@@ -16,8 +16,9 @@
 // an allow rule must cover every command, so execute(git:*) does not allow
 // "git status && rm -rf x", while a deny or ask rule applies if it matches
 // any one of them. A command line the parser cannot vouch for, such as one
-// with command substitution or one that pipes into sh, is never allowed by
-// a pattern rule. Deny rules over commands remain a best effort: a command
+// with command substitution, one that pipes into sh, one that sets a
+// variable (PATH=..., LD_PRELOAD=...) or one that runs a program by path
+// (./npm), is never allowed by a pattern rule. Deny rules over commands remain a best effort: a command
 // can be reached in ways the text does not show (a script, an alias for
 // another program, a wrapper the parser does not know). Permission rules
 // decide which calls the agent makes; they are not a sandbox.

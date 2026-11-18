@@ -11,9 +11,10 @@ func TestSplitCommand(t *testing.T) {
 		want   []string
 		wantOK bool
 	}{
-		// The brief's reference cases.
+		// The brief's reference cases. Assignments and paths in the command
+		// word never vouch for a line (a security-review ruling).
 		{"git status && ls -la", []string{"git status", "ls -la"}, true},
-		{"FOO=1 /usr/bin/git  log", []string{"git log"}, true},
+		{"FOO=1 /usr/bin/git  log", []string{"git log"}, false},
 		{`\rm x`, []string{"rm x"}, true},
 		{`"rm" -rf x`, []string{"rm -rf x"}, true},
 		{"echo 'a;b'", []string{"echo a;b"}, true},
@@ -23,7 +24,7 @@ func TestSplitCommand(t *testing.T) {
 		{"echo `id`", []string{"echo", "id"}, false},
 		{"bash -c 'ls'", []string{"bash -c ls"}, false},
 		{`echo "unterminated`, []string{"echo unterminated"}, false},
-		{"nohup env -i A=1 rm x", []string{"rm x"}, true},
+		{"nohup env -i A=1 rm x", []string{"rm x"}, false},
 
 		// Nothing to vouch for.
 		{"", nil, false},
@@ -76,14 +77,38 @@ func TestSplitCommand(t *testing.T) {
 		{"ls >/dev/nullx", []string{"ls"}, false},
 		{"ls >'/dev/null'", []string{"ls"}, false},
 		{"ls < in.txt", []string{"ls in.txt"}, false},
+		{"ls >`rm x`", []string{"ls", "rm x"}, false},
+		{"ls >x`rm y`", []string{"ls", "rm y"}, false},
+		{"ls >$(rm x)", []string{"ls", "rm x"}, false},
+		{"ls >/dev/null$x", []string{"ls $x"}, false},
 
 		// Command-word normalization.
-		{"A=1 B='x y' git log", []string{"git log"}, true},
+		{"A=1 B='x y' git log", []string{"git log"}, false},
+		{"env -i rm x", []string{"rm x"}, true},
+		{"PATH=/tmp/evil; npm test", []string{"npm test"}, false},
+		{"./npm test", []string{"npm test"}, false},
+		{`"./npm test"`, []string{"npm test"}, false},
+		{`"git status" x`, []string{"git status x"}, false},
 		{`"A=1" git log`, []string{"A=1 git log"}, true},
 		{"command builtin exec time rm x", []string{"rm x"}, true},
 		{"nice -n 5 rm x", []string{"rm x"}, true},
 		{"nice rm x", []string{"rm x"}, true},
-		{"/usr/bin/env A=1 /bin/rm x", []string{"rm x"}, true},
+		{"/usr/bin/env A=1 /bin/rm x", []string{"rm x"}, false},
+		{"nice -n -5 rm x", []string{"rm x"}, true},
+		{"nice -n x rm y", []string{"rm y"}, false},
+		{"timeout 1 rm x", []string{"rm x"}, true},
+		{"timeout -k 5s -s KILL --preserve-status 1.5m rm x", []string{"rm x"}, true},
+		{"timeout --signal=TERM --kill-after=2 10 rm x", []string{"rm x"}, true},
+		{"timeout -z 1 rm x", []string{"-z 1 rm x"}, false},
+		{"timeout -s 'a b' 1 rm x", []string{"-s a b 1 rm x"}, false},
+		{"timeout abc rm x", []string{"abc rm x"}, false},
+		{"stdbuf -oL -e0 grep x", []string{"grep x"}, true},
+		{"stdbuf --output=L -i 4K grep x", []string{"grep x"}, true},
+		{"stdbuf -oQ grep x", []string{"-oQ grep x"}, false},
+		{"find . -name x", []string{"find . -name x"}, true},
+		{`find . -name x -exec rm {} \;`, []string{"find . -name x -exec rm {} ;", "rm {}"}, false},
+		{"find . -execdir /bin/rm {} + -print", []string{"find . -execdir /bin/rm {} + -print", "rm {}"}, false},
+		{"find . -ok", []string{"find . -ok"}, false},
 		{"command -p rm x", []string{"-p rm x"}, false},
 		{"env -u A rm x", []string{"-u A rm x"}, false},
 		{"nice -5 rm x", []string{"-5 rm x"}, false},
@@ -135,8 +160,37 @@ func TestShellSmuggling(t *testing.T) {
 			}
 		})
 	}
-	if got := Evaluate(shell("git status && git diff"), allowGit); got.Behavior != Allow {
-		t.Fatalf("every segment allowed: got %+v, want Allow", got)
+	for _, cmd := range []string{"git status", "git status && git diff"} {
+		if got := Evaluate(shell(cmd), allowGit); got.Behavior != Allow {
+			t.Fatalf("Evaluate(%q) = %+v, want Allow", cmd, got)
+		}
+	}
+
+	// A rule names a program, not whatever an assignment, a path or a
+	// quoted word makes the shell run under that name.
+	allowNpmTest := Context{Rules: Rules{Allow: []Rule{mustRule(t, "execute(npm test)")}}}
+	for _, tt := range []struct {
+		pc  Context
+		cmd string
+	}{
+		{allowNpmTest, "PATH=/tmp/evil npm test"},
+		{allowNpmTest, "PATH=/tmp/evil; npm test"},
+		{allowNpmTest, "LD_PRELOAD=./x.so npm test"},
+		{allowNpmTest, "env PATH=. npm test"},
+		{allowNpmTest, "./npm test"},
+		{allowNpmTest, "/tmp/evil/npm test"},
+		{allowNpmTest, `"./npm test"`},
+		{allowGit, "./git status"},
+		{allowGit, "GIT_SSH_COMMAND='rm -rf ~' git fetch"},
+	} {
+		t.Run("allow/"+tt.cmd, func(t *testing.T) {
+			if got := Evaluate(shell(tt.cmd), tt.pc); got.Behavior != Ask {
+				t.Fatalf("Evaluate(%q) = %+v, want Ask", tt.cmd, got)
+			}
+		})
+	}
+	if got := Evaluate(shell("npm test"), allowNpmTest); got.Behavior != Allow {
+		t.Fatalf("Evaluate(%q) = %+v, want Allow", "npm test", got)
 	}
 
 	denyRm := Context{Mode: ModeBypass, Rules: Rules{Deny: []Rule{mustRule(t, "execute(rm:*)")}}}
@@ -149,6 +203,10 @@ func TestShellSmuggling(t *testing.T) {
 		`\rm x`,
 		"nohup rm x",
 		"echo $(rm x)",
+		"ls >`rm x`",
+		"ls >x`rm y`",
+		"timeout 1 rm x",
+		`find . -exec rm {} \;`,
 	} {
 		t.Run("deny/"+cmd, func(t *testing.T) {
 			if got := Evaluate(shell(cmd), denyRm); got.Behavior != Deny {
