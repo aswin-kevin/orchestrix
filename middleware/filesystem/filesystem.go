@@ -94,6 +94,11 @@ type Config struct {
 	// Backend, execute is registered exactly when it implements
 	// backend.Executor.
 	Execute bool
+
+	// Background offers run_in_background on execute, which hands the
+	// command to tool.Call.Background (set by the tasks middleware) instead
+	// of waiting for it. False leaves the parameter out of the schema.
+	Background bool
 }
 
 // middleware is the filesystem middleware. It is immutable after New, so it

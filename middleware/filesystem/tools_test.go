@@ -585,3 +585,43 @@ func TestOversizedMediaIsNotAttached(t *testing.T) {
 		t.Fatalf("content = %.200v, want the text placeholder", res.Content)
 	}
 }
+
+// fakeBackground records what execute hands to tool.Call.Background.
+type fakeBackground struct {
+	gotCmd     string
+	gotTimeout time.Duration
+}
+
+func (f *fakeBackground) Start(_ context.Context, _ *tool.Call, command string, timeout time.Duration) (string, error) {
+	f.gotCmd, f.gotTimeout = command, timeout
+	return "bg_7", nil
+}
+
+func TestExecuteBackgroundSchemaOnlyWhenEnabled(t *testing.T) {
+	props := func(cfg Config) map[string]any {
+		return newFixture(t, cfg).tools["execute"].Schema()["properties"].(map[string]any)
+	}
+	if _, ok := props(Config{Execute: true})["run_in_background"]; ok {
+		t.Fatal("run_in_background offered without Config.Background")
+	}
+	if _, ok := props(Config{Execute: true, Background: true})["run_in_background"]; !ok {
+		t.Fatal("run_in_background missing with Config.Background")
+	}
+
+	eb := &execBackend{Backend: newClockBackend()}
+	f := newFixture(t, Config{Backend: eb, Background: true})
+	wantText(t, f.run(t, "execute", obj{"command": "make", "run_in_background": true}), true,
+		"background execution is not available")
+
+	bg := &fakeBackground{}
+	f.call.Background = bg
+	wantText(t, f.run(t, "execute", obj{"command": "make", "run_in_background": true}), false,
+		"Started background task bg_7. Use task_output to read its output; you will be notified when it finishes.")
+	if bg.gotCmd != "make" || bg.gotTimeout != 0 || eb.gotCmd != "" {
+		t.Fatalf("background got %q/%v, foreground ran %q", bg.gotCmd, bg.gotTimeout, eb.gotCmd)
+	}
+	f.run(t, "execute", obj{"command": "make", "run_in_background": true, "timeout_seconds": 9})
+	if bg.gotTimeout != 9*time.Second {
+		t.Fatalf("background timeout = %v, want 9s", bg.gotTimeout)
+	}
+}

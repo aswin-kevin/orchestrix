@@ -16,6 +16,13 @@ type executeInput struct {
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" desc:"Seconds to wait before the command is stopped. Defaults to the configured timeout and is capped at the configured maximum."`
 }
 
+// backgroundExecuteInput is the input of execute when Config.Background is
+// set; a separate type keeps run_in_background out of the schema otherwise.
+type backgroundExecuteInput struct {
+	executeInput
+	RunInBackground bool `json:"run_in_background,omitempty" desc:"Start the command and return immediately; you will be notified when it finishes."`
+}
+
 // registersExecute reports whether the execute tool is offered; see
 // Config.Execute for why a nil Backend needs the explicit opt-in.
 func (m *middleware) registersExecute() bool {
@@ -29,18 +36,25 @@ func (m *middleware) registersExecute() bool {
 // executeTool has no permission function of its own, so it falls through to
 // the default "ask" verdict: running commands is never pre-approved here.
 func (m *middleware) executeTool() tool.Tool {
-	return tool.New(ToolExecute,
-		m.description(ToolExecute, "Run a shell command in the workspace and return its combined output followed by the exit code. Each command runs in a fresh shell from the workspace root, so `cd` and `export` do not carry over; chain steps with `&&`. Commands that exceed the timeout are stopped."),
-		m.execute,
-		tool.WithShellSubject(func(raw json.RawMessage) string {
-			var in executeInput
-			_ = json.Unmarshal(raw, &in) // an unparsable input has no subject
-			return in.Command
-		}),
-	)
+	description := m.description(ToolExecute, "Run a shell command in the workspace and return its combined output followed by the exit code. Each command runs in a fresh shell from the workspace root, so `cd` and `export` do not carry over; chain steps with `&&`. Commands that exceed the timeout are stopped.")
+	subject := tool.WithShellSubject(func(raw json.RawMessage) string {
+		var in executeInput
+		_ = json.Unmarshal(raw, &in) // an unparsable input has no subject
+		return in.Command
+	})
+	if m.cfg.Background {
+		return tool.New(ToolExecute, description, m.execute, subject)
+	}
+	foreground := func(ctx context.Context, in executeInput, c *tool.Call) (tool.Result, error) {
+		return m.execute(ctx, backgroundExecuteInput{executeInput: in}, c)
+	}
+	return tool.New(ToolExecute, description, foreground, subject)
 }
 
-func (m *middleware) execute(ctx context.Context, in executeInput, c *tool.Call) (tool.Result, error) {
+func (m *middleware) execute(ctx context.Context, in backgroundExecuteInput, c *tool.Call) (tool.Result, error) {
+	if in.RunInBackground {
+		return m.executeInBackground(ctx, in.executeInput, c), nil
+	}
 	b, err := m.backendFor(c)
 	if err != nil {
 		return tool.Errorf("%v", err), nil
@@ -57,6 +71,31 @@ func (m *middleware) execute(ctx context.Context, in executeInput, c *tool.Call)
 	out := tool.Text(formatExec(res, timeout))
 	out.IsError = res.TimedOut
 	return out, nil
+}
+
+// executeInBackground hands the command to the run's background starter,
+// with the backend the foreground command would use. A timeout the model did
+// not ask for is left to the starter, whose default suits long-running jobs
+// better than the foreground one.
+func (m *middleware) executeInBackground(ctx context.Context, in executeInput, c *tool.Call) tool.Result {
+	if c == nil || c.Background == nil {
+		return tool.Errorf("background execution is not available")
+	}
+	b, err := m.backendFor(c)
+	if err != nil {
+		return tool.Errorf("%v", err)
+	}
+	withBackend := *c
+	withBackend.Backend = b
+	var timeout time.Duration
+	if in.TimeoutSeconds > 0 {
+		timeout = m.execTimeout(in.TimeoutSeconds)
+	}
+	id, err := c.Background.Start(ctx, &withBackend, in.Command, timeout)
+	if err != nil {
+		return tool.Errorf("background start failed: %v", err)
+	}
+	return tool.Text(fmt.Sprintf("Started background task %s. Use task_output to read its output; you will be notified when it finishes.", id))
 }
 
 // execTimeout applies the default and the cap to the model's request.

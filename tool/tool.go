@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -89,6 +90,16 @@ type Call struct {
 	// paths (ls, glob, grep) must drop what this rejects. Use Visible, which
 	// tolerates nil.
 	ReadVisible func(path string) bool
+	// Background starts commands that outlive the call; the tasks middleware
+	// sets it. nil means background execution is unavailable.
+	Background Background
+}
+
+// Background starts shell commands as background jobs of the run's thread.
+type Background interface {
+	// Start runs command on c's backend without waiting for it and returns
+	// the job's id. A zero timeout means the implementation's default.
+	Start(ctx context.Context, c *Call, command string, timeout time.Duration) (id string, err error)
 }
 
 // The values of ResumeValue.Type: how the human answered the interrupt. They
