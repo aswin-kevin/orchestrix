@@ -112,6 +112,13 @@ type Executor interface {
 	Execute(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
 }
 
+// InternalDir is the hidden workspace directory where middleware keep the
+// artifacts they write for the model to read back: offloaded transcripts,
+// oversized tool results and messages. Those files may contain anything the
+// conversation did, secrets included, so keep the directory out of version
+// control (for a disk workspace, add ".orchestrix/" to .gitignore).
+const InternalDir = "/.orchestrix"
+
 // DefaultKillGrace is how long a stopped command's process group gets to exit
 // after SIGTERM before it is sent SIGKILL. Callers waiting for a stopped
 // Process can bound the wait by it.

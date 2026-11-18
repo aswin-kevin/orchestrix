@@ -46,11 +46,11 @@ func TestLargeToolResultOffloaded(t *testing.T) {
 	original := bigOutput()
 	out := wrapToolWith(t, Config{Backend: b}, "web_fetch", "call_1", tool.Text(original))
 
-	if got := readAll(t, b, "/large_tool_results/call_1.txt"); got != original {
+	if got := readAll(t, b, "/.orchestrix/large_tool_results/call_1.txt"); got != original {
 		t.Fatalf("stored file differs from original (len %d vs %d)", len(got), len(original))
 	}
 	text := out.Flatten()
-	for _, want := range []string{"first line", "/large_tool_results/call_1.txt", "Output too large (100011 chars)"} {
+	for _, want := range []string{"first line", "/.orchestrix/large_tool_results/call_1.txt", "Output too large (100011 chars)"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("result missing %q: %.300s", want, text)
 		}
@@ -67,7 +67,7 @@ func TestOwnToolsNotOffloaded(t *testing.T) {
 	if out.Flatten() != res.Flatten() {
 		t.Fatal("read_file result was offloaded")
 	}
-	if _, err := b.Read(context.Background(), "/large_tool_results/call_1.txt", 0, 1); err == nil {
+	if _, err := b.Read(context.Background(), "/.orchestrix/large_tool_results/call_1.txt", 0, 1); err == nil {
 		t.Fatal("file written for own tool")
 	}
 }
@@ -93,7 +93,7 @@ func TestOffloadKeepsErrorFlagImagesAndSanitizesID(t *testing.T) {
 		t.Fatalf("flag or image lost: %+v", out)
 	}
 	// The hash suffix keeps ids that sanitize alike, such as a/b and a_b, apart.
-	if !regexp.MustCompile(`/large_tool_results/___a_b_c-[0-9a-f]{8}\.txt`).MatchString(out.Flatten()) {
+	if !regexp.MustCompile(`/\.orchestrix/large_tool_results/___a_b_c-[0-9a-f]{8}\.txt`).MatchString(out.Flatten()) {
 		t.Fatalf("id not sanitized: %.200s", out.Flatten())
 	}
 }
@@ -161,8 +161,8 @@ func TestLargeUserMessageViewOnly(t *testing.T) {
 	if first[1].Content[0].Text != huge {
 		t.Fatal("assistant text must not be offloaded")
 	}
-	start := strings.Index(text, "/large_messages/")
-	path := text[start : start+len("/large_messages/")+12+len(".txt")]
+	start := strings.Index(text, "/.orchestrix/large_messages/")
+	path := text[start : start+len("/.orchestrix/large_messages/")+12+len(".txt")]
 	if got := readAll(t, b, path); got != huge {
 		t.Fatalf("stored message differs (len %d)", len(got))
 	}
@@ -189,11 +189,11 @@ func TestLargeUserMessageUsesRequestBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := got[0].Content[0].Text
-	start := strings.Index(text, "/large_messages/")
+	start := strings.Index(text, "/.orchestrix/large_messages/")
 	if start < 0 {
 		t.Fatalf("block not offloaded: %.100s", text)
 	}
-	if readAll(t, b, text[start:start+len("/large_messages/")+12+len(".txt")]) != huge {
+	if readAll(t, b, text[start:start+len("/.orchestrix/large_messages/")+12+len(".txt")]) != huge {
 		t.Fatal("message not stored on the request's backend")
 	}
 }

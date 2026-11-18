@@ -279,7 +279,7 @@ The `summarize` middleware keeps long conversations inside the model's context w
 
 - **Automatic compaction.** When a request would pass 85% of the context window, older messages are replaced in the view by a summary, and about the last 25% of the window is kept verbatim. The cut never separates a tool call from its result. The model can also ask for it with the `compact_conversation` tool.
 - **Micro-compaction.** Every request clears large results of older tool calls (the newest six are kept) and shortens large old tool inputs.
-- **Offload.** Summarized messages are saved under `/conversation_history/<thread>` in the workspace so the model can read them back; this needs a thread ID. Separately, a tool result over 80,000 characters is saved under `/large_tool_results/` and replaced by a head and the path.
+- **Offload.** Summarized messages are saved under `/.orchestrix/conversation_history/<thread>` in the workspace so the model can read them back; this needs a thread ID. Separately, a tool result over 80,000 characters is saved under `/.orchestrix/large_tool_results/` (an oversized user message under `/.orchestrix/large_messages/`) and replaced by a head and the path. These files hold whatever the conversation held, secrets included: on a disk or shell workspace, add `.orchestrix/` to your `.gitignore`.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -381,7 +381,9 @@ _, _ = a, err
 
 Command rules are matched on the parsed command line, not the raw text. An allow rule such as `execute(git:*)` must cover every command in a line, so `git status && rm -rf x` is not allowed by it, while a deny or ask rule applies if it matches any one command. A line the parser cannot vouch for (command substitution, piping into a shell, a leading `VAR=value`, a program run by path) is never allowed by a pattern rule, and when deny or ask rules exist it needs a human even in `bypassPermissions` mode. Rules still name programs, not behavior: an allowed program that runs others can reach anything.
 
-**The shell backend is not a sandbox.** Commands run as your process, with its privileges and, by default, a small allowlist of its environment variables. Run agents that execute untrusted instructions inside a container or VM.
+**The shell backend is not a sandbox.** Commands run as your process, with its privileges and, by default, a small allowlist of its environment variables. A command's process group is killed when it ends, but a process that leaves the group (`setsid`, a daemonizing double fork) is not tracked and keeps running. Run agents that execute untrusted instructions inside a container or VM.
+
+The agent writes transcripts and oversized outputs under `.orchestrix/` in the workspace (see "Offload" above). They may contain secrets that passed through the conversation; add `.orchestrix/` to `.gitignore`.
 
 ## CLI
 

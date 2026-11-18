@@ -92,7 +92,13 @@ func WithHooks(cfg hooks.Config) Option {
 // threads. It cannot be combined with WithBackend or WithBackendFactory.
 //
 // The shell backend runs commands as the host process, with its privileges;
-// it is not a sandbox.
+// it is not a sandbox. Processes that leave a command's process group
+// (setsid, daemonizing) are not killed when it ends.
+//
+// Middleware write transcripts and oversized outputs under
+// backend.InternalDir (".orchestrix/" in root). They may contain secrets the
+// conversation held; keep that directory out of version control, for
+// instance with a .gitignore entry.
 func WithShell(root string, opts shell.Options) Option {
 	return func(s *settings) { s.shell = &shellSpec{root: root, opts: opts} }
 }

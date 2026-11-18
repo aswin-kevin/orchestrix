@@ -315,3 +315,9 @@ func TestCompactAlongsideParallelCalls(t *testing.T) {
 		t.Fatalf("last message holds %d results, want all 3 parallel results", len(results))
 	}
 }
+
+func TestHistoryDirIsUnderTheInternalRoot(t *testing.T) {
+	if HistoryDir != "/.orchestrix/conversation_history" {
+		t.Fatalf("HistoryDir = %q, want it under /.orchestrix", HistoryDir)
+	}
+}

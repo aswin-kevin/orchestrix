@@ -35,6 +35,7 @@ import (
 	"context"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -66,8 +67,9 @@ const (
 	// CharsPerToken is the characters-per-token ratio used to estimate the
 	// size of messages.
 	CharsPerToken = 4
-	// HistoryDir is the backend directory holding offloaded transcripts.
-	HistoryDir = "/conversation_history"
+	// HistoryDir is the backend directory holding offloaded transcripts,
+	// under backend.InternalDir.
+	HistoryDir = backend.InternalDir + "/conversation_history"
 	// ToolCompact is the name of the tool that requests a compaction.
 	ToolCompact = "compact_conversation"
 	// ClearedResultText replaces the content of a cleared tool result.

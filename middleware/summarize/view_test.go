@@ -129,11 +129,11 @@ func TestViewUsesBoundaryStateUntouched(t *testing.T) {
 	s := state.New()
 	s.SetMessages(mixedHistory()[:10])
 	before := s.Messages()
-	BoundaryKey.Set(s, Boundary{Index: 6, Summary: "S", Path: "/conversation_history/t1/1.md"})
+	BoundaryKey.Set(s, Boundary{Index: 6, Summary: "S", Path: "/.orchestrix/conversation_history/t1/1.md"})
 
 	got := wrapOnce(t, Config{}, s)
 
-	wantSummary := "<summary>\nS\n</summary>\nEarlier conversation was summarized above. Its full transcript is in /conversation_history/t1/1.md."
+	wantSummary := "<summary>\nS\n</summary>\nEarlier conversation was summarized above. Its full transcript is in /.orchestrix/conversation_history/t1/1.md."
 	if len(got) != 5 || got[0].Role != llm.RoleUser || got[0].Text() != wantSummary {
 		t.Fatalf("view = %d messages starting %q, want summary + 4 messages", len(got), got[0].Text())
 	}

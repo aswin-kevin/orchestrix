@@ -27,8 +27,8 @@ const (
 	// only, by a preview.
 	MessageOffloadChars = 200_000
 
-	toolResultDir  = "/large_tool_results"
-	messageDir     = "/large_messages"
+	toolResultDir  = backend.InternalDir + "/large_tool_results"
+	messageDir     = backend.InternalDir + "/large_messages"
 	headLines      = 10   // lines of a large result kept inline
 	messagePreview = 2000 // characters of a large message kept inline
 	hashChars      = 12   // hex characters of the content hash in a message file name
