@@ -195,16 +195,21 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request) iter.Seq2[S
 		// Closing on every exit, including the consumer breaking out of the
 		// loop, releases the connection promptly.
 		defer resp.Body.Close()
-		streamAnthropicEvents(resp.Body, yield)
+		streamAnthropicEvents(ctx, resp.Body, yield)
 	}
 }
 
 // streamAnthropicEvents translates the SSE body into stream events. A body
 // that ends before message_stop is reported as an error so truncated replies
 // are never mistaken for complete ones.
-func streamAnthropicEvents(body io.Reader, yield func(StreamEvent, error) bool) {
+func streamAnthropicEvents(ctx context.Context, body io.Reader, yield func(StreamEvent, error) bool) {
 	for sse, err := range readSSE(body) {
 		if err != nil {
+			// A cancelled context surfaces from the transport as a wrapped
+			// read error; report the cause callers test for.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				err = ctxErr
+			}
 			yield(StreamEvent{}, err)
 			return
 		}
@@ -378,7 +383,11 @@ func toAnthropicSystem(segments []string, cacheBoundary int) []anthropicSystem {
 func toAnthropicTools(tools []ToolSchema) []anthropicTool {
 	wire := make([]anthropicTool, len(tools))
 	for i, t := range tools {
-		wire[i] = anthropicTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}
+		schema := t.InputSchema
+		if schema == nil {
+			schema = map[string]any{"type": "object"}
+		}
+		wire[i] = anthropicTool{Name: t.Name, Description: t.Description, InputSchema: schema}
 	}
 	return wire
 }
@@ -394,12 +403,17 @@ func toAnthropicThinking(mode string, maxTokens int) *anthropicThinking {
 }
 
 // toAnthropicMessages converts history. Messages left with no content after
-// filtering are dropped because the API rejects empty ones.
+// filtering are dropped because the API rejects empty ones, and neighbours of
+// the same role are merged so roles keep alternating after a drop.
 func toAnthropicMessages(msgs []Message, keepThinking bool) []anthropicMessage {
 	out := make([]anthropicMessage, 0, len(msgs))
 	for _, m := range msgs {
 		blocks := toAnthropicBlocks(m.Content, keepThinking)
-		if len(blocks) > 0 {
+		switch {
+		case len(blocks) == 0:
+		case len(out) > 0 && out[len(out)-1].Role == m.Role:
+			out[len(out)-1].Content = append(out[len(out)-1].Content, blocks...)
+		default:
 			out = append(out, anthropicMessage{Role: m.Role, Content: blocks})
 		}
 	}
@@ -413,6 +427,9 @@ func toAnthropicBlocks(blocks []Block, keepThinking bool) []anthropicBlock {
 		// not see earlier thinking blocks at all.
 		if b.Type == BlockThinking && (!keepThinking || b.Signature == "") {
 			continue
+		}
+		if b.Type == BlockText && b.Text == "" {
+			continue // the API rejects empty text blocks
 		}
 		out = append(out, toAnthropicBlock(b, keepThinking))
 	}
@@ -432,22 +449,4 @@ func toAnthropicBlock(b Block, keepThinking bool) anthropicBlock {
 		wire.Content = toAnthropicBlocks(b.Content, keepThinking)
 	}
 	return wire
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func firstNonZero(values ...int) int {
-	for _, v := range values {
-		if v != 0 {
-			return v
-		}
-	}
-	return 0
 }

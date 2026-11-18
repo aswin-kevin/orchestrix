@@ -3,12 +3,14 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // sseServer replies to every request with the given stream body and records
@@ -326,5 +328,84 @@ func TestNewValidation(t *testing.T) {
 	}
 	if _, err := New(Config{Format: FormatAnthropic, Model: "m"}); err != nil {
 		t.Errorf("anthropic: %v", err)
+	}
+}
+
+// blockingStream sends one text delta and then holds the connection open,
+// reporting when the client goes away.
+func newBlockingServer(t *testing.T) (url string, gone <-chan struct{}) {
+	t.Helper()
+	ch := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}
+
+`)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+		close(ch)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, ch
+}
+
+func waitClosed(t *testing.T, gone <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-gone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("server connection was not closed")
+	}
+}
+
+func TestAnthropicStreamConsumerBreakClosesConnection(t *testing.T) {
+	url, gone := newBlockingServer(t)
+	p := newTestAnthropic(t, url)
+
+	for _, err := range p.Stream(context.Background(), Request{Messages: []Message{UserText("x")}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		break
+	}
+	waitClosed(t, gone)
+}
+
+func TestAnthropicStreamContextCancelClosesConnection(t *testing.T) {
+	url, gone := newBlockingServer(t)
+	p := newTestAnthropic(t, url)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var last error
+	for _, err := range p.Stream(ctx, Request{Messages: []Message{UserText("x")}}) {
+		if err == nil {
+			cancel()
+		}
+		last = err
+	}
+	if !errors.Is(last, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", last)
+	}
+	waitClosed(t, gone)
+}
+
+func TestAnthropicHistoryMergesAndDropsEmpty(t *testing.T) {
+	msgs := toAnthropicMessages([]Message{
+		UserText("one"),
+		{Role: RoleAssistant, Content: []Block{{Type: BlockThinking, Thinking: "unsigned"}}},
+		UserText("two"),
+		{Role: RoleAssistant, Content: []Block{TextBlock("")}},
+	}, true)
+	if len(msgs) != 1 || len(msgs[0].Content) != 2 || msgs[0].Role != RoleUser {
+		t.Errorf("messages = %+v", msgs)
+	}
+}
+
+func TestAnthropicToolDefaultSchema(t *testing.T) {
+	tools := toAnthropicTools([]ToolSchema{{Name: "noargs"}})
+	if tools[0].InputSchema["type"] != "object" {
+		t.Errorf("schema = %v", tools[0].InputSchema)
 	}
 }
