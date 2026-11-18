@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/internal/glob"
+	"github.com/aswin-kevin/orchestrix/internal/names"
 )
 
 const (
@@ -42,7 +43,7 @@ func ParseRule(s string) (Rule, error) {
 		if strings.ContainsRune(s, ')') {
 			return Rule{}, fmt.Errorf("permission rule %q: unbalanced parentheses", s)
 		}
-		if err := validateToolName(s); err != nil {
+		if err := names.Validate(s); err != nil {
 			return Rule{}, fmt.Errorf("permission rule %q: %w", s, err)
 		}
 		return Rule{Tool: s}, nil
@@ -51,7 +52,7 @@ func ParseRule(s string) (Rule, error) {
 		return Rule{}, fmt.Errorf("permission rule %q: unbalanced parentheses", s)
 	}
 	name, pattern := s[:open], s[open+1:len(s)-1]
-	if err := validateToolName(name); err != nil {
+	if err := names.Validate(name); err != nil {
 		return Rule{}, fmt.Errorf("permission rule %q: %w", s, err)
 	}
 	if pattern == "" {
@@ -67,27 +68,6 @@ func ParseRule(s string) (Rule, error) {
 		return Rule{Pattern: pattern, Op: Op(name)}, nil
 	}
 	return Rule{Tool: name, Pattern: pattern}, nil
-}
-
-// validateToolName rejects names with characters outside [A-Za-z0-9_.:-]
-// (which covers MCP-style names such as "mcp__srv__tool"). Without this, a typo
-// like "write (/x)" would become a tool rule for a nonexistent tool and the
-// rule would silently never match.
-func validateToolName(name string) error {
-	if name == "" {
-		return errors.New("missing tool name")
-	}
-	for _, c := range name {
-		if !isToolNameChar(c) {
-			return fmt.Errorf("invalid character %q in tool name", c)
-		}
-	}
-	return nil
-}
-
-func isToolNameChar(c rune) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-		c == '_' || c == '.' || c == ':' || c == '-'
 }
 
 // balancedParens reports whether every ")" in s closes an earlier "(".
