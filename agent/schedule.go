@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"unicode/utf8"
@@ -22,10 +21,6 @@ const cancelledToolResult = "Tool call cancelled."
 // skippedToolResult answers a call that never ran because another call of
 // its turn stopped the run (see ErrStopRun).
 const skippedToolResult = "Tool call skipped: the run was stopped."
-
-// codeFence opens and closes a Markdown code block, which models sometimes
-// wrap around tool arguments.
-const codeFence = "```"
 
 // toolCall is one tool_use of the current turn on its way to a result.
 type toolCall struct {
@@ -291,44 +286,20 @@ func parseToolInput(raw json.RawMessage) (json.RawMessage, error) {
 	if json.Valid(raw) {
 		return raw, nil
 	}
-	if body, ok := stripCodeFence(string(raw)); ok && json.Valid([]byte(body)) {
+	if body, ok := tool.StripCodeFence(string(raw)); ok && json.Valid([]byte(body)) {
 		return json.RawMessage(body), nil
 	}
 	var v any
 	return nil, json.Unmarshal(raw, &v) // raw is invalid, so this reports why
 }
 
-// stripCodeFence returns the body of s when s is a fenced code block such as
-// "```json\n{...}\n```". The opening fence must end its own line, because
-// what follows it on that line is the language tag.
-func stripCodeFence(s string) (string, bool) {
-	s = strings.TrimSpace(s)
-	if len(s) < 2*len(codeFence) || !strings.HasPrefix(s, codeFence) || !strings.HasSuffix(s, codeFence) {
-		return "", false
-	}
-	inner := s[len(codeFence) : len(s)-len(codeFence)]
-	_, body, ok := strings.Cut(inner, "\n")
-	if !ok {
-		return "", false
-	}
-	return strings.TrimSpace(body), true
-}
-
 // validateInput checks in against t's schema unless t takes raw input. It
 // returns the error result for invalid input, nil otherwise.
 func validateInput(t tool.Tool, in json.RawMessage) *tool.Result {
-	if err := checkInput(t, in); err != nil {
+	if err := tool.CheckInput(t, in); err != nil {
 		return errorResult("invalid input for %s: %v", t.Name(), err)
 	}
 	return nil
-}
-
-// checkInput checks in against t's schema unless t takes raw input.
-func checkInput(t tool.Tool, in json.RawMessage) error {
-	if raw, ok := t.(tool.RawInputer); ok && raw.AcceptsRawInput() {
-		return nil
-	}
-	return tool.Validate(t.Schema(), in)
 }
 
 // runCall executes an admitted call through the tool handler chain. A panic

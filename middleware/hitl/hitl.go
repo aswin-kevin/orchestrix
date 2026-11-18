@@ -12,7 +12,6 @@ package hitl
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"slices"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -145,7 +144,7 @@ func ask(ctx context.Context, approver permission.Approver, cfg InterruptConfig,
 // rewrite is refused. The Approver's allow stands in for an Ask, but a deny
 // rule still wins.
 func applyRewrite(ctx context.Context, call *agent.ToolCall, in json.RawMessage) *tool.Result {
-	if err := checkInput(call.Tool, in); err != nil {
+	if err := tool.CheckInput(call.Tool, in); err != nil {
 		res := tool.Errorf("invalid input for %s: %v", call.Name, err)
 		return &res
 	}
@@ -199,15 +198,4 @@ func reasonFor(cfg InterruptConfig, name string) string {
 		return cfg.Reason
 	}
 	return "Approval required for " + name
-}
-
-// checkInput validates in against t's schema, unless t takes raw input.
-func checkInput(t tool.Tool, in json.RawMessage) error {
-	if raw, ok := t.(tool.RawInputer); ok && raw.AcceptsRawInput() {
-		return nil
-	}
-	if err := tool.Validate(t.Schema(), in); err != nil {
-		return fmt.Errorf("validate: %w", err)
-	}
-	return nil
 }

@@ -194,7 +194,7 @@ func rewriteInput(ctx context.Context, call *agent.ToolCall, updated json.RawMes
 // checkInput validates call.Input against the tool's schema, returning the
 // error result for invalid input.
 func checkInput(call *agent.ToolCall) *tool.Result {
-	if err := validateInput(call.Tool, call.Input); err != nil {
+	if err := tool.CheckInput(call.Tool, call.Input); err != nil {
 		return errorResult("invalid input for %s: %v", call.Name, err)
 	}
 	return nil
@@ -203,14 +203,6 @@ func checkInput(call *agent.ToolCall) *tool.Result {
 func errorResult(format string, args ...any) *tool.Result {
 	res := tool.Errorf(format, args...)
 	return &res
-}
-
-// validateInput checks in against t's schema unless t takes raw input.
-func validateInput(t tool.Tool, in json.RawMessage) error {
-	if raw, ok := t.(tool.RawInputer); ok && raw.AcceptsRawInput() {
-		return nil
-	}
-	return tool.Validate(t.Schema(), in)
 }
 
 // toolInput describes call to a hook.

@@ -13,9 +13,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-// codeFence delimits a Markdown code block, which models often wrap JSON in.
-const codeFence = "```"
-
 // structuredOutput checks the answer of a completed subagent run against
 // schema and, while it is invalid, continues the run with the validation
 // error, up to DefaultOutputRetries times. It returns the last Final and the
@@ -45,7 +42,10 @@ func structuredOutput(ctx context.Context, child *agent.Agent, in agent.Input, f
 // parseAnswer validates text, with any surrounding code fence removed, as a
 // JSON object against schema and returns it compacted.
 func parseAnswer(schema map[string]any, text string) (string, error) {
-	raw := stripFence(text)
+	raw, fenced := tool.StripCodeFence(text)
+	if !fenced {
+		raw = strings.TrimSpace(text)
+	}
 	if !strings.HasPrefix(raw, "{") {
 		return "", errors.New("the answer must be a JSON object")
 	}
@@ -57,16 +57,4 @@ func parseAnswer(schema map[string]any, text string) (string, error) {
 		return "", err
 	}
 	return compact.String(), nil
-}
-
-// stripFence returns text without a surrounding Markdown code fence and its
-// language tag ("```json ... ```"); other text is returned trimmed.
-func stripFence(text string) string {
-	s := strings.TrimSpace(text)
-	if len(s) < 2*len(codeFence) || !strings.HasPrefix(s, codeFence) || !strings.HasSuffix(s, codeFence) {
-		return s
-	}
-	s = strings.TrimSuffix(strings.TrimPrefix(s, codeFence), codeFence)
-	s = strings.TrimPrefix(s, "json")
-	return strings.TrimSpace(s)
 }

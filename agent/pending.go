@@ -261,7 +261,7 @@ func checkEditedInput(t tool.Tool, in json.RawMessage) error {
 	if !json.Valid(in) {
 		return errors.New("not valid JSON")
 	}
-	return checkInput(t, in)
+	return tool.CheckInput(t, in)
 }
 
 // newResumption validates a Resume request against the pending record in s.
