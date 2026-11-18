@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"slices"
+	"sync/atomic"
 
 	"github.com/aswin-kevin/orchestrix/llm"
 )
@@ -43,6 +44,10 @@ type toolScopeKey struct{}
 type toolScope struct {
 	run       *run
 	toolUseID string
+	// done is set once the call has returned. Code that kept the call's
+	// context, such as a background task, may outlive it, and its events
+	// must not be attributed to a call whose result is already recorded.
+	done atomic.Bool
 }
 
 // Info returns the RunInfo of the run ctx belongs to, and false when ctx
@@ -65,13 +70,14 @@ func Info(ctx context.Context) (RunInfo, bool) {
 // ev.ParentToolID is set to the current call's id only when empty, so an
 // event forwarded through several levels names the call it originated under.
 // Forward reports whether the event was sent: false for KindFinal, outside a
-// tool call, or once the run has ended or its consumer stopped reading.
+// tool call, once that tool call has returned, or once the run has ended or
+// its consumer stopped reading.
 func Forward(ctx context.Context, ev Event) bool {
 	if ev.Kind == KindFinal {
 		return false
 	}
 	scope, _ := ctx.Value(toolScopeKey{}).(*toolScope)
-	if scope == nil {
+	if scope == nil || scope.done.Load() {
 		return false
 	}
 	if ev.ParentToolID == "" {
@@ -91,7 +97,10 @@ func runContext(ctx context.Context, info *RunInfo) context.Context {
 	return context.WithValue(ctx, toolScopeKey{}, (*toolScope)(nil))
 }
 
-// callContext returns the context a tool call of r runs under.
-func (r *run) callContext(ctx context.Context, toolUseID string) context.Context {
-	return context.WithValue(ctx, toolScopeKey{}, &toolScope{run: r, toolUseID: toolUseID})
+// callContext returns the context a tool call of r runs under, and end, to
+// be called once the call has returned: Forward refuses the context from
+// then on.
+func (r *run) callContext(ctx context.Context, toolUseID string) (callCtx context.Context, end func()) {
+	scope := &toolScope{run: r, toolUseID: toolUseID}
+	return context.WithValue(ctx, toolScopeKey{}, scope), func() { scope.done.Store(true) }
 }

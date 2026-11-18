@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,7 +118,6 @@ func toolInterrupt(c *toolCall, intr *Interrupt) *callInterrupt {
 // requests and ends the run waiting for decisions.
 func (r *run) interrupt(calls []*toolCall) *Final {
 	turn := pendingTurn{Calls: make([]callRecord, len(calls))}
-	var requests []ActionRequest
 	for i, c := range calls {
 		turn.Calls[i] = callRecord{
 			ID:        c.id,
@@ -126,13 +126,47 @@ func (r *run) interrupt(calls []*toolCall) *Final {
 			Result:    c.result,
 			Interrupt: c.interrupt,
 		}
-		if c.interrupt != nil {
-			requests = append(requests, c.interrupt.Request)
-		}
 	}
 	pendingKey.Set(r.state, turn)
-	r.emit(Event{Kind: KindInterrupt, Interrupt: &Interrupt{Requests: requests}})
+	r.emit(Event{Kind: KindInterrupt, Interrupt: &Interrupt{Requests: turn.requests()}})
 	return r.finish(ReasonInterrupted, nil)
+}
+
+// Pending returns the pending actions of the interrupted run recorded in s,
+// in call order: the Interrupt that run reported with KindInterrupt. s is
+// the Final.State of a run that ended with ReasonInterrupted, possibly
+// restored from JSON. Pending returns false when s is nil or holds no
+// interrupted run (it was never interrupted, or was resumed or run again
+// since). The result is a copy: changing it never touches s.
+func Pending(s *state.State) (*Interrupt, bool) {
+	if s == nil {
+		return nil, false
+	}
+	turn, ok := pendingKey.Get(s)
+	if !ok {
+		return nil, false
+	}
+	requests := turn.requests()
+	if len(requests) == 0 {
+		return nil, false
+	}
+	return &Interrupt{Requests: requests}, true
+}
+
+// requests returns a copy of the requests of the turn's pending calls, in
+// call order.
+func (t pendingTurn) requests() []ActionRequest {
+	var requests []ActionRequest
+	for _, rec := range t.Calls {
+		if rec.Interrupt == nil {
+			continue
+		}
+		req := rec.Interrupt.Request
+		req.Input = bytes.Clone(req.Input)
+		req.Allowed = slices.Clone(req.Allowed)
+		requests = append(requests, req)
+	}
+	return requests
 }
 
 // resumeTurn finishes the interrupted turn. It runs after the BeforeAgent

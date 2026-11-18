@@ -1,11 +1,9 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -206,8 +204,8 @@ func (r *run) callModel() (*llm.Response, error) {
 	return resp, err
 }
 
-// modelRequest builds the request for the next turn. Its messages are a
-// repaired view of State, so wrappers may rewrite them freely.
+// modelRequest builds the request for the next turn. Its messages are the
+// View of State, so wrappers may rewrite them freely.
 func (r *run) modelRequest() *ModelRequest {
 	cfg := r.agent.cfg
 	return &ModelRequest{
@@ -216,7 +214,7 @@ func (r *run) modelRequest() *ModelRequest {
 			Model:         cfg.Model,
 			System:        slices.Clone(cfg.System),
 			CacheBoundary: cfg.CacheBoundary,
-			Messages:      repairHistory(requestView(r.state.Messages())),
+			Messages:      View(r.state.Messages()),
 			Tools:         r.toolSchemas(),
 			MaxTokens:     r.maxTokens(),
 			Temperature:   clonePtr(cfg.Temperature),
@@ -227,36 +225,6 @@ func (r *run) modelRequest() *ModelRequest {
 		Backend:  r.backend,
 		ThreadID: r.threadID,
 	}
-}
-
-// requestView copies msgs for a model request, dropping each message's
-// host-only Meta. The content is copied all the way down (nested tool_result
-// content, tool inputs, sources, provider data), because wrappers may edit
-// the view in place and State must not see it.
-func requestView(msgs []llm.Message) []llm.Message {
-	view := make([]llm.Message, len(msgs))
-	for i, m := range msgs {
-		m.Content = cloneBlocks(m.Content)
-		m.Meta = nil
-		view[i] = m
-	}
-	return view
-}
-
-// cloneBlocks returns a deep copy of blocks.
-func cloneBlocks(blocks []llm.Block) []llm.Block {
-	if blocks == nil {
-		return nil
-	}
-	out := make([]llm.Block, len(blocks))
-	for i, b := range blocks {
-		b.Input = bytes.Clone(b.Input)
-		b.Content = cloneBlocks(b.Content)
-		b.Source = clonePtr(b.Source)
-		b.ProviderData = maps.Clone(b.ProviderData)
-		out[i] = b
-	}
-	return out
 }
 
 // streamModel is the innermost model handler: it streams the reply from the

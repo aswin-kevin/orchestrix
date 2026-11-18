@@ -12,6 +12,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -325,5 +326,149 @@ func TestNonStreamingEmitsOnce(t *testing.T) {
 		deltas[0].Kind != KindThinking || deltas[0].Text != "let me think" ||
 		deltas[1].Kind != KindText || deltas[1].Text != "hello world" {
 		t.Fatalf("content events = %+v, want one thinking then one text", deltas)
+	}
+}
+
+// stopHook answers every BeforeStop with prompts[i] for its i-th call, and
+// with the last prompt once they run out.
+type stopHook struct {
+	prompts []string
+	calls   *int
+}
+
+func (stopHook) Name() string { return "stop_hook" }
+
+func (h stopHook) BeforeStop(context.Context, *state.State, *llm.Response) (string, error) {
+	i := min(*h.calls, len(h.prompts)-1)
+	*h.calls++
+	return h.prompts[i], nil
+}
+
+func TestBeforeStopContinues(t *testing.T) {
+	var calls int
+	p := llmtest.New(llmtest.Turn{Text: "first answer"}, llmtest.Turn{Text: "verified"})
+	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{stopHook{prompts: []string{"verify the file", ""}, calls: &calls}}})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonCompleted || final.Err != nil || final.Turns != 2 || final.Text != "verified" {
+		t.Fatalf("final = %+v, want completed after 2 turns", final)
+	}
+	if p.Calls() != 2 || calls != 2 {
+		t.Fatalf("model calls = %d, BeforeStop calls = %d; want 2 and 2", p.Calls(), calls)
+	}
+	msgs := final.State.Messages()
+	if len(msgs) != 4 || msgs[1].Text() != "first answer" || msgs[2].Role != llm.RoleUser || msgs[2].Text() != "verify the file" {
+		t.Fatalf("state messages = %+v, want the prompt right after the first answer", msgs)
+	}
+	if got := lastText(p.Requests[1]); got != "verify the file" {
+		t.Fatalf("second request ends with %q, want the BeforeStop prompt", got)
+	}
+}
+
+func TestBeforeStopCapped(t *testing.T) {
+	var calls int
+	turns := make([]llmtest.Turn, 1+MaxStopContinuations+1) // one spare: it must stay unused
+	for i := range turns {
+		turns[i] = llmtest.Turn{Text: fmt.Sprintf("answer %d", i)}
+	}
+	p := llmtest.New(turns...)
+	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{stopHook{prompts: []string{"again"}, calls: &calls}}})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonCompleted || final.Err != nil {
+		t.Fatalf("final = %+v, want completed", final)
+	}
+	if p.Calls() != 1+MaxStopContinuations || calls != MaxStopContinuations {
+		t.Fatalf("model calls = %d, BeforeStop calls = %d; want %d and %d",
+			p.Calls(), calls, 1+MaxStopContinuations, MaxStopContinuations)
+	}
+}
+
+func TestBeforeStopNotOnSettlement(t *testing.T) {
+	var calls int
+	p := llmtest.New(toolTurn("t1"), llmtest.Turn{Text: "summary"})
+	a := mustNew(t, Config{
+		Provider:   p,
+		Tools:      []tool.Tool{echoTool()},
+		MaxTurns:   1,
+		Settlement: &Settlement{Prompt: settlementPrompt},
+		Middleware: []Middleware{stopHook{prompts: []string{"keep going"}, calls: &calls}},
+	})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonMaxTurns || final.Text != "summary" || p.Calls() != 2 {
+		t.Fatalf("final = %+v after %d model calls, want max_turns after 2", final, p.Calls())
+	}
+	if calls != 0 {
+		t.Fatalf("BeforeStop called %d times during settlement, want 0", calls)
+	}
+}
+
+// failingStop fails BeforeStop with err.
+type failingStop struct{ err error }
+
+func (failingStop) Name() string { return "failing_stop" }
+
+func (h failingStop) BeforeStop(context.Context, *state.State, *llm.Response) (string, error) {
+	return "", h.err
+}
+
+func TestBeforeStopErrorEndsRun(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want TerminalReason
+	}{
+		{errors.New("boom"), ReasonMiddlewareError},
+		{fmt.Errorf("enough: %w", ErrStopRun), ReasonHookStopped},
+	} {
+		a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "answer"}), Middleware: []Middleware{failingStop{tc.err}}})
+
+		_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+		if final.Reason != tc.want || !errors.Is(final.Err, tc.err) {
+			t.Fatalf("final = %+v, want %s wrapping %v", final, tc.want, tc.err)
+		}
+	}
+}
+
+// namedStop answers BeforeStop with prompt and logs its name.
+type namedStop struct {
+	name, prompt string
+	log          *[]string
+}
+
+func (h namedStop) Name() string { return h.name }
+
+func (h namedStop) BeforeStop(context.Context, *state.State, *llm.Response) (string, error) {
+	*h.log = append(*h.log, h.name)
+	return h.prompt, nil
+}
+
+func TestBeforeStopReverseOrderFirstPromptWins(t *testing.T) {
+	var log []string
+	turns := make([]llmtest.Turn, 1+MaxStopContinuations)
+	for i := range turns {
+		turns[i] = llmtest.Turn{Text: "answer"}
+	}
+	p := llmtest.New(turns...)
+	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{
+		namedStop{name: "outer", prompt: "from outer", log: &log},
+		namedStop{name: "inner", prompt: "from inner", log: &log},
+		namedStop{name: "innermost", log: &log},
+	}})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonCompleted || p.Calls() != 1+MaxStopContinuations {
+		t.Fatalf("final = %+v after %d model calls, want completed after %d", final, p.Calls(), 1+MaxStopContinuations)
+	}
+	if got := lastText(p.Requests[1]); got != "from inner" {
+		t.Fatalf("continuation prompt = %q, want the first non-empty one in reverse order", got)
+	}
+	if want := []string{"innermost", "inner"}; !slices.Equal(log[:2], want) {
+		t.Fatalf("hook order = %v, want %v first", log, want)
 	}
 }

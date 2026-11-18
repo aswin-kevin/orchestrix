@@ -46,6 +46,9 @@ type toolCall struct {
 	resumed *resumedCall
 	// resume is handed to the tool as tool.Call.Resume.
 	resume *tool.ResumeValue
+	// approved reports that a human approved the call (ToolCall.Approved):
+	// the Approver allowed it, or it runs on a Resume decision.
+	approved bool
 	// announced reports that KindToolUse was emitted for the call in this
 	// run. It is emitted only once the call's fate is known, so every
 	// announced call also gets a KindToolResult unless it is left pending.
@@ -344,14 +347,17 @@ func (r *run) runCall(c *toolCall) (res tool.Result, intr *Interrupt) {
 		return *stopped, nil
 	}
 	call := &ToolCall{
-		ID:    c.id,
-		Name:  c.name,
-		Input: c.input,
-		Tool:  c.tool,
-		State: r.state,
-		Call:  r.toolEnv(c),
+		ID:       c.id,
+		Name:     c.name,
+		Input:    c.input,
+		Tool:     c.tool,
+		State:    r.state,
+		Call:     r.toolEnv(c),
+		Approved: c.approved,
 	}
-	res, err := r.agent.runTool(r.callContext(r.budget.toolCtx, c.id), call)
+	ctx, end := r.callContext(r.budget.toolCtx, c.id)
+	defer end()
+	res, err := r.agent.runTool(ctx, call)
 	if err == nil {
 		return res, nil
 	}

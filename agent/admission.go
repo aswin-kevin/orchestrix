@@ -1,6 +1,10 @@
 package agent
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -43,6 +47,7 @@ func (r *run) admit(c *toolCall) *tool.Result {
 			return nil
 		}
 		decision = r.agent.cfg.Approver(r.ctx, req, decision.Message)
+		c.approved = decision.Behavior == permission.Allow
 	}
 	return r.applyPermission(c, decision)
 }
@@ -52,6 +57,7 @@ func (r *run) admit(c *toolCall) *tool.Result {
 // forbid. The human's decision is the approval, so an Ask counts as granted;
 // a Deny still refuses the call.
 func (r *run) recheck(c *toolCall) *tool.Result {
+	c.approved = true
 	decision := permission.Evaluate(r.permissionRequest(c), r.agent.permissionContext())
 	if decision.Behavior == permission.Ask {
 		decision = permission.Allowed()
@@ -73,15 +79,38 @@ func (r *run) applyPermission(c *toolCall, decision permission.Decision) *tool.R
 	return validateInput(c.tool, c.input)
 }
 
-// permissionRequest describes c for permission.Evaluate, using whichever
-// optional interfaces the tool implements.
+// permissionRequest describes c for permission.Evaluate.
 func (r *run) permissionRequest(c *toolCall) permission.Request {
-	t, in := c.tool, c.input
+	return r.agent.permissionRequest(r.ctx, c.name, c.tool, c.input)
+}
+
+// CheckPermission runs the permission pipeline the loop applies to a new
+// call (rules, permission mode and the tool's own check) on call.Input, and
+// returns its decision. It never consults the Approver: an Ask is returned
+// as is, for the caller to resolve, which lets a ToolWrapper ask a human
+// itself. call.Tool is used when set, else the agent's tool named call.Name;
+// a name the agent does not know is denied. A panic in the tool's methods
+// propagates to the caller.
+func (a *Agent) CheckPermission(ctx context.Context, call *ToolCall) permission.Decision {
+	t := call.Tool
+	if t == nil {
+		var ok bool
+		if t, ok = a.registry.Get(call.Name); !ok {
+			return permission.Denied(fmt.Sprintf("unknown tool %q", call.Name))
+		}
+	}
+	return permission.Evaluate(a.permissionRequest(ctx, call.Name, t, call.Input), a.permissionContext())
+}
+
+// permissionRequest describes a call of t named name with input in for
+// permission.Evaluate, using whichever optional interfaces the tool
+// implements. ctx is passed to the tool's own CheckPermission.
+func (a *Agent) permissionRequest(ctx context.Context, name string, t tool.Tool, in json.RawMessage) permission.Request {
 	req := permission.Request{
-		Tool:      c.name,
+		Tool:      name,
 		Input:     in,
 		ReadOnly:  t.ReadOnly(in),
-		SelfCheck: t.CheckPermission(r.ctx, in, r.agent.permissionContext()),
+		SelfCheck: t.CheckPermission(ctx, in, a.permissionContext()),
 	}
 	if e, ok := t.(tool.Editor); ok {
 		req.Edit = e.IsEdit(in)

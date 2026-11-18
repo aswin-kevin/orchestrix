@@ -101,7 +101,7 @@ Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. 
 
 ## Middleware
 
-A middleware is any value with a `Name() string` method plus whichever hook interfaces it needs: `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `ModelWrapper`, `ToolWrapper` and `ToolProvider`. Wrappers nest like an onion: the first middleware in the stack is the outermost, and a wrapper may call `next` zero, one or several times.
+A middleware is any value with a `Name() string` method plus whichever hook interfaces it needs: `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeStop`, `ModelWrapper`, `ToolWrapper` and `ToolProvider`. Wrappers nest like an onion: the first middleware in the stack is the outermost, and a wrapper may call `next` zero, one or several times.
 
 The default stack is `filesystem` (file tools) and `planning` (`write_todos`). Adding a middleware with a default's name replaces it; `WithoutMiddleware("planning")` removes it.
 

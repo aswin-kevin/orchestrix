@@ -69,6 +69,10 @@ type budget struct {
 	// unproductiveNudges counts consecutive nudges that yielded little.
 	unproductiveNudges int
 
+	// stopContinuations counts the turns BeforeStop hooks added, capped at
+	// MaxStopContinuations.
+	stopContinuations int
+
 	// settleReason is the limit being settled; empty outside settlement.
 	settleReason TerminalReason
 	// settleTurnsLeft is how many settlement model calls remain.
@@ -173,7 +177,7 @@ func (r *run) afterToolTurn() *Final {
 
 // afterNoToolTurn decides what follows a reply without tool calls: resuming
 // a truncated reply, nudging the model toward its token budget, or the end
-// of the run.
+// of the run, which BeforeStop hooks may still put off.
 func (r *run) afterNoToolTurn(resp *llm.Response) *Final {
 	b := r.budget
 	if b.settling() {
@@ -182,7 +186,7 @@ func (r *run) afterNoToolTurn(resp *llm.Response) *Final {
 	}
 	if resp.StopReason == llm.StopMaxTokens {
 		if b.resumes >= maxResumeAttempts {
-			return r.finish(ReasonCompleted, nil)
+			return r.complete(resp)
 		}
 		b.resumes++
 		return r.continueWith(DefaultResumePrompt)
@@ -190,7 +194,25 @@ func (r *run) afterNoToolTurn(resp *llm.Response) *Final {
 	if prompt, ok := b.nudge(r.agent.cfg.TokenBudget, r.usage.Output); ok {
 		return r.continueWith(prompt)
 	}
-	return r.finish(ReasonCompleted, nil)
+	return r.complete(resp)
+}
+
+// complete ends the run as completed, unless a BeforeStop hook asks for
+// another turn and the run has continuations left.
+func (r *run) complete(resp *llm.Response) *Final {
+	b := r.budget
+	if b.stopContinuations >= MaxStopContinuations {
+		return r.finish(ReasonCompleted, nil)
+	}
+	prompt, err := r.beforeStop(resp)
+	if err != nil {
+		return r.hookFailure(err)
+	}
+	if prompt == "" {
+		return r.finish(ReasonCompleted, nil)
+	}
+	b.stopContinuations++
+	return r.continueWith(prompt)
 }
 
 // continueWith appends prompt as a user message so the model takes another

@@ -527,3 +527,99 @@ func TestHeldCallNotAnnounced(t *testing.T) {
 		assertToolEventsPaired(t, resumed)
 	})
 }
+
+// approvalLog records ToolCall.Approved per tool_use id, as ToolWrappers see
+// it.
+type approvalLog struct {
+	mu       sync.Mutex
+	approved map[string]bool
+}
+
+func (*approvalLog) Name() string { return "approval_log" }
+
+func (l *approvalLog) WrapTool(ctx context.Context, call *ToolCall, next ToolHandler) (tool.Result, error) {
+	l.mu.Lock()
+	l.approved[call.ID] = call.Approved
+	l.mu.Unlock()
+	return next(ctx, call)
+}
+
+func TestToolCallApprovedFlag(t *testing.T) {
+	newLog := func() *approvalLog { return &approvalLog{approved: map[string]bool{}} }
+
+	t.Run("approver allows", func(t *testing.T) {
+		seen := newLog()
+		runOneTurn(t, Config{
+			Tools:      []tool.Tool{writeTool(newCallLog()), readTool(newCallLog())},
+			Middleware: []Middleware{seen},
+			Approver: func(context.Context, permission.Request, string) permission.Decision {
+				return permission.Allowed()
+			},
+		}, llmtest.Turn{ToolCalls: []llmtest.Call{writeCall("w"), readCall("r")}})
+		if !seen.approved["w"] || seen.approved["r"] {
+			t.Fatalf("Approved = %v, want true for the approved w only (r is allowed by mode)", seen.approved)
+		}
+	})
+
+	t.Run("allow rule", func(t *testing.T) {
+		seen := newLog()
+		runOneTurn(t, Config{
+			Tools:      []tool.Tool{writeTool(newCallLog())},
+			Middleware: []Middleware{seen},
+			Rules:      permission.Rules{Allow: []permission.Rule{{Tool: "write_file"}}},
+		}, llmtest.Turn{ToolCalls: []llmtest.Call{writeCall("w")}})
+		if approved, ran := seen.approved["w"]; !ran || approved {
+			t.Fatalf("Approved = %v (ran %v), want false for a rule-allowed call", approved, ran)
+		}
+	})
+
+	t.Run("resumed approve", func(t *testing.T) {
+		seen := newLog()
+		log := newCallLog()
+		a, _, final := interruptedRun(t, Config{
+			Tools:      []tool.Tool{writeTool(log), readTool(log)},
+			Middleware: []Middleware{seen},
+		}, writeCall("w"), readCall("r"))
+
+		resumeCompleted(t, a, final.State, Decision{ToolUseID: "w", Type: Approve})
+
+		if !seen.approved["w"] || seen.approved["r"] {
+			t.Fatalf("Approved = %v, want true for the resumed w only", seen.approved)
+		}
+	})
+}
+
+func TestCheckPermissionDenyRule(t *testing.T) {
+	a := mustNew(t, Config{
+		Provider: llmtest.New(),
+		Tools:    []tool.Tool{writeTool(newCallLog())},
+		Rules:    permission.Rules{Deny: []permission.Rule{{Tool: "write_file"}}},
+		Approver: func(context.Context, permission.Request, string) permission.Decision {
+			t.Fatal("CheckPermission consulted the Approver")
+			return permission.Decision{}
+		},
+	})
+	write, _ := a.registry.Get("write_file")
+	call := &ToolCall{ID: "w", Name: "write_file", Input: json.RawMessage(`{"text":"x"}`), Tool: write}
+
+	if got := a.CheckPermission(context.Background(), call); got.Behavior != permission.Deny {
+		t.Fatalf("CheckPermission = %+v, want deny", got)
+	}
+}
+
+func TestCheckPermissionAsksWithoutConsultingApprover(t *testing.T) {
+	a := mustNew(t, Config{
+		Provider: llmtest.New(),
+		Tools:    []tool.Tool{writeTool(newCallLog())},
+		Approver: func(context.Context, permission.Request, string) permission.Decision {
+			t.Fatal("CheckPermission consulted the Approver")
+			return permission.Decision{}
+		},
+	})
+	write, _ := a.registry.Get("write_file")
+	call := &ToolCall{ID: "w", Name: "write_file", Input: json.RawMessage(`{"text":"x"}`), Tool: write}
+
+	if got := a.CheckPermission(context.Background(), call); got.Behavior != permission.Ask {
+		t.Fatalf("CheckPermission = %+v, want ask in the default mode", got)
+	}
+}

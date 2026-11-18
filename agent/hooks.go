@@ -9,8 +9,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 )
 
-// ErrStopRun ends a run on purpose. When a BeforeAgent, BeforeModel or
-// AfterModel hook, or a ToolWrapper (or the tool itself), returns an error
+// ErrStopRun ends a run on purpose. When a BeforeAgent, BeforeModel,
+// AfterModel or BeforeStop hook, or a ToolWrapper (or the tool itself), returns an error
 // wrapping it, the run ends with ReasonHookStopped and Final.Err is that
 // error. A tool call that stops the run is answered with an error result, and
 // the calls of its turn that had not started are answered as skipped, so
@@ -51,6 +51,26 @@ func (r *run) afterModel(resp *llm.Response) error {
 		}
 	}
 	return nil
+}
+
+// beforeStop asks the BeforeStop hooks, in reverse stack order, for a prompt
+// that keeps the run going. The first non-empty prompt wins, so the hooks
+// after it are not consulted; an empty result lets the run complete.
+func (r *run) beforeStop(resp *llm.Response) (string, error) {
+	for _, mw := range slices.Backward(r.agent.stack) {
+		h, ok := mw.(BeforeStop)
+		if !ok {
+			continue
+		}
+		prompt, err := h.BeforeStop(r.ctx, r.state, resp)
+		if err != nil {
+			return "", hookError(mw, "BeforeStop", err)
+		}
+		if prompt != "" {
+			return prompt, nil
+		}
+	}
+	return "", nil
 }
 
 // afterAgent runs the AfterAgent hooks under a context that keeps the run's

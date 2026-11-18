@@ -362,3 +362,54 @@ func TestResumeWithRejectsMessages(t *testing.T) {
 		t.Fatalf("state has %d messages, want %d: an invalid resume leaves it untouched", got, before)
 	}
 }
+
+// staleForward saves the context of its tool call; on the next model turn,
+// while the run is still live, it tries to Forward with it.
+type staleForward struct {
+	saved     *context.Context
+	forwarded *bool
+	tried     *bool
+}
+
+func (staleForward) Name() string { return "stale_forward" }
+
+func (h staleForward) BeforeModel(context.Context, *state.State) error {
+	if *h.saved != nil && !*h.tried {
+		*h.tried = true
+		*h.forwarded = Forward(*h.saved, Event{Kind: KindText, Text: "stale"})
+	}
+	return nil
+}
+
+func TestForwardRefusedAfterToolCallReturned(t *testing.T) {
+	var saved context.Context
+	var forwarded, tried bool
+	saver := tool.New("save", "Keep the call context.",
+		func(ctx context.Context, _ struct{}, _ *tool.Call) (tool.Result, error) {
+			saved = ctx
+			if !Forward(ctx, Event{Kind: KindText, Text: "live"}) {
+				t.Error("Forward during the call reported failure")
+			}
+			return tool.Text("saved"), nil
+		},
+		tool.WithReadOnly())
+	a := mustNew(t, Config{
+		Provider:   llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "s1", Name: "save"}}}, llmtest.Turn{Text: "done"}),
+		Tools:      []tool.Tool{saver},
+		Middleware: []Middleware{staleForward{saved: &saved, forwarded: &forwarded, tried: &tried}},
+	})
+
+	events, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonCompleted || !tried {
+		t.Fatalf("final = %+v, tried = %v; want completed after a stale Forward attempt", final, tried)
+	}
+	if forwarded {
+		t.Fatal("Forward with the context of a returned call reported success")
+	}
+	for _, ev := range events {
+		if ev.Text == "stale" {
+			t.Fatalf("stale event %+v reached the stream", ev)
+		}
+	}
+}
