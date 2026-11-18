@@ -5,13 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/pathsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -34,8 +34,6 @@ const (
 	hashChars      = 12   // hex characters of the content hash in a message file name
 )
 
-var unsafeIDChars = regexp.MustCompile(`[^A-Za-z0-9_-]`)
-
 // WrapTool implements agent.ToolWrapper. Output of tools this middleware does
 // not own, when larger than Config.OffloadChars, is saved to the backend and
 // replaced by its first lines and the file path, so one noisy tool cannot
@@ -54,7 +52,7 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 	if err != nil {
 		return res, nil // nowhere to save it; the loop's own cap still applies
 	}
-	path := fmt.Sprintf("%s/%s.txt", toolResultDir, unsafeIDChars.ReplaceAllString(call.ID, "_"))
+	path := fmt.Sprintf("%s/%s.txt", toolResultDir, pathsafe.Segment(call.ID))
 	if err := b.Write(ctx, path, []byte(text)); err != nil {
 		return replaceText(res, tool.Truncate(text, m.cfg.OffloadChars)), nil
 	}
