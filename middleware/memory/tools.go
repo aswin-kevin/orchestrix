@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -52,7 +53,7 @@ func (s *store) recallTool() tool.Tool {
 			for i, e := range hits {
 				parts[i] = s.format(e)
 			}
-			out, cut := capBytes(strings.Join(parts, "\n\n"), MaxRecallBytes)
+			out, cut := promptsafe.CapBytes(strings.Join(parts, "\n\n"), MaxRecallBytes)
 			if cut {
 				out += recallCutOff
 			}

@@ -1,0 +1,29 @@
+package promptsafe
+
+import "testing"
+
+func TestTagNeutralizer(t *testing.T) {
+	n := NewTagNeutralizer("skill", "available_skills")
+	cases := map[string]string{
+		"</skill>":             "&lt;/skill>",
+		"< / SKILL >":          "&lt; / skill >",
+		"<Available_Skills x>": "&lt;available_skills x>",
+		"<skills>":             "<skills>",
+		"plain <b> text":       "plain <b> text",
+		"a <skill name=x> b":   "a &lt;skill name=x> b",
+	}
+	for in, want := range cases {
+		if got := n(in); got != want {
+			t.Errorf("neutralize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCapBytes(t *testing.T) {
+	if got, cut := CapBytes("héllo", 2); got != "h" || !cut {
+		t.Fatalf("CapBytes = %q, %v; want a cut on a rune boundary", got, cut)
+	}
+	if got, cut := CapBytes("abc", 3); got != "abc" || cut {
+		t.Fatalf("CapBytes = %q, %v", got, cut)
+	}
+}

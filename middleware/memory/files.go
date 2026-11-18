@@ -2,11 +2,10 @@ package memory
 
 import (
 	"context"
-	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 )
 
 const (
@@ -14,15 +13,9 @@ const (
 	commentClose = "-->"
 )
 
-// frameTag matches the start of an opening or closing <memory> or
-// <memory_index> tag in any case, with whitespace allowed inside it.
-var frameTag = regexp.MustCompile(`(?i)<(\s*/?\s*)(memory_index|memory)\b`)
-
-// neutralizeTags escapes the "<" of every tag in s that could open or end one
-// of the prompt's own elements (lowercasing the tag name), so content cannot break out of its frame.
-func neutralizeTags(s string) string {
-	return frameTag.ReplaceAllStringFunc(s, func(tag string) string { return "&lt;" + strings.ToLower(tag[1:]) })
-}
+// neutralizeTags escapes any tag in s that could open or end one of the
+// prompt's own elements.
+var neutralizeTags = promptsafe.NewTagNeutralizer("memory_index", "memory")
 
 // loadIndex reads the store index for the system prompt, neutralizing a
 // literal frame tag and capping it at DefaultMaxIndexBytes. A missing or
@@ -37,7 +30,7 @@ func loadIndex(ctx context.Context, b backend.Backend, p string) string {
 	}
 	index := strings.TrimSpace(strings.Join(res.Lines, "\n"))
 	index = neutralizeTags(index)
-	index, _ = capBytes(index, DefaultMaxIndexBytes)
+	index, _ = promptsafe.CapBytes(index, DefaultMaxIndexBytes)
 	return strings.TrimSpace(index)
 }
 
@@ -59,7 +52,7 @@ func loadFiles(ctx context.Context, b backend.Backend, paths []string, maxBytes 
 			continue
 		}
 		content = neutralizeTags(content)
-		content, truncated := capBytes(content, maxBytes)
+		content, truncated := promptsafe.CapBytes(content, maxBytes)
 		content = strings.TrimSpace(content)
 		files = append(files, File{Path: p, Content: content, Truncated: truncated})
 	}
@@ -81,15 +74,4 @@ func stripComments(s string) string {
 			return out.String()
 		}
 	}
-}
-
-// capBytes cuts s to at most limit bytes without splitting a rune.
-func capBytes(s string, limit int) (string, bool) {
-	if len(s) <= limit {
-		return s, false
-	}
-	for limit > 0 && !utf8.RuneStart(s[limit]) {
-		limit--
-	}
-	return s[:limit], true
 }
