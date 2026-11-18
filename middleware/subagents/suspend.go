@@ -20,9 +20,9 @@ import (
 const maxReasonInput = 120
 
 // suspendedKey holds the subagents waiting for a decision, by the tool_use id
-// of the task call that started them. It is private: it belongs to the run
-// whose task calls these are.
-var suspendedKey = state.NewKey[map[string]Suspended]("subagents.suspended", state.Private[map[string]Suspended]())
+// of the task call that started them. It is run-local (state.RunLocal): it
+// belongs to the run whose task calls these are, so not even a fork gets it.
+var suspendedKey = state.NewKey[map[string]Suspended]("subagents.suspended", state.RunLocal[map[string]Suspended]())
 
 // Suspended is a subagent run that ended interrupted, kept in the parent's
 // State until the parent's task call is resumed.

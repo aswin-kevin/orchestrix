@@ -46,7 +46,10 @@ func forkInput(parentThread, description string, c *tool.Call) (agent.Input, err
 // assistant message holding the task call, answered by a user message that
 // hands the fork its task.
 func forkState(c *tool.Call, description string) (*state.State, error) {
-	s := c.State.Clone()
+	// Fork leaves out the parent's run-local bookkeeping (its suspended
+	// children, workspace snapshot, pending turn, background jobs): the fork
+	// continues the conversation, not the parent's run.
+	s := c.State.Fork()
 	msgs := s.Messages()
 	i, ok := callIndex(msgs, c.ToolUseID)
 	if !ok {
@@ -57,10 +60,6 @@ func forkState(c *tool.Call, description string) (*state.State, error) {
 	msgs = append(msgs[:i+1:i+1], forkAnswers(msgs[i], c.ToolUseID, description))
 	s.SetMessages(msgs)
 	forkedKey.Set(s, true)
-	// The fork continues the conversation, not the parent's bookkeeping:
-	// the parent's suspended children and workspace snapshot stay with it.
-	suspendedKey.Delete(s)
-	agent.WorkspaceKey.Delete(s)
 	return s, nil
 }
 

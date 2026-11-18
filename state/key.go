@@ -13,6 +13,9 @@ import (
 type keyMeta struct {
 	typ     reflect.Type
 	private bool
+	// runLocal marks bookkeeping of the run that owns the State; Fork drops
+	// it. It implies private.
+	runLocal bool
 	// decode turns serialized JSON into the key's concrete type T.
 	decode func(json.RawMessage) (any, error)
 	// merge combines parent and child values; nil means "child wins".
@@ -47,9 +50,9 @@ func declare(meta keyMeta, name string) {
 		registry.keys[name] = meta
 		return
 	}
-	if prev.typ != meta.typ || prev.private != meta.private {
-		panic(fmt.Sprintf("state: key %q redeclared with a different type or privacy (was %v private=%t, now %v private=%t)",
-			name, prev.typ, prev.private, meta.typ, meta.private))
+	if prev.typ != meta.typ || prev.private != meta.private || prev.runLocal != meta.runLocal {
+		panic(fmt.Sprintf("state: key %q redeclared with a different type or privacy (was %v private=%t runLocal=%t, now %v private=%t runLocal=%t)",
+			name, prev.typ, prev.private, prev.runLocal, meta.typ, meta.private, meta.runLocal))
 	}
 	if meta.merge != nil {
 		prev.merge = meta.merge
@@ -66,9 +69,10 @@ func declare(meta keyMeta, name string) {
 // the State is marshaled, cloned or handed to a child. Set and Update panic
 // on a value that cannot be encoded.
 type Key[T any] struct {
-	name    string
-	private bool
-	merge   func(parent, child T) T
+	name     string
+	private  bool
+	runLocal bool
+	merge    func(parent, child T) T
 }
 
 // KeyOption configures a Key at construction time.
@@ -78,6 +82,15 @@ type KeyOption[T any] func(*Key[T])
 // MergeChild never merges it back into the parent.
 func Private[T any]() KeyOption[T] {
 	return func(k *Key[T]) { k.private = true }
+}
+
+// RunLocal marks a key as bookkeeping of the run that owns the State, such
+// as a record of its in-flight turn or of the processes it started. It
+// implies Private, and Fork does not copy it either: a forked run continues
+// the conversation, but must not act on its parent's bookkeeping. Clone and
+// serialization keep it, since they stand for the same run.
+func RunLocal[T any]() KeyOption[T] {
+	return func(k *Key[T]) { k.private, k.runLocal = true, true }
 }
 
 // MergeWith sets how MergeChild combines the parent's and the child's values
@@ -197,8 +210,9 @@ func (k Key[T]) store(s *State, v T) {
 // meta builds the type-erased description stored in the registry.
 func (k Key[T]) meta() keyMeta {
 	m := keyMeta{
-		typ:     reflect.TypeFor[T](),
-		private: k.private,
+		typ:      reflect.TypeFor[T](),
+		private:  k.private,
+		runLocal: k.runLocal,
 		decode: func(raw json.RawMessage) (any, error) {
 			var v T
 			if err := json.Unmarshal(raw, &v); err != nil {

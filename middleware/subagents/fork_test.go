@@ -2,6 +2,7 @@ package subagents
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"slices"
 	"strings"
@@ -9,8 +10,10 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -129,5 +132,35 @@ func TestForkNotOfferedWhenDisabled(t *testing.T) {
 	enabled := newMiddleware(t, Config{}).(agent.ToolProvider).Tools()[0]
 	if !strings.Contains(enabled.Description(), "- "+Fork+":") {
 		t.Fatalf("task description does not list fork:\n%s", enabled.Description())
+	}
+}
+
+// runLocalKey stands for a middleware's per-run bookkeeping, such as the
+// background jobs a run started.
+var runLocalKey = state.NewKey[string]("subagents_test.run_local", state.RunLocal[string]())
+
+func TestForkStateDropsRunLocalValues(t *testing.T) {
+	s := state.New()
+	s.AppendMessages(llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{{Type: llm.BlockToolUse, ID: "t1", Name: ToolTask}}})
+	runLocalKey.Set(s, "parent's")
+	privateKey.Set(s, "kept")
+	agent.WorkspaceKey.Set(s, json.RawMessage(`{}`))
+	suspendedKey.Set(s, map[string]Suspended{"t0": {}})
+
+	fork, err := forkState(&tool.Call{ToolUseID: "t1", State: s}, "do it")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := runLocalKey.Get(fork); ok {
+		t.Fatalf("fork state holds the parent's run-local value %q", v)
+	}
+	if v, _ := privateKey.Get(fork); v != "kept" {
+		t.Fatalf("fork private value = %q, want the parent's conversation state kept", v)
+	}
+	if _, ok := agent.WorkspaceKey.Get(fork); ok {
+		t.Fatal("fork state holds the parent's workspace snapshot")
+	}
+	if _, ok := suspendedKey.Get(fork); ok {
+		t.Fatal("fork state holds the parent's suspended subagents")
 	}
 }

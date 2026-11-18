@@ -76,7 +76,7 @@ func waitLimit(seconds int) time.Duration {
 // lookup finds a task of the call's thread: the live job, or failing that
 // the run's record of it. Records are refreshed first.
 func (m *Middleware) lookup(c *tool.Call, id string) (*job, JobRecord, bool) {
-	records := m.updateRecords(c.State, nil)
+	records := m.updateRecords(c.State, c.ThreadID, nil)
 	if j := m.jobs.job(c.ThreadID, id); j != nil {
 		status, exitCode := j.outcome()
 		return j, JobRecord{ID: id, ThreadID: c.ThreadID, Command: j.command, Status: status, ExitCode: exitCode, Started: j.started}, true
@@ -159,18 +159,16 @@ func (m *Middleware) taskStop(ctx context.Context, in taskIDInput, c *tool.Call)
 		return tool.Errorf("%v", err), nil
 	}
 	// The model asked for the stop, so it needs no notification about it.
-	m.updateRecords(c.State, func(records []JobRecord) {
-		for i := range records {
-			if records[i].ID == in.TaskID && records[i].finished() {
-				m.markNotified(&records[i])
-			}
+	m.updateRecords(c.State, c.ThreadID, func(r *JobRecord) {
+		if r.ID == in.TaskID && r.finished() {
+			m.markNotified(r)
 		}
 	})
 	return tool.Text(fmt.Sprintf("Stopped task %s.", in.TaskID)), nil
 }
 
 func (m *Middleware) taskList(_ context.Context, _ taskListInput, c *tool.Call) (tool.Result, error) {
-	records := m.updateRecords(c.State, nil)
+	records := m.updateRecords(c.State, c.ThreadID, nil)
 	if len(records) == 0 {
 		return tool.Text("No background tasks."), nil
 	}

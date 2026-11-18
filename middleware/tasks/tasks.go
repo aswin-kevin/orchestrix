@@ -13,7 +13,8 @@
 //
 // Job records live in the run's State (JobsKey); a job recorded as running
 // that the middleware does not know, because the State was saved by an
-// earlier process, is reported as lost.
+// earlier process, is reported as lost. A run only reads, announces and
+// stops the jobs of its own thread.
 package tasks
 
 import (
@@ -116,9 +117,10 @@ func outputTail(output string) string {
 // finished reports whether the record describes an ended job.
 func (r JobRecord) finished() bool { return r.Status != StatusRunning }
 
-// JobsKey holds the run's job records, oldest first. It is private to the run
-// that owns it.
-var JobsKey = state.NewKey[[]JobRecord]("tasks.jobs", state.Private[[]JobRecord]())
+// JobsKey holds the run's job records, oldest first. It is run-local
+// (state.RunLocal): neither a subagent nor a fork inherits the records, since
+// the jobs belong to the thread that started them.
+var JobsKey = state.NewKey[[]JobRecord]("tasks.jobs", state.RunLocal[[]JobRecord]())
 
 // Config configures the tasks middleware.
 type Config struct {
@@ -215,28 +217,35 @@ func (s starter) Start(ctx context.Context, c *tool.Call, command string, timeou
 	return j.id, nil
 }
 
-// BeforeModel implements agent.BeforeModel: every job that ended since the
-// last turn, or was lost, is announced with one user message.
+// BeforeModel implements agent.BeforeModel: every job of the run's thread
+// that ended since the last turn, or was lost, is announced with one user
+// message. Records of other threads are left alone, so a run never takes
+// another thread's notifications.
 //
 // Before that, a thread whose jobs all ended and were announced in earlier
 // turns is released (see manager.release): the model had the turn of each
 // notification to read the output, and afterwards task_output reports the
 // recorded outcome only.
 func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
-	if info, ok := agent.Info(ctx); ok && info.ThreadID != "" {
-		m.jobs.release(info.ThreadID)
+	threadID := runThread(ctx)
+	if threadID != "" {
+		m.jobs.release(threadID)
 	}
 	var notices []llm.Message
-	m.updateRecords(s, func(records []JobRecord) {
-		for i := range records {
-			if records[i].finished() && !records[i].Notified {
-				notices = append(notices, notification(records[i]))
-				m.markNotified(&records[i])
-			}
+	m.updateRecords(s, threadID, func(r *JobRecord) {
+		if r.finished() && !r.Notified {
+			notices = append(notices, notification(*r))
+			m.markNotified(r)
 		}
 	})
 	s.AppendMessages(notices...)
 	return nil
+}
+
+// runThread is the thread of the run ctx belongs to; empty outside a run.
+func runThread(ctx context.Context) string {
+	info, _ := agent.Info(ctx)
+	return info.ThreadID
 }
 
 // markNotified records, in r and on its job, that the model was told the job
@@ -255,48 +264,69 @@ func notification(r JobRecord) llm.Message {
 
 // AfterAgent implements agent.AfterAgent: a nested run's jobs are stopped and
 // forgotten when it ends, so a subagent's jobs never outlive it. A top-level
-// run's jobs keep running for later runs of the thread.
+// run's jobs keep running for later runs of the thread. Only jobs of the
+// run's own thread are stopped: a State may carry records of other threads,
+// and those jobs belong to whoever runs them.
 func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
-	if info, ok := agent.Info(ctx); !ok || info.Depth == 0 {
+	info, ok := agent.Info(ctx)
+	if !ok || info.Depth == 0 {
 		return nil
 	}
-	records, _ := JobsKey.Get(s)
-	byThread := map[string][]string{}
-	for _, r := range records {
+	var ids []string
+	for _, r := range m.threadRecords(s, info.ThreadID) {
 		if !r.finished() {
-			byThread[r.ThreadID] = append(byThread[r.ThreadID], r.ID)
+			ids = append(ids, r.ID)
 		}
 	}
-	for threadID, ids := range byThread {
-		m.jobs.stopAndForget(threadID, ids, func() {
-			m.updateRecords(s, func(records []JobRecord) {
-				for i := range records {
-					if slices.Contains(ids, records[i].ID) {
-						m.markNotified(&records[i])
-					}
-				}
-			})
-		})
+	if len(ids) == 0 {
+		return nil
 	}
+	m.jobs.stopAndForget(info.ThreadID, ids, func() {
+		m.updateRecords(s, info.ThreadID, func(r *JobRecord) {
+			if slices.Contains(ids, r.ID) {
+				m.markNotified(r)
+			}
+		})
+	})
 	return nil
 }
 
-// updateRecords brings the run's records up to date with the jobs, then lets
-// edit change them, in one State update, and returns a copy of the result.
-// A running record whose job ended takes its outcome; one whose job the
-// middleware does not know is lost. edit may be nil.
-func (m *Middleware) updateRecords(s *state.State, edit func([]JobRecord)) []JobRecord {
+// threadRecords returns the run's records of threadID, as stored.
+func (m *Middleware) threadRecords(s *state.State, threadID string) []JobRecord {
+	records, _ := JobsKey.Get(s)
+	var out []JobRecord
+	for _, r := range records {
+		if r.ThreadID == threadID {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// updateRecords brings the run's records of threadID up to date with the
+// jobs, then lets edit change each of them, in one State update, and returns
+// a copy of the records of threadID. A running record whose job ended takes
+// its outcome; one whose job the middleware does not know is lost. Records
+// of other threads are kept untouched. edit may be nil.
+func (m *Middleware) updateRecords(s *state.State, threadID string, edit func(*JobRecord)) []JobRecord {
 	var out []JobRecord
 	JobsKey.Update(s, func(records []JobRecord) []JobRecord {
 		records = slices.Clone(records)
 		for i := range records {
+			if records[i].ThreadID != threadID {
+				continue
+			}
 			m.refresh(&records[i])
-		}
-		if edit != nil {
-			edit(records)
+			if edit != nil {
+				edit(&records[i])
+			}
 		}
 		records = pruneRecords(records, m.jobs.maxFinished)
-		out = slices.Clone(records)
+		for _, r := range records {
+			if r.ThreadID == threadID {
+				out = append(out, r)
+			}
+		}
 		return records
 	})
 	return out

@@ -12,9 +12,9 @@ import (
 )
 
 // WorkspaceKey holds the snapshot of a run's backend (backend.Snapshotter)
-// when Config.SyncWorkspace is set. It is private: a subagent never inherits
-// its parent's workspace through State.
-var WorkspaceKey = state.NewKey[json.RawMessage]("agent.workspace", state.Private[json.RawMessage]())
+// when Config.SyncWorkspace is set. It is run-local (state.RunLocal): neither
+// a subagent nor a fork inherits its parent's workspace through State.
+var WorkspaceKey = state.NewKey[json.RawMessage]("agent.workspace", state.RunLocal[json.RawMessage]())
 
 // A persisted run saves at the points Config.Checkpointer lists. The first
 // save follows the BeforeAgent hooks, so the input is stored only once they

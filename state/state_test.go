@@ -365,3 +365,34 @@ func TestSetUnencodableValuePanics(t *testing.T) {
 		t.Fatal("rejected value was stored")
 	}
 }
+
+func TestForkDropsRunLocalKeys(t *testing.T) {
+	shared := NewKey[string]("test.fork_shared")
+	private := NewKey[string]("test.fork_private", Private[string]())
+	local := NewKey[string]("test.fork_local", RunLocal[string]())
+	s := New()
+	s.AppendMessages(llm.UserText("hello"))
+	shared.Set(s, "a")
+	private.Set(s, "b")
+	local.Set(s, "c")
+
+	f := s.Fork()
+	if msgs := f.Messages(); len(msgs) != 1 || msgs[0].Text() != "hello" {
+		t.Fatalf("fork messages = %+v", msgs)
+	}
+	if got, _ := shared.Get(f); got != "a" {
+		t.Fatalf("fork shared = %q", got)
+	}
+	if got, _ := private.Get(f); got != "b" {
+		t.Fatalf("fork private = %q, want the private value kept", got)
+	}
+	if _, ok := local.Get(f); ok {
+		t.Fatal("fork kept a run-local value")
+	}
+	if _, ok := local.Get(s.ChildFor()); ok {
+		t.Fatal("ChildFor copied a run-local value")
+	}
+	if got, _ := local.Get(s.Clone()); got != "c" {
+		t.Fatalf("Clone dropped the run-local value: %q", got)
+	}
+}

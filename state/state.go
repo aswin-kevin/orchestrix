@@ -74,6 +74,17 @@ func (s *State) Clone() *State {
 	return clone
 }
 
+// Fork returns a State for a run that continues this one's conversation
+// separately: an independent deep copy, like Clone, without the values of
+// RunLocal keys. Keys the State has never seen are copied.
+func (s *State) Fork() *State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fork := s.copyLocked(func(name string) bool { return !lookupKey(name).runLocal })
+	fork.messages = deepCopyMessages(s.messages)
+	return fork
+}
+
 // ChildFor returns a State for a subagent: it carries a deep copy of every
 // non-private value and no messages. Keys the State has never seen are
 // treated as non-private.

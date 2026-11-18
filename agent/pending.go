@@ -35,8 +35,9 @@ var permissionDecisions = []DecisionType{Approve, Edit, Reject, Respond}
 var defaultToolDecisions = []DecisionType{Approve, Reject, Respond}
 
 // pendingKey holds the record of an interrupted turn until Resume finishes it
-// or a new Run abandons it. It is private: a subagent never inherits it.
-var pendingKey = state.NewKey[pendingTurn]("agent.pending", state.Private[pendingTurn]())
+// or a new Run abandons it. It is run-local (state.RunLocal): neither a
+// subagent nor a fork inherits it.
+var pendingKey = state.NewKey[pendingTurn]("agent.pending", state.RunLocal[pendingTurn]())
 
 // errTurnMissing reports a State whose history no longer holds the assistant
 // message of the interrupted turn, so its results have nowhere to go.
