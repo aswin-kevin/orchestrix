@@ -128,7 +128,10 @@ func (r *run) prepare(use llm.Block, via string) (c *toolCall) {
 }
 
 // resolve returns the tool of the turn named name, or the error result of a
-// call that names a tool it may not call.
+// call that names a tool it may not call: one disabled during settlement,
+// an unknown one, or one the run's State makes unavailable
+// (tool.Availability). Both direct calls and dispatch targets resolve here,
+// so an unavailable tool is refused before any approval is asked for.
 func (r *run) resolve(name string) (tool.Tool, *tool.Result) {
 	// The model may still call a tool hidden from it during settlement.
 	if r.disabled(name) {
@@ -137,6 +140,11 @@ func (r *run) resolve(name string) (tool.Tool, *tool.Result) {
 	t, ok := r.turnTools().Get(name)
 	if !ok {
 		return nil, errorResult("unknown tool %q", name)
+	}
+	if a, ok := t.(tool.Availability); ok {
+		if err := a.Available(r.state); err != nil {
+			return nil, errorResult("%v", err)
+		}
 	}
 	return t, nil
 }

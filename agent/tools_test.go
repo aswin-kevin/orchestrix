@@ -519,3 +519,56 @@ func TestPanickingDynamicToolsFailsRun(t *testing.T) {
 		t.Fatalf("final = %+v, want a middleware error naming the panic", final)
 	}
 }
+
+// lockedTool is a write_file that a run may call only once its State says
+// so (tool.Availability), like a tool gated until a skill unlocks it.
+type lockedTool struct{ tool.Tool }
+
+// unlockedKey marks a State in which lockedTool is available.
+var unlockedKey = state.NewKey[bool]("agent_test.unlocked")
+
+func (lockedTool) Available(s *state.State) error {
+	if ok, _ := unlockedKey.Get(s); !ok {
+		return errors.New("write_file is locked")
+	}
+	return nil
+}
+
+func TestUnavailableToolRefusedBeforeApproval(t *testing.T) {
+	log := newCallLog()
+	asked := 0
+	cfg := Config{
+		Tools: []tool.Tool{newDispatchTool(), lockedTool{fileTool(log)}},
+		Rules: permission.Rules{Ask: []permission.Rule{{Tool: "write_file"}}},
+		Approver: func(context.Context, permission.Request, string) permission.Decision {
+			asked++
+			return permission.Allowed()
+		},
+	}
+	direct := llmtest.Call{ID: "w", Name: "write_file", Input: map[string]any{"path": "/a.txt", "text": "hi"}}
+
+	results := runOneTurn(t, cfg, llmtest.Turn{ToolCalls: []llmtest.Call{direct, fileCall("d", "/b.txt")}})
+
+	for i, r := range results {
+		if !r.IsError || resultText(r) != "write_file is locked" {
+			t.Errorf("result %d = %+v, want the availability error", i, r)
+		}
+	}
+	if asked != 0 || len(log.ran()) != 0 {
+		t.Fatalf("approver asked %d times, calls run %v; want neither for a locked tool", asked, log.ran())
+	}
+
+	t.Run("available", func(t *testing.T) {
+		cfg.Provider = llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{direct, fileCall("d", "/b.txt")}}, llmtest.Turn{Text: "done"})
+		s := state.New()
+		unlockedKey.Set(s, true)
+		in := userInput("go")
+		in.State = s
+		_, final := collect(t, mustNew(t, cfg).Run(context.Background(), in))
+		if final.Reason != ReasonCompleted || asked != 2 || !slices.Equal(log.ran(), []string{"w", "d"}) {
+			t.Fatalf("final = %+v, asked = %d, ran = %v; want both approved and run", final, asked, log.ran())
+		}
+	})
+}
+
+var _ tool.Availability = lockedTool{}
