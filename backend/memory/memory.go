@@ -145,14 +145,28 @@ func (b *Backend) Read(_ context.Context, p string, offset, limit int) (backend.
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
+	f, err := b.load("read", p)
+	if err != nil {
+		return backend.ReadResult{}, err
+	}
+	return backend.NewReadResult(f.content, f.modTime, offset, limit), nil
+}
+
+// load returns the file at the cleaned path p for an operation that needs
+// its whole content: it fails for a directory, a missing file, or a file over
+// backend.MaxReadFileBytes. Callers must hold b.mu.
+func (b *Backend) load(op, p string) (file, error) {
 	f, ok := b.files[p]
 	if !ok {
 		if b.kindOf(p) == isDir {
-			return backend.ReadResult{}, fail("read", p, backend.ErrIsDir)
+			return file{}, fail(op, p, backend.ErrIsDir)
 		}
-		return backend.ReadResult{}, fail("read", p, backend.ErrNotFound)
+		return file{}, fail(op, p, backend.ErrNotFound)
 	}
-	return backend.NewReadResult(f.content, f.modTime, offset, limit), nil
+	if err := backend.CheckReadSize(int64(len(f.content))); err != nil {
+		return file{}, fail(op, p, err)
+	}
+	return f, nil
 }
 
 // Write replaces the file at p, creating parent directories implicitly.
@@ -181,12 +195,9 @@ func (b *Backend) Edit(_ context.Context, p, old, replacement string, replaceAll
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	f, ok := b.files[p]
-	if !ok {
-		if b.kindOf(p) == isDir {
-			return backend.EditResult{}, fail("edit", p, backend.ErrIsDir)
-		}
-		return backend.EditResult{}, fail("edit", p, backend.ErrNotFound)
+	f, err := b.load("edit", p)
+	if err != nil {
+		return backend.EditResult{}, err
 	}
 	updated, count, err := backend.ApplyEdit(f.content, old, replacement, replaceAll)
 	if err != nil {
@@ -204,12 +215,9 @@ func (b *Backend) MultiEdit(_ context.Context, p string, edits []backend.EditOp)
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	f, ok := b.files[p]
-	if !ok {
-		if b.kindOf(p) == isDir {
-			return backend.EditResult{}, fail("multi-edit", p, backend.ErrIsDir)
-		}
-		return backend.EditResult{}, fail("multi-edit", p, backend.ErrNotFound)
+	f, err := b.load("multi-edit", p)
+	if err != nil {
+		return backend.EditResult{}, err
 	}
 	updated, count, err := backend.ApplyEdits(f.content, edits)
 	if err != nil {

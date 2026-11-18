@@ -21,6 +21,11 @@ const (
 	mediaTypePDF        = "application/pdf"
 )
 
+// MaxMediaBytes is the largest image or PDF read_file attaches for the model;
+// a bigger one gets the text placeholder instead, since a multi-megabyte
+// attachment would swamp the request.
+const MaxMediaBytes = 5 << 20
+
 type lsInput struct {
 	Path string `json:"path,omitempty" desc:"Directory to list, absolute from the workspace root. Defaults to \"/\"."`
 }
@@ -138,15 +143,17 @@ func truncateLine(line string, limit int) string {
 	return line[:cut] + lineTruncatedMarker
 }
 
-// binaryResult returns images and PDFs as content blocks when the model can
-// take them, and a plain notice otherwise.
+// binaryResult returns images and PDFs up to MaxMediaBytes as content blocks
+// when the model can take them, and a plain notice otherwise.
 func binaryResult(res backend.ReadResult, profile llm.Profile) tool.Result {
-	src := &llm.Source{Type: "base64", MediaType: res.MediaType, Data: base64.StdEncoding.EncodeToString(res.Data)}
-	switch {
-	case profile.Images && strings.HasPrefix(res.MediaType, "image/"):
-		return tool.Result{Content: []llm.Block{{Type: llm.BlockImage, Source: src}}}
-	case profile.PDFs && res.MediaType == mediaTypePDF:
-		return tool.Result{Content: []llm.Block{{Type: llm.BlockDocument, Source: src}}}
+	if len(res.Data) <= MaxMediaBytes {
+		src := &llm.Source{Type: "base64", MediaType: res.MediaType, Data: base64.StdEncoding.EncodeToString(res.Data)}
+		switch {
+		case profile.Images && strings.HasPrefix(res.MediaType, "image/"):
+			return tool.Result{Content: []llm.Block{{Type: llm.BlockImage, Source: src}}}
+		case profile.PDFs && res.MediaType == mediaTypePDF:
+			return tool.Result{Content: []llm.Block{{Type: llm.BlockDocument, Source: src}}}
+		}
 	}
 	return tool.Text(fmt.Sprintf("binary file (%s, %d bytes) — cannot display", res.MediaType, len(res.Data)))
 }

@@ -245,22 +245,36 @@ func toFileInfo(virtualPath string, info fs.FileInfo) backend.FileInfo {
 
 // Read returns a page of the file at p.
 func (b *Backend) Read(_ context.Context, p string, offset, limit int) (backend.ReadResult, error) {
-	clean, realPath, err := b.resolve("read", p)
+	_, _, content, info, err := b.load("read", p)
 	if err != nil {
 		return backend.ReadResult{}, err
-	}
-	info, err := os.Stat(realPath)
-	if err != nil {
-		return backend.ReadResult{}, wrapFSError("read", clean, err)
-	}
-	if err := requireRegular("read", clean, info); err != nil {
-		return backend.ReadResult{}, err
-	}
-	content, err := os.ReadFile(realPath)
-	if err != nil {
-		return backend.ReadResult{}, wrapFSError("read", clean, err)
 	}
 	return backend.NewReadResult(content, info.ModTime(), offset, limit), nil
+}
+
+// load resolves p and reads the whole regular file it names, refusing one
+// over backend.MaxReadFileBytes before reading it. It returns the cleaned
+// and real paths for operations that write the file back.
+func (b *Backend) load(op, p string) (clean, realPath string, content []byte, info fs.FileInfo, err error) {
+	clean, realPath, err = b.resolve(op, p)
+	if err != nil {
+		return "", "", nil, nil, err
+	}
+	info, err = os.Stat(realPath)
+	if err != nil {
+		return "", "", nil, nil, wrapFSError(op, clean, err)
+	}
+	if err := requireRegular(op, clean, info); err != nil {
+		return "", "", nil, nil, err
+	}
+	if err := backend.CheckReadSize(info.Size()); err != nil {
+		return "", "", nil, nil, fmt.Errorf("disk: %s %s: %w", op, clean, err)
+	}
+	content, err = os.ReadFile(realPath)
+	if err != nil {
+		return "", "", nil, nil, wrapFSError(op, clean, err)
+	}
+	return clean, realPath, content, info, nil
 }
 
 // errNotRegular reports a FIFO, device or socket, which the backend refuses to
@@ -292,20 +306,9 @@ func (b *Backend) Write(_ context.Context, p string, content []byte) error {
 
 // Edit replaces old with replacement in the file at p.
 func (b *Backend) Edit(_ context.Context, p, old, replacement string, replaceAll bool) (backend.EditResult, error) {
-	clean, realPath, err := b.resolve("edit", p)
+	clean, realPath, content, _, err := b.load("edit", p)
 	if err != nil {
 		return backend.EditResult{}, err
-	}
-	info, err := os.Stat(realPath)
-	if err != nil {
-		return backend.EditResult{}, wrapFSError("edit", clean, err)
-	}
-	if err := requireRegular("edit", clean, info); err != nil {
-		return backend.EditResult{}, err
-	}
-	content, err := os.ReadFile(realPath)
-	if err != nil {
-		return backend.EditResult{}, wrapFSError("edit", clean, err)
 	}
 	updated, count, err := backend.ApplyEdit(content, old, replacement, replaceAll)
 	if err != nil {
@@ -320,20 +323,9 @@ func (b *Backend) Edit(_ context.Context, p, old, replacement string, replaceAll
 // MultiEdit applies edits to the file at p all or nothing: the edits run on
 // the file's bytes in memory and a single atomic replace writes the result.
 func (b *Backend) MultiEdit(_ context.Context, p string, edits []backend.EditOp) (backend.EditResult, error) {
-	clean, realPath, err := b.resolve("multi-edit", p)
+	clean, realPath, content, _, err := b.load("multi-edit", p)
 	if err != nil {
 		return backend.EditResult{}, err
-	}
-	info, err := os.Stat(realPath)
-	if err != nil {
-		return backend.EditResult{}, wrapFSError("multi-edit", clean, err)
-	}
-	if err := requireRegular("multi-edit", clean, info); err != nil {
-		return backend.EditResult{}, err
-	}
-	content, err := os.ReadFile(realPath)
-	if err != nil {
-		return backend.EditResult{}, wrapFSError("multi-edit", clean, err)
 	}
 	updated, count, err := backend.ApplyEdits(content, edits)
 	if err != nil {

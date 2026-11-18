@@ -547,3 +547,27 @@ func TestSearchToolsDropInvisiblePaths(t *testing.T) {
 	wantText(t, f.run(t, "glob", obj{"pattern": "*", "path": "/secrets"}), false, "no files matched")
 	wantText(t, f.run(t, "ls", obj{"path": "/secrets"}), false, emptyDirText)
 }
+
+func TestTooLargeFileRenderedForModel(t *testing.T) {
+	b := newClockBackend()
+	size := backend.MaxReadFileBytes + 1
+	seed(t, b, "/big.txt", strings.Repeat("a", size))
+	f := newFixture(t, Config{Backend: b})
+
+	want := fmt.Sprintf("File is too large to read (%d bytes); use grep or glob to inspect it.", size)
+	wantText(t, f.run(t, "read_file", obj{"path": "/big.txt"}), true, want)
+	wantText(t, f.run(t, "edit_file", obj{"path": "/big.txt", "old_string": "a", "new_string": "b"}), true, want)
+}
+
+func TestOversizedMediaIsNotAttached(t *testing.T) {
+	b := newClockBackend()
+	png := "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+	seed(t, b, "/huge.png", png+strings.Repeat("\x00", MaxMediaBytes))
+	f := newFixture(t, Config{Backend: b})
+	f.call.Profile = llm.Profile{Images: true}
+
+	res := f.run(t, "read_file", obj{"path": "/huge.png"})
+	if len(res.Content) != 1 || res.Content[0].Type != llm.BlockText || !strings.HasPrefix(res.Flatten(), "binary file (image/png, ") {
+		t.Fatalf("content = %.200v, want the text placeholder", res.Content)
+	}
+}

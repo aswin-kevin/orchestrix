@@ -3,6 +3,7 @@ package memory_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -102,5 +103,29 @@ func TestMemoryIsolatesCallerBuffers(t *testing.T) {
 	res, err := m.Read(ctx, "/f", 0, 0)
 	if err != nil || res.Lines[0] != "abc" {
 		t.Fatalf("stored content aliased the caller's slice: %+v, %v", res, err)
+	}
+}
+
+func TestMemoryRefusesFilesOverReadLimit(t *testing.T) {
+	ctx := context.Background()
+	m := memory.New()
+	big := make([]byte, backend.MaxReadFileBytes+1)
+	if err := m.Write(ctx, "/big", big); err != nil {
+		t.Fatal(err)
+	}
+	_, readErr := m.Read(ctx, "/big", 0, 1)
+	_, editErr := m.Edit(ctx, "/big", "a", "b", false)
+	_, multiErr := m.MultiEdit(ctx, "/big", []backend.EditOp{{Old: "a", New: "b"}})
+	for name, err := range map[string]error{"Read": readErr, "Edit": editErr, "MultiEdit": multiErr} {
+		var tooLarge *backend.TooLargeError
+		if !errors.Is(err, backend.ErrTooLarge) || !errors.As(err, &tooLarge) || tooLarge.Size != int64(len(big)) {
+			t.Errorf("%s error = %v, want ErrTooLarge reporting %d bytes", name, err, len(big))
+		}
+	}
+	if err := m.Write(ctx, "/limit", big[:backend.MaxReadFileBytes]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Read(ctx, "/limit", 0, 1); err != nil {
+		t.Errorf("file at exactly the limit: %v", err)
 	}
 }

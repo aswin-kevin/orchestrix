@@ -14,7 +14,10 @@ var errNoBackend = errors.New("no backend configured")
 // failures are expected conditions the model can recover from, so they are
 // results rather than Go errors.
 func errorResult(err error, path string) tool.Result {
+	var tooLarge *backend.TooLargeError
 	switch {
+	case errors.As(err, &tooLarge):
+		return tool.Errorf("File is too large to read (%d bytes); use grep or glob to inspect it.", tooLarge.Size)
 	case errors.Is(err, backend.ErrNotFound):
 		return tool.Errorf("File not found: %s", path)
 	case errors.Is(err, backend.ErrIsDir):

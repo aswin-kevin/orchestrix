@@ -253,3 +253,30 @@ func TestDiskRejectsNonRegularFiles(t *testing.T) {
 		t.Error("Write over a FIFO must fail")
 	}
 }
+
+func TestDiskRefusesFilesOverReadLimit(t *testing.T) {
+	ctx := context.Background()
+	b, root := newDisk(t)
+	// A sparse file: large on paper, cheap to create.
+	f, err := os.Create(filepath.Join(root, "big"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := int64(backend.MaxReadFileBytes + 1)
+	if err := f.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, readErr := b.Read(ctx, "/big", 0, 1)
+	_, editErr := b.Edit(ctx, "/big", "a", "b", false)
+	_, multiErr := b.MultiEdit(ctx, "/big", []backend.EditOp{{Old: "a", New: "b"}})
+	for name, err := range map[string]error{"Read": readErr, "Edit": editErr, "MultiEdit": multiErr} {
+		var tooLarge *backend.TooLargeError
+		if !errors.Is(err, backend.ErrTooLarge) || !errors.As(err, &tooLarge) || tooLarge.Size != size {
+			t.Errorf("%s error = %v, want ErrTooLarge reporting %d bytes", name, err, size)
+		}
+	}
+}

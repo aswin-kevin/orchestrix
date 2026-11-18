@@ -67,7 +67,9 @@ type GrepMatch struct {
 type Backend interface {
 	// Ls lists the direct children of a directory.
 	Ls(ctx context.Context, path string) ([]FileInfo, error)
-	// Read returns up to limit lines starting at the 0-based line offset.
+	// Read returns up to limit lines starting at the 0-based line offset. A
+	// file over MaxReadFileBytes fails with ErrTooLarge, as it does for Edit
+	// and MultiEdit.
 	Read(ctx context.Context, path string, offset, limit int) (ReadResult, error)
 	// Write replaces the file's content, creating parent directories.
 	Write(ctx context.Context, path string, content []byte) error
