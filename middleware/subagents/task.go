@@ -11,6 +11,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -29,10 +30,11 @@ func (m *middleware) taskTool(order []string) tool.Tool {
 		Run:         m.runTask,
 		// Parallel task calls run together.
 		Concurrent: func(json.RawMessage) bool { return true },
-		// Starting a subagent is harmless in itself: each tool the subagent
-		// calls goes through the subagent's own permission checks. In
-		// dontAsk mode a tool's own allow does not count, so there the task
-		// tool needs an allow rule (see the package documentation).
+		// Starting a subagent changes nothing by itself: each tool the
+		// subagent calls goes through the subagent's own permission checks.
+		// Being read-only, the task tool is allowed in plan and dontAsk
+		// modes too (see the package documentation).
+		ReadOnly: func(json.RawMessage) bool { return true },
 		Permission: func(context.Context, json.RawMessage, permission.Context) permission.Decision {
 			return permission.Allowed()
 		},
@@ -136,7 +138,7 @@ func (m *middleware) start(info agent.RunInfo, in TaskInput, c *tool.Call) (chil
 	if in.SubagentType == Fork {
 		run.in, err = forkInput(info.ThreadID, in.Description, c)
 	} else {
-		run.in = childInput(info.ThreadID, in.SubagentType, in.Description, c)
+		run.in = childInput(info, in, c)
 	}
 	return run, err
 }
@@ -180,19 +182,36 @@ func childThread(parentThread, typ, toolUseID string) string {
 	return parentThread + "/" + typ + "/" + toolUseID
 }
 
-// childInput starts an isolated subagent run on the task description alone,
-// with the parent's shareable state and backend, under a thread id unique to
-// the call.
-func childInput(parentThread, name, description string, c *tool.Call) agent.Input {
+// childInput starts an isolated subagent run of in on the task description
+// alone, with the parent's shareable state and backend, under a thread id
+// unique to the call. info is the parent's run; see inheritedMode for the
+// permission mode the child starts in.
+func childInput(info agent.RunInfo, in TaskInput, c *tool.Call) agent.Input {
+	s := c.State.ChildFor()
+	if mode, ok := inheritedMode(info.Agent, c.State); ok {
+		agent.PermissionModeKey.Set(s, mode)
+	}
 	return agent.Input{
-		ThreadID:  childThread(parentThread, name, c.ToolUseID),
-		State:     c.State.ChildFor(),
-		Messages:  []llm.Message{llm.UserText(description)},
+		ThreadID:  childThread(info.ThreadID, in.SubagentType, c.ToolUseID),
+		State:     s,
+		Messages:  []llm.Message{llm.UserText(in.Description)},
 		Backend:   c.Backend,
-		AgentName: name,
+		AgentName: in.SubagentType,
 		// The parent's thread is the one that is saved.
 		Ephemeral: true,
 	}
+}
+
+// inheritedMode reports the permission mode an isolated subagent started by
+// parent's run with State s must start in, overriding its configured
+// Subagent.PermissionMode: the parent's current mode whenever the run changed
+// it (agent.PermissionModeKey is set), and plan mode whenever the parent is
+// in it, so a subagent can never act more freely than a planning parent. ok
+// is false when the subagent keeps its configured mode.
+func inheritedMode(parent *agent.Agent, s *state.State) (mode permission.Mode, ok bool) {
+	mode = parent.PermissionMode(s)
+	_, changed := agent.PermissionModeKey.Get(s)
+	return mode, changed || mode == permission.ModePlan
 }
 
 // runChild runs child to its end and returns its Final (see drain).

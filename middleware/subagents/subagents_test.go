@@ -522,8 +522,10 @@ func TestPromptAppendedAfterSystem(t *testing.T) {
 	}
 }
 
-func TestTaskToolNeedsAllowRuleInDontAskMode(t *testing.T) {
-	allowTask, err := permission.ParseRule(ToolTask)
+// The task tool is read-only, so dontAsk mode allows it without an allow
+// rule; a deny rule still refuses it.
+func TestTaskToolInDontAskMode(t *testing.T) {
+	task, err := permission.ParseRule(ToolTask)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -532,8 +534,8 @@ func TestTaskToolNeedsAllowRuleInDontAskMode(t *testing.T) {
 		rules   permission.Rules
 		allowed bool
 	}{
-		{"no rule", permission.Rules{}, false},
-		{"allow rule", permission.Rules{Allow: []permission.Rule{allowTask}}, true},
+		{"no rule", permission.Rules{}, true},
+		{"deny rule", permission.Rules{Deny: []permission.Rule{task}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := llmtest.New(
