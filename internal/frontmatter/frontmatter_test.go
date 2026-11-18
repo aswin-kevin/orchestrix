@@ -147,3 +147,15 @@ func TestStringListTrimsSequenceElements(t *testing.T) {
 		t.Fatalf("Tools = %#v", f.Tools)
 	}
 }
+
+func TestStringListAllEmptySequenceIsNil(t *testing.T) {
+	var f struct {
+		Tools StringList `yaml:"tools"`
+	}
+	if _, _, err := Parse([]byte("---\ntools: [\"\", \" \"]\n---\n"), &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Tools != nil {
+		t.Fatalf("Tools = %#v, want nil", f.Tools)
+	}
+}
