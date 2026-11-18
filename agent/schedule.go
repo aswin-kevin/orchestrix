@@ -109,10 +109,11 @@ func (c *toolCall) pending() bool { return c.interrupt != nil }
 
 // insertAfter puts msgs right after the message at index. Tool results must
 // directly follow their assistant message, and a BeforeAgent hook of a
-// resumed run may have appended messages after it.
+// resumed run may have appended messages after it. An index past the end (a
+// tool or wrapper shrank the history during the turn) appends.
 func (r *run) insertAfter(index int, msgs []llm.Message) {
 	history := r.state.Messages()
-	at := index + 1
+	at := min(index+1, len(history))
 	if at == len(history) {
 		r.state.AppendMessages(msgs...)
 		return

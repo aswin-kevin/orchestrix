@@ -352,3 +352,19 @@ func TestParseToolInput(t *testing.T) {
 		}
 	}
 }
+
+func TestToolShrinkingHistoryMidTurnDoesNotPanic(t *testing.T) {
+	truncate := tool.New("truncate", "Drop the history.",
+		func(_ context.Context, _ struct{}, c *tool.Call) (tool.Result, error) {
+			c.State.SetMessages(nil)
+			return tool.Text("dropped"), nil
+		}, tool.WithReadOnly())
+	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "t1", Name: "truncate", Input: map[string]any{}}}}, llmtest.Turn{Text: "done"})
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{truncate}})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonCompleted {
+		t.Fatalf("final = %s (err %v), want completed", final.Reason, final.Err)
+	}
+}

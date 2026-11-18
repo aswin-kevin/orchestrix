@@ -125,7 +125,7 @@ Every tool call is checked before it runs. Choose a mode with `WithPermissionMod
 | `dontAsk` | Never asks; denies whatever is not explicitly allowed. |
 | `auto` | Never asks; denies unless a rule or the tool itself allows. |
 
-Rules refine the mode. Deny rules always win, even over `bypassPermissions`, and an ask rule always asks, even for a tool that considers itself safe. A path hidden by a `read(...)` deny or ask rule is also left out of `ls`, `glob` and `grep` results.
+Rules refine the mode. Deny rules always win, even over `bypassPermissions`, an ask rule asks even for a tool that considers itself safe, and a tool that refuses a call itself is never overridden. A path hidden by a `read(...)` deny or ask rule is also left out of `ls`, `glob` and `grep` results.
 
 ```go
 // Imports omitted; model comes from surrounding code.
