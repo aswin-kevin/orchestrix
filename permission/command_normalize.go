@@ -19,10 +19,15 @@ const blankChars = " \t\n"
 var testCommands = map[string]bool{"[": true, "[[": true}
 
 // opaqueCommands run code taken from their arguments, from input or from a
-// file, which the parser cannot see.
+// file, which the parser cannot see, or run their arguments as a command in
+// a way it does not validate (another user, root directory or namespace).
 var opaqueCommands = map[string]bool{
 	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "fish": true,
 	"eval": true, "source": true, ".": true, "xargs": true, "sudo": true, "doas": true,
+	"ionice": true, "setsid": true, "chroot": true, "flock": true, "watch": true,
+	"strace": true, "ltrace": true, "busybox": true, "unbuffer": true,
+	"parallel": true, "script": true, "su": true, "runuser": true,
+	"nsenter": true, "unshare": true,
 }
 
 // wrapperCommands run the rest of their words as a command. nice, env,
@@ -51,15 +56,45 @@ var findExecEnd = map[string]bool{";": true, "+": true}
 // endOfOptions ends a command's options.
 const endOfOptions = "--"
 
-// wrapperValueOptions lists, for every wrapper, the options whose value is
-// the next word; wrapperTail uses it to skip options it cannot validate.
-var wrapperValueOptions = map[string][]string{
-	"command": nil, "builtin": nil, "nohup": nil, "time": nil,
-	"exec":    {"-a"},
-	"nice":    {"-n", "--adjustment"},
-	"env":     {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"},
-	"timeout": {"-s", "-k", "--signal", "--kill-after"},
-	"stdbuf":  {"-i", "-o", "-e", "--input", "--output", "--error"},
+// tailSpec describes where the command a wrapper runs starts in its
+// arguments, for commandTail's unvalidated guess.
+type tailSpec struct {
+	// valueOptions are the options whose value is the next word.
+	valueOptions []string
+	// operands is how many words come between the options and the command,
+	// such as chroot's new root or flock's lock file.
+	operands int
+}
+
+// commandTails lists the wrappers, and the opaque commands that run their
+// arguments as a simple command, whose wrapped command commandTail can
+// guess. Shells, su and script take the command as one string, so they
+// have no entry.
+var commandTails = map[string]tailSpec{
+	"command": {}, "builtin": {}, "nohup": {}, "time": {},
+	"exec":    {valueOptions: []string{"-a"}},
+	"nice":    {valueOptions: []string{"-n", "--adjustment"}},
+	"env":     {valueOptions: []string{"-u", "-C", "-S", "--unset", "--chdir", "--split-string"}},
+	"timeout": {valueOptions: []string{"-s", "-k", "--signal", "--kill-after"}},
+	"stdbuf":  {valueOptions: []string{"-i", "-o", "-e", "--input", "--output", "--error"}},
+
+	"eval":     {},
+	"xargs":    {valueOptions: []string{"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s"}},
+	"sudo":     {valueOptions: []string{"-C", "-D", "-g", "-h", "-p", "-R", "-r", "-T", "-t", "-U", "-u"}},
+	"doas":     {valueOptions: []string{"-C", "-u"}},
+	"ionice":   {valueOptions: []string{"-c", "-n", "-p", "-P", "-u"}},
+	"setsid":   {},
+	"chroot":   {valueOptions: []string{"--userspec", "--groups"}, operands: 1},
+	"flock":    {valueOptions: []string{"-w", "-E", "--timeout", "--conflict-exit-code"}, operands: 1},
+	"watch":    {valueOptions: []string{"-n", "--interval"}},
+	"strace":   {valueOptions: []string{"-a", "-b", "-e", "-I", "-o", "-P", "-p", "-S", "-s", "-U", "-u", "-X"}},
+	"ltrace":   {valueOptions: []string{"-a", "-e", "-n", "-o", "-p", "-s", "-u"}},
+	"busybox":  {},
+	"unbuffer": {},
+	"parallel": {valueOptions: []string{"-j", "--jobs", "-S", "--sshlogin"}},
+	"runuser":  {valueOptions: []string{"-u", "-g", "-G", "--user", "--group"}},
+	"nsenter":  {valueOptions: []string{"-t", "--target", "-S", "-G", "--setuid", "--setgid"}},
+	"unshare":  {},
 }
 
 // stateBuiltins set variables, aliases, traps or shell options, which can
@@ -68,7 +103,7 @@ var wrapperValueOptions = map[string][]string{
 var stateBuiltins = map[string]bool{
 	"export": true, "declare": true, "typeset": true, "readonly": true,
 	"local": true, "read": true, "unset": true, "alias": true, "trap": true,
-	"enable": true, "shopt": true,
+	"enable": true, "shopt": true, "set": true, "mapfile": true, "readarray": true,
 }
 
 // stateOptionLetters are builtins that change shell state only with one
@@ -120,9 +155,8 @@ func normalizeSegment(words []word) (segments []string, ok bool) {
 		}
 		// A wrapper whose arguments did not validate still most likely runs
 		// what follows its options; give deny rules that guess as well.
-		if tail := wrapperTail(name, args); !wrapperOK && len(tail) > 0 && len(tail) != len(rest) {
-			guessed, _ := normalizeSegment(tail)
-			guesses = append(guesses, guessed...)
+		if tail := commandTail(name, args); !wrapperOK && len(tail) > 0 && len(tail) != len(rest) {
+			guesses = append(guesses, guessSegments(tail)...)
 		}
 		// time and reserved words come before assignments, not after them.
 		if name == "time" || (reservedWords[name] && words[0].quotedAt == notQuoted) {
@@ -133,6 +167,9 @@ func normalizeSegment(words []word) (segments []string, ok bool) {
 	}
 	if len(words) == 0 {
 		return guesses, ok
+	}
+	if opaqueCommands[name] {
+		guesses = append(guesses, guessSegments(commandTail(name, words[1:]))...)
 	}
 	ok = ok && vouchableName(name) && !changesShellState(name, words[1:])
 	texts := []string{name}
@@ -150,14 +187,42 @@ func normalizeSegment(words []word) (segments []string, ok bool) {
 	return segments, ok
 }
 
-// wrapperTail guesses the command a wrapper runs, without validating its
-// arguments: what follows its leading options (and their values) and, for
-// timeout, one duration and, for env, its assignments.
-func wrapperTail(name string, args []word) []word {
-	valueOptions, isWrapper := wrapperValueOptions[name]
-	if !isWrapper {
+// guessSegments normalizes a guessed command for deny rules; whether it
+// could be vouched for does not matter, as the guess never is.
+func guessSegments(words []word) []string {
+	segments, _ := normalizeSegment(words)
+	return segments
+}
+
+// commandTail guesses the command a wrapper runs, without validating its
+// arguments: what follows its leading options (and their values), its
+// operands, an end-of-options marker and, for timeout, one duration and,
+// for env, its assignments. It is nil for commands commandTails lacks.
+func commandTail(name string, args []word) []word {
+	spec, known := commandTails[name]
+	if !known {
 		return nil
 	}
+	args = skipOptions(args, spec.valueOptions)
+	switch {
+	case name == "timeout" && len(args) > 0 && looseDurationPattern.MatchString(args[0].text):
+		args = args[1:]
+	case name == "env":
+		args, _ = dropAssignments(args)
+	}
+	if len(args) < spec.operands {
+		return nil
+	}
+	args = args[spec.operands:]
+	if len(args) > 0 && args[0].text == endOfOptions {
+		args = args[1:]
+	}
+	return args
+}
+
+// skipOptions drops leading options, the values of valueOptions, and an
+// end-of-options marker.
+func skipOptions(args []word, valueOptions []string) []word {
 	for startsWithOption(args) {
 		opt := args[0].text
 		args = args[1:]
@@ -167,12 +232,6 @@ func wrapperTail(name string, args []word) []word {
 		if takesValue(opt, valueOptions) && len(args) > 0 {
 			args = args[1:]
 		}
-	}
-	switch {
-	case name == "timeout" && len(args) > 0 && looseDurationPattern.MatchString(args[0].text):
-		args = args[1:]
-	case name == "env":
-		args, _ = dropAssignments(args)
 	}
 	return args
 }
@@ -214,7 +273,8 @@ func changesShellState(name string, args []word) bool {
 
 // vouchableName reports whether a command word names one known command.
 func vouchableName(name string) bool {
-	if name == "" || strings.ContainsAny(name, blankChars) {
+	// A leading '-' is a wrapper option the wrapper did not consume.
+	if name == "" || strings.HasPrefix(name, "-") || strings.ContainsAny(name, blankChars) {
 		return false
 	}
 	return testCommands[name] || !strings.ContainsAny(name, unsafeCommandChars)
@@ -242,7 +302,8 @@ func stripWrapper(name string, quotedAt int, args []word) (rest []word, stripped
 		return args, true, !startsWithOption(args)
 	case name == "nice":
 		if len(args) >= 2 && args[0].text == "-n" {
-			return args[2:], true, integerPattern.MatchString(args[1].text)
+			rest := args[2:]
+			return rest, true, integerPattern.MatchString(args[1].text) && !startsWithOption(rest)
 		}
 		return args, true, !startsWithOption(args)
 	case name == "env":
@@ -252,7 +313,7 @@ func stripWrapper(name string, quotedAt int, args []word) (rest []word, stripped
 		if len(rest) == 0 || !durationPattern.MatchString(rest[0].text) {
 			return rest, true, false
 		}
-		return rest[1:], true, ok
+		return rest[1:], true, ok && !startsWithOption(rest[1:])
 	case name == "stdbuf":
 		rest, ok := stripOptions(args, stdbufOptions)
 		return rest, true, ok
