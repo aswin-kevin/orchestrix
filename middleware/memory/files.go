@@ -19,8 +19,10 @@ const (
 var frameTag = regexp.MustCompile(`(?i)<(\s*/?\s*)(memory_index|memory)\b`)
 
 // neutralizeTags escapes the "<" of every tag in s that could open or end one
-// of the prompt's own elements, so content cannot break out of its frame.
-func neutralizeTags(s string) string { return frameTag.ReplaceAllString(s, "&lt;${1}${2}") }
+// of the prompt's own elements (lowercasing the tag name), so content cannot break out of its frame.
+func neutralizeTags(s string) string {
+	return frameTag.ReplaceAllStringFunc(s, func(tag string) string { return "&lt;" + strings.ToLower(tag[1:]) })
+}
 
 // loadIndex reads the store index for the system prompt, neutralizing a
 // literal frame tag and capping it at DefaultMaxIndexBytes. A missing or
