@@ -331,7 +331,7 @@ func TestNewValidation(t *testing.T) {
 	}
 }
 
-// blockingStream sends one text delta and then holds the connection open,
+// newBlockingServer sends one text delta and then holds the connection open,
 // reporting when the client goes away.
 func newBlockingServer(t *testing.T) (url string, gone <-chan struct{}) {
 	t.Helper()
