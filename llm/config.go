@@ -172,7 +172,11 @@ func New(cfg Config) (Provider, error) {
 		}
 		return p, nil
 	case FormatOpenAIResponses:
-		return nil, fmt.Errorf("llm: format %q is not available yet", cfg.Format)
+		p, err := newResponses(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return p, nil
 	}
 	return nil, fmt.Errorf("llm: unknown provider format %q", cfg.Format)
 }

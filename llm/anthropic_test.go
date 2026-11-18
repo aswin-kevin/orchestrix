@@ -319,14 +319,13 @@ func TestNewValidation(t *testing.T) {
 	cases := map[string]Config{
 		"no model":       {Format: FormatAnthropic},
 		"unknown format": {Format: "bogus", Model: "m"},
-		"responses":      {Format: FormatOpenAIResponses, Model: "m"},
 	}
 	for name, cfg := range cases {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
 	}
-	for _, format := range []Format{FormatAnthropic, FormatOpenAI} {
+	for _, format := range []Format{FormatAnthropic, FormatOpenAI, FormatOpenAIResponses} {
 		if _, err := New(Config{Format: format, Model: "m"}); err != nil {
 			t.Errorf("%s: %v", format, err)
 		}
