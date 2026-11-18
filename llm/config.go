@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -148,4 +149,24 @@ func (c *Config) newHTTPClient() (*http.Client, error) {
 	// No overall client timeout: streams are
 	// long-lived and callers bound them with a context.
 	return &http.Client{Transport: transport}, nil
+}
+
+// New returns the Provider for cfg.Format. The configuration is copied, so
+// the caller may reuse or modify cfg afterwards.
+func New(cfg Config) (Provider, error) {
+	if cfg.Model == "" {
+		return nil, errors.New("llm: config has no model")
+	}
+	switch cfg.Format {
+	case FormatAnthropic:
+		// Unpack so a failure yields a nil Provider, not a typed nil.
+		p, err := newAnthropic(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return p, nil
+	case FormatOpenAI, FormatOpenAIResponses:
+		return nil, fmt.Errorf("llm: format %q is not available yet", cfg.Format)
+	}
+	return nil, fmt.Errorf("llm: unknown provider format %q", cfg.Format)
 }

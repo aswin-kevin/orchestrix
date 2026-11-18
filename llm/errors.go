@@ -62,7 +62,10 @@ func IsContextOverflow(err error) bool {
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	if apiErr.Status != http.StatusBadRequest && apiErr.Status != http.StatusRequestEntityTooLarge {
+	// Status 0 marks an error reported inside an otherwise successful stream.
+	switch apiErr.Status {
+	case 0, http.StatusBadRequest, http.StatusRequestEntityTooLarge:
+	default:
 		return false
 	}
 	body := strings.ToLower(apiErr.Body)
