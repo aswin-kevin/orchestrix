@@ -19,11 +19,15 @@
 // synchronously. Without one, a subagent that needs a decision ends
 // interrupted; the parent keeps it (Suspended) and pauses the task call with
 // one request that lists the subagent's pending actions and accepts approve
-// or reject. Resuming the parent with that decision applies it to every
-// pending action of the subagent and continues the subagent, which may pause
-// again. Per-action decisions on a subagent's requests are not available
-// through the parent. The subagent's own KindInterrupt events are not
-// forwarded.
+// and/or reject, whichever every one of those actions accepts. Resuming the
+// parent with that decision applies it to every pending action of the
+// subagent and continues the subagent, which may pause again. Per-action
+// decisions (edit, respond) on a subagent's requests are not available
+// through the parent: a subagent whose actions accept neither approve nor
+// reject is stopped, its state discarded, and the task call fails. A
+// suspended subagent is dropped once its task call no longer awaits a
+// decision, for instance when a new Run abandons the parent's interrupt. The
+// subagent's own KindInterrupt events are not forwarded.
 //
 // Token usage: a subagent's model calls are reported as forwarded KindUsage
 // events (with ParentToolID set) and are not included in the parent's
@@ -38,6 +42,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -130,6 +135,13 @@ func New(cfg Config) (agent.Middleware, error) {
 	}
 	m.task = m.taskTool(order)
 	return m, nil
+}
+
+// BeforeAgent implements agent.BeforeAgent: it drops suspended subagents
+// whose task call no longer awaits a decision (see pruneSuspended).
+func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
+	pruneSuspended(s)
+	return nil
 }
 
 // Name implements agent.Middleware.

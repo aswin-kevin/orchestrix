@@ -224,10 +224,16 @@ func TestChildUsesParentApprover(t *testing.T) {
 }
 
 func TestResumeWithoutSuspendedChild(t *testing.T) {
-	task := newMiddleware(t, Config{}).(agent.ToolProvider).Tools()[0]
-	c := &tool.Call{ToolUseID: "t1", State: state.New(), Resume: &tool.ResumeValue{Type: tool.ResumeApprove}}
-	res, err := task.Call(context.Background(), json.RawMessage(`{"description":"x","subagent_type":"general-purpose"}`), c)
-	if err != nil || !res.IsError {
-		t.Fatalf("result = %q (error=%v), err = %v; want an error result", res.Flatten(), res.IsError, err)
+	f := newInterruptFixture(t, nil)
+	s := f.interrupt(t)
+	suspendedKey.Delete(s)
+	f.resume(t, s, agent.Decision{ToolUseID: "t1", Type: agent.Approve})
+
+	res := onlyResult(t, f.parent)
+	if !res.IsError || !strings.Contains(blockText(res), "no suspended subagent") {
+		t.Fatalf("task result = %q (error=%v), want the missing-entry error", blockText(res), res.IsError)
+	}
+	if f.child.Calls() != 1 || f.writes.Load() != 0 {
+		t.Fatalf("child requests = %d, writes = %d; want the child left alone", f.child.Calls(), f.writes.Load())
 	}
 }

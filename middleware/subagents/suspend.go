@@ -37,16 +37,24 @@ type Suspended struct {
 	Requests []agent.ActionRequest `json:"requests"`
 }
 
-// suspendDecisions are the answers the parent's task call accepts: each
+// suspendDecisions are the answers the parent's task call can relay: each
 // applies to every pending request of the child.
 var suspendDecisions = []agent.DecisionType{agent.Approve, agent.Reject}
 
 // suspend keeps an interrupted child in the parent's State and pauses the
-// task call with one request summarizing the child's.
+// task call with one request summarizing the child's. It offers the
+// decisions every child request accepts; when there is none, the child
+// cannot be resumed through the parent, so its run is dropped and the task
+// call fails instead.
 func suspend(c *tool.Call, run childRun, final *agent.Final) (tool.Result, error) {
 	pending, ok := agent.Pending(final.State)
 	if !ok {
 		return tool.Errorf("subagent %s was interrupted with no pending action", run.typ), nil
+	}
+	reason := approvalReason(run.typ, pending.Requests)
+	allowed := relayable(pending.Requests)
+	if len(allowed) == 0 {
+		return tool.Errorf("%s; it needs a decision the parent cannot relay (only approve or reject), so it was stopped", reason), nil
 	}
 	data, err := json.Marshal(final.State)
 	if err != nil {
@@ -63,8 +71,8 @@ func suspend(c *tool.Call, run childRun, final *agent.Final) (tool.Result, error
 	})
 	return tool.Result{}, &agent.Interrupt{
 		Requests: []agent.ActionRequest{{
-			Reason:  approvalReason(run.typ, pending.Requests),
-			Allowed: slices.Clone(suspendDecisions),
+			Reason:  reason,
+			Allowed: allowed,
 		}},
 		// A Reject must reach resumeTask too: it is the child's to answer,
 		// and its Suspended entry must be cleared.
@@ -80,14 +88,17 @@ func (m *middleware) resumeTask(ctx context.Context, c *tool.Call) (tool.Result,
 	if !ok {
 		return tool.Errorf("the task tool can only run inside an agent run"), nil
 	}
-	s, ok := takeSuspended(c.State, c.ToolUseID)
+	entries, _ := suspendedKey.Get(c.State)
+	s, ok := entries[c.ToolUseID]
 	if !ok {
 		return tool.Errorf("no suspended subagent to resume for this task call"), nil
 	}
+	// Checked before the entry is taken, so a refused decision keeps it.
 	decisions, err := childDecisions(*c.Resume, s.Requests)
 	if err != nil {
 		return tool.Errorf("cannot resume subagent %s: %v", s.Type, err), nil
 	}
+	takeSuspended(c.State, c.ToolUseID)
 	childState := state.New()
 	if err := json.Unmarshal(s.State, childState); err != nil {
 		return tool.Errorf("cannot resume subagent %s: decode its state: %v", s.Type, err), nil
@@ -109,24 +120,58 @@ func (m *middleware) resumeTask(ctx context.Context, c *tool.Call) (tool.Result,
 	return m.settle(ctx, c, run, final)
 }
 
-// takeSuspended removes and returns the child suspended under id.
-func takeSuspended(s *state.State, id string) (Suspended, bool) {
-	var entry Suspended
-	var found bool
+// takeSuspended removes the child suspended under id. The Update keeps
+// parallel task calls of one turn from losing each other's changes.
+func takeSuspended(s *state.State, id string) {
 	suspendedKey.Update(s, func(entries map[string]Suspended) map[string]Suspended {
-		entry, found = entries[id]
-		if !found {
-			return entries
-		}
 		out := maps.Clone(entries)
 		delete(out, id)
 		return out
 	})
-	return entry, found
+}
+
+// pruneSuspended drops the suspended children whose task call no longer
+// awaits a decision: a new Run abandoned the interrupt, or the call was
+// settled without the task tool (a stopped turn, a refused recheck). Without
+// it their states would ride along in every checkpoint. A resumed run still
+// holds its pending record when BeforeAgent runs, so its children are kept.
+func pruneSuspended(s *state.State) {
+	entries, ok := suspendedKey.Get(s)
+	if !ok {
+		return
+	}
+	waiting := make(map[string]bool)
+	if pending, ok := agent.Pending(s); ok {
+		for _, req := range pending.Requests {
+			waiting[req.ToolUseID] = true
+		}
+	}
+	kept := maps.Clone(entries)
+	maps.DeleteFunc(kept, func(id string, _ Suspended) bool { return !waiting[id] })
+	if len(kept) == 0 {
+		suspendedKey.Delete(s)
+		return
+	}
+	if len(kept) < len(entries) {
+		suspendedKey.Set(s, kept)
+	}
+}
+
+// relayable returns the decisions of suspendDecisions that every request
+// accepts.
+func relayable(requests []agent.ActionRequest) []agent.DecisionType {
+	var out []agent.DecisionType
+	for _, d := range suspendDecisions {
+		if !slices.ContainsFunc(requests, func(req agent.ActionRequest) bool { return !slices.Contains(req.Allowed, d) }) {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // childDecisions applies the parent's decision to every pending request of
-// the child: approve all, or reject all with the parent's message.
+// the child: approve all, or reject all with the parent's message. It fails
+// when a request does not accept the decision.
 func childDecisions(resume tool.ResumeValue, requests []agent.ActionRequest) ([]agent.Decision, error) {
 	typ := agent.DecisionType(resume.Type)
 	if !slices.Contains(suspendDecisions, typ) {
@@ -134,6 +179,9 @@ func childDecisions(resume tool.ResumeValue, requests []agent.ActionRequest) ([]
 	}
 	decisions := make([]agent.Decision, len(requests))
 	for i, req := range requests {
+		if !slices.Contains(req.Allowed, typ) {
+			return nil, fmt.Errorf("decision %q is not allowed for %s (allowed: %v)", typ, req.Tool, req.Allowed)
+		}
 		decisions[i] = agent.Decision{ToolUseID: req.ToolUseID, Type: typ}
 		if typ == agent.Reject {
 			decisions[i].Message = resume.Message

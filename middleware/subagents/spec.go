@@ -47,8 +47,9 @@ type Subagent struct {
 	MaxTurns int
 	// OutputSchema, when non-nil, is the JSON schema the subagent's final
 	// answer must satisfy; the answer must be a JSON object. An invalid
-	// answer is sent back for correction up to DefaultOutputRetries times.
-	// Nil means the final text is returned as is.
+	// answer is sent back for correction up to DefaultOutputRetries times;
+	// the count starts over when a suspended subagent is resumed. Nil means
+	// the final text is returned as is.
 	OutputSchema map[string]any
 }
 
