@@ -49,7 +49,8 @@ type BeforeAgent interface {
 	BeforeAgent(ctx context.Context, s *state.State) error
 }
 
-// AfterAgent runs once after the run has finished, whatever the reason.
+// AfterAgent runs once after the run has finished, whatever the reason,
+// unless the consumer stopped reading the run's events first.
 type AfterAgent interface {
 	AfterAgent(ctx context.Context, s *state.State) error
 }
