@@ -21,6 +21,9 @@ type Agent struct {
 	cfg      Config
 	stack    []Middleware
 	registry *tool.Registry
+	// dynamic are the stack's DynamicToolProviders, in stack order; see
+	// tools.go.
+	dynamic []DynamicToolProvider
 	// runTool is the tool handler chain, built once because it holds no
 	// per-run data.
 	runTool ToolHandler
@@ -76,6 +79,7 @@ func New(cfg Config) (*Agent, error) {
 		cfg:      cfg,
 		stack:    stack,
 		registry: registry,
+		dynamic:  dynamicProviders(stack),
 		runTool:  chainTool(stack, invokeTool),
 	}, nil
 }

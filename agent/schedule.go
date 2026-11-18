@@ -24,12 +24,23 @@ const skippedToolResult = "Tool call skipped: the run was stopped."
 
 // toolCall is one tool_use of the current turn on its way to a result.
 type toolCall struct {
-	id   string
+	id string
+	// name is the tool that runs: for a dispatched call, the target.
 	name string
 	// tool is nil when the model named a tool that does not exist.
 	tool tool.Tool
 	// input is the parsed input, or the raw one when it would not parse.
 	input json.RawMessage
+	// via names the dispatching tool (tool.Dispatcher) the model called when
+	// name, tool and input are those of the target it dispatched to; empty
+	// for a call the model made directly.
+	via string
+	// dispatcher and dispatchInput are the dispatching tool and the input
+	// the model gave it, kept so that its own permission is evaluated before
+	// the target's. They are nil on a call restored by Resume: its
+	// dispatcher was evaluated when the call was first admitted.
+	dispatcher    tool.Tool
+	dispatchInput json.RawMessage
 	// concurrent reports whether the call may run alongside its neighbours.
 	concurrent bool
 	// blocked, when set, is the result of a call that must not run: it
@@ -136,7 +147,7 @@ func (r *run) insertAfter(index int, msgs []llm.Message) {
 func (r *run) prepareAll(uses []llm.Block) []*toolCall {
 	calls := make([]*toolCall, len(uses))
 	for i, use := range uses {
-		calls[i] = r.prepare(use)
+		calls[i] = r.prepare(use, "")
 	}
 	return calls
 }
@@ -246,39 +257,6 @@ func (r *run) heldBack(c *toolCall, halted *atomic.Bool) bool {
 	return c.resumed == nil && halted.Load()
 }
 
-// prepare resolves the tool named by use and checks its input.
-func (r *run) prepare(use llm.Block) (c *toolCall) {
-	c = &toolCall{id: use.ID, name: use.Name, input: use.Input}
-	defer func() {
-		if v := recover(); v != nil {
-			c.blocked = panicResult(c.name, v)
-		}
-	}()
-
-	// The model may still call a tool hidden from it during settlement.
-	if r.disabled(use.Name) {
-		c.blocked = errorResult("tool %s is not available while the run is wrapping up", use.Name)
-		return c
-	}
-	t, ok := r.agent.registry.Get(use.Name)
-	if !ok {
-		c.blocked = errorResult("unknown tool %q", use.Name)
-		return c
-	}
-	c.tool = t
-	input, err := parseToolInput(use.Input)
-	if err != nil {
-		c.blocked = errorResult("invalid JSON arguments: %v. Re-issue the call with valid JSON.", err)
-		return c
-	}
-	c.input = input
-	if c.blocked = validateInput(t, input); c.blocked != nil {
-		return c
-	}
-	c.concurrent = t.ConcurrencySafe(input)
-	return c
-}
-
 // parseToolInput returns raw if it is valid JSON. Otherwise it retries with a
 // surrounding Markdown code fence removed, and failing that returns the parse
 // error.
@@ -323,6 +301,7 @@ func (r *run) runCall(c *toolCall) (res tool.Result, intr *Interrupt) {
 	call := &ToolCall{
 		ID:       c.id,
 		Name:     c.name,
+		Via:      c.via,
 		Input:    c.input,
 		Tool:     c.tool,
 		State:    r.state,

@@ -251,10 +251,10 @@ func (r *run) settlementPrompt(reason TerminalReason) string {
 	return s.Prompt
 }
 
-// toolSchemas lists the tools offered to the model, which leaves out the
-// disabled ones during settlement.
+// toolSchemas lists the tools of the turn offered to the model, which leaves
+// out the disabled ones during settlement.
 func (r *run) toolSchemas() []llm.ToolSchema {
-	return slices.DeleteFunc(r.agent.registry.Schemas(), func(s llm.ToolSchema) bool {
+	return slices.DeleteFunc(r.turnTools().Schemas(), func(s llm.ToolSchema) bool {
 		return r.disabled(s.Name)
 	})
 }

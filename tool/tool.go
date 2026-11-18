@@ -68,6 +68,19 @@ type RawInputer interface {
 	AcceptsRawInput() bool
 }
 
+// Dispatcher is implemented by a tool that stands for another tool, such as
+// one that calls a tool by name. The agent loop calls Dispatch after
+// validating the dispatcher's own input and runs the named tool with the
+// returned input instead: permission, ToolWrappers, events and interrupts
+// all see that target, so dispatching never bypasses what applies to the
+// target when the model calls it directly. The dispatcher's own permission
+// is still evaluated first, on its own input. A returned error becomes the
+// call's error result. A target that is itself a Dispatcher is refused, and
+// the dispatcher's Call is not reached for a valid dispatch.
+type Dispatcher interface {
+	Dispatch(in json.RawMessage) (name string, input json.RawMessage, err error)
+}
+
 // Call carries the per-invocation environment handed to Tool.Call.
 type Call struct {
 	ToolUseID  string

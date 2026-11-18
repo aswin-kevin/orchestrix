@@ -41,7 +41,7 @@ func (r *run) start(c *toolCall) (res *tool.Result) {
 // input rewrite carried by an Allow decision is applied to c.
 func (r *run) admit(c *toolCall) *tool.Result {
 	req := r.permissionRequest(c)
-	decision := permission.Evaluate(req, r.permissionContext())
+	decision := r.evaluate(c, req)
 	if decision.Behavior == permission.Ask {
 		if r.agent.cfg.Approver == nil {
 			c.interrupt = askInterrupt(c, decision.Message)
@@ -59,7 +59,7 @@ func (r *run) admit(c *toolCall) *tool.Result {
 // a Deny still refuses the call.
 func (r *run) recheck(c *toolCall) *tool.Result {
 	c.approved = true
-	decision := permission.Evaluate(r.permissionRequest(c), r.permissionContext())
+	decision := r.evaluate(c, r.permissionRequest(c))
 	if decision.Behavior == permission.Ask {
 		decision = permission.Allowed()
 	}
@@ -78,6 +78,29 @@ func (r *run) applyPermission(c *toolCall, decision permission.Decision) *tool.R
 	}
 	c.input = decision.UpdatedInput
 	return validateInput(c.tool, c.input)
+}
+
+// evaluate runs the permission pipeline on c, whose request (the one an
+// Approver is asked about) is req. A dispatched call is evaluated on its
+// dispatcher first, with the dispatcher's own input, so that rules naming
+// the dispatcher apply: its deny refuses the call, and its ask makes the
+// call need approval even where the target alone would be allowed.
+// Otherwise the target's decision stands. An input rewrite in the
+// dispatcher's allow is ignored: its input has already been dispatched.
+func (r *run) evaluate(c *toolCall, req permission.Request) permission.Decision {
+	pc := r.permissionContext()
+	own := permission.Allowed()
+	if c.dispatcher != nil {
+		own = permission.Evaluate(r.agent.permissionRequest(r.ctx, r.state, c.via, c.dispatcher, c.dispatchInput), pc)
+	}
+	if own.Behavior == permission.Deny {
+		return own
+	}
+	decision := permission.Evaluate(req, pc)
+	if own.Behavior == permission.Ask && decision.Behavior == permission.Allow {
+		return permission.AskUser(own.Message)
+	}
+	return decision
 }
 
 // permissionRequest describes c for permission.Evaluate, under the run's
@@ -110,13 +133,13 @@ func (a *Agent) CheckPermission(ctx context.Context, call *ToolCall) permission.
 }
 
 // toolFor resolves the tool a ToolCall built outside the loop refers to:
-// call.Tool when set, else the agent's tool named call.Name. ok is false for
-// a name the agent does not know.
+// call.Tool when set, else the agent's tool named call.Name (see Tool). ok
+// is false for a name the agent does not know.
 func (a *Agent) toolFor(call *ToolCall) (t tool.Tool, ok bool) {
 	if call.Tool != nil {
 		return call.Tool, true
 	}
-	return a.registry.Get(call.Name)
+	return a.Tool(call.Name)
 }
 
 // permissionRequest describes a call of t named name with input in, made by
@@ -159,25 +182,21 @@ func (r *run) hold(c *toolCall) {
 	if c.blocked != nil || r.agent.cfg.Approver != nil {
 		return
 	}
-	req, ok := r.heldPermissionRequest(c)
-	if !ok {
-		return
-	}
-	decision := permission.Evaluate(req, r.permissionContext())
-	if decision.Behavior == permission.Ask {
+	decision, ok := r.heldDecision(c)
+	if ok && decision.Behavior == permission.Ask {
 		c.interrupt = askInterrupt(c, decision.Message)
 		r.announce(c)
 	}
 }
 
-// heldPermissionRequest is permissionRequest for a held call. The tool's
-// methods may panic; that leaves the call not started (ok is false), and it
-// settles with a panic result once it is scheduled for real.
-func (r *run) heldPermissionRequest(c *toolCall) (req permission.Request, ok bool) {
+// heldDecision evaluates the permission of a held call. The tools' methods
+// may panic; that leaves the call not started (ok is false), and it settles
+// with a panic result once it is scheduled for real.
+func (r *run) heldDecision(c *toolCall) (decision permission.Decision, ok bool) {
 	defer func() {
 		if recover() != nil {
 			ok = false
 		}
 	}()
-	return r.permissionRequest(c), true
+	return r.evaluate(c, r.permissionRequest(c)), true
 }
