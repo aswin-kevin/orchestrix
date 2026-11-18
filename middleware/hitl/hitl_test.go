@@ -3,6 +3,7 @@ package hitl
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -101,7 +102,7 @@ func drain(t *testing.T, seq func(func(agent.Event, error) bool)) ([]agent.Event
 	t.Helper()
 	var events []agent.Event
 	var final *agent.Final
-	for ev, _ := range seq {
+	for ev := range seq {
 		events = append(events, ev)
 		if ev.Kind == agent.KindFinal {
 			final = ev.Final
@@ -437,5 +438,113 @@ func TestToolOwnInterruptAfterHitl(t *testing.T) {
 	}
 	if text, _ := result(t, final.State, "d"); text != "deployed /prod" {
 		t.Fatalf("result = %q, want the tool to complete", text)
+	}
+}
+
+func TestWhenFlippingFalseAfterEditStillClearsResume(t *testing.T) {
+	l := &log{}
+	cfg := Config{InterruptOn: map[string]InterruptConfig{
+		"execute": {When: func(_ context.Context, c *agent.ToolCall) bool {
+			var in commandInput
+			_ = json.Unmarshal(c.Input, &in)
+			return strings.HasPrefix(in.Command, "rm")
+		}},
+	}}
+	a := newAgent(t, cfg, withTools(bypass, execute(l)),
+		llmtest.Turn{ToolCalls: []llmtest.Call{call("x", "execute", obj{"command": "rm x"})}},
+		llmtest.Turn{Text: "done"})
+	events, final := run(t, a)
+	mustInterrupt(t, events, final)
+
+	_, final = resume(t, a, final.State, agent.Decision{ToolUseID: "x", Type: agent.Edit, Input: json.RawMessage(`{"command":"ls"}`)})
+	mustComplete(t, final)
+	if !slices.Equal(l.all(), []string{"ls"}) {
+		t.Fatalf("ran %v, want the edited command", l.all())
+	}
+	if l.resumes[0] != nil {
+		t.Fatalf("tool saw Resume %+v, want hitl's answer consumed", l.resumes[0])
+	}
+}
+
+func TestTwoConfiguredCallsInterruptAndResume(t *testing.T) {
+	l := &log{}
+	a := newAgent(t, on("write_file"), withTools(bypass, writeFile(l)),
+		llmtest.Turn{ToolCalls: []llmtest.Call{
+			call("w1", "write_file", obj{"path": "/1"}),
+			call("w2", "write_file", obj{"path": "/2"}),
+		}},
+		llmtest.Turn{Text: "done"})
+	// A tool-raised interrupt halts the turn: the second call waits for its
+	// own turn at the human once the first is decided.
+	events, final := run(t, a)
+	if id := mustInterrupt(t, events, final).Requests[0].ToolUseID; id != "w1" {
+		t.Fatalf("first interrupt is for %q, want w1", id)
+	}
+	events, final = resume(t, a, final.State, agent.Decision{ToolUseID: "w1", Type: agent.Approve})
+	if id := mustInterrupt(t, events, final).Requests[0].ToolUseID; id != "w2" {
+		t.Fatalf("second interrupt is for %q, want w2", id)
+	}
+	_, final = resume(t, a, final.State, agent.Decision{ToolUseID: "w2", Type: agent.Approve})
+	mustComplete(t, final)
+	if !slices.Equal(l.all(), []string{"/1", "/2"}) {
+		t.Fatalf("ran %v, want both writes once, in order", l.all())
+	}
+}
+
+func TestRespondOutsideAllowedIsInvalid(t *testing.T) {
+	a := newAgent(t, on("write_file"), withTools(bypass, writeFile(&log{})), writeTurns("/a.txt")...)
+	events, final := run(t, a)
+	mustInterrupt(t, events, final)
+
+	_, final = resume(t, a, final.State, agent.Decision{ToolUseID: "w", Type: agent.Respond, Message: "hi"})
+	if final.Reason != agent.ReasonInvalidResume || !errors.Is(final.Err, agent.ErrInvalidDecision) {
+		t.Fatalf("final = %v / %v, want invalid resume with ErrInvalidDecision", final.Reason, final.Err)
+	}
+}
+
+func TestApproverRewriteToDeniedPathIsRefused(t *testing.T) {
+	l := &log{}
+	ac := withTools(bypass, writeFile(l))
+	ac.Rules = permission.Rules{Deny: []permission.Rule{{Op: permission.OpWrite, Pattern: "/secret/*"}}}
+	ac.Approver = func(context.Context, permission.Request, string) permission.Decision {
+		return permission.Decision{Behavior: permission.Allow, UpdatedInput: json.RawMessage(`{"path":"/secret/key"}`)}
+	}
+	a := newAgent(t, on("write_file"), ac, writeTurns("/a.txt")...)
+	_, final := run(t, a)
+	mustComplete(t, final)
+	if len(l.all()) != 0 {
+		t.Fatalf("ran %v, want the denied rewrite refused", l.all())
+	}
+	if text, isErr := result(t, final.State, "w"); !isErr || !strings.HasPrefix(text, "Permission denied") {
+		t.Fatalf("result = %q (error %v), want Permission denied", text, isErr)
+	}
+}
+
+func TestApproverRewriteIgnoredWhenEditNotAllowed(t *testing.T) {
+	l := &log{}
+	cfg := Config{InterruptOn: map[string]InterruptConfig{
+		"write_file": {Allowed: []agent.DecisionType{agent.Approve, agent.Reject}},
+	}}
+	ac := withTools(bypass, writeFile(l))
+	ac.Approver = func(context.Context, permission.Request, string) permission.Decision {
+		return permission.Decision{Behavior: permission.Allow, UpdatedInput: json.RawMessage(`{"path":"/other"}`)}
+	}
+	a := newAgent(t, cfg, ac, writeTurns("/a.txt")...)
+	_, final := run(t, a)
+	mustComplete(t, final)
+	if !slices.Equal(l.all(), []string{"/a.txt"}) {
+		t.Fatalf("ran %v, want the original input", l.all())
+	}
+}
+
+func TestRejectedWithoutMessage(t *testing.T) {
+	ac := withTools(bypass, writeFile(&log{}))
+	ac.Approver = func(context.Context, permission.Request, string) permission.Decision {
+		return permission.Decision{Behavior: permission.Deny}
+	}
+	a := newAgent(t, on("write_file"), ac, writeTurns("/a.txt")...)
+	_, final := run(t, a)
+	if text, isErr := result(t, final.State, "w"); !isErr || text != "Rejected." {
+		t.Fatalf("result = %q (error %v), want Rejected.", text, isErr)
 	}
 }

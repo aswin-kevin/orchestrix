@@ -30,6 +30,11 @@ var DefaultAllowed = []agent.DecisionType{agent.Approve, agent.Edit, agent.Rejec
 // keep its own Resume value.
 var approvedKey = state.NewKey[[]string]("hitl.approved", state.Private[[]string]())
 
+// askedKey holds the tool_use ids hitl interrupted and has not yet seen
+// answered, so a resumed call is recognized even when its edited input no
+// longer satisfies When.
+var askedKey = state.NewKey[[]string]("hitl.asked", state.Private[[]string]())
+
 // InterruptConfig describes when and how one tool needs a human decision.
 type InterruptConfig struct {
 	// Allowed lists the decisions the host may answer with. Nil means
@@ -61,56 +66,107 @@ func New(cfg Config) agent.Middleware { return &middleware{cfg: cfg} }
 func (m *middleware) Name() string { return "hitl" }
 
 // WrapTool implements agent.ToolWrapper.
+//
+// A configured Approver may be called concurrently for parallel tool calls,
+// and the call holds its concurrency slot while it waits, so it must be safe
+// for concurrent use and should not block indefinitely.
 func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	cfg, ok := m.cfg.InterruptOn[call.Name]
-	if !ok || (cfg.When != nil && !cfg.When(ctx, call)) || m.cleared(call) {
+	switch {
+	case !ok || cleared(call):
 		return next(ctx, call)
-	}
-	if call.Call.Resume != nil {
-		return m.resumed(ctx, call, next)
-	}
-	if call.Approved {
+	case call.Call.Resume != nil && asked(call):
+		// Answering hitl's own interrupt: When judged the original input,
+		// and an edit may have changed what it says.
+		return resumed(ctx, call, next)
+	case cfg.When != nil && !cfg.When(ctx, call):
+		return next(ctx, call)
+	case call.Approved:
 		return next(ctx, call) // the permission step already asked a human
 	}
 	if approver := approverOf(ctx); approver != nil {
-		return m.ask(ctx, approver, cfg, call, next)
+		return ask(ctx, approver, cfg, call, next)
 	}
+	askedKey.Update(call.State, func(ids []string) []string { return append(ids, call.ID) })
 	return tool.Result{}, interruptFor(cfg, call.Name)
 }
 
 // cleared reports whether hitl already let this call through.
-func (m *middleware) cleared(call *agent.ToolCall) bool {
+func cleared(call *agent.ToolCall) bool {
 	ids, _ := approvedKey.Get(call.State)
+	return slices.Contains(ids, call.ID)
+}
+
+// asked reports whether hitl raised an interrupt for this call that is still
+// unanswered.
+func asked(call *agent.ToolCall) bool {
+	ids, _ := askedKey.Get(call.State)
 	return slices.Contains(ids, call.ID)
 }
 
 // resumed carries out the human's decision on hitl's own interrupt. The loop
 // has already applied an edit's new input, schema-checked it and checked it
 // against the permission rules again.
-func (m *middleware) resumed(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
+func resumed(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	resume := call.Call.Resume
+	call.Call.Resume = nil // consumed: the tool must not mistake it for its own
+	askedKey.Update(call.State, func(ids []string) []string { return without(ids, call.ID) })
 	if resume.Type == tool.ResumeRespond {
 		return tool.Text(resume.Message), nil
 	}
 	approvedKey.Update(call.State, func(ids []string) []string { return append(ids, call.ID) })
-	call.Call.Resume = nil
 	return next(ctx, call)
 }
 
-// ask puts the question to the run's Approver and waits for the answer.
-func (m *middleware) ask(ctx context.Context, approver permission.Approver, cfg InterruptConfig, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
+// without returns ids minus id, without touching ids.
+func without(ids []string, id string) []string {
+	return slices.DeleteFunc(slices.Clone(ids), func(s string) bool { return s == id })
+}
+
+// ask puts the question to the run's Approver and waits for the answer. A
+// rewrite of the input is honored only where the host may edit, and is
+// checked against the permission rules like any edited call.
+func ask(ctx context.Context, approver permission.Approver, cfg InterruptConfig, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	req := permission.Request{Tool: call.Name, Input: call.Input}
 	decision := approver(ctx, req, reasonFor(cfg, call.Name))
 	if decision.Behavior != permission.Allow {
-		return tool.Errorf("Rejected: %s", decision.Message), nil
+		return rejected(decision.Message), nil
 	}
-	if len(decision.UpdatedInput) > 0 {
-		if err := checkInput(call.Tool, decision.UpdatedInput); err != nil {
-			return tool.Errorf("invalid input for %s: %v", call.Name, err), nil
+	if len(decision.UpdatedInput) > 0 && slices.Contains(allowedOf(cfg), agent.Edit) {
+		if res := applyRewrite(ctx, call, decision.UpdatedInput); res != nil {
+			return *res, nil
 		}
-		call.Input = decision.UpdatedInput
 	}
 	return next(ctx, call)
+}
+
+// applyRewrite makes in the call's input after checking it against the
+// tool's schema and the permission rules. It returns an error result when the
+// rewrite is refused. The Approver's allow stands in for an Ask, but a deny
+// rule still wins.
+func applyRewrite(ctx context.Context, call *agent.ToolCall, in json.RawMessage) *tool.Result {
+	if err := checkInput(call.Tool, in); err != nil {
+		res := tool.Errorf("invalid input for %s: %v", call.Name, err)
+		return &res
+	}
+	if info, ok := agent.Info(ctx); ok {
+		edited := *call
+		edited.Input = in
+		if d := info.Agent.CheckPermission(ctx, &edited); d.Behavior == permission.Deny {
+			res := tool.Errorf("Permission denied: %s", d.Message)
+			return &res
+		}
+	}
+	call.Input = in
+	return nil
+}
+
+// rejected is the result of a call the Approver refused.
+func rejected(message string) tool.Result {
+	if message == "" {
+		return tool.Errorf("Rejected.")
+	}
+	return tool.Errorf("Rejected: %s", message)
 }
 
 // approverOf returns the Approver of the agent running ctx, or nil.
@@ -124,14 +180,18 @@ func approverOf(ctx context.Context) permission.Approver {
 
 // interruptFor builds the interrupt that asks the host about a call of name.
 func interruptFor(cfg InterruptConfig, name string) *agent.Interrupt {
-	allowed := cfg.Allowed
-	if allowed == nil {
-		allowed = DefaultAllowed
-	}
 	return &agent.Interrupt{Requests: []agent.ActionRequest{{
 		Reason:  reasonFor(cfg, name),
-		Allowed: slices.Clone(allowed),
+		Allowed: slices.Clone(allowedOf(cfg)),
 	}}}
+}
+
+// allowedOf returns the decisions cfg offers.
+func allowedOf(cfg InterruptConfig) []agent.DecisionType {
+	if cfg.Allowed == nil {
+		return DefaultAllowed
+	}
+	return cfg.Allowed
 }
 
 func reasonFor(cfg InterruptConfig, name string) string {
