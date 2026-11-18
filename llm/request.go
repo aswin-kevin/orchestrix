@@ -33,6 +33,10 @@ type ToolSchema struct {
 	InputSchema map[string]any // JSON Schema for the tool input
 }
 
+// MaxCacheBreakpoints is the most cache breakpoints Anthropic accepts in one
+// request, counting the system boundary and message breakpoints together.
+const MaxCacheBreakpoints = 4
+
 // Request is a provider-neutral model call.
 type Request struct {
 	Model string
@@ -41,6 +45,11 @@ type Request struct {
 	// form the cacheable prefix; 0 means nothing is marked cacheable.
 	System        []string
 	CacheBoundary int
+
+	// CacheRecent is the number of trailing user messages a provider with
+	// explicit prompt caching marks as cache breakpoints; 0 marks none.
+	// Providers without explicit caching ignore it.
+	CacheRecent int
 
 	Messages    []Message
 	Tools       []ToolSchema

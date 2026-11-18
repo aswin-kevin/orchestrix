@@ -76,6 +76,8 @@ type anthropicBlock struct {
 	Content   []anthropicBlock `json:"content,omitempty"`
 	IsError   bool             `json:"is_error,omitempty"`
 	Source    *Source          `json:"source,omitempty"`
+
+	CacheControl *anthropicCacheCt `json:"cache_control,omitempty"`
 }
 
 type anthropicTool struct {
@@ -358,6 +360,7 @@ func (p *anthropicProvider) buildRequest(req Request, stream bool) anthropicRequ
 		Thinking:      toAnthropicThinking(thinking, maxTokens),
 		Stream:        stream,
 	}
+	markRecentUserMessages(wire.Messages, req.CacheRecent, MaxCacheBreakpoints-countSystemBreakpoints(wire.System))
 	if effort != "" {
 		wire.OutputConfig = &anthropicOutput{Effort: effort}
 	}
@@ -373,6 +376,32 @@ func toAnthropicSystem(segments []string, cacheBoundary int) []anthropicSystem {
 		}
 	}
 	return system
+}
+
+func countSystemBreakpoints(system []anthropicSystem) int {
+	n := 0
+	for _, s := range system {
+		if s.CacheControl != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// markRecentUserMessages sets a cache breakpoint on the last block of the last
+// recent user messages, but never more than budget. It works on the final wire
+// messages because merging and dropping empty ones changes which messages
+// exist.
+func markRecentUserMessages(msgs []anthropicMessage, recent, budget int) {
+	marks := min(recent, budget)
+	for i := len(msgs) - 1; i >= 0 && marks > 0; i-- {
+		if msgs[i].Role != RoleUser {
+			continue
+		}
+		last := len(msgs[i].Content) - 1
+		msgs[i].Content[last].CacheControl = &anthropicCacheCt{Type: "ephemeral"}
+		marks--
+	}
 }
 
 func toAnthropicTools(tools []ToolSchema) []anthropicTool {

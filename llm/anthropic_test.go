@@ -412,3 +412,105 @@ func TestAnthropicToolDefaultSchema(t *testing.T) {
 		t.Errorf("schema = %v", tools[0].InputSchema)
 	}
 }
+
+// cacheMarkers returns, per wire message, whether its last block carries a
+// cache breakpoint, plus the total number of breakpoints including system.
+func cacheMarkers(t *testing.T, body map[string]any) (perMessage []bool, total int) {
+	t.Helper()
+	system, _ := body["system"].([]any) // omitted when empty
+	for _, s := range system {
+		if _, ok := s.(map[string]any)["cache_control"]; ok {
+			total++
+		}
+	}
+	for _, m := range body["messages"].([]any) {
+		blocks := m.(map[string]any)["content"].([]any)
+		marked := false
+		for i, b := range blocks {
+			if _, ok := b.(map[string]any)["cache_control"]; ok {
+				if i != len(blocks)-1 {
+					t.Errorf("cache_control on block %d, want only the last of %d", i, len(blocks))
+				}
+				marked = true
+				total++
+			}
+		}
+		perMessage = append(perMessage, marked)
+	}
+	return perMessage, total
+}
+
+func sendCacheRequest(t *testing.T, req Request) map[string]any {
+	t.Helper()
+	srv := newSSEServer(t, 200, "text/event-stream", textOnlyStream)
+	p := newTestAnthropic(t, srv.URL+"/v1")
+	if _, err := Collect(context.Background(), p, req); err != nil {
+		t.Fatal(err)
+	}
+	return srv.body
+}
+
+func toolResultMessage(id string) Message {
+	return Message{Role: RoleUser, Content: []Block{{
+		Type: BlockToolResult, ToolUseID: id, Content: []Block{{Type: BlockText, Text: "ok"}},
+	}}}
+}
+
+func TestAnthropicCacheRecentMarksLastUserMessages(t *testing.T) {
+	asst := Message{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "a"}}}
+	msgs := []Message{UserText("u1"), asst, toolResultMessage("t1"), asst, UserText("u3")}
+
+	got, total := cacheMarkers(t, sendCacheRequest(t, Request{Messages: msgs, CacheRecent: 2}))
+	want := []bool{false, false, true, false, true}
+	if !equalBools(got, want) || total != 2 {
+		t.Errorf("markers = %v (total %d), want %v (total 2)", got, total, want)
+	}
+}
+
+func TestAnthropicCacheRecentIsCappedWithSystemBreakpoint(t *testing.T) {
+	asst := Message{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "a"}}}
+	var msgs []Message
+	for i := 0; i < 6; i++ {
+		msgs = append(msgs, UserText("u"), asst)
+	}
+	msgs = append(msgs, UserText("last"))
+
+	req := Request{System: []string{"sys"}, CacheBoundary: 1, Messages: msgs, CacheRecent: 10}
+	_, total := cacheMarkers(t, sendCacheRequest(t, req))
+	if total != MaxCacheBreakpoints {
+		t.Errorf("total markers = %d, want exactly %d", total, MaxCacheBreakpoints)
+	}
+}
+
+func TestAnthropicCacheRecentAfterMerge(t *testing.T) {
+	msgs := []Message{
+		UserText("first"),
+		{Role: RoleAssistant, Content: []Block{{Type: BlockText, Text: "a"}}},
+		toolResultMessage("t1"),
+		UserText("second"),
+	}
+	got, total := cacheMarkers(t, sendCacheRequest(t, Request{Messages: msgs, CacheRecent: 1}))
+	want := []bool{false, false, true}
+	if !equalBools(got, want) || total != 1 {
+		t.Errorf("markers = %v (total %d), want %v (total 1)", got, total, want)
+	}
+}
+
+func TestAnthropicCacheRecentZeroMarksNothing(t *testing.T) {
+	_, total := cacheMarkers(t, sendCacheRequest(t, Request{Messages: []Message{UserText("hi")}}))
+	if total != 0 {
+		t.Errorf("total markers = %d, want 0", total)
+	}
+}
+
+func equalBools(a, b []bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
