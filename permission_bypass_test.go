@@ -2,6 +2,7 @@ package orchestrix_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/planning"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // secretWorkspace holds one file under a read-denied directory and one
@@ -160,5 +162,23 @@ func TestWriteTodosAllowedInNonInteractiveModes(t *testing.T) {
 				t.Fatalf("todos = %+v (result %q), want the list written", got, resultOf(t, final.State, "t"))
 			}
 		})
+	}
+}
+
+func TestToolSelfDenyWinsInBypassMode(t *testing.T) {
+	ran := false
+	guarded := tool.New("guarded", "Refuses to run.",
+		func(context.Context, struct{}, *tool.Call) (tool.Result, error) {
+			ran = true
+			return tool.Text("ran"), nil
+		},
+		tool.WithPermission(func(context.Context, json.RawMessage, permission.Context) permission.Decision {
+			return permission.Denied("guarded refuses")
+		}))
+
+	got := toolResultText(t, llmtest.Call{ID: "g", Name: "guarded"},
+		orchestrix.WithTools(guarded), orchestrix.WithPermissionMode(permission.ModeBypass))
+	if ran || got != "Permission denied: guarded refuses" {
+		t.Fatalf("ran = %v, result = %q; want the tool's own denial to stand in bypass mode", ran, got)
 	}
 }

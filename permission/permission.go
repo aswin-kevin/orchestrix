@@ -9,11 +9,18 @@
 // Rules are matched lexically. Path rules compare cleaned virtual paths,
 // case-sensitively, and do not resolve symlinks: a rule for /secrets/** does
 // not cover a link elsewhere that points into /secrets (the disk backend
-// still refuses anything that resolves outside its root). Tool patterns
-// match the call's subject as plain text, so a command prefix rule such as
-// execute(git:*) does not parse shell syntax: "git status && rm -rf x" starts
-// with "git " and matches. Permission rules decide which calls the agent
-// makes; they are not a sandbox.
+// still refuses anything that resolves outside its root).
+//
+// Tool patterns match a plain subject, such as a URL, as text. A shell
+// subject (Request.Shell) is split into its commands first (SplitCommand):
+// an allow rule must cover every command, so execute(git:*) does not allow
+// "git status && rm -rf x", while a deny or ask rule applies if it matches
+// any one of them. A command line the parser cannot vouch for, such as one
+// with command substitution or one that pipes into sh, is never allowed by
+// a pattern rule. Deny rules over commands remain a best effort: a command
+// can be reached in ways the text does not show (a script, an alias for
+// another program, a wrapper the parser does not know). Permission rules
+// decide which calls the agent makes; they are not a sandbox.
 package permission
 
 import (
@@ -109,6 +116,10 @@ type Request struct {
 	// Subject is the primary string tool rule patterns match against, such as
 	// a shell command or a URL.
 	Subject string
+	// Shell marks Subject as a shell command line: tool rules with a pattern
+	// then match its individual commands (see SplitCommand). False means
+	// patterns match Subject as plain text.
+	Shell bool
 	// Paths lists the filesystem accesses, matched by path rules.
 	//
 	// Every tool that touches the filesystem must report every path it

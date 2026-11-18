@@ -25,6 +25,10 @@ type Spec struct {
 	// Subject returns the string permission rules match against (a shell
 	// command, a URL); nil means none.
 	Subject func(json.RawMessage) string
+	// ShellSubject marks Subject as a shell command line, so permission
+	// patterns match each command in it; false means patterns match Subject
+	// as plain text.
+	ShellSubject bool
 	// Paths must report every file-system path the call touches, as virtual
 	// absolute paths, because permission checks see nothing else. Nil means
 	// the tool touches no paths.
@@ -72,6 +76,8 @@ func (b *built) Subject(in json.RawMessage) string {
 	return b.spec.Subject(in)
 }
 
+func (b *built) ShellSubject() bool { return b.spec.ShellSubject }
+
 func (b *built) Paths(in json.RawMessage) []permission.PathAccess {
 	if b.spec.Paths == nil {
 		return nil
@@ -116,6 +122,15 @@ func WithPermission(f func(context.Context, json.RawMessage, permission.Context)
 // WithSubject sets the string permission rules match against.
 func WithSubject(f func(json.RawMessage) string) Option {
 	return func(s *Spec) { s.Subject = f }
+}
+
+// WithShellSubject sets the subject permission rules match against and
+// marks it as a shell command line; see Spec.ShellSubject.
+func WithShellSubject(f func(json.RawMessage) string) Option {
+	return func(s *Spec) {
+		s.Subject = f
+		s.ShellSubject = true
+	}
 }
 
 // WithPaths sets the reporter of every path the tool touches; see Spec.Paths.

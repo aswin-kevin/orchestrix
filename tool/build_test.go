@@ -53,6 +53,22 @@ func TestBuildImplementsOptionalInterfaces(t *testing.T) {
 	}
 }
 
+func TestWithShellSubject(t *testing.T) {
+	tl := New("sh", "Run.", func(context.Context, struct{}, *Call) (Result, error) { return Text("ok"), nil },
+		WithShellSubject(func(json.RawMessage) string { return "ls" }))
+	if got := tl.(Subjecter).Subject(nil); got != "ls" {
+		t.Errorf("Subject = %q, want %q", got, "ls")
+	}
+	if !tl.(ShellSubjecter).ShellSubject() {
+		t.Error("WithShellSubject must mark the subject as a shell command line")
+	}
+	plain := New("plain", "Run.", func(context.Context, struct{}, *Call) (Result, error) { return Text("ok"), nil },
+		WithSubject(func(json.RawMessage) string { return "x" }))
+	if plain.(ShellSubjecter).ShellSubject() {
+		t.Error("WithSubject alone must not mark a shell subject")
+	}
+}
+
 func TestBuildNilOptionalFuncsAreInert(t *testing.T) {
 	tl := Build(Spec{Name: "plain", Run: noopRun})
 	in := json.RawMessage(`{}`)

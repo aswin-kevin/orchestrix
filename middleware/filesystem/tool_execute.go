@@ -32,7 +32,7 @@ func (m *middleware) executeTool() tool.Tool {
 	return tool.New(ToolExecute,
 		m.description(ToolExecute, "Run a shell command in the workspace and return its combined output followed by the exit code. Commands that exceed the timeout are stopped."),
 		m.execute,
-		tool.WithSubject(func(raw json.RawMessage) string {
+		tool.WithShellSubject(func(raw json.RawMessage) string {
 			var in executeInput
 			_ = json.Unmarshal(raw, &in) // an unparsable input has no subject
 			return in.Command

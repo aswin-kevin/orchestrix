@@ -41,6 +41,14 @@ type Subjecter interface {
 	Subject(in json.RawMessage) string
 }
 
+// ShellSubjecter is implemented by tools whose subject is a shell command
+// line. Permission rules then match each command in the line rather than the
+// line as plain text, so "git status && rm x" is not covered by a rule for
+// git alone.
+type ShellSubjecter interface {
+	ShellSubject() bool
+}
+
 // PathAccessor is implemented by tools that touch the file system. Every path
 // the call touches must be reported as a virtual absolute path.
 type PathAccessor interface {

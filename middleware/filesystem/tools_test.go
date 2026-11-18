@@ -377,6 +377,20 @@ func TestExecuteTimeoutCappedAndSubject(t *testing.T) {
 	}
 }
 
+func TestExecuteToolIsShellSubject(t *testing.T) {
+	tl := newFixture(t, Config{Execute: true}).tools["execute"]
+	s, ok := tl.(tool.ShellSubjecter)
+	if !ok || !s.ShellSubject() {
+		t.Fatal("execute must report its subject as a shell command line")
+	}
+	if got := tl.(tool.Subjecter).Subject(json.RawMessage(`{"command":"ls && pwd"}`)); got != "ls && pwd" {
+		t.Fatalf("Subject = %q", got)
+	}
+	if s, ok := newFixture(t, Config{Backend: newClockBackend()}).tools["read_file"].(tool.ShellSubjecter); ok && s.ShellSubject() {
+		t.Fatal("read_file must not report a shell subject")
+	}
+}
+
 func TestExecuteOptInWithPerCallBackend(t *testing.T) {
 	f := newFixture(t, Config{Execute: true})
 	if _, ok := f.tools["execute"]; !ok {

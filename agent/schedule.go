@@ -412,6 +412,9 @@ func (r *run) permissionRequest(c *toolCall) permission.Request {
 	if s, ok := t.(tool.Subjecter); ok {
 		req.Subject = s.Subject(in)
 	}
+	if s, ok := t.(tool.ShellSubjecter); ok {
+		req.Shell = s.ShellSubject()
+	}
 	if p, ok := t.(tool.PathAccessor); ok {
 		req.Paths = p.Paths(in)
 	}

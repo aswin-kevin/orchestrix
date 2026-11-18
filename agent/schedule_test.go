@@ -183,7 +183,7 @@ func TestPermissionRequestFromOptionalInterfaces(t *testing.T) {
 	editor := tool.New("edit", "Edit.",
 		func(context.Context, struct{}, *tool.Call) (tool.Result, error) { return tool.Text("ok"), nil },
 		tool.WithEdit(),
-		tool.WithSubject(func(json.RawMessage) string { return "subject" }),
+		tool.WithShellSubject(func(json.RawMessage) string { return "subject" }),
 		tool.WithPaths(func(json.RawMessage) []permission.PathAccess { return paths }),
 		tool.WithPermission(func(_ context.Context, _ json.RawMessage, pc permission.Context) permission.Decision {
 			if pc.Mode != permission.ModeAcceptEdits {
@@ -202,7 +202,7 @@ func TestPermissionRequestFromOptionalInterfaces(t *testing.T) {
 		},
 	}, llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e", Name: "edit"}}})
 
-	if !got.Edit || got.ReadOnly || got.Subject != "subject" || len(got.Paths) != 1 || got.Paths[0] != paths[0] {
+	if !got.Edit || got.ReadOnly || got.Subject != "subject" || !got.Shell || len(got.Paths) != 1 || got.Paths[0] != paths[0] {
 		t.Fatalf("permission request = %+v", got)
 	}
 	if got.SelfCheck.Behavior != permission.Ask || got.SelfCheck.Message != "self check" {

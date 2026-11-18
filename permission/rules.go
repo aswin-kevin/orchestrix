@@ -113,6 +113,12 @@ func (r Rule) Matches(req Request) bool {
 	return r.Pattern == "" || matchSubject(r.Pattern, req.Subject)
 }
 
+// matchesCommand reports whether the rule is a tool rule for tool whose
+// pattern matches one command of a shell subject.
+func (r Rule) matchesCommand(tool, command string) bool {
+	return !r.isPathRule() && r.Tool == tool && r.Pattern != "" && matchSubject(r.Pattern, command)
+}
+
 // matchesPaths is true when any single access has the rule's Op and a path
 // matching the rule's glob. Paths are virtual absolute paths; a relative one is
 // rooted at "/" before matching so that "secrets/x" cannot slip past a rule
