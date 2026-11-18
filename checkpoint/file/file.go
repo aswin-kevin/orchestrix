@@ -22,8 +22,10 @@
 // also fsyncs the directory so the new file's entry survives a crash. After
 // Save returns nil the checkpoint survives process and OS crashes (subject
 // to the storage device honoring fsync). A crash mid-write can leave a torn
-// final line: readers ignore it, and the next Save truncates it away before
-// appending. An unparsable line anywhere else is reported as corruption.
+// final line, one without its newline: readers ignore it, and the next Save
+// truncates it away before appending. A newline-terminated line that does not
+// parse, even the last one, cannot come from a crash and is reported as
+// corruption.
 //
 // # Concurrency
 //
@@ -294,8 +296,9 @@ func (c *Checkpointer) syncDir() error {
 	return finish(d, true)
 }
 
-// Load replays the thread's file from its last snapshot. A torn final line is
-// ignored; corruption elsewhere is an error.
+// Load replays the thread's file from its last snapshot. A torn
+// (unterminated) final line is ignored; any unparsable complete line is an
+// error.
 func (c *Checkpointer) Load(ctx context.Context, threadID string) (*state.State, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

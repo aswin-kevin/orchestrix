@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -195,8 +196,10 @@ func TestFileTornTailIgnored(t *testing.T) {
 	}
 	path := onlyFile(t, dir)
 	lines := readLines(t, path)
+	// What a crash mid-write leaves: the start of a line, without the
+	// newline that a complete record always ends with.
 	half := lines[2][:len(lines[2])/2]
-	appendRaw(t, path, half) // half of a valid line, no newline
+	appendRaw(t, path, half)
 
 	if got := stateJSON(t, load(t, c, "t")); got != saved[2] {
 		t.Fatalf("torn tail changed Load:\n got %s\nwant %s", got, saved[2])
@@ -233,15 +236,28 @@ func TestFileTornTailRecoveredByNewProcess(t *testing.T) {
 	}
 }
 
-func TestFileUnparsableTerminatedLastLineIgnored(t *testing.T) {
+func TestFileUnparsableTerminatedLastLineErrors(t *testing.T) {
+	// A record is written with its newline in one Write, so a crash can only
+	// cut a line short; a complete line that does not parse was damaged
+	// later and must not be silently cut away.
 	dir := t.TempDir()
 	c := newCP(t, dir)
 	s := state.New()
 	s.AppendMessages(llm.UserText("a"))
 	save(t, c, "t", s)
-	appendRaw(t, onlyFile(t, dir), "garbage\n")
-	if got, want := stateJSON(t, load(t, c, "t")), stateJSON(t, s); got != want {
-		t.Fatalf("got %s want %s", got, want)
+	path := onlyFile(t, dir)
+	appendRaw(t, path, "garbage\n")
+	before := readLines(t, path)
+
+	if _, err := c.Load(ctx, "t"); err == nil {
+		t.Fatal("Load succeeded on an unparsable newline-terminated last line")
+	}
+	c2 := newCP(t, dir)
+	if err := c2.Save(ctx, "t", s); err == nil {
+		t.Fatal("Save succeeded on an unparsable newline-terminated last line")
+	}
+	if after := readLines(t, path); !slices.Equal(after, before) {
+		t.Fatalf("the corrupt file was changed:\n got %q\nwant %q", after, before)
 	}
 }
 

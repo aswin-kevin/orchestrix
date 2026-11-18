@@ -18,26 +18,24 @@ type replayed struct {
 	size    int64     // file size; larger than goodEnd means a torn tail
 }
 
-// readRecords parses data into records. A final line that lacks its newline
-// or does not parse is a torn write and is dropped; an unparsable line
-// anywhere earlier is corruption and an error. goodEnd is the offset after
-// the last record kept.
+// readRecords parses data into records. Each record is written together
+// with its newline in one Write, so a crash can leave only an unterminated
+// final line: that torn write is dropped. Any line that ends in a newline but
+// does not parse, the last one included, is corruption and an error. goodEnd
+// is the offset after the last record kept.
 func readRecords(data []byte) (recs []record, goodEnd int64, err error) {
 	for pos := 0; pos < len(data); {
 		nl := bytes.IndexByte(data[pos:], '\n')
 		if nl < 0 {
-			break // unterminated tail
+			break // torn final line
 		}
-		end := pos + nl + 1
 		var rec record
 		if jsonErr := json.Unmarshal(data[pos:pos+nl], &rec); jsonErr != nil {
-			if end == len(data) {
-				break // torn final line
-			}
 			return nil, 0, fmt.Errorf("corrupt record at byte %d: %w", pos, jsonErr)
 		}
 		recs = append(recs, rec)
-		pos, goodEnd = end, int64(end)
+		pos += nl + 1
+		goodEnd = int64(pos)
 	}
 	return recs, goodEnd, nil
 }
