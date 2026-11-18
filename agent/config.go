@@ -19,14 +19,15 @@ const (
 	DefaultMaxToolOutputChars = 200_000
 	// DefaultAgentName is the agent id used when Config.Name is empty.
 	DefaultAgentName = "main"
-	// DefaultSettlementMaxTurns is how many extra tool-less turns a run gets
-	// to wrap up after hitting a limit.
+	// DefaultSettlementMaxTurns is how many extra model calls a run gets to
+	// wrap up after hitting a limit.
 	DefaultSettlementMaxTurns = 2
 )
 
 // Settlement configures the wrap-up phase a run enters when it hits a limit
-// (such as max turns): the model gets a few more turns, without tools, to
-// summarise where it got to.
+// (such as max turns): the model gets a few more turns, with DisabledTools
+// withheld, to summarise where it got to. The run still ends with the reason
+// of the limit, never ReasonCompleted.
 type Settlement struct {
 	// Prompt is sent to the model when the settlement starts.
 	Prompt string

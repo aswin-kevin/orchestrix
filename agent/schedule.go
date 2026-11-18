@@ -118,6 +118,11 @@ func (r *run) prepare(use llm.Block) (c *toolCall) {
 		}
 	}()
 
+	// The model may still call a tool hidden from it during settlement.
+	if r.disabled(use.Name) {
+		c.rejected = errorResult("tool %s is not available while the run is wrapping up", use.Name)
+		return c
+	}
 	t, ok := r.agent.registry.Get(use.Name)
 	if !ok {
 		c.rejected = errorResult("unknown tool %q", use.Name)
@@ -193,8 +198,8 @@ func (r *run) admit(c *toolCall) (res *tool.Result) {
 	if c.rejected != nil {
 		return c.rejected
 	}
-	if r.ctx.Err() != nil {
-		return errorResult(cancelledToolResult)
+	if stopped := r.stoppedResult(); stopped != nil {
+		return stopped
 	}
 	req := r.permissionRequest(c)
 	decision := permission.Evaluate(req, r.agent.permissionContext())
@@ -259,9 +264,9 @@ func (r *run) runCall(c *toolCall) (res tool.Result) {
 	}()
 
 	// The call may have waited for a concurrency slot while the run was
-	// being cancelled.
-	if r.ctx.Err() != nil {
-		return *errorResult(cancelledToolResult)
+	// being cancelled or ran out of time.
+	if stopped := r.stoppedResult(); stopped != nil {
+		return *stopped
 	}
 	call := &ToolCall{
 		ID:    c.id,
@@ -271,14 +276,27 @@ func (r *run) runCall(c *toolCall) (res tool.Result) {
 		State: r.state,
 		Call:  r.toolEnv(c),
 	}
-	res, err := r.agent.runTool(r.ctx, call)
-	switch {
-	case err == nil:
+	res, err := r.agent.runTool(r.budget.toolCtx, call)
+	if err == nil {
 		return res
+	}
+	if stopped := r.stoppedResult(); stopped != nil {
+		return *stopped
+	}
+	return *errorResult("tool %s failed: %v", c.name, err)
+}
+
+// stoppedResult returns the result for a call that the run's cancellation or
+// its time budget stopped, or nil while neither has happened. The two are
+// reported differently so the model knows whether time ran out.
+func (r *run) stoppedResult() *tool.Result {
+	switch {
 	case r.ctx.Err() != nil:
-		return *errorResult(cancelledToolResult)
+		return errorResult(cancelledToolResult)
+	case r.budget.expired():
+		return errorResult(timeBudgetToolResult)
 	default:
-		return *errorResult("tool %s failed: %v", c.name, err)
+		return nil
 	}
 }
 

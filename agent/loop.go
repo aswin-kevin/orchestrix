@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -27,9 +28,12 @@ type run struct {
 	threadID string
 	state    *state.State
 	backend  backend.Backend
-	// model is the model handler chain wrapped around streamModel; it is
-	// built per run because the innermost handler streams to this run.
+	// model is the model handler chain wrapped around streamModel (or
+	// completeModel); it is built per run because the innermost handler
+	// emits to this run.
 	model ModelHandler
+	// budget tracks the run limits; see budget.go.
+	budget *budget
 
 	events chan Event
 	// gone is closed by the consumer when it stops reading events.
@@ -61,8 +65,13 @@ func (a *Agent) newRun(ctx context.Context, in Input) *run {
 		backend:  a.backendFor(in.ThreadID),
 		events:   make(chan Event),
 		gone:     make(chan struct{}),
+		budget:   newBudget(ctx, a.cfg.MaxDuration),
 	}
-	r.model = chainModel(a.stack, r.streamModel)
+	innermost := r.streamModel
+	if a.cfg.NonStreaming {
+		innermost = r.completeModel
+	}
+	r.model = chainModel(a.stack, innermost)
 	return r
 }
 
@@ -78,6 +87,7 @@ func (a *Agent) backendFor(threadID string) backend.Backend {
 func (r *run) drive(input []llm.Message) {
 	defer close(r.events)
 	defer r.seal()
+	defer r.budget.stopClock()
 
 	r.state.AppendMessages(input...)
 	final := r.loop()
@@ -89,8 +99,8 @@ func (r *run) drive(input []llm.Message) {
 	r.send(Event{Kind: KindFinal, Final: final})
 }
 
-// loop runs turns until the model stops asking for tools or something ends
-// the run early.
+// loop runs turns until the model is done, a run limit is reached, or
+// something ends the run early.
 func (r *run) loop() *Final {
 	if err := r.beforeAgent(); err != nil {
 		return r.finish(ReasonMiddlewareError, err)
@@ -100,18 +110,31 @@ func (r *run) loop() *Final {
 		if final != nil {
 			return final
 		}
-		uses := resp.Message.ToolUses()
-		if len(uses) == 0 {
-			return r.finish(ReasonCompleted, nil)
+		if r.escalate(resp) {
+			continue
 		}
-		if final := r.toolTurn(uses); final != nil {
+		r.record(resp)
+		if final := r.afterReply(resp); final != nil {
 			return final
 		}
 	}
 }
 
-// modelTurn performs one model call with its hooks and records the reply in
-// State. It returns a Final when the run must end.
+// afterReply runs the tool calls of a recorded reply, if any, then applies
+// the run limits. It returns a Final when the run must end.
+func (r *run) afterReply(resp *llm.Response) *Final {
+	uses := resp.Message.ToolUses()
+	if len(uses) == 0 {
+		return r.afterNoToolTurn(resp)
+	}
+	if final := r.toolTurn(uses); final != nil {
+		return final
+	}
+	return r.afterToolTurn()
+}
+
+// modelTurn performs one model call with its hooks and accounts for its
+// usage. It returns a Final when the run must end.
 func (r *run) modelTurn() (*llm.Response, *Final) {
 	if err := r.beforeModel(); err != nil {
 		return nil, r.finish(ReasonMiddlewareError, err)
@@ -123,7 +146,7 @@ func (r *run) modelTurn() (*llm.Response, *Final) {
 	if err := r.afterModel(resp); err != nil {
 		return nil, r.finish(ReasonMiddlewareError, err)
 	}
-	r.record(resp)
+	r.account(resp)
 	return resp, nil
 }
 
@@ -140,10 +163,6 @@ func (r *run) callModel() (*llm.Response, error) {
 // repaired view of State, so wrappers may rewrite them freely.
 func (r *run) modelRequest() *ModelRequest {
 	cfg := r.agent.cfg
-	maxTokens := cfg.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = cfg.Profile.MaxOutput
-	}
 	return &ModelRequest{
 		Provider: cfg.Provider,
 		Request: llm.Request{
@@ -151,8 +170,8 @@ func (r *run) modelRequest() *ModelRequest {
 			System:        slices.Clone(cfg.System),
 			CacheBoundary: cfg.CacheBoundary,
 			Messages:      repairHistory(withoutMeta(r.state.Messages())),
-			Tools:         r.agent.registry.Schemas(),
-			MaxTokens:     maxTokens,
+			Tools:         r.toolSchemas(),
+			MaxTokens:     r.maxTokens(),
 			Temperature:   clonePtr(cfg.Temperature),
 		},
 		State:   r.state,
@@ -173,9 +192,7 @@ func withoutMeta(msgs []llm.Message) []llm.Message {
 // streamModel is the innermost model handler: it streams the reply from the
 // provider, forwarding text and thinking deltas as they arrive.
 func (r *run) streamModel(ctx context.Context, req *ModelRequest) (*llm.Response, error) {
-	if r.attempts.Add(1) > 1 {
-		r.emit(Event{Kind: KindRetry})
-	}
+	r.countAttempt()
 	var acc llm.Accumulator
 	for ev, err := range req.Provider.Stream(ctx, req.Request) {
 		if err != nil {
@@ -195,6 +212,49 @@ func (r *run) streamModel(ctx context.Context, req *ModelRequest) (*llm.Response
 		return nil, err
 	}
 	return acc.Response()
+}
+
+// completeModel is the innermost model handler when Config.NonStreaming is
+// set: it fetches the whole reply, then forwards its thinking and its text as
+// one event each.
+func (r *run) completeModel(ctx context.Context, req *ModelRequest) (*llm.Response, error) {
+	r.countAttempt()
+	resp, err := req.Provider.Complete(ctx, req.Request)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, errNoResponse
+	}
+	if thinking := thinkingText(resp.Message); thinking != "" {
+		r.emit(Event{Kind: KindThinking, Text: thinking})
+	}
+	if text := resp.Message.Text(); text != "" {
+		r.emit(Event{Kind: KindText, Text: text})
+	}
+	return resp, nil
+}
+
+// countAttempt notes a call of the innermost model handler, reporting every
+// call after the first of a turn as a retry.
+func (r *run) countAttempt() {
+	if r.attempts.Add(1) > 1 {
+		r.emit(Event{Kind: KindRetry})
+	}
+}
+
+// thinkingText concatenates the message's thinking blocks.
+func thinkingText(m llm.Message) string {
+	var sb strings.Builder
+	for _, b := range m.Content {
+		if b.Type == llm.BlockThinking {
+			sb.WriteString(b.Thinking)
+		}
+	}
+	return sb.String()
 }
 
 func (r *run) emitDelta(ev llm.StreamEvent) {
@@ -220,16 +280,21 @@ func (r *run) modelFailure(err error) *Final {
 	}
 }
 
-// record appends the assistant reply to State and accounts for its usage.
+// account adds the usage of a model call to the run's total. Every call
+// counts, including a reply discarded for a retry.
+func (r *run) account(resp *llm.Response) {
+	r.usage.Add(resp.Usage)
+	usage := resp.Usage
+	r.emit(Event{Kind: KindUsage, Usage: &usage})
+}
+
+// record appends the assistant reply to State as the outcome of a turn.
 func (r *run) record(resp *llm.Response) {
 	r.turns++
 	r.state.AppendMessages(resp.Message)
-	r.usage.Add(resp.Usage)
 	if text := resp.Message.Text(); text != "" {
 		r.lastText = text
 	}
-	usage := resp.Usage
-	r.emit(Event{Kind: KindUsage, Usage: &usage})
 }
 
 func (r *run) finish(reason TerminalReason, err error) *Final {
@@ -288,69 +353,4 @@ func (r *run) abandoned() bool {
 	default:
 		return false
 	}
-}
-
-// Hook runners. Before* hooks run in stack order and After* hooks in reverse
-// stack order (see the package documentation); each stops at the first error.
-
-func (r *run) beforeAgent() error {
-	for _, mw := range r.agent.stack {
-		if h, ok := mw.(BeforeAgent); ok {
-			if err := h.BeforeAgent(r.ctx, r.state); err != nil {
-				return hookError(mw, "BeforeAgent", err)
-			}
-		}
-	}
-	return nil
-}
-
-func (r *run) beforeModel() error {
-	for _, mw := range r.agent.stack {
-		if h, ok := mw.(BeforeModel); ok {
-			if err := h.BeforeModel(r.ctx, r.state); err != nil {
-				return hookError(mw, "BeforeModel", err)
-			}
-		}
-	}
-	return nil
-}
-
-func (r *run) afterModel(resp *llm.Response) error {
-	for _, mw := range slices.Backward(r.agent.stack) {
-		if h, ok := mw.(AfterModel); ok {
-			if err := h.AfterModel(r.ctx, r.state, resp); err != nil {
-				return hookError(mw, "AfterModel", err)
-			}
-		}
-	}
-	return nil
-}
-
-func (r *run) afterAgent() error {
-	for _, mw := range slices.Backward(r.agent.stack) {
-		if h, ok := mw.(AfterAgent); ok {
-			if err := h.AfterAgent(r.ctx, r.state); err != nil {
-				return hookError(mw, "AfterAgent", err)
-			}
-		}
-	}
-	return nil
-}
-
-// runAfterAgent runs the AfterAgent hooks and folds a failure into final. A
-// run that had otherwise succeeded ends with ReasonMiddlewareError; a run
-// that had already failed keeps its reason and gains the hook's error.
-func (r *run) runAfterAgent(final *Final) {
-	err := r.afterAgent()
-	if err == nil {
-		return
-	}
-	if final.Err == nil {
-		final.Reason = ReasonMiddlewareError
-	}
-	final.Err = errors.Join(final.Err, err)
-}
-
-func hookError(mw Middleware, hook string, err error) error {
-	return fmt.Errorf("agent: middleware %q %s: %w", mw.Name(), hook, err)
 }

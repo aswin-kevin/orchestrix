@@ -1,0 +1,329 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"iter"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/tool"
+)
+
+const settlementPrompt = "Limit reached. Summarise where you got to."
+
+func echoCall(id string) llmtest.Call {
+	return llmtest.Call{ID: id, Name: "echo", Input: map[string]any{"text": id}}
+}
+
+func toolTurn(id string) llmtest.Turn {
+	return llmtest.Turn{ToolCalls: []llmtest.Call{echoCall(id)}}
+}
+
+// schemaNames lists the tool names offered by req.
+func schemaNames(req llm.Request) []string {
+	var names []string
+	for _, s := range req.Tools {
+		names = append(names, s.Name)
+	}
+	return names
+}
+
+// lastText returns the text of the last message of req.
+func lastText(req llm.Request) string {
+	return req.Messages[len(req.Messages)-1].Text()
+}
+
+func TestMaxTurnsWithoutSettlement(t *testing.T) {
+	p := llmtest.New(toolTurn("t1"), toolTurn("t2"), toolTurn("t3"))
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTurns: 2})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonMaxTurns || final.Err != nil || final.Turns != 2 {
+		t.Fatalf("final = %+v, want max_turns after 2 turns", final)
+	}
+	if p.Calls() != 2 {
+		t.Fatalf("model called %d times, want 2", p.Calls())
+	}
+	// The tools of the last allowed turn still ran, so State stays paired.
+	if res := lastToolResults(t, final.State); res[0].ToolUseID != "t2" || res[0].IsError {
+		t.Fatalf("last results = %+v, want echo result for t2", res)
+	}
+}
+
+func TestMaxTurnsSettlementHidesToolsAndKeepsReason(t *testing.T) {
+	var executed bool
+	execute := tool.New("execute", "Run a command.",
+		func(context.Context, echoInput, *tool.Call) (tool.Result, error) {
+			executed = true
+			return tool.Text("ran"), nil
+		})
+	p := llmtest.New(
+		toolTurn("t1"),
+		// The model may still name a hidden tool during settlement.
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "x1", Name: "execute", Input: map[string]any{"text": "rm"}}}},
+		toolTurn("t3"),
+	)
+	a := mustNew(t, Config{
+		Provider: p,
+		Tools:    []tool.Tool{echoTool(), execute},
+		MaxTurns: 1,
+		Settlement: &Settlement{
+			Prompt:        settlementPrompt,
+			MaxTurns:      2,
+			DisabledTools: []string{"execute"},
+		},
+	})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonMaxTurns || final.Err != nil {
+		t.Fatalf("final = %+v, want max_turns", final)
+	}
+	if p.Calls() != 3 {
+		t.Fatalf("model called %d times, want 1 + 2 settlement turns", p.Calls())
+	}
+	if got := schemaNames(p.Requests[0]); !slices.Contains(got, "execute") {
+		t.Fatalf("first request tools = %v, want execute offered", got)
+	}
+	if got := lastText(p.Requests[1]); got != settlementPrompt {
+		t.Fatalf("first settlement request ends with %q, want the settlement prompt", got)
+	}
+	for _, req := range p.Requests[1:] {
+		if got := schemaNames(req); slices.Contains(got, "execute") || !slices.Contains(got, "echo") {
+			t.Fatalf("settlement request tools = %v, want echo without execute", got)
+		}
+	}
+	if executed {
+		t.Fatal("a disabled tool ran during settlement")
+	}
+	refused := p.Requests[2].Messages[len(p.Requests[2].Messages)-1].Content[0]
+	if refused.ToolUseID != "x1" || !refused.IsError {
+		t.Fatalf("disabled call result = %+v, want an error result", refused)
+	}
+}
+
+func TestSettlementNaturalStopUsesPromptByReason(t *testing.T) {
+	const byReason = "Out of turns: wrap up."
+	p := llmtest.New(toolTurn("t1"), llmtest.Turn{Text: "summary"})
+	a := mustNew(t, Config{
+		Provider: p,
+		Tools:    []tool.Tool{echoTool()},
+		MaxTurns: 1,
+		Settlement: &Settlement{
+			Prompt:         settlementPrompt,
+			PromptByReason: map[TerminalReason]string{ReasonMaxTurns: byReason},
+		},
+	})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonMaxTurns || final.Text != "summary" {
+		t.Fatalf("final = %+v, want max_turns with the summary", final)
+	}
+	if got := lastText(p.Requests[1]); got != byReason {
+		t.Fatalf("settlement prompt = %q, want the per-reason override", got)
+	}
+}
+
+// hangTool blocks until its context ends, failing the test if that takes
+// longer than limit.
+func hangTool(t *testing.T, limit time.Duration) tool.Tool {
+	return tool.New("hang", "Block until interrupted.",
+		func(ctx context.Context, _ struct{}, _ *tool.Call) (tool.Result, error) {
+			select {
+			case <-ctx.Done():
+				return tool.Result{}, ctx.Err()
+			case <-time.After(limit):
+				t.Error("hung tool was never interrupted")
+				return tool.Text("timed out"), nil
+			}
+		},
+		tool.WithReadOnly())
+}
+
+func TestMaxDurationInterruptsHungTool(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "h1", Name: "hang"}}})
+	a := mustNew(t, Config{
+		Provider:    p,
+		Tools:       []tool.Tool{hangTool(t, 5*time.Second)},
+		MaxDuration: 50 * time.Millisecond,
+	})
+
+	start := time.Now()
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("run took %v, want it interrupted near the 50ms budget", elapsed)
+	}
+	if final.Reason != ReasonTimeout || final.Err != nil {
+		t.Fatalf("final = %+v, want timeout", final)
+	}
+	res := lastToolResults(t, final.State)[0]
+	if !res.IsError || !strings.Contains(res.Content[0].Text, "time budget") {
+		t.Fatalf("hung tool result = %+v, want a time budget interruption", res)
+	}
+}
+
+func TestTimeoutSettlementRunsOnParentContext(t *testing.T) {
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "h1", Name: "hang"}}},
+		llmtest.Turn{Text: "summary"},
+	)
+	a := mustNew(t, Config{
+		Provider:    p,
+		Tools:       []tool.Tool{hangTool(t, 5*time.Second)},
+		MaxDuration: 50 * time.Millisecond,
+		Settlement:  &Settlement{Prompt: settlementPrompt},
+	})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	// The settlement model call would fail if it ran on the expired deadline.
+	if final.Reason != ReasonTimeout || final.Text != "summary" || final.Err != nil {
+		t.Fatalf("final = %+v, want timeout with the settlement summary", final)
+	}
+	if got := lastText(p.Requests[1]); got != settlementPrompt {
+		t.Fatalf("settlement request ends with %q, want the settlement prompt", got)
+	}
+}
+
+func textTurn(text string, output int) llmtest.Turn {
+	return llmtest.Turn{Text: text, Usage: llm.Usage{Output: output}}
+}
+
+func TestTokenBudgetNudgesThenStops(t *testing.T) {
+	p := llmtest.New(textTurn("a", 100), textTurn("b", 100), textTurn("c", 100), textTurn("never", 1))
+	a := mustNew(t, Config{Provider: p, TokenBudget: 10_000})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	// Both nudged turns produced fewer than 500 tokens, so the third reply
+	// ends the run.
+	if final.Reason != ReasonCompleted || final.Text != "c" || p.Calls() != 3 {
+		t.Fatalf("final = %+v after %d calls, want completed after 3", final, p.Calls())
+	}
+	for i, remaining := range []int{9_900, 9_800} {
+		want := fmt.Sprintf(DefaultBudgetNudge, remaining)
+		if got := lastText(p.Requests[i+1]); got != want {
+			t.Fatalf("request %d ends with %q, want %q", i+1, got, want)
+		}
+	}
+}
+
+func TestTokenBudgetStopsNearBudget(t *testing.T) {
+	p := llmtest.New(textTurn("a", 950), textTurn("never", 1))
+	a := mustNew(t, Config{Provider: p, TokenBudget: 1_000})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonCompleted || p.Calls() != 1 {
+		t.Fatalf("final = %+v after %d calls, want completed without a nudge", final, p.Calls())
+	}
+}
+
+func truncatedTurn(text string) llmtest.Turn {
+	return llmtest.Turn{Text: text, StopReason: llm.StopMaxTokens}
+}
+
+func TestMaxTokensEscalateThenResume(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		maxOutput int
+		want      int
+	}{
+		{"escalates to the cap", 100_000, EscalatedMaxTokens},
+		{"capped at the profile", 32_000, 32_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := llmtest.New(truncatedTurn("cut"), truncatedTurn("longer cut"), llmtest.Turn{Text: "done"})
+			a := mustNew(t, Config{
+				Provider:          p,
+				MaxTokens:         1_000,
+				Profile:           &llm.Profile{ContextWindow: 200_000, MaxOutput: tc.maxOutput},
+				EscalateMaxTokens: true,
+			})
+
+			events, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+			if final.Reason != ReasonCompleted || final.Text != "done" || p.Calls() != 3 {
+				t.Fatalf("final = %+v after %d calls, want completed after 3", final, p.Calls())
+			}
+			retry := p.Requests[1]
+			if retry.MaxTokens != tc.want {
+				t.Fatalf("retry MaxTokens = %d, want %d", retry.MaxTokens, tc.want)
+			}
+			if len(retry.Messages) != len(p.Requests[0].Messages) {
+				t.Fatal("the escalated retry added messages; it must repeat the same turn")
+			}
+			resume := p.Requests[2]
+			msgs := resume.Messages
+			if lastText(resume) != DefaultResumePrompt || msgs[len(msgs)-2].Text() != "longer cut" {
+				t.Fatalf("resume request ends with %+v, want truncated reply then resume prompt", msgs[len(msgs)-2:])
+			}
+			if !slices.ContainsFunc(events, func(ev Event) bool { return ev.Kind == KindRetry }) {
+				t.Fatal("no KindRetry event for the discarded truncated reply")
+			}
+		})
+	}
+}
+
+func TestMaxTokensResumeGivesUp(t *testing.T) {
+	p := llmtest.New(truncatedTurn("1"), truncatedTurn("2"), truncatedTurn("3"), truncatedTurn("4"), truncatedTurn("never"))
+	a := mustNew(t, Config{Provider: p})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonCompleted || final.Text != "4" || p.Calls() != 4 {
+		t.Fatalf("final = %+v after %d calls, want completed with the 4th reply", final, p.Calls())
+	}
+}
+
+// completeOnly is a provider that fails any streaming call, so a run can
+// only succeed through Complete.
+type completeOnly struct{ resp *llm.Response }
+
+func (completeOnly) Stream(context.Context, llm.Request) iter.Seq2[llm.StreamEvent, error] {
+	return func(yield func(llm.StreamEvent, error) bool) {
+		yield(llm.StreamEvent{}, errors.New("streaming not supported"))
+	}
+}
+
+func (p completeOnly) Complete(context.Context, llm.Request) (*llm.Response, error) {
+	return p.resp, nil
+}
+
+func TestNonStreamingEmitsOnce(t *testing.T) {
+	p := completeOnly{resp: &llm.Response{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{
+			{Type: llm.BlockThinking, Thinking: "let me think"},
+			llm.TextBlock("hello "),
+			llm.TextBlock("world"),
+		}},
+		StopReason: llm.StopEndTurn,
+	}}
+	a := mustNew(t, Config{Provider: p, NonStreaming: true})
+
+	events, final := collect(t, a.Run(context.Background(), userInput("hi")))
+
+	if final.Reason != ReasonCompleted || final.Text != "hello world" {
+		t.Fatalf("final = %+v, want completed with the full text", final)
+	}
+	var deltas []Event
+	for _, ev := range events {
+		if ev.Kind == KindText || ev.Kind == KindThinking {
+			deltas = append(deltas, ev)
+		}
+	}
+	if len(deltas) != 2 ||
+		deltas[0].Kind != KindThinking || deltas[0].Text != "let me think" ||
+		deltas[1].Kind != KindText || deltas[1].Text != "hello world" {
+		t.Fatalf("content events = %+v, want one thinking then one text", deltas)
+	}
+}
