@@ -85,11 +85,16 @@ type Backend interface {
 	Grep(ctx context.Context, pattern string, opts GrepOptions) ([]GrepMatch, error)
 }
 
-// ExecOptions configures Executor.Execute.
+// ExecOptions configures Executor.Execute and Starter.Start.
 type ExecOptions struct {
-	Timeout        time.Duration
-	Env            []string
-	Dir            string
+	// Timeout stops the command after this long; 0 means the backend default.
+	Timeout time.Duration
+	// Env holds extra "KEY=value" entries that override the backend's
+	// environment; nil adds none.
+	Env []string
+	// Dir is the working directory as a backend path; empty means the root.
+	Dir string
+	// MaxOutputBytes caps the captured output; 0 means the backend default.
 	MaxOutputBytes int
 }
 
@@ -105,6 +110,28 @@ type ExecResult struct {
 // Executor runs shell commands.
 type Executor interface {
 	Execute(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
+}
+
+// Process is a command started by a Starter.
+type Process interface {
+	// Done is closed once the command has finished and its whole process
+	// group is gone.
+	Done() <-chan struct{}
+	// Result returns the final result; ok is false until Done is closed.
+	Result() (res ExecResult, ok bool)
+	// Output returns the output captured so far, capped like
+	// ExecResult.Output. It is safe to call while the command runs.
+	Output() string
+	// Stop kills the process group; Done closes afterwards. Stopping a
+	// finished process is a no-op.
+	Stop() error
+}
+
+// Starter starts a command without waiting for it. The process is not tied to
+// ctx (ctx bounds only the start); it ends on completion, opts.Timeout, or
+// Process.Stop.
+type Starter interface {
+	Start(ctx context.Context, cmd string, opts ExecOptions) (Process, error)
 }
 
 // Snapshotter is implemented by backends whose content can be captured into,

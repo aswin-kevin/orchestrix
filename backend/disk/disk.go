@@ -127,6 +127,18 @@ func (b *Backend) resolve(op, p string) (clean, realPath string, err error) {
 	return clean, resolved, nil
 }
 
+// RealPath returns the symlink-free host path that p denotes, after the same
+// cleaning, symlink resolution and confinement checks as Read; it fails with
+// backend.ErrOutsideRoot when the path leaves the root. An empty p means the
+// root. The path need not exist.
+func (b *Backend) RealPath(p string) (string, error) {
+	if p == "" {
+		p = b.rootPath()
+	}
+	_, realPath, err := b.resolve("realpath", p)
+	return realPath, err
+}
+
 func (b *Backend) inside(p string) bool {
 	rel, err := filepath.Rel(b.root, p)
 	if err != nil {

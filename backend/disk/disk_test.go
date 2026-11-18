@@ -280,3 +280,46 @@ func TestDiskRefusesFilesOverReadLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestDiskRealPath(t *testing.T) {
+	b, tempRoot := newDisk(t)
+	root, err := filepath.EvalSymlinks(tempRoot) // RealPath returns symlink-free paths
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]string{
+		"":             root,
+		"/":            root,
+		"/sub":         filepath.Join(root, "sub"),
+		"/sub/new.txt": filepath.Join(root, "sub", "new.txt"),
+		"/../sub":      filepath.Join(root, "sub"),
+	} {
+		got, err := b.RealPath(p)
+		if err != nil || got != want {
+			t.Errorf("RealPath(%q) = %q, %v; want %q", p, got, err, want)
+		}
+	}
+
+	outside := t.TempDir()
+	mustSymlink(t, outside, filepath.Join(root, "link"))
+	if _, err := b.RealPath("/link"); !errors.Is(err, backend.ErrOutsideRoot) {
+		t.Errorf("RealPath through outward symlink = %v, want ErrOutsideRoot", err)
+	}
+	if _, err := b.RealPath("/link/deep/x"); !errors.Is(err, backend.ErrOutsideRoot) {
+		t.Errorf("RealPath below outward symlink = %v, want ErrOutsideRoot", err)
+	}
+
+	host, err := disk.New(root, disk.WithVirtual(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := host.RealPath(""); err != nil || got != root {
+		t.Errorf("host RealPath(\"\") = %q, %v; want root %q", got, err, root)
+	}
+	if _, err := host.RealPath(filepath.Join(root, "..")); !errors.Is(err, backend.ErrOutsideRoot) {
+		t.Errorf("host RealPath(root/..) = %v, want ErrOutsideRoot", err)
+	}
+}

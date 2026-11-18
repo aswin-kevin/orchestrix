@@ -30,7 +30,7 @@ func (m *middleware) registersExecute() bool {
 // the default "ask" verdict: running commands is never pre-approved here.
 func (m *middleware) executeTool() tool.Tool {
 	return tool.New(ToolExecute,
-		m.description(ToolExecute, "Run a shell command in the workspace and return its combined output followed by the exit code. Commands that exceed the timeout are stopped."),
+		m.description(ToolExecute, "Run a shell command in the workspace and return its combined output followed by the exit code. Each command runs in a fresh shell from the workspace root, so `cd` and `export` do not carry over; chain steps with `&&`. Commands that exceed the timeout are stopped."),
 		m.execute,
 		tool.WithShellSubject(func(raw json.RawMessage) string {
 			var in executeInput

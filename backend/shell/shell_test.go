@@ -1,0 +1,326 @@
+//go:build unix
+
+package shell_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/backendtest"
+	"github.com/aswin-kevin/orchestrix/backend/shell"
+)
+
+// goneWithin bounds how long a test waits for a killed process to disappear.
+const goneWithin = 2 * time.Second
+
+var (
+	_ backend.Backend     = (*shell.Backend)(nil)
+	_ backend.Executor    = (*shell.Backend)(nil)
+	_ backend.Starter     = (*shell.Backend)(nil)
+	_ backend.MultiEditor = (*shell.Backend)(nil)
+)
+
+// newShell returns a backend over a fresh temp dir and the dir's symlink-free
+// path, which is what commands see as their working directory.
+func newShell(t *testing.T, opts shell.Options) (*shell.Backend, string) {
+	t.Helper()
+	b, err := shell.New(t.TempDir(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := b.RealPath("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b, root
+}
+
+func execute(t *testing.T, b *shell.Backend, cmd string, opts backend.ExecOptions) backend.ExecResult {
+	t.Helper()
+	res, err := b.Execute(context.Background(), cmd, opts)
+	if err != nil {
+		t.Fatalf("Execute(%q): %v", cmd, err)
+	}
+	return res
+}
+
+// firstLinePID parses the pid a test command printed with `echo $$` or
+// `echo $!` as its first output line.
+func firstLinePID(t *testing.T, output string) int {
+	t.Helper()
+	line, _, _ := strings.Cut(output, "\n")
+	pid, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		t.Fatalf("no pid on the first line of %q", output)
+	}
+	return pid
+}
+
+// requireGone fails unless kill(target, 0) reports ESRCH within goneWithin,
+// killing the target if it is still there. A negative target names a process
+// group.
+func requireGone(t *testing.T, target int) {
+	t.Helper()
+	deadline := time.Now().Add(goneWithin)
+	for {
+		if err := syscall.Kill(target, 0); errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(target, syscall.SIGKILL) // never leave the leak running
+			t.Fatalf("process (group) %d still exists", target)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestShellConformance(t *testing.T) {
+	backendtest.Run(t, func(t *testing.T) backend.Backend {
+		b, _ := newShell(t, shell.Options{})
+		return b
+	})
+}
+
+func TestExecuteExitCodeAndOutput(t *testing.T) {
+	b, _ := newShell(t, shell.Options{})
+	res := execute(t, b, "echo hi; echo err >&2; exit 3", backend.ExecOptions{})
+	if res.ExitCode != 3 || res.TimedOut || res.Truncated {
+		t.Errorf("result = %+v, want exit 3, not timed out or truncated", res)
+	}
+	if !strings.Contains(res.Output, "hi\n") || !strings.Contains(res.Output, "err\n") {
+		t.Errorf("output %q must hold stdout and stderr", res.Output)
+	}
+}
+
+func TestExecuteStdinIsEmpty(t *testing.T) {
+	b, _ := newShell(t, shell.Options{})
+	res := execute(t, b, "cat; echo done", backend.ExecOptions{Timeout: 5 * time.Second})
+	if res.Output != "done\n" || res.TimedOut {
+		t.Errorf("result = %+v; a stdin reader must see EOF at once", res)
+	}
+}
+
+func TestExecuteRunsInRootAndDir(t *testing.T) {
+	b, root := newShell(t, shell.Options{})
+	if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res := execute(t, b, "pwd", backend.ExecOptions{}); res.Output != root+"\n" {
+		t.Errorf("pwd = %q, want root %q", res.Output, root)
+	}
+	if res := execute(t, b, "pwd", backend.ExecOptions{Dir: "/sub"}); res.Output != filepath.Join(root, "sub")+"\n" {
+		t.Errorf("pwd in /sub = %q", res.Output)
+	}
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for dir, want := range map[string]error{
+		"/../x":     backend.ErrNotFound, // cleaned to <root>/x, which does not exist
+		"/missing":  backend.ErrNotFound,
+		"/file.txt": backend.ErrNotDir,
+		"/link":     backend.ErrOutsideRoot,
+	} {
+		if _, err := b.Execute(ctx, "pwd", backend.ExecOptions{Dir: dir}); !errors.Is(err, want) {
+			t.Errorf("Execute with Dir %q = %v, want %v", dir, err, want)
+		}
+		if _, err := b.Start(ctx, "pwd", backend.ExecOptions{Dir: dir}); !errors.Is(err, want) {
+			t.Errorf("Start with Dir %q = %v, want %v", dir, err, want)
+		}
+	}
+}
+
+func TestEnvAllowlistAndInjection(t *testing.T) {
+	t.Setenv("ORX_SECRET_TEST", "leaked")
+	b, _ := newShell(t, shell.Options{Env: map[string]string{"A": "1", "B": "options", "TERM": "xterm"}})
+	res := execute(t, b, "env", backend.ExecOptions{Env: []string{"B=exec"}})
+	if strings.Contains(res.Output, "ORX_SECRET_TEST") {
+		t.Errorf("host secret leaked into the command env:\n%s", res.Output)
+	}
+	lines := strings.Split(res.Output, "\n")
+	for _, want := range []string{"A=1", "B=exec", "PAGER=cat", "GIT_TERMINAL_PROMPT=0", "TERM=xterm", "PATH=" + os.Getenv("PATH")} {
+		if !containsLine(lines, want) {
+			t.Errorf("env lacks %q:\n%s", want, res.Output)
+		}
+	}
+	for _, unwanted := range []string{"B=options", "TERM=dumb"} {
+		if containsLine(lines, unwanted) {
+			t.Errorf("env holds overridden %q:\n%s", unwanted, res.Output)
+		}
+	}
+
+	inherit, _ := newShell(t, shell.Options{InheritEnv: true})
+	if res := execute(t, inherit, "env", backend.ExecOptions{}); !containsLine(strings.Split(res.Output, "\n"), "ORX_SECRET_TEST=leaked") {
+		t.Errorf("InheritEnv must pass the host env:\n%s", res.Output)
+	}
+}
+
+func containsLine(lines []string, want string) bool {
+	for _, line := range lines {
+		if line == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestTimeoutKillsGroup(t *testing.T) {
+	cases := map[string]struct {
+		opts shell.Options
+		exec backend.ExecOptions
+	}{
+		"exec timeout":    {exec: backend.ExecOptions{Timeout: 200 * time.Millisecond}},
+		"default timeout": {opts: shell.Options{Timeout: 200 * time.Millisecond}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			b, _ := newShell(t, tc.opts)
+			start := time.Now()
+			res := execute(t, b, "echo $$; sleep 30", tc.exec)
+			if elapsed := time.Since(start); elapsed > 3*time.Second {
+				t.Errorf("timed-out command took %s", elapsed)
+			}
+			if !res.TimedOut || res.ExitCode != -1 {
+				t.Errorf("result = %+v, want TimedOut and exit -1", res)
+			}
+			requireGone(t, -firstLinePID(t, res.Output))
+		})
+	}
+}
+
+func TestTimeoutEscalatesToKill(t *testing.T) {
+	b, _ := newShell(t, shell.Options{})
+	start := time.Now()
+	// The ignored SIGTERM is inherited by sleep, so only SIGKILL ends the group.
+	res := execute(t, b, "trap '' TERM; echo $$; sleep 30", backend.ExecOptions{Timeout: 200 * time.Millisecond})
+	if elapsed := time.Since(start); elapsed > shell.DefaultKillGrace+3*time.Second {
+		t.Errorf("SIGTERM-immune command took %s", elapsed)
+	}
+	if !res.TimedOut {
+		t.Errorf("result = %+v, want TimedOut", res)
+	}
+	requireGone(t, -firstLinePID(t, res.Output))
+}
+
+func TestGrandchildKilled(t *testing.T) {
+	b, _ := newShell(t, shell.Options{})
+	start := time.Now()
+	res := execute(t, b, "sleep 1000 & echo $!", backend.ExecOptions{})
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("Execute waited %s for a background grandchild", elapsed)
+	}
+	requireGone(t, firstLinePID(t, res.Output))
+
+	// A grandchild that detached from the output pipe is still reaped.
+	res = execute(t, b, "sleep 1000 >/dev/null 2>&1 & echo $!", backend.ExecOptions{})
+	requireGone(t, firstLinePID(t, res.Output))
+}
+
+func TestOutputCapHeadAndTail(t *testing.T) {
+	b, _ := newShell(t, shell.Options{})
+	res := execute(t, b, "seq 1 200000", backend.ExecOptions{MaxOutputBytes: 4096})
+	if !strings.HasPrefix(res.Output, "1\n2\n") || !strings.HasSuffix(res.Output, "\n200000\n") {
+		t.Errorf("output must keep head and tail, got %q…%q", res.Output[:20], res.Output[len(res.Output)-20:])
+	}
+	if !res.Truncated || !strings.Contains(res.Output, " bytes omitted]") {
+		t.Errorf("Truncated = %v, output must name the omitted bytes", res.Truncated)
+	}
+	if len(res.Output) > 4096+64 {
+		t.Errorf("capped output is %d bytes", len(res.Output))
+	}
+
+	capped, _ := newShell(t, shell.Options{MaxOutputBytes: 100})
+	if res := execute(t, capped, "seq 1 1000", backend.ExecOptions{}); !res.Truncated || len(res.Output) > 100+64 {
+		t.Errorf("Options.MaxOutputBytes ignored: %d bytes, truncated %v", len(res.Output), res.Truncated)
+	}
+}
+
+func TestStartOutputWhileRunningAndStop(t *testing.T) {
+	b, _ := newShell(t, shell.Options{})
+	p, err := b.Start(context.Background(), "echo $$; echo started; sleep 30", backend.ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(goneWithin)
+	for !strings.Contains(p.Output(), "started") {
+		if time.Now().After(deadline) {
+			t.Fatalf("output while running = %q", p.Output())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, ok := p.Result(); ok {
+		t.Fatal("Result must not be final while the command runs")
+	}
+	if err := p.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	select {
+	case <-p.Done():
+	case <-time.After(goneWithin):
+		t.Fatal("Done not closed after Stop")
+	}
+	res, ok := p.Result()
+	if !ok || !strings.Contains(res.Output, "started") || res.TimedOut {
+		t.Errorf("Result = %+v, %v", res, ok)
+	}
+	requireGone(t, -firstLinePID(t, res.Output))
+	if err := p.Stop(); err != nil {
+		t.Errorf("Stop after Done = %v, want nil", err)
+	}
+}
+
+func TestStartOutlivesContext(t *testing.T) {
+	b, _ := newShell(t, shell.Options{})
+	ctx, cancel := context.WithCancel(context.Background())
+	p, err := b.Start(ctx, "sleep 1; echo late", backend.ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case <-p.Done():
+	case <-time.After(5 * time.Second):
+		_ = p.Stop()
+		t.Fatal("process did not finish")
+	}
+	if res, _ := p.Result(); res.Output != "late\n" || res.ExitCode != 0 {
+		t.Errorf("Result = %+v; cancelling the start context must not stop the process", res)
+	}
+
+	if _, err := b.Start(ctx, "echo no", backend.ExecOptions{}); !errors.Is(err, context.Canceled) {
+		t.Errorf("Start with a done context = %v, want context.Canceled", err)
+	}
+}
+
+func TestExecuteContextCancelStopsGroup(t *testing.T) {
+	b, root := newShell(t, shell.Options{})
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	pidFile := filepath.Join(root, "pid")
+	start := time.Now()
+	_, err := b.Execute(ctx, "echo $$ > pid; sleep 30", backend.ExecOptions{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Execute = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("cancelled Execute took %s", elapsed)
+	}
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireGone(t, -firstLinePID(t, string(data)))
+}
