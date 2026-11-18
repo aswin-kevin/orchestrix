@@ -271,7 +271,7 @@ _, _ = a, err
 
 `WithSubagentConfig` controls the rest: `DisableFork`, `DisableGeneralPurpose`, `MaxDepth` (default 2) and the prompts. A spec may also set its own `Tools`, `Middleware`, `Provider`, `Model`, `Rules` and an `OutputSchema` that its final answer must satisfy.
 
-Approvals: with a `WithApprover`, subagents inherit it and ask it directly. Without one, a subagent that needs a decision pauses the parent's `task` call with one request listing the subagent's pending actions; approving or rejecting it applies to all of them, and the subagent then continues. Per-action `edit` and `respond` decisions are not available for a subagent's requests. A subagent's token usage is reported in forwarded usage events and is not added to the parent's `Final.Usage`.
+Approvals: with a `WithApprover`, subagents inherit it and ask it directly. Without one, a subagent that needs a decision pauses the parent's `task` call with one request listing the subagent's pending actions; approving or rejecting it applies to all of them, and the subagent then continues. That request's reason shortens each action's input; `subagents.SuspendedFor(final.State, toolUseID)` returns the subagent's full requests, so you can see exactly what you approve. Per-action `edit` and `respond` decisions are not available for a subagent's requests. A subagent's token usage is reported in forwarded usage events and is not added to the parent's `Final.Usage`.
 
 ## Context management
 

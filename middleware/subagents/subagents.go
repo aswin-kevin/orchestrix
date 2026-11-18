@@ -19,7 +19,9 @@
 // synchronously. Without one, a subagent that needs a decision ends
 // interrupted; the parent keeps it (Suspended) and pauses the task call with
 // one request that lists the subagent's pending actions and accepts approve
-// and/or reject, whichever every one of those actions accepts. Resuming the
+// and/or reject, whichever every one of those actions accepts. That
+// request's Reason quotes each action's input cut short; SuspendedFor gives
+// the host the subagent's full requests. Resuming the
 // parent with that decision applies it to every pending action of the
 // subagent and continues the subagent, which may pause again. Per-action
 // decisions (edit, respond) on a subagent's requests are not available

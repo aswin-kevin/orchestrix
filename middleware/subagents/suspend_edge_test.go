@@ -2,6 +2,7 @@ package subagents
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -221,5 +223,47 @@ func TestForkSuspendsAndResumes(t *testing.T) {
 	if res := last[len(last)-1]; res.Role != llm.RoleUser || toolResults(p.Requests[4])[0].ToolUseID != "t1" ||
 		blockText(toolResults(p.Requests[4])[0]) != "fork done" {
 		t.Fatalf("parent's task result = %+v, want the fork's answer", toolResults(p.Requests[4]))
+	}
+}
+
+func TestSuspendedForShowsFullChildRequests(t *testing.T) {
+	f := newInterruptFixture(t, nil)
+	s := f.interrupt(t)
+
+	got, ok := SuspendedFor(s, "t1")
+	if !ok {
+		t.Fatal("SuspendedFor found no child under the interrupted task call")
+	}
+	if got.Type != "writer" || len(got.Requests) != 1 {
+		t.Fatalf("suspended = %+v, want the writer with one request", got)
+	}
+	req := got.Requests[0]
+	if req.Tool != "write_file" || string(req.Input) != `{"text":"hello"}` || req.Reason == "" {
+		t.Fatalf("child request = %+v, want write_file with its full input and reason", req)
+	}
+	// A deep copy: changing it leaves the parent's State alone.
+	got.Requests[0].Input[2] = 'X'
+	got.Requests[0].Allowed[0] = "changed"
+	again, _ := SuspendedFor(s, "t1")
+	if string(again.Requests[0].Input) != `{"text":"hello"}` || again.Requests[0].Allowed[0] == "changed" {
+		t.Fatalf("SuspendedFor shares memory with the State: %+v", again.Requests[0])
+	}
+	if _, ok := SuspendedFor(s, "t2"); ok {
+		t.Fatal("SuspendedFor found a child under an unknown call")
+	}
+}
+
+func TestSuspendedForKeepsInputTheReasonTruncates(t *testing.T) {
+	long := json.RawMessage(`{"text":"` + strings.Repeat("x", 2*maxReasonInput) + `"}`)
+	requests := []agent.ActionRequest{{ToolUseID: "w1", Tool: "write_file", Input: long, Reason: "needs approval"}}
+	s := state.New()
+	suspendedKey.Set(s, map[string]Suspended{"t1": {Type: "writer", Requests: requests}})
+
+	if reason := approvalReason("writer", requests); strings.Contains(reason, string(long)) {
+		t.Fatalf("parent reason quotes the whole input: %q", reason)
+	}
+	got, _ := SuspendedFor(s, "t1")
+	if string(got.Requests[0].Input) != string(long) {
+		t.Fatalf("suspended input = %s, want it whole", got.Requests[0].Input)
 	}
 }

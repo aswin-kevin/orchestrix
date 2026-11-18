@@ -25,7 +25,10 @@ const maxReasonInput = 120
 var suspendedKey = state.NewKey[map[string]Suspended]("subagents.suspended", state.RunLocal[map[string]Suspended]())
 
 // Suspended is a subagent run that ended interrupted, kept in the parent's
-// State until the parent's task call is resumed.
+// State until the parent's task call is resumed. The parent's interrupt
+// summarizes Requests in its Reason, with each input cut short; a host that
+// wants to see exactly what it is approving reads the full requests with
+// SuspendedFor.
 type Suspended struct {
 	// Type is the subagent_type the run was started as.
 	Type string `json:"type"`
@@ -33,8 +36,33 @@ type Suspended struct {
 	ThreadID string `json:"thread_id"`
 	// State is the child's Final.State, as JSON.
 	State json.RawMessage `json:"state"`
-	// Requests are the child's pending actions (agent.Pending of State).
+	// Requests are the child's pending actions (agent.Pending of State),
+	// each with its full Input and the child's Reason.
 	Requests []agent.ActionRequest `json:"requests"`
+}
+
+// SuspendedFor returns the subagent suspended under the task call with
+// toolUseID in s, the parent's State, while that call awaits a decision
+// (agent.Pending lists it). The result is a deep copy, safe to keep or
+// change. It reports false when no subagent is suspended under the call.
+func SuspendedFor(s *state.State, toolUseID string) (Suspended, bool) {
+	entries, _ := suspendedKey.Get(s)
+	entry, ok := entries[toolUseID]
+	if !ok {
+		return Suspended{}, false
+	}
+	return entry.clone(), true
+}
+
+// clone returns a deep copy of the entry.
+func (e Suspended) clone() Suspended {
+	e.State = bytes.Clone(e.State)
+	e.Requests = slices.Clone(e.Requests)
+	for i := range e.Requests {
+		e.Requests[i].Input = bytes.Clone(e.Requests[i].Input)
+		e.Requests[i].Allowed = slices.Clone(e.Requests[i].Allowed)
+	}
+	return e
 }
 
 // suspendDecisions are the answers the parent's task call can relay: each
