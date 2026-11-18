@@ -12,7 +12,7 @@ A Go SDK for building agents: a streaming tool-use loop with provider-neutral mo
 - **Permissions.** Six modes plus allow, ask and deny rules, evaluated before any tool runs.
 - **Pluggable file backends.** In-memory per-thread workspaces or a real directory on disk.
 - **Human in the loop.** A tool call that needs approval pauses the run; resume it with your decision, even from a serialized state.
-- **Budgets.** Limit turns, wall-clock time and output tokens.
+- **Budgets.** Limit model turns and wall-clock time, and cap output tokens per response; a total token target (`TokenBudget`) is available through `agent.Config` and `WithConfig`.
 - **Zero dependencies.** Standard library only.
 
 ## Install
@@ -92,7 +92,7 @@ A middleware is any value with a `Name() string` method plus whichever hook inte
 
 The default stack is `filesystem` (file tools) and `planning` (`write_todos`). Adding a middleware with a default's name replaces it; `WithoutMiddleware("planning")` removes it.
 
-A custom middleware that logs every tool call:
+A custom middleware that logs every tool call (imports omitted):
 
 ```go
 type toolLogger struct{}
@@ -135,6 +135,8 @@ orchestrix.New(model,
 )
 ```
 
+`execute` exists only with a backend that can run commands (the shell backend arrives in milestone 2), so the `execute(rm:*)` rule above is illustrative for now.
+
 Rule grammar: `Tool` matches a tool by name, `Tool(pattern)` narrows it by the call's main string (such as a shell command; `git:*` matches `git` followed by arguments), and `read(glob)` / `write(glob)` match file paths. A malformed rule makes `New` return an error. Calls that need approval go to the `WithApprover` callback, or interrupt the run when there is none (see below).
 
 ## Backends
@@ -159,6 +161,7 @@ Use `WithBackendFactory(func(threadID string) backend.Backend { ... })` to choos
 Without an approver, a tool call that needs approval pauses the run. The final event has reason `interrupted`, and `Final.State` holds everything needed to continue. Answer each pending action with a `Decision` (`Approve`, `Edit`, `Reject` or `Respond`) and call `Resume`:
 
 ```go
+// Imports omitted; ctx and model come from surrounding code.
 a, _ := orchestrix.New(model) // default mode: write_file needs approval
 
 in := orchestrix.Text("Create /todo.txt with three items.")
@@ -179,13 +182,16 @@ for ev, err := range a.Run(ctx, in) {
 }
 
 if final.Reason == agent.ReasonInterrupted {
+	answers := bufio.NewScanner(os.Stdin)
 	var decisions []agent.Decision
 	for _, req := range pending.Requests {
-		fmt.Printf("approve %s %s? ", req.Tool, req.Input)
-		decisions = append(decisions, agent.Decision{
-			ToolUseID: req.ToolUseID,
-			Type:      agent.Approve,
-		})
+		fmt.Printf("run %s %s? [y/N] ", req.Tool, req.Input)
+		answers.Scan()
+		d := agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Approve}
+		if !strings.EqualFold(strings.TrimSpace(answers.Text()), "y") {
+			d.Type, d.Message = agent.Reject, "the user declined"
+		}
+		decisions = append(decisions, d)
 	}
 	for ev, err := range a.Resume(ctx, "demo", final.State, decisions) {
 		// the same event stream as Run
@@ -224,7 +230,7 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 
 Milestone 1 (core) ships the three providers, the agent loop with middleware, events and budgets, permissions, memory and disk backends, file and planning tools, the preset and a minimal CLI. Next:
 
-- **Milestone 2, deep agents:** subagents (isolated and forked), summarization, prompt caching, hooks, checkpointed interrupts and resume, a human-approval middleware, shell backend and background tasks.
+- **Milestone 2, depth:** subagents (isolated and forked), summarization, prompt caching, hooks, checkpointed interrupts and resume, a human-approval middleware, shell backend and background tasks.
 - **Milestone 3, knowledge and reach:** memory, skills, MCP, plan mode, deferred tools, web tools, ask-user.
 - **Milestone 4, scale:** async runs, a coordinator, rubric evaluation, model profiles, key-value, composite and sandbox backends, context compression, examples and full docs.
 
