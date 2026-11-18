@@ -99,9 +99,12 @@ type ModelRequest struct {
 	Profile llm.Profile
 	// Turn is the zero-based index of the current model turn.
 	Turn int
-	// Backend is the backend resolved for this run (BackendFactory(threadID)
-	// or Config.Backend). It may be nil.
+	// Backend is the backend resolved for this run (Input.Backend,
+	// BackendFactory(threadID) or Config.Backend). It may be nil.
 	Backend backend.Backend
+	// ThreadID is the run's Input.ThreadID; empty when it was started
+	// without one.
+	ThreadID string
 }
 
 // ModelHandler performs a model call. The innermost handler talks to the

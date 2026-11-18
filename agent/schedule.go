@@ -47,6 +47,10 @@ type toolCall struct {
 	resumed *resumedCall
 	// resume is handed to the tool as tool.Call.Resume.
 	resume *tool.ResumeValue
+	// announced reports that KindToolUse was emitted for the call in this
+	// run. It is emitted only once the call's fate is known, so every
+	// announced call also gets a KindToolResult unless it is left pending.
+	announced bool
 
 	// The outcome: result once the call is done, interrupt while it awaits
 	// a decision; neither for a call that was not started.
@@ -91,11 +95,18 @@ func (r *run) toolTurn(assistantIndex int, calls []*toolCall) *Final {
 
 // stopTurn ends the run after a call of the turn returned ErrStopRun. Every
 // call without a result, including one awaiting a decision, is answered as
-// skipped, so each tool_use keeps its tool_result.
+// skipped, so each tool_use keeps its tool_result. A call that was announced
+// (one left pending) has its skipped result reported too, so each
+// KindToolUse keeps its KindToolResult.
 func (r *run) stopTurn(assistantIndex int, calls []*toolCall, err error) *Final {
 	for _, c := range calls {
-		if !c.done() {
-			c.interrupt = nil
+		if c.done() {
+			continue
+		}
+		c.interrupt = nil
+		if c.announced {
+			r.settle(c, *errorResult(skippedToolResult))
+		} else {
 			c.result = errorResult(skippedToolResult)
 		}
 	}
@@ -159,6 +170,10 @@ func batches(calls []*toolCall) [][]*toolCall {
 // on their own goroutines, at most MaxConcurrency at a time. A pending call
 // sets halted. Once a call has asked to stop the run, no further call starts;
 // toolTurn answers those. runBatch returns once every started call is done.
+//
+// A call is announced only once its fate is known: when it settles without
+// running, when it becomes pending, or right before it starts. A call left
+// not started is never announced, so it needs no KindToolResult.
 func (r *run) runBatch(batch []*toolCall, halted *atomic.Bool) {
 	slots := make(chan struct{}, r.agent.cfg.MaxConcurrency)
 	var wg sync.WaitGroup
@@ -170,12 +185,13 @@ func (r *run) runBatch(batch []*toolCall, halted *atomic.Bool) {
 			r.hold(c)
 			continue
 		}
-		r.emit(Event{Kind: KindToolUse, ToolID: c.id, ToolName: c.name, Input: c.input})
 		res := r.start(c)
 		switch {
 		case c.pending():
+			r.announce(c)
 			halted.Store(true)
 		case res != nil:
+			r.announce(c)
 			r.settle(c, *res)
 		default:
 			slots <- struct{}{}
@@ -187,6 +203,7 @@ func (r *run) runBatch(batch []*toolCall, halted *atomic.Bool) {
 				<-slots
 				continue
 			}
+			r.announce(c)
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -208,6 +225,13 @@ func (r *run) execute(c *toolCall, halted *atomic.Bool) {
 		return
 	}
 	r.settle(c, res)
+}
+
+// announce reports to the consumer that c is attempted, with the input it
+// runs with.
+func (r *run) announce(c *toolCall) {
+	c.announced = true
+	r.emit(Event{Kind: KindToolUse, ToolID: c.id, ToolName: c.name, Input: c.input})
 }
 
 // settle records the result of c and reports it to the consumer.
@@ -237,6 +261,7 @@ func (r *run) hold(c *toolCall) {
 	decision := permission.Evaluate(req, r.agent.permissionContext())
 	if decision.Behavior == permission.Ask {
 		c.interrupt = askInterrupt(c, decision.Message)
+		r.announce(c)
 	}
 }
 
@@ -451,7 +476,7 @@ func (r *run) runCall(c *toolCall) (res tool.Result, intr *Interrupt) {
 		State: r.state,
 		Call:  r.toolEnv(c),
 	}
-	res, err := r.agent.runTool(r.budget.toolCtx, call)
+	res, err := r.agent.runTool(r.callContext(r.budget.toolCtx, c.id), call)
 	if err == nil {
 		return res, nil
 	}
@@ -492,7 +517,7 @@ func (r *run) toolEnv(c *toolCall) *tool.Call {
 	cfg := r.agent.cfg
 	return &tool.Call{
 		ToolUseID:      c.id,
-		AgentID:        cfg.Name,
+		AgentID:        r.name,
 		ThreadID:       r.threadID,
 		WorkingDir:     cfg.WorkingDir,
 		Backend:        r.backend,

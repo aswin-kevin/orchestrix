@@ -1,0 +1,97 @@
+package agent
+
+import (
+	"context"
+	"slices"
+
+	"github.com/aswin-kevin/orchestrix/llm"
+)
+
+// RunInfo describes the run a context belongs to. Info returns it from the
+// context of every hook, wrapper, permission check and tool call of a run.
+type RunInfo struct {
+	// Agent is the agent executing the run; never nil.
+	Agent *Agent
+	// ThreadID is Input.ThreadID; empty when the run was started without one.
+	ThreadID string
+	// AgentName is the name the run reports in events and tool.Call.AgentID:
+	// Input.AgentName, or Config.Name when that is empty. Never empty.
+	AgentName string
+	// Input holds the messages this run appended to State (Input.Messages);
+	// nil for a resumed run, which appends none. Do not modify the messages.
+	Input []llm.Message
+	// Resumed reports a run started by Resume or ResumeWith; false for Run.
+	Resumed bool
+	// Depth is 0 for a top-level run. A run started with the context of a
+	// tool call of another run (a subagent) has the parent's Depth+1.
+	Depth int
+	// ParentToolID is the tool_use id of the call whose context started this
+	// nested run; empty for a top-level run.
+	ParentToolID string
+}
+
+// runInfoKey keys the *RunInfo of a run in its context.
+type runInfoKey struct{}
+
+// toolScopeKey keys the *toolScope of the tool call a context belongs to.
+// A run sets it to nil in its own context, so that hooks of a nested run are
+// not mistaken for code running inside the parent's tool call.
+type toolScopeKey struct{}
+
+// toolScope identifies one tool call of a run, for Forward and for a nested
+// run started from it.
+type toolScope struct {
+	run       *run
+	toolUseID string
+}
+
+// Info returns the RunInfo of the run ctx belongs to, and false when ctx
+// belongs to no run.
+func Info(ctx context.Context) (RunInfo, bool) {
+	info, ok := ctx.Value(runInfoKey{}).(*RunInfo)
+	if !ok {
+		return RunInfo{}, false
+	}
+	out := *info
+	// Clipped, so that appending to it cannot write into the run's record.
+	out.Input = slices.Clip(out.Input)
+	return out, true
+}
+
+// Forward re-emits ev on the stream of the run whose tool call ctx belongs
+// to, typically an event of a nested run started inside that call. KindFinal
+// is never forwarded: the nested run's outcome reaches the parent as the tool
+// result. ev.Agent is kept when set, so a nested agent's events keep its name;
+// ev.ParentToolID is set to the current call's id only when empty, so an
+// event forwarded through several levels names the call it originated under.
+// Forward reports whether the event was sent: false for KindFinal, outside a
+// tool call, or once the run has ended or its consumer stopped reading.
+func Forward(ctx context.Context, ev Event) bool {
+	if ev.Kind == KindFinal {
+		return false
+	}
+	scope, _ := ctx.Value(toolScopeKey{}).(*toolScope)
+	if scope == nil {
+		return false
+	}
+	if ev.ParentToolID == "" {
+		ev.ParentToolID = scope.toolUseID
+	}
+	return scope.run.emit(ev)
+}
+
+// runContext returns ctx carrying info, with info's nesting derived from the
+// tool call ctx was taken from, if any.
+func runContext(ctx context.Context, info *RunInfo) context.Context {
+	if parent, _ := ctx.Value(toolScopeKey{}).(*toolScope); parent != nil {
+		info.Depth = parent.run.info.Depth + 1
+		info.ParentToolID = parent.toolUseID
+	}
+	ctx = context.WithValue(ctx, runInfoKey{}, info)
+	return context.WithValue(ctx, toolScopeKey{}, (*toolScope)(nil))
+}
+
+// callContext returns the context a tool call of r runs under.
+func (r *run) callContext(ctx context.Context, toolUseID string) context.Context {
+	return context.WithValue(ctx, toolScopeKey{}, &toolScope{run: r, toolUseID: toolUseID})
+}

@@ -22,6 +22,10 @@ var (
 	ErrInvalidDecision = errors.New("agent: decision type not allowed for this action")
 )
 
+// errResumeMessages reports a ResumeWith whose Input carries messages: a
+// resumed run must first answer the interrupted turn, so it appends none.
+var errResumeMessages = errors.New("agent: a resumed run takes no Input.Messages")
+
 // DecisionType is how a human answers a pending action.
 type DecisionType string
 
@@ -108,14 +112,33 @@ type Decision struct {
 // are placed right after the turn's assistant message (before anything a
 // BeforeAgent hook added) and the run goes on like one started by Run, with
 // the same hooks, a fresh budget, and threadID selecting the backend.
+//
+// Resume is ResumeWith with an Input holding just threadID and s.
 func (a *Agent) Resume(ctx context.Context, threadID string, s *state.State, decisions []Decision) iter.Seq2[Event, error] {
+	return a.ResumeWith(ctx, Input{ThreadID: threadID, State: s}, decisions)
+}
+
+// ResumeWith is Resume with the per-run settings of in: in.State is the
+// interrupted conversation, and in.ThreadID, in.Backend and in.AgentName
+// apply as they do for Run. A resumed run appends no messages, so a
+// non-empty in.Messages makes the request invalid, like a missing decision:
+// the stream is a single KindFinal with ReasonInvalidResume.
+func (a *Agent) ResumeWith(ctx context.Context, in Input, decisions []Decision) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
-		resume, err := newResumption(s, decisions)
+		resume, err := a.newResumption(in, decisions)
 		if err != nil {
-			final := &Final{Reason: ReasonInvalidResume, Err: err, State: s}
-			yield(Event{Kind: KindFinal, Agent: a.cfg.Name, Final: final}, err)
+			final := &Final{Reason: ReasonInvalidResume, Err: err, State: in.State}
+			yield(Event{Kind: KindFinal, Agent: a.name(in), Final: final}, err)
 			return
 		}
-		a.stream(ctx, Input{ThreadID: threadID, State: s}, resume)(yield)
+		a.stream(ctx, in, resume)(yield)
 	}
+}
+
+// newResumption validates a ResumeWith request.
+func (a *Agent) newResumption(in Input, decisions []Decision) (*resumption, error) {
+	if len(in.Messages) > 0 {
+		return nil, errResumeMessages
+	}
+	return newResumption(in.State, decisions)
 }

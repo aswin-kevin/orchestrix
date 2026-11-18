@@ -18,8 +18,12 @@ const (
 	// KindThinking is a delta of model reasoning (Event.Text).
 	KindThinking EventKind = "thinking"
 	// KindToolUse announces an attempt to run a tool call (ToolID, ToolName,
-	// Input). A call that pauses for a decision is announced again when it
-	// is resumed, then with the input it runs with.
+	// Input). It is emitted once the call's fate is known: right before the
+	// call starts, when it is answered without running, or when it pauses
+	// for a decision. A call that never started is not announced, and every
+	// announced call gets a KindToolResult unless the run ends interrupted
+	// with it pending. A call that pauses is announced again when it is
+	// resumed, then with the input it runs with.
 	KindToolUse EventKind = "tool_use"
 	// KindToolResult reports a finished tool call (ToolID, ToolName, ToolResult).
 	KindToolResult EventKind = "tool_result"
@@ -77,12 +81,19 @@ const (
 // fields are set; see the EventKind constants.
 type Event struct {
 	Kind EventKind
-	// Agent is the Config.Name of the agent that produced the event.
-	Agent    string
-	Text     string
-	ToolID   string
-	ToolName string
-	Input    json.RawMessage
+	// Agent is the name of the agent that produced the event: its run's
+	// Input.AgentName or Config.Name. An event forwarded from a nested run
+	// (see Forward) keeps the nested agent's name.
+	Agent string
+	// ParentToolID is set on an event forwarded from a nested run (see
+	// Forward): the tool_use id of the call under which the run that
+	// produced the event was started. An event forwarded through several
+	// levels keeps the id of the first level. Empty for a run's own events.
+	ParentToolID string
+	Text         string
+	ToolID       string
+	ToolName     string
+	Input        json.RawMessage
 	// ToolResult is set for KindToolResult.
 	ToolResult *tool.Result
 	// Usage is set for KindUsage.

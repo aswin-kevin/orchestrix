@@ -25,11 +25,15 @@ var errNoResponse = errors.New("model handler returned no response")
 // run on their own goroutines and only touch the run through emit and the
 // concurrency-safe State.
 type run struct {
-	agent    *Agent
+	agent *Agent
+	// ctx carries info (see Info); hooks and wrappers run under it.
 	ctx      context.Context
+	info     *RunInfo
 	threadID string
-	state    *state.State
-	backend  backend.Backend
+	// name is the effective agent name, RunInfo.AgentName.
+	name    string
+	state   *state.State
+	backend backend.Backend
 	// model is the model handler chain wrapped around streamModel (or
 	// completeModel); it is built per run because the innermost handler
 	// emits to this run.
@@ -63,17 +67,32 @@ type run struct {
 	lastText string
 }
 
-func (a *Agent) newRun(ctx context.Context, in Input) *run {
+// newRun prepares a run of in; resume, when set, is the interrupted turn it
+// finishes first.
+func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 	s := in.State
 	if s == nil {
 		s = state.New()
 	}
+	info := &RunInfo{
+		Agent:     a,
+		ThreadID:  in.ThreadID,
+		AgentName: a.name(in),
+		Resumed:   resume != nil,
+	}
+	if resume == nil {
+		info.Input = in.Messages
+	}
+	ctx = runContext(ctx, info)
 	r := &run{
 		agent:    a,
 		ctx:      ctx,
+		info:     info,
 		threadID: in.ThreadID,
+		name:     info.AgentName,
 		state:    s,
-		backend:  a.backendFor(in.ThreadID),
+		backend:  a.backendFor(in),
+		resume:   resume,
 		events:   make(chan Event),
 		gone:     make(chan struct{}),
 		budget:   newBudget(ctx, a.cfg.MaxDuration),
@@ -86,12 +105,17 @@ func (a *Agent) newRun(ctx context.Context, in Input) *run {
 	return r
 }
 
-// backendFor returns the backend tools of the given thread operate on.
-func (a *Agent) backendFor(threadID string) backend.Backend {
-	if a.cfg.BackendFactory != nil {
-		return a.cfg.BackendFactory(threadID)
+// backendFor returns the backend a run of in operates on: Input.Backend,
+// else the one BackendFactory builds for the thread, else Config.Backend.
+func (a *Agent) backendFor(in Input) backend.Backend {
+	switch {
+	case in.Backend != nil:
+		return in.Backend
+	case a.cfg.BackendFactory != nil:
+		return a.cfg.BackendFactory(in.ThreadID)
+	default:
+		return a.cfg.Backend
 	}
-	return a.cfg.Backend
 }
 
 // drive executes the run and closes the event channel when it is over.
@@ -197,10 +221,11 @@ func (r *run) modelRequest() *ModelRequest {
 			MaxTokens:     r.maxTokens(),
 			Temperature:   clonePtr(cfg.Temperature),
 		},
-		State:   r.state,
-		Profile: *cfg.Profile,
-		Turn:    r.turns,
-		Backend: r.backend,
+		State:    r.state,
+		Profile:  *cfg.Profile,
+		Turn:     r.turns,
+		Backend:  r.backend,
+		ThreadID: r.threadID,
 	}
 }
 
@@ -371,23 +396,30 @@ func (r *run) finish(reason TerminalReason, err error) *Final {
 	}
 }
 
-// emit sends ev to the consumer. It is safe to call from any goroutine, and
-// drops the event once the consumer has gone or the final event is sent.
-func (r *run) emit(ev Event) {
+// emit sends ev to the consumer and reports whether it was delivered. It is
+// safe to call from any goroutine, and drops the event once the consumer has
+// gone or the final event is sent.
+func (r *run) emit(ev Event) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.sealed {
-		return
+		return false
 	}
-	r.send(ev)
+	return r.send(ev)
 }
 
-// send delivers ev unless the consumer has stopped reading.
-func (r *run) send(ev Event) {
-	ev.Agent = r.agent.cfg.Name
+// send delivers ev unless the consumer has stopped reading, and reports
+// whether it did. An event without an Agent is stamped with the run's name;
+// one forwarded from a nested run keeps the nested agent's.
+func (r *run) send(ev Event) bool {
+	if ev.Agent == "" {
+		ev.Agent = r.name
+	}
 	select {
 	case r.events <- ev:
+		return true
 	case <-r.gone:
+		return false
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -25,15 +26,26 @@ type Agent struct {
 	runTool ToolHandler
 }
 
-// Input starts a run.
+// Input starts a run. Its fields override, for this run only, what the
+// agent's Config would otherwise decide.
 type Input struct {
 	// ThreadID identifies the conversation; it selects the backend when
-	// Config.BackendFactory is set and is passed to tools.
+	// Config.BackendFactory is set and is passed to tools and model
+	// wrappers. Empty is allowed and is passed on as is.
 	ThreadID string
-	// Messages are appended to State's history before the first turn.
+	// Messages are appended to State's history before the first turn. A
+	// resumed run takes none (see ResumeWith).
 	Messages []llm.Message
 	// State holds the conversation to continue; nil starts a fresh one.
+	// ResumeWith requires it.
 	State *state.State
+	// Backend, when non-nil, is the backend this run uses instead of
+	// BackendFactory(ThreadID) or Config.Backend; nil keeps those.
+	Backend backend.Backend
+	// AgentName, when non-empty, replaces Config.Name as the name the run
+	// reports in Event.Agent, tool.Call.AgentID and RunInfo.AgentName; empty
+	// keeps Config.Name.
+	AgentName string
 }
 
 // New validates cfg, applies its defaults and builds the agent. It fails for a
@@ -85,13 +97,20 @@ func (a *Agent) Run(ctx context.Context, in Input) iter.Seq2[Event, error] {
 	return a.stream(ctx, in, nil)
 }
 
+// name returns the name a run started with in reports.
+func (a *Agent) name(in Input) string {
+	if in.AgentName != "" {
+		return in.AgentName
+	}
+	return a.cfg.Name
+}
+
 // stream starts a run, which first finishes the interrupted turn when resume
 // is set, and streams its events as described on Run.
 func (a *Agent) stream(ctx context.Context, in Input, resume *resumption) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
 		ctx, cancel := context.WithCancel(ctx)
-		r := a.newRun(ctx, in)
-		r.resume = resume
+		r := a.newRun(ctx, in, resume)
 		go r.drive(in.Messages)
 		// After a normal finish this only releases the context.
 		defer r.abandon(cancel)

@@ -3,7 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -367,4 +370,160 @@ func TestToolShrinkingHistoryMidTurnDoesNotPanic(t *testing.T) {
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %s (err %v), want completed", final.Reason, final.Err)
 	}
+}
+
+// assertToolEventsPaired fails unless every KindToolUse event is followed by
+// a KindToolResult for the same call.
+func assertToolEventsPaired(t *testing.T, events []Event) {
+	t.Helper()
+	for i, ev := range events {
+		if ev.Kind != KindToolUse {
+			continue
+		}
+		paired := slices.ContainsFunc(events[i+1:], func(later Event) bool {
+			return later.Kind == KindToolResult && later.ToolID == ev.ToolID
+		})
+		if !paired {
+			t.Fatalf("KindToolUse %q has no later KindToolResult", ev.ToolID)
+		}
+	}
+}
+
+// assertHistoryPaired fails unless every tool_use in the history is answered
+// by a tool_result in the message right after it.
+func assertHistoryPaired(t *testing.T, msgs []llm.Message) {
+	t.Helper()
+	for i, m := range msgs {
+		for _, use := range m.ToolUses() {
+			answered := i+1 < len(msgs) && slices.ContainsFunc(msgs[i+1].Content, func(b llm.Block) bool {
+				return b.Type == llm.BlockToolResult && b.ToolUseID == use.ID
+			})
+			if !answered {
+				t.Fatalf("tool_use %q has no tool_result in the next message", use.ID)
+			}
+		}
+	}
+}
+
+// stopperTool stops the run when the call with id stop runs, once ready
+// (when non-nil) is closed; any other call succeeds.
+func stopperTool(stop string, ready <-chan struct{}) tool.Tool {
+	return tool.New("stopper", "Stop the run on one call.",
+		func(ctx context.Context, _ echoInput, c *tool.Call) (tool.Result, error) {
+			if c.ToolUseID != stop {
+				return tool.Text("ok"), nil
+			}
+			if ready != nil {
+				select {
+				case <-ready:
+				case <-ctx.Done():
+					return tool.Result{}, ctx.Err()
+				}
+			}
+			return tool.Result{}, fmt.Errorf("tool: %w", ErrStopRun)
+		},
+		tool.WithReadOnly(), tool.WithConcurrent())
+}
+
+func stopperCall(id string) llmtest.Call {
+	return llmtest.Call{ID: id, Name: "stopper", Input: map[string]any{"text": id}}
+}
+
+func TestStopRunPairsEveryToolUseEvent(t *testing.T) {
+	t.Run("calls waiting for a slot", func(t *testing.T) {
+		p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{stopperCall("s"), stopperCall("a"), stopperCall("b")}})
+		a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{stopperTool("s", nil)}, MaxConcurrency: 1})
+
+		events, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+		if final.Reason != ReasonHookStopped {
+			t.Fatalf("final = %+v, want hook_stopped", final)
+		}
+		assertToolEventsPaired(t, events)
+		assertHistoryPaired(t, final.State.Messages())
+	})
+
+	t.Run("call pending on ask", func(t *testing.T) {
+		asked := make(chan struct{})
+		var once sync.Once
+		asker := tool.New("asker", "Needs approval.",
+			func(context.Context, echoInput, *tool.Call) (tool.Result, error) { return tool.Text("asked"), nil },
+			tool.WithConcurrent(),
+			tool.WithPermission(func(context.Context, json.RawMessage, permission.Context) permission.Decision {
+				once.Do(func() { close(asked) })
+				return permission.AskUser("confirm")
+			}))
+		p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{
+			stopperCall("s"),
+			{ID: "q", Name: "asker", Input: map[string]any{"text": "q"}},
+		}})
+		a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{stopperTool("s", asked), asker}})
+
+		events, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+		if final.Reason != ReasonHookStopped {
+			t.Fatalf("final = %+v, want hook_stopped", final)
+		}
+		if toolUseInput(events, "q") == "" {
+			t.Fatal("the pending call q was never announced")
+		}
+		assertToolEventsPaired(t, events)
+		assertHistoryPaired(t, final.State.Messages())
+	})
+}
+
+func TestHeldCallNotAnnounced(t *testing.T) {
+	t.Run("held after an ask", func(t *testing.T) {
+		log := newCallLog()
+		concurrentWrite := tool.New("write_file", "Write.",
+			func(_ context.Context, in writeInput, c *tool.Call) (tool.Result, error) {
+				log.add(c)
+				return tool.Text("wrote " + in.Text), nil
+			},
+			tool.WithConcurrent())
+		read := tool.New("read", "Read.",
+			func(_ context.Context, in echoInput, c *tool.Call) (tool.Result, error) {
+				log.add(c)
+				return tool.Text("read " + in.Text), nil
+			},
+			tool.WithReadOnly(), tool.WithConcurrent())
+
+		_, events, _ := interruptedRun(t, Config{Tools: []tool.Tool{concurrentWrite, read}, MaxConcurrency: 1},
+			writeCall("w"), readCall("r"))
+
+		if toolUseInput(events, "r") != "" || log.count("r") != 0 {
+			t.Fatal("the held read was announced or ran before the interrupt")
+		}
+	})
+
+	t.Run("held while waiting for a slot", func(t *testing.T) {
+		log := newCallLog()
+		pause := tool.New("pause", "Interrupt until resumed.",
+			func(_ context.Context, _ echoInput, c *tool.Call) (tool.Result, error) {
+				log.add(c)
+				if c.Resume == nil {
+					return tool.Result{}, &Interrupt{}
+				}
+				return tool.Text("paused"), nil
+			},
+			tool.WithReadOnly(), tool.WithConcurrent())
+		read := tool.New("read", "Read.",
+			func(_ context.Context, in echoInput, c *tool.Call) (tool.Result, error) {
+				log.add(c)
+				return tool.Text("read " + in.Text), nil
+			},
+			tool.WithReadOnly(), tool.WithConcurrent())
+
+		a, events, final := interruptedRun(t, Config{Tools: []tool.Tool{pause, read}, MaxConcurrency: 1},
+			llmtest.Call{ID: "p", Name: "pause", Input: map[string]any{"text": "p"}}, readCall("r"))
+
+		if toolUseInput(events, "r") != "" || log.count("r") != 0 {
+			t.Fatal("the read held while waiting for its slot was announced or ran before the interrupt")
+		}
+		resumed, _ := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "p", Type: Approve}}))
+		if toolUseInput(resumed, "r") == "" || log.count("r") != 1 {
+			t.Fatal("the held read was not announced and run once on resume")
+		}
+		assertToolEventsPaired(t, resumed)
+	})
 }
