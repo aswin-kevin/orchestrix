@@ -192,6 +192,7 @@ func (r *run) modelRequest() *ModelRequest {
 		State:   r.state,
 		Profile: *cfg.Profile,
 		Turn:    r.turns,
+		Backend: r.backend,
 	}
 }
 

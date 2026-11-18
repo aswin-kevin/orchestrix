@@ -135,6 +135,7 @@ func (m *middleware) offloadMessageBlock(ctx context.Context, b backend.Backend,
 	}
 	sum := sha256.Sum256([]byte(block.Text))
 	path := fmt.Sprintf("%s/%s.txt", messageDir, hex.EncodeToString(sum[:])[:hashChars])
+	// Any Read error is treated as "not saved yet"; a failing Write then ends the offload.
 	if _, err := b.Read(ctx, path, 0, 1); err != nil {
 		if err := b.Write(ctx, path, []byte(block.Text)); err != nil {
 			return block, false

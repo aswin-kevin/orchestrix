@@ -183,10 +183,8 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 			return slices.Contains(m.excluded, s.Name)
 		})
 	}
-	// A model request carries no per-call backend, so only a configured one
-	// can receive offloaded messages.
-	if m.cfg.Backend != nil {
-		req.Request.Messages = m.offloadLargeMessages(ctx, m.cfg.Backend, req.Request.Messages)
+	if b := m.requestBackend(req); b != nil {
+		req.Request.Messages = m.offloadLargeMessages(ctx, b, req.Request.Messages)
 	}
 	return next(ctx, req)
 }
@@ -197,6 +195,15 @@ func (m *middleware) description(name, builtin string) string {
 		return d
 	}
 	return builtin
+}
+
+// requestBackend picks the configured backend, else the one the run resolved
+// for the model request; nil when there is none.
+func (m *middleware) requestBackend(req *agent.ModelRequest) backend.Backend {
+	if m.cfg.Backend != nil {
+		return m.cfg.Backend
+	}
+	return req.Backend
 }
 
 // backendFor picks the configured backend, else the agent's.

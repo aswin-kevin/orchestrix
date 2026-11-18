@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -659,4 +661,30 @@ func TestConsumerPanicStopsRun(t *testing.T) {
 		t.Fatalf("provider context error = %v, want context.Canceled", p.ctxErr)
 	}
 	waitForGoroutines(t, baseline)
+}
+
+// backendProbe records the backend each model request carries.
+type backendProbe struct{ seen *[]backend.Backend }
+
+func (backendProbe) Name() string { return "probe" }
+
+func (p backendProbe) WrapModel(ctx context.Context, req *ModelRequest, next ModelHandler) (*llm.Response, error) {
+	*p.seen = append(*p.seen, req.Backend)
+	return next(ctx, req)
+}
+
+func TestModelRequestCarriesThreadBackend(t *testing.T) {
+	byThread := map[string]backend.Backend{"t1": memory.New(), "t2": memory.New()}
+	var seen []backend.Backend
+	a := mustNew(t, Config{
+		Provider:       llmtest.New(llmtest.Turn{Text: "ok"}),
+		Middleware:     []Middleware{backendProbe{&seen}},
+		BackendFactory: func(id string) backend.Backend { return byThread[id] },
+	})
+
+	collect(t, a.Run(context.Background(), Input{ThreadID: "t2", Messages: []llm.Message{llm.UserText("hi")}}))
+
+	if len(seen) != 1 || seen[0] != byThread["t2"] {
+		t.Fatalf("request backend = %v, want the t2 backend", seen)
+	}
 }

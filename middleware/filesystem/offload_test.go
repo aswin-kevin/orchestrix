@@ -131,8 +131,20 @@ func requestMessages(t *testing.T, cfg Config, msgs []llm.Message) []llm.Message
 	return got
 }
 
+// countingBackend counts writes.
+type countingBackend struct {
+	backend.Backend
+	writes int
+}
+
+func (c *countingBackend) Write(ctx context.Context, p string, d []byte) error {
+	c.writes++
+	return c.Backend.Write(ctx, p, d)
+}
+
 func TestLargeUserMessageViewOnly(t *testing.T) {
-	b := memory.New()
+	cb := &countingBackend{Backend: memory.New()}
+	var b backend.Backend = cb
 	huge := "intro\n" + strings.Repeat("z", MessageOffloadChars+10)
 	history := []llm.Message{llm.UserText(huge), {Role: llm.RoleAssistant, Content: []llm.Block{llm.TextBlock(huge)}}}
 
@@ -156,6 +168,39 @@ func TestLargeUserMessageViewOnly(t *testing.T) {
 	second := requestMessages(t, Config{Backend: b}, history)
 	if second[0].Content[0].Text != text {
 		t.Fatal("second turn produced a different replacement")
+	}
+	if cb.writes != 1 {
+		t.Fatalf("writes = %d, want 1 (second turn must reuse the file)", cb.writes)
+	}
+}
+
+func TestLargeUserMessageUsesRequestBackend(t *testing.T) {
+	b := memory.New()
+	huge := strings.Repeat("z", MessageOffloadChars+10)
+	req := &agent.ModelRequest{Request: llm.Request{Messages: []llm.Message{llm.UserText(huge)}}, Backend: b}
+	var got []llm.Message
+	_, err := New(Config{}).(agent.ModelWrapper).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+		got = r.Request.Messages
+		return &llm.Response{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := got[0].Content[0].Text
+	start := strings.Index(text, "/large_messages/")
+	if start < 0 {
+		t.Fatalf("block not offloaded: %.100s", text)
+	}
+	if readAll(t, b, text[start:start+len("/large_messages/")+12+len(".txt")]) != huge {
+		t.Fatal("message not stored on the request's backend")
+	}
+}
+
+func TestExcludedOwnToolIsOffloadable(t *testing.T) {
+	cfg := Config{Backend: memory.New(), Tools: []string{ToolReadFile}}
+	out := wrapToolWith(t, cfg, ToolGrep, "c", tool.Text(bigOutput()))
+	if !strings.Contains(out.Flatten(), "Output too large") {
+		t.Fatal("a tool the allowlist excludes belongs to someone else and must be offloaded")
 	}
 }
 

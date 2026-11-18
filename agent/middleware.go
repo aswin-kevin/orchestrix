@@ -31,6 +31,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -94,6 +95,9 @@ type ModelRequest struct {
 	Profile llm.Profile
 	// Turn is the zero-based index of the current model turn.
 	Turn int
+	// Backend is the backend resolved for this run (BackendFactory(threadID)
+	// or Config.Backend). It may be nil.
+	Backend backend.Backend
 }
 
 // ModelHandler performs a model call. The innermost handler talks to the
