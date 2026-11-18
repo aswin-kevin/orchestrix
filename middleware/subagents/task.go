@@ -138,7 +138,7 @@ func (m *middleware) start(info agent.RunInfo, in TaskInput, c *tool.Call) (chil
 	if in.SubagentType == Fork {
 		run.in, err = forkInput(info.ThreadID, in.Description, c)
 	} else {
-		run.in = childInput(info, in, c)
+		run.in = childInput(info, child, in, c)
 	}
 	return run, err
 }
@@ -182,15 +182,13 @@ func childThread(parentThread, typ, toolUseID string) string {
 	return parentThread + "/" + typ + "/" + toolUseID
 }
 
-// childInput starts an isolated subagent run of in on the task description
-// alone, with the parent's shareable state and backend, under a thread id
-// unique to the call. info is the parent's run; see inheritedMode for the
-// permission mode the child starts in.
-func childInput(info agent.RunInfo, in TaskInput, c *tool.Call) agent.Input {
+// childInput starts an isolated run of child, the subagent in selects, on
+// the task description alone, with the parent's shareable state and backend,
+// under a thread id unique to the call. info is the parent's run; see
+// childMode for the permission mode the child starts in.
+func childInput(info agent.RunInfo, child *agent.Agent, in TaskInput, c *tool.Call) agent.Input {
 	s := c.State.ChildFor()
-	if mode, ok := inheritedMode(info.Agent, c.State); ok {
-		agent.PermissionModeKey.Set(s, mode)
-	}
+	agent.PermissionModeKey.Set(s, childMode(info.Agent, child, c.State))
 	return agent.Input{
 		ThreadID:  childThread(info.ThreadID, in.SubagentType, c.ToolUseID),
 		State:     s,
@@ -202,16 +200,14 @@ func childInput(info agent.RunInfo, in TaskInput, c *tool.Call) agent.Input {
 	}
 }
 
-// inheritedMode reports the permission mode an isolated subagent started by
-// parent's run with State s must start in, overriding its configured
-// Subagent.PermissionMode: the parent's current mode whenever the run changed
-// it (agent.PermissionModeKey is set), and plan mode whenever the parent is
-// in it, so a subagent can never act more freely than a planning parent. ok
-// is false when the subagent keeps its configured mode.
-func inheritedMode(parent *agent.Agent, s *state.State) (mode permission.Mode, ok bool) {
-	mode = parent.PermissionMode(s)
-	_, changed := agent.PermissionModeKey.Get(s)
-	return mode, changed || mode == permission.ModePlan
+// childMode is the permission mode child, an isolated subagent started by
+// parent's run with State s, starts in: the stricter (permission.Stricter)
+// of the parent's current mode and the child's configured one
+// (Subagent.PermissionMode, else the parent's Config.PermissionMode). A
+// subagent therefore never acts more freely than the run that started it,
+// nor more freely than it was configured to.
+func childMode(parent, child *agent.Agent, s *state.State) permission.Mode {
+	return permission.Stricter(parent.PermissionMode(s), child.PermissionMode(nil))
 }
 
 // runChild runs child to its end and returns its Final (see drain).

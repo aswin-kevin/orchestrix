@@ -124,7 +124,8 @@ func without(ids []string, id string) []string {
 
 // ask puts the question to approver, the Approver of agent a running the
 // call, and waits for the answer. The question describes the call as the
-// permission step does (paths, subject, edit). A rewrite of the input is
+// permission step does (paths, subject, edit); building it runs the tool's
+// own CheckPermission once more, for SelfCheck. A rewrite of the input is
 // honored only where the host may edit, and is checked against the
 // permission rules like any edited call.
 func ask(ctx context.Context, a *agent.Agent, approver permission.Approver, cfg InterruptConfig, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {

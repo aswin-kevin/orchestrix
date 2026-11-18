@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -99,6 +101,15 @@ func TestSetPermissionModeInvalid(t *testing.T) {
 	if got := a.PermissionMode(nil); got != permission.ModeAcceptEdits {
 		t.Fatalf("PermissionMode(nil) = %q, want the config's", got)
 	}
+}
+
+func TestSetPermissionModeNilStatePanics(t *testing.T) {
+	defer func() {
+		if v := recover(); v == nil || !strings.Contains(fmt.Sprint(v), "nil State") {
+			t.Fatalf("recovered %v, want a panic naming the nil State", v)
+		}
+	}()
+	_ = SetPermissionMode(nil, permission.ModePlan)
 }
 
 func TestToolSelfCheckSeesRunMode(t *testing.T) {

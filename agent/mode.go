@@ -15,7 +15,11 @@ import (
 // It is part of State, so it is checkpointed and restored with the thread,
 // and State.Fork copies it, so a fork continues in the same mode. It is
 // private: State.ChildFor does not copy it, so a subagent does not inherit it
-// implicitly (the subagents middleware propagates it explicitly).
+// implicitly (the subagents middleware derives the subagent's mode from it).
+//
+// Any code that can write the run's State, a tool or middleware included,
+// can set this key and so holds full authority over the run's mode, up to
+// bypassPermissions: give that ability only to code trusted with it.
 var PermissionModeKey = state.NewKey[permission.Mode]("agent.permission_mode", state.Private[permission.Mode]())
 
 // ErrInvalidMode is returned by SetPermissionMode for a mode
@@ -35,11 +39,20 @@ func (a *Agent) PermissionMode(s *state.State) permission.Mode {
 }
 
 // SetPermissionMode changes the permission mode of the run with State s. It
-// takes effect at the next permission evaluation, which may be the next call
-// of the same turn: mutating calls run one at a time. An empty m deletes the
-// key, returning the run to Config.PermissionMode; a mode Valid rejects
-// returns an error wrapping ErrInvalidMode and leaves s unchanged.
+// takes effect at the next permission evaluation. A tool that calls it must
+// not be concurrency-safe: calls that are not concurrency-safe run one at a
+// time, and the calls after one are admitted only once it has finished, so
+// the new mode applies to the next call of the same turn. From a
+// concurrency-safe tool, calls of the same parallel batch may already have
+// been admitted under the old mode.
+//
+// An empty m deletes the key, returning the run to Config.PermissionMode; a
+// mode Valid rejects returns an error wrapping ErrInvalidMode and leaves s
+// unchanged. A nil s is a programming error and panics.
 func SetPermissionMode(s *state.State, m permission.Mode) error {
+	if s == nil {
+		panic("agent: SetPermissionMode called with a nil State")
+	}
 	switch {
 	case m == "":
 		PermissionModeKey.Delete(s)

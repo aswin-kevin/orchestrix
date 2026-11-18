@@ -29,7 +29,8 @@ func editTool() tool.Tool {
 // write_file.
 type modeRun struct {
 	// parentMode is the parent's Config.PermissionMode; runMode, when
-	// non-empty, is set on the parent's State before the run.
+	// non-empty, is stored under agent.PermissionModeKey on the parent's
+	// State before the run.
 	parentMode, runMode permission.Mode
 	// childMode is the writer's Subagent.PermissionMode.
 	childMode permission.Mode
@@ -65,8 +66,10 @@ func (r modeRun) run(t *testing.T) modeOutcome {
 	}
 	in := userInput("go")
 	in.State = state.New()
-	if err := agent.SetPermissionMode(in.State, r.runMode); err != nil {
-		t.Fatal(err)
+	if r.runMode != "" {
+		// Set directly, as a restored checkpoint would, so an invalid mode
+		// can be tested.
+		agent.PermissionModeKey.Set(in.State, r.runMode)
 	}
 	_, final := collect(t, context.Background(), a, in)
 	if final.Reason != agent.ReasonCompleted {
@@ -99,8 +102,10 @@ func TestChildInheritsPlanMode(t *testing.T) {
 			t.Fatal("the child wrote /out.md in plan mode")
 		}
 	})
-	t.Run("parent in default", func(t *testing.T) {
-		got := modeRun{parentMode: permission.ModeDefault, childMode: permission.ModeBypass}.run(t)
+	t.Run("parent not in plan", func(t *testing.T) {
+		// Bypass rather than default: a child never runs more freely than
+		// its parent, so under a default parent it would ask.
+		got := modeRun{parentMode: permission.ModeBypass, childMode: permission.ModeBypass}.run(t)
 		if res := got.childWriteResult(t); res.IsError {
 			t.Fatalf("child write_file result = %q, want success", blockText(res))
 		}
@@ -110,16 +115,78 @@ func TestChildInheritsPlanMode(t *testing.T) {
 	})
 }
 
-func TestChildStartsInParentRunMode(t *testing.T) {
-	// The parent's mode was changed during its run, so the child runs in
-	// acceptEdits rather than its configured dontAsk, which would deny the
-	// edit.
-	got := modeRun{parentMode: permission.ModeBypass, runMode: permission.ModeAcceptEdits, childMode: permission.ModeDontAsk}.run(t)
-	if res := got.childWriteResult(t); res.IsError {
-		t.Fatalf("child write_file result = %q, want success in acceptEdits mode", blockText(res))
+func TestChildModeIsStricter(t *testing.T) {
+	const dontAskDenied = "Permission denied: write_file is not permitted in dontAsk mode"
+	for _, tc := range []struct {
+		name string
+		run  modeRun
+		// denied is the child's write_file error, "" when it must write.
+		denied string
+	}{
+		{"dontAsk child under acceptEdits run", modeRun{parentMode: permission.ModeBypass, runMode: permission.ModeAcceptEdits, childMode: permission.ModeDontAsk}, dontAskDenied},
+		{"bypass child under dontAsk parent", modeRun{parentMode: permission.ModeDontAsk, childMode: permission.ModeBypass}, dontAskDenied},
+		{"bypass child under dontAsk run", modeRun{parentMode: permission.ModeBypass, runMode: permission.ModeDontAsk, childMode: permission.ModeBypass}, dontAskDenied},
+		{"bypass child under plan parent config", modeRun{parentMode: permission.ModePlan, childMode: permission.ModeBypass}, planDenied},
+		{"bypass child under invalid restored mode", modeRun{parentMode: permission.ModeBypass, runMode: "nope", childMode: permission.ModeBypass}, planDenied},
+		{"acceptEdits child under bypass parent", modeRun{parentMode: permission.ModeBypass, childMode: permission.ModeAcceptEdits}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.run.run(t)
+			res := got.childWriteResult(t)
+			if tc.denied == "" {
+				if res.IsError || !got.written {
+					t.Fatalf("child write_file result = %q (written %v), want success", blockText(res), got.written)
+				}
+				return
+			}
+			if !res.IsError || blockText(res) != tc.denied {
+				t.Fatalf("child write_file result = %q (error %v), want %q", blockText(res), res.IsError, tc.denied)
+			}
+			if got.written {
+				t.Fatal("the child wrote /out.md")
+			}
+		})
 	}
-	if !got.written {
-		t.Fatal("the child did not write /out.md")
+}
+
+func TestGrandchildOfPlanParentIsPlan(t *testing.T) {
+	// The researcher has no Middleware of its own, so it inherits the
+	// parent's stack, task tool included, and delegates once more.
+	child := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{taskCall("inner", "researcher", "write it")}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "w", Name: "write_file", Input: obj{}}}},
+		llmtest.Turn{Text: "grandchild done"},
+		llmtest.Turn{Text: "child done"},
+	)
+	parent := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{taskCall("t1", "researcher", "go")}},
+		llmtest.Turn{Text: "done"},
+	)
+	mw := newMiddleware(t, Config{Subagents: []Subagent{{
+		Name: "researcher", Description: "Researches.", SystemPrompt: "you research", Provider: child,
+		Tools: []tool.Tool{editTool()}, PermissionMode: permission.ModeBypass,
+	}}})
+	be := memory.New()
+	a, err := agent.New(agent.Config{
+		Provider: parent, Backend: be, Middleware: []agent.Middleware{mw}, PermissionMode: permission.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := userInput("go")
+	in.State = state.New()
+	agent.PermissionModeKey.Set(in.State, permission.ModePlan)
+	_, final := collect(t, context.Background(), a, in)
+
+	if final.Reason != agent.ReasonCompleted {
+		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
+	}
+	results := toolResults(child.Requests[2])
+	if len(results) != 1 || !results[0].IsError || blockText(results[0]) != planDenied {
+		t.Fatalf("grandchild write_file results = %+v, want one %q", results, planDenied)
+	}
+	if _, err := be.Read(context.Background(), "/out.md", 0, 0); err == nil {
+		t.Fatal("the grandchild wrote /out.md in plan mode")
 	}
 }
 
