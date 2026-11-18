@@ -19,15 +19,15 @@ const monitorPoll = 50 * time.Millisecond
 // so they run alongside other calls without approval.
 func (m *Middleware) Tools() []tool.Tool {
 	return []tool.Tool{
-		tool.New(ToolTaskOutput, "Show a background task's status, exit code and output. With block, wait until it finishes or timeout_seconds pass.",
+		tool.New(ToolTaskOutput, "Show a background shell job's status, exit code and output (a job started by execute with run_in_background, not a task subagent). With block, wait until it finishes or timeout_seconds pass.",
 			m.taskOutput, tool.WithReadOnly(), tool.WithConcurrent()),
-		tool.New(ToolTaskStop, "Stop a running background task and everything it started.",
+		tool.New(ToolTaskStop, "Stop a running background shell job and everything it started.",
 			m.taskStop, tool.WithPermission(allowStop)),
-		tool.New(ToolTaskList, "List this conversation's background tasks with their status.",
+		tool.New(ToolTaskList, "List this conversation's background shell jobs with their status.",
 			m.taskList, tool.WithReadOnly(), tool.WithConcurrent()),
-		tool.New(ToolSleep, "Wait for the given number of seconds. Returns early when a background task finishes, so use it instead of polling.",
+		tool.New(ToolSleep, "Wait for the given number of seconds. Returns early when a background shell job finishes, so use it instead of polling.",
 			m.sleep, tool.WithReadOnly(), tool.WithConcurrent()),
-		tool.New(ToolMonitor, "Wait until a background task's output has a line matching an RE2 pattern, the task ends, or timeout_seconds pass.",
+		tool.New(ToolMonitor, "Wait until a background shell job's output has a line matching an RE2 pattern, the job ends, or timeout_seconds pass.",
 			m.monitor, tool.WithReadOnly(), tool.WithConcurrent()),
 	}
 }
@@ -42,13 +42,13 @@ func allowStop(context.Context, json.RawMessage, permission.Context) permission.
 // seconds; struct tags cannot refer to the constant.
 
 type taskOutputInput struct {
-	TaskID         string `json:"task_id" desc:"Id of the background task, such as bg_1."`
+	TaskID         string `json:"task_id" desc:"Id of the background shell job, such as bg_1."`
 	Block          bool   `json:"block,omitempty" desc:"Wait for the task to finish before answering."`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" desc:"Most seconds to wait when block is set; capped at 300."`
 }
 
 type taskIDInput struct {
-	TaskID string `json:"task_id" desc:"Id of the background task, such as bg_1."`
+	TaskID string `json:"task_id" desc:"Id of the background shell job, such as bg_1."`
 }
 
 type taskListInput struct{}
@@ -59,7 +59,7 @@ type sleepInput struct {
 }
 
 type monitorInput struct {
-	TaskID         string `json:"task_id" desc:"Id of the background task, such as bg_1."`
+	TaskID         string `json:"task_id" desc:"Id of the background shell job, such as bg_1."`
 	Pattern        string `json:"pattern" desc:"RE2 regular expression matched against each output line."`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" desc:"Most seconds to wait; capped at 300."`
 }
