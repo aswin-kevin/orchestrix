@@ -61,11 +61,14 @@ func carriesToolResult(m llm.Message) bool {
 
 func isToolResult(b llm.Block) bool { return b.Type == llm.BlockToolResult }
 
-// clearOldResults replaces, in place, the content of every tool result other
-// than the newest KeepToolResults whose text is longer than ClearResultChars.
+// clearOldResults replaces, in place, the content of every tool result
+// before the last assistant message, other than the newest KeepToolResults of
+// those, whose text is longer than ClearResultChars. Results after the last
+// assistant message answer the current turn and have not been seen by the
+// model yet, so they are never cleared.
 func (m *middleware) clearOldResults(msgs []llm.Message) {
 	kept := 0
-	for i := len(msgs) - 1; i >= 0; i-- {
+	for i := lastIndex(msgs, isAssistant) - 1; i >= 0; i-- {
 		content := msgs[i].Content
 		for j := len(content) - 1; j >= 0; j-- {
 			if !isToolResult(content[j]) {
@@ -85,12 +88,12 @@ func resultText(b llm.Block) string {
 }
 
 // shortenOldInputs replaces, in place, every tool_use input longer than
-// MaxOldInputChars in assistant messages before the last one with a valid
-// JSON object holding the input's beginning. The last assistant message is
-// left alone: its calls are the ones being answered now.
+// MaxOldInputChars in assistant messages before the last plain user message
+// with a valid JSON object holding the input's beginning. The tool loop after
+// that message is left alone: it is the turn in progress, and providers may
+// validate its signed thinking against the inputs as they were sent.
 func (m *middleware) shortenOldInputs(msgs []llm.Message) {
-	last := lastAssistant(msgs)
-	for i := range last {
+	for i := range max(lastIndex(msgs, isPlainUser), 0) {
 		if msgs[i].Role != llm.RoleAssistant {
 			continue
 		}
@@ -102,16 +105,20 @@ func (m *middleware) shortenOldInputs(msgs []llm.Message) {
 	}
 }
 
-// lastAssistant returns the index of the last assistant message, or
-// len(msgs) when there is none.
-func lastAssistant(msgs []llm.Message) int {
+// lastIndex returns the index of the last message matching f, or -1.
+func lastIndex(msgs []llm.Message, f func(llm.Message) bool) int {
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == llm.RoleAssistant {
+		if f(msgs[i]) {
 			return i
 		}
 	}
-	return len(msgs)
+	return -1
 }
+
+func isAssistant(m llm.Message) bool { return m.Role == llm.RoleAssistant }
+
+// isPlainUser reports a user message that is not a set of tool results.
+func isPlainUser(m llm.Message) bool { return m.Role == llm.RoleUser && !carriesToolResult(m) }
 
 // shortenedInput returns {"truncated": "<first keptInputChars chars>…"}.
 func shortenedInput(input json.RawMessage) json.RawMessage {

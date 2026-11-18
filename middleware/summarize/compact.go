@@ -14,13 +14,11 @@ import (
 // minTailMessages is the fewest messages a compaction keeps verbatim.
 const minTailMessages = 2
 
-// defaultThread names the transcript directory of a run without a ThreadID.
-const defaultThread = "default"
-
 // compact summarizes the messages between the current boundary and the
 // recent tail of about keepTokens, and moves the boundary past them. It
 // reports whether the boundary moved; false with a nil error means there was
-// nothing to summarize. State messages are never changed.
+// nothing to summarize. A summarizer error is also recorded in
+// Boundary.LastError; success clears it. State messages are never changed.
 func (m *middleware) compact(ctx context.Context, req *agent.ModelRequest, keepTokens int) (bool, error) {
 	msgs := req.State.Messages()
 	prev, _ := Current(req.State)
@@ -34,6 +32,10 @@ func (m *middleware) compact(ctx context.Context, req *agent.ModelRequest, keepT
 	older := msgs[prev.Index:k]
 	summary, err := m.summarize(ctx, req, prev.Summary, render(older, DefaultMaxBlockChars))
 	if err != nil {
+		BoundaryKey.Update(req.State, func(b Boundary) Boundary {
+			b.LastError = err.Error()
+			return b
+		})
 		return false, err
 	}
 	next := Boundary{Index: k, Summary: summary, Compactions: prev.Compactions + 1}
@@ -83,19 +85,16 @@ func (m *middleware) summarize(ctx context.Context, req *agent.ModelRequest, pre
 }
 
 // offload saves the transcript of compaction number n to its own file and
-// returns the path; empty when offload is disabled, there is no backend, or
-// the write failed. Each compaction gets a new file, so no file grows past
+// returns the path; empty when offload is disabled, there is no backend, the
+// run has no ThreadID (threadless runs would overwrite each other's files),
+// or the write failed. Each compaction gets a new file, so no file grows past
 // what one read can load. A failed write is not an error: State still holds
 // every message, the transcript is only a convenience for the model.
 func (m *middleware) offload(ctx context.Context, req *agent.ModelRequest, n int, transcript string) string {
-	if m.cfg.DisableOffload || req.Backend == nil {
+	if m.cfg.DisableOffload || req.Backend == nil || req.ThreadID == "" {
 		return ""
 	}
-	thread := req.ThreadID
-	if thread == "" {
-		thread = defaultThread
-	}
-	path := fmt.Sprintf("%s/%s/%d.md", HistoryDir, pathsafe.Segment(thread), n)
+	path := fmt.Sprintf("%s/%s/%d.md", HistoryDir, pathsafe.Segment(req.ThreadID), n)
 	if err := req.Backend.Write(ctx, path, []byte(transcript)); err != nil {
 		return ""
 	}

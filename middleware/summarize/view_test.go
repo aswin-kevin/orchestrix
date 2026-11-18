@@ -165,6 +165,8 @@ func TestMicroCompactClearsOldResultsOnly(t *testing.T) {
 		id := fmt.Sprintf("long%d", i)
 		msgs = append(msgs, assistantCalls(id), userResults(long, id))
 	}
+	// A finished turn, so every result above has been seen by the model.
+	msgs = append(msgs, assistantText("all done"), llm.UserText("thanks"))
 	s := state.New()
 	s.SetMessages(msgs)
 
@@ -200,12 +202,36 @@ func TestMicroCompactClearsOldResultsOnly(t *testing.T) {
 	}
 }
 
+func TestMicroCompactKeepsCurrentTurnResults(t *testing.T) {
+	long := strings.Repeat("r", 3000)
+	var ids []string
+	for i := range 8 {
+		ids = append(ids, fmt.Sprintf("p%d", i))
+	}
+	s := state.New()
+	s.SetMessages([]llm.Message{llm.UserText("go"), assistantCalls(ids...), userResults(long, ids...)})
+
+	got := wrapOnce(t, Config{}, s)
+
+	for _, b := range got[2].Content {
+		if b.Content[0].Text == ClearedResultText {
+			t.Fatalf("result %s of the current turn was cleared before the model saw it", b.ToolUseID)
+		}
+	}
+}
+
 func TestOldToolInputTruncatedValidJSON(t *testing.T) {
 	bigInput := fmt.Sprintf(`{"content":%q}`, strings.Repeat("é", 5000))
 	old := llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{toolUse("w1", bigInput)}}
-	last := llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{toolUse("w2", bigInput)}}
+	loop1 := llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{toolUse("w2", bigInput)}}
+	loop2 := llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{toolUse("w3", bigInput)}}
 	s := state.New()
-	s.SetMessages([]llm.Message{llm.UserText("go"), old, userResults("ok", "w1"), last, userResults("ok", "w2")})
+	// w2 and w3 belong to the tool loop answering the last plain user
+	// message; providers may validate signed thinking across it.
+	s.SetMessages([]llm.Message{
+		llm.UserText("go"), old, userResults("ok", "w1"),
+		llm.UserText("next"), loop1, userResults("ok", "w2"), loop2, userResults("ok", "w3"),
+	})
 
 	got := wrapOnce(t, Config{}, s)
 
@@ -221,10 +247,41 @@ func TestOldToolInputTruncatedValidJSON(t *testing.T) {
 	if len(parsed) != 1 || parsed["truncated"] != prefix+"…" {
 		t.Fatalf("truncated input = %.120s, want {\"truncated\": first 500 chars + …}", oldInput)
 	}
-	if string(got[3].Content[0].Input) != bigInput {
-		t.Fatal("the last assistant message's tool input was truncated")
+	for _, i := range []int{4, 6} {
+		if string(got[i].Content[0].Input) != bigInput {
+			t.Fatalf("tool input of message %d, in the current tool loop, was truncated", i)
+		}
 	}
 	if string(s.Messages()[1].Content[0].Input) != bigInput {
 		t.Fatal("truncation changed State")
+	}
+}
+
+func TestStaleBoundaryIgnored(t *testing.T) {
+	s := state.New()
+	s.SetMessages(mixedHistory()[:4])
+	BoundaryKey.Set(s, Boundary{Index: 9, Summary: "S", Compactions: 1})
+	got := wrapOnce(t, Config{}, s)
+	if len(got) != 4 || strings.Contains(got[0].Text(), "<summary>") {
+		t.Fatalf("view = %d messages starting %q, want the 4 state messages", len(got), got[0].Text())
+	}
+}
+
+func TestBoundaryCheckpointRoundTrip(t *testing.T) {
+	s := state.New()
+	s.SetMessages(mixedHistory()[:4])
+	want := Boundary{Index: 2, Summary: "S", Path: HistoryDir + "/t1/1.md", Compactions: 1, LastError: "boom"}
+	BoundaryKey.Set(s, want)
+
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := state.New()
+	if err := json.Unmarshal(data, restored); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := Current(restored); !ok || got != want {
+		t.Fatalf("restored boundary = %+v (ok %v), want %+v", got, ok, want)
 	}
 }

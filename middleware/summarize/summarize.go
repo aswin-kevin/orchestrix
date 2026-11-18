@@ -6,10 +6,14 @@
 // messages a summary stands for, and every request is built as one user
 // message holding the summary followed by the messages after the boundary.
 // The summarized originals are also saved to the backend, one file per
-// compaction under HistoryDir, so the model can read them back.
+// compaction under HistoryDir/<thread>, so the model can read them back; runs
+// without a ThreadID skip this.
 //
 // Every request is micro-compacted as well: old, large tool results are
 // replaced by a short notice and old, large tool inputs are shortened. The
+// current turn is never touched: results the model has not seen yet are
+// kept, and so are the tool inputs of the tool loop answering the last user
+// message, which may carry signed thinking that providers validate. The
 // model can ask for a compaction itself with the compact_conversation tool.
 //
 // The cut between summary and kept messages never separates a tool_result
@@ -101,7 +105,9 @@ type Config struct {
 	// DefaultSummaryPrompt.
 	SummaryPrompt *string
 	// DisableOffload stops saving summarized messages to the backend; false
-	// saves them whenever the run has a backend.
+	// saves them whenever the run has a backend and a ThreadID. Runs without
+	// a ThreadID never offload: they would share, and overwrite, one
+	// transcript directory.
 	DisableOffload bool
 }
 
@@ -118,6 +124,11 @@ type Boundary struct {
 	// Compactions counts the compactions that led to this boundary; it
 	// numbers the transcript files. Zero for no compaction.
 	Compactions int `json:"compactions,omitempty"`
+	// LastError is the error of the last failed compaction attempt; empty
+	// when the last attempt succeeded or none failed. A failure is recorded
+	// here because compaction runs outside any tool call, where no event can
+	// be forwarded, and the turn itself goes on uncompacted.
+	LastError string `json:"last_error,omitempty"`
 }
 
 // BoundaryKey holds the current Boundary. It is private to the run that owns
@@ -127,9 +138,12 @@ var BoundaryKey = state.NewKey[Boundary]("summarize.boundary", state.Private[Bou
 // requestedKey is set by compact_conversation; the next model call compacts.
 var requestedKey = state.NewKey[bool]("summarize.requested", state.Private[bool]())
 
-// Current returns the current Boundary; false when nothing was compacted.
+// Current returns the current Boundary; false when nothing was compacted
+// yet. The Boundary is returned either way, so its LastError can be read
+// even before the first successful compaction.
 func Current(s *state.State) (Boundary, bool) {
-	return BoundaryKey.Get(s)
+	b, ok := BoundaryKey.Get(s)
+	return b, ok && b.Index > 0
 }
 
 // middleware is the summarize middleware. It is immutable after New, so it is
@@ -176,7 +190,8 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 	if requested, _ := requestedKey.Get(req.State); requested {
 		requestedKey.Delete(req.State)
 		// A failed compaction must not fail the turn: State still holds the
-		// whole conversation, so the request just goes out uncompacted.
+		// whole conversation, so the request just goes out uncompacted. The
+		// error is recorded in Boundary.LastError.
 		_, _ = m.compact(ctx, req, m.keepTokens(req.Profile))
 	}
 	req.Request.Messages = m.view(req.State, req.Request.Messages)

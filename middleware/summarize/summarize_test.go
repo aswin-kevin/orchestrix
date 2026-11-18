@@ -2,6 +2,7 @@ package summarize
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // testWindow is the context window of the test agents. With
@@ -40,10 +42,23 @@ func compactCall(id string) llmtest.Call {
 
 func runAgent(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, msgs []llm.Message) *agent.Final {
 	t.Helper()
+	return runInput(t, main, b, cfg, agent.Input{ThreadID: "t1", Messages: msgs})
+}
+
+// noopTool answers every call with "ok".
+func noopTool() tool.Tool {
+	return tool.New("noop", "Does nothing.", func(context.Context, struct{}, *tool.Call) (tool.Result, error) {
+		return tool.Text("ok"), nil
+	}, tool.WithReadOnly(), tool.WithConcurrent())
+}
+
+func runInput(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, in agent.Input) *agent.Final {
+	t.Helper()
 	a, err := agent.New(agent.Config{
 		Provider:       main,
 		Profile:        &llm.Profile{ContextWindow: testWindow, MaxOutput: 500},
 		Backend:        b,
+		Tools:          []tool.Tool{noopTool()},
 		Middleware:     []agent.Middleware{New(cfg)},
 		PermissionMode: permission.ModeBypass,
 	})
@@ -51,7 +66,7 @@ func runAgent(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, ms
 		t.Fatalf("agent.New: %v", err)
 	}
 	var final *agent.Final
-	for ev := range a.Run(context.Background(), agent.Input{ThreadID: "t1", Messages: msgs}) {
+	for ev := range a.Run(context.Background(), in) {
 		if ev.Kind == agent.KindFinal {
 			final = ev.Final
 		}
@@ -204,5 +219,80 @@ func TestDisableOffloadAndDefaultSummarizer(t *testing.T) {
 	}
 	if _, err := b.Read(context.Background(), HistoryDir+"/t1/1.md", 0, 1); err == nil {
 		t.Fatal("transcript written although offload is disabled")
+	}
+}
+
+func TestThreadlessRunSkipsOffload(t *testing.T) {
+	main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}}, llmtest.Turn{Text: "done"})
+	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})
+	b := memory.New()
+
+	final := runInput(t, main, b, Config{Provider: summarizer}, agent.Input{Messages: paddedHistory()})
+
+	if bd, ok := Current(final.State); !ok || bd.Summary != "SUMMARY-1" || bd.Path != "" {
+		t.Fatalf("boundary = %+v, want SUMMARY-1 without a path", bd)
+	}
+	if files, _ := b.Glob(context.Background(), "**", HistoryDir); len(files) != 0 {
+		t.Fatalf("threadless run wrote transcripts: %+v", files)
+	}
+}
+
+func TestFailedCompactionRecordedAndRequestUncompacted(t *testing.T) {
+	main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}}, llmtest.Turn{Text: "done"})
+	summarizer := llmtest.New(llmtest.Turn{Err: errors.New("summarizer down")})
+
+	final := runAgent(t, main, memory.New(), Config{Provider: summarizer}, paddedHistory())
+
+	if summarizer.Calls() != 1 {
+		t.Fatalf("summarizer called %d times, want 1", summarizer.Calls())
+	}
+	if _, ok := Current(final.State); ok {
+		t.Fatal("a failed compaction must not set a boundary")
+	}
+	bd, _ := BoundaryKey.Get(final.State)
+	if !strings.Contains(bd.LastError, "summarizer down") {
+		t.Fatalf("LastError = %q, want the summarizer error", bd.LastError)
+	}
+	if next := main.Requests[1].Messages; len(next) != 7 || strings.Contains(next[0].Text(), "<summary>") {
+		t.Fatalf("next request has %d messages, want the uncompacted 7", len(next))
+	}
+}
+
+func TestSuccessfulCompactionClearsLastError(t *testing.T) {
+	main := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c2")}},
+		llmtest.Turn{Text: "done"},
+	)
+	summarizer := llmtest.New(llmtest.Turn{Err: errors.New("summarizer down")}, llmtest.Turn{Text: "SUMMARY-1"})
+
+	final := runAgent(t, main, memory.New(), Config{Provider: summarizer}, paddedHistory())
+
+	if bd, ok := Current(final.State); !ok || bd.Summary != "SUMMARY-1" || bd.LastError != "" || bd.Compactions != 1 {
+		t.Fatalf("boundary = %+v, want SUMMARY-1, compaction 1, no error", bd)
+	}
+}
+
+func TestCompactAlongsideParallelCalls(t *testing.T) {
+	main := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{
+			{ID: "n1", Name: "noop", Input: map[string]any{}}, compactCall("c1"), {ID: "n2", Name: "noop", Input: map[string]any{}},
+		}},
+		llmtest.Turn{Text: "done"},
+	)
+	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})
+
+	final := runAgent(t, main, memory.New(), Config{Provider: summarizer}, paddedHistory())
+
+	if summarizer.Calls() != 1 {
+		t.Fatalf("summarizer called %d times, want 1", summarizer.Calls())
+	}
+	if bd, _ := Current(final.State); bd.Index != 3 {
+		t.Fatalf("boundary index = %d, want 3", bd.Index)
+	}
+	next := main.Requests[1].Messages
+	validateView(t, next)
+	if results := next[len(next)-1].Content; len(results) != 3 {
+		t.Fatalf("last message holds %d results, want all 3 parallel results", len(results))
 	}
 }
