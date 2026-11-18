@@ -225,3 +225,66 @@ func TestModelFromEnvironment(t *testing.T) {
 		t.Errorf("code = %d, model = %q, want 0 and from-env", code, got.Model)
 	}
 }
+
+// executeTurns scripts an execute call followed by a final answer.
+func executeTurns() *llmtest.Scripted {
+	return llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "c1", Name: "execute", Input: map[string]string{"command": "echo ok"}}}},
+		llmtest.Turn{Text: "done"},
+	)
+}
+
+func TestShellExecuteAvailable(t *testing.T) {
+	code, _, stderr := invoke(t, "", executeTurns(), "-model", "openai:test", "-dir", t.TempDir(), "-yes", "-p", "run it")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stderr, "⎿ ok") {
+		t.Errorf("stderr = %q, want the command output %q", stderr, "ok")
+	}
+}
+
+func TestNoShellHasNoExecute(t *testing.T) {
+	_, _, stderr := invoke(t, "", executeTurns(), "-model", "openai:test", "-dir", t.TempDir(), "-yes", "-no-shell", "-p", "run it")
+
+	if strings.Contains(stderr, "⎿ ok") {
+		t.Errorf("stderr = %q, want execute to be unavailable with -no-shell", stderr)
+	}
+	if !strings.Contains(stderr, "unknown tool") {
+		t.Errorf("stderr = %q, want an unknown tool result", stderr)
+	}
+}
+
+func TestOneShotPersistsThread(t *testing.T) {
+	store := t.TempDir()
+	args := []string{"-model", "openai:test", "-dir", t.TempDir(), "-store", store, "-thread", "t", "-p"}
+	first := llmtest.New(llmtest.Turn{Text: "one"})
+	if code, _, stderr := invoke(t, "", first, append(args, "hi")...); code != 0 {
+		t.Fatalf("first run: exit code = %d (stderr %q)", code, stderr)
+	}
+
+	second := llmtest.New(llmtest.Turn{Text: "two"})
+	if code, _, stderr := invoke(t, "", second, append(args, "again")...); code != 0 {
+		t.Fatalf("second run: exit code = %d (stderr %q)", code, stderr)
+	}
+
+	// user "hi", assistant "one", user "again"
+	if got := len(second.Requests[0].Messages); got != 3 {
+		t.Errorf("second run's first request has %d messages, want 3 (the first exchange carried over)", got)
+	}
+}
+
+func TestReplPersistsThread(t *testing.T) {
+	store := t.TempDir()
+	args := []string{"-model", "openai:test", "-dir", t.TempDir(), "-store", store}
+	first := llmtest.New(llmtest.Turn{Text: "one"})
+	invoke(t, "hi\n/exit\n", first, args...)
+
+	second := llmtest.New(llmtest.Turn{Text: "two"})
+	invoke(t, "again\n/exit\n", second, args...)
+
+	if got := len(second.Requests[0].Messages); got != 3 {
+		t.Errorf("second session's first request has %d messages, want 3", got)
+	}
+}

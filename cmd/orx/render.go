@@ -28,12 +28,46 @@ type renderer struct {
 	stdout, stderr io.Writer
 	// dim wraps stderr lines in ANSI dim; set only when stderr is a terminal.
 	dim bool
+	// topAgent is the agent whose output is shown unprefixed; events of any
+	// other agent are subagent output.
+	topAgent string
+
+	// mu guards midLine and textAgent: the approval prompt arrives from a
+	// tool goroutine while the main one renders events.
+	mu sync.Mutex
 	// midLine is true while streamed text has not yet been ended by a newline.
 	midLine bool
+	// textAgent is the agent whose text is streaming while midLine is set.
+	textAgent string
 }
 
 func newRenderer(stdout, stderr io.Writer) *renderer {
-	return &renderer{stdout: stdout, stderr: &lockedWriter{w: stderr}, dim: isTerminal(stderr)}
+	return &renderer{stdout: stdout, stderr: &lockedWriter{w: stderr}, dim: isTerminal(stderr), topAgent: agent.DefaultAgentName}
+}
+
+// subagentIndent and the bracketed name mark output of a nested agent.
+const subagentIndent = "  "
+
+// prefix returns the line prefix for output of the named agent: empty for
+// the top-level agent.
+func (r *renderer) prefix(name string) string {
+	if name == "" || name == r.topAgent {
+		return ""
+	}
+	return subagentIndent + "[" + name + "] "
+}
+
+// prompts returns the writer for interactive prompts. It ends a streamed
+// text line first, so a prompt never lands in the middle of a reply.
+func (r *renderer) prompts() io.Writer { return promptWriter{r} }
+
+type promptWriter struct{ r *renderer }
+
+func (w promptWriter) Write(p []byte) (int, error) {
+	w.r.mu.Lock()
+	defer w.r.mu.Unlock()
+	w.r.endText()
+	return w.r.stderr.Write(p)
 }
 
 // lockedWriter serializes writes. The approval prompt is written from the
@@ -63,28 +97,46 @@ func isTerminal(w io.Writer) bool {
 
 // render prints one event. Thinking and progress events are not shown.
 func (r *renderer) render(ev agent.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	pre := r.prefix(ev.Agent)
 	switch ev.Kind {
 	case agent.KindText:
-		r.text(ev.Text)
+		r.text(ev.Agent, pre, ev.Text)
 	case agent.KindToolUse:
-		r.status(fmt.Sprintf("⏺ %s(%s)", ev.ToolName, compactJSON(ev.Input)))
+		r.status(pre + fmt.Sprintf("⏺ %s(%s)", ev.ToolName, compactJSON(ev.Input)))
 	case agent.KindToolResult:
 		if ev.ToolResult != nil {
-			r.status("  ⎿ " + truncate(firstLine(ev.ToolResult.Flatten()), maxLineRunes))
+			r.status(pre + "  ⎿ " + truncate(firstLine(ev.ToolResult.Flatten()), maxLineRunes))
 		}
 	case agent.KindFinal:
 		r.final(ev.Final)
 	}
 }
 
-func (r *renderer) text(s string) {
-	fmt.Fprint(r.stdout, s)
-	if s != "" {
-		r.midLine = !strings.HasSuffix(s, "\n")
+// text streams s to stdout. Every line of a subagent's text starts with
+// pre; text of a different agent than the one mid-line starts a new line.
+func (r *renderer) text(agentName, pre, s string) {
+	if s == "" {
+		return
 	}
+	if r.midLine && agentName != r.textAgent {
+		r.endText()
+	}
+	if pre != "" {
+		if !r.midLine {
+			s = pre + s
+		}
+		// Prefix each further line, but not the empty one after a final newline.
+		body := strings.TrimSuffix(s, "\n")
+		s = strings.ReplaceAll(body, "\n", "\n"+pre) + s[len(body):]
+	}
+	fmt.Fprint(r.stdout, s)
+	r.midLine = !strings.HasSuffix(s, "\n")
+	r.textAgent = agentName
 }
 
-// endText finishes a streamed text line so later output starts on a new one.
+// endText (called with mu held) finishes a streamed text line so later output starts on a new one.
 func (r *renderer) endText() {
 	if r.midLine {
 		fmt.Fprintln(r.stdout)

@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"iter"
 	"os"
 	"os/signal"
 	"strings"
@@ -18,7 +19,10 @@ import (
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend/disk"
+	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 )
@@ -31,8 +35,9 @@ const (
 )
 
 const (
-	// threadID names the single conversation a CLI session holds.
-	threadID = "cli"
+	// defaultThread names the conversation a session holds when -thread is
+	// not given.
+	defaultThread = "cli"
 	// modelEnv supplies -model when the flag is absent.
 	modelEnv = "ORX_MODEL"
 	// defaultMaxTurns bounds the model turns of one prompt.
@@ -54,6 +59,11 @@ type options struct {
 	// What to run and where.
 	prompt, systemFile, dir string
 	maxTurns                int
+	// store is the directory of the file checkpointer; empty keeps the
+	// conversation in memory only. thread names the conversation in it.
+	store, thread string
+	// noShell selects the plain disk workspace, without the execute tool.
+	noShell bool
 	// Permissions: mode is only meaningful when modeGiven is set.
 	yes, modeGiven bool
 	mode           string
@@ -74,18 +84,24 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	in := newLineReader(stdin)
 	rend := newRenderer(stdout, stderr)
 	stderr = rend.stderr // the shared, locked writer
-	ag, code := buildAgent(opts, newApprover(in, stderr), newProvider, stderr)
+	ag, shutdown, code := buildAgent(opts, newApprover(in, rend.prompts()), newProvider, stderr)
 	if ag == nil {
 		return code
 	}
+	defer shutdown()
 
+	conv, err := newConversation(ctx, ag, opts)
+	if err != nil {
+		fmt.Fprintln(stderr, "orx:", err)
+		return exitError
+	}
 	if opts.prompt != "" {
-		if _, ok := runTurn(ctx, ag, state.New(), opts.prompt, rend, stderr); !ok {
+		if !conv.turn(ctx, opts.prompt, rend, stderr) {
 			return exitError
 		}
 		return exitOK
 	}
-	return repl(ctx, ag, in, rend, stderr)
+	return repl(ctx, conv, in, rend, stderr)
 }
 
 func parseFlags(args []string, stderr io.Writer) (options, error) {
@@ -98,6 +114,9 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.mode, "mode", "", "permission mode name; wins over -yes")
 	fs.StringVar(&o.systemFile, "system", "", "file holding the system prompt")
 	fs.StringVar(&o.dir, "dir", ".", "root directory of the file workspace")
+	fs.StringVar(&o.store, "store", "", "directory for saved conversations; enables persistence")
+	fs.StringVar(&o.thread, "thread", defaultThread, "conversation name inside -store")
+	fs.BoolVar(&o.noShell, "no-shell", false, "use the plain disk workspace: no execute tool")
 	fs.IntVar(&o.maxTurns, "max-turns", defaultMaxTurns, "maximum model turns per prompt")
 	fs.StringVar(&o.thinking, "thinking", "", "thinking setting passed to the provider")
 	fs.StringVar(&o.effort, "effort", "", "reasoning effort passed to the provider")
@@ -113,13 +132,17 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 }
 
 // buildAgent assembles the agent. It returns a nil agent and an exit code
-// when setup fails.
+// when setup fails; otherwise the returned shutdown func must be called when
+// the agent is no longer used, to stop its background tasks.
 func buildAgent(o options, ap *approver, newProvider func(llm.Config) (llm.Provider, error),
-	stderr io.Writer) (*agent.Agent, int) {
+	stderr io.Writer) (ag *agent.Agent, shutdown func(), code int) {
+	fail := func(code int, format string, args ...any) (*agent.Agent, func(), int) {
+		fmt.Fprintf(stderr, "orx: "+format+"\n", args...)
+		return nil, nil, code
+	}
 	cfg, err := llm.ParseModel(o.model)
 	if err != nil {
-		fmt.Fprintln(stderr, "orx:", err)
-		return nil, exitUsage
+		return fail(exitUsage, "%v", err)
 	}
 	if o.baseURL != "" {
 		cfg.BaseURL = o.baseURL
@@ -127,20 +150,36 @@ func buildAgent(o options, ap *approver, newProvider func(llm.Config) (llm.Provi
 	cfg.Thinking, cfg.ReasoningEffort = o.thinking, o.effort
 	provider, err := newProvider(cfg)
 	if err != nil {
-		fmt.Fprintln(stderr, "orx:", err)
-		return nil, exitError
-	}
-	ws, err := disk.New(o.dir)
-	if err != nil {
-		fmt.Fprintln(stderr, "orx:", err)
-		return nil, exitError
+		return fail(exitError, "%v", err)
 	}
 
 	agentOpts := []orchestrix.Option{
-		orchestrix.WithBackend(ws),
 		orchestrix.WithApprover(ap.decide),
 		orchestrix.WithMaxTurns(o.maxTurns),
 		orchestrix.WithConfig(func(c *agent.Config) { c.Model = cfg.Model }),
+	}
+	shutdown = func() {}
+	if o.noShell {
+		ws, err := disk.New(o.dir)
+		if err != nil {
+			return fail(exitError, "%v", err)
+		}
+		agentOpts = append(agentOpts, orchestrix.WithBackend(ws))
+	} else {
+		// The tasks middleware keeps background jobs alive beyond a single
+		// call, so the caller must stop them on every exit path.
+		jobs := tasks.New(tasks.Config{})
+		shutdown = jobs.Shutdown
+		agentOpts = append(agentOpts,
+			orchestrix.WithShell(o.dir, shell.Options{}), orchestrix.WithTasks(jobs))
+	}
+	if o.store != "" {
+		cp, err := file.New(o.store)
+		if err != nil {
+			shutdown()
+			return fail(exitError, "open store: %v", err)
+		}
+		agentOpts = append(agentOpts, orchestrix.WithCheckpointer(cp))
 	}
 	if mode := effectiveMode(o, stderr); mode != "" {
 		agentOpts = append(agentOpts, orchestrix.WithPermissionMode(mode))
@@ -148,18 +187,18 @@ func buildAgent(o options, ap *approver, newProvider func(llm.Config) (llm.Provi
 	if o.systemFile != "" {
 		text, err := os.ReadFile(o.systemFile)
 		if err != nil {
-			fmt.Fprintln(stderr, "orx: read system prompt:", err)
-			return nil, exitUsage
+			shutdown()
+			return fail(exitUsage, "read system prompt: %v", err)
 		}
 		agentOpts = append(agentOpts, orchestrix.WithSystemPrompt(string(text)))
 	}
 
-	ag, err := orchestrix.New(provider, agentOpts...)
+	ag, err = orchestrix.New(provider, agentOpts...)
 	if err != nil {
-		fmt.Fprintln(stderr, "orx:", err)
-		return nil, exitUsage
+		shutdown()
+		return fail(exitUsage, "%v", err)
 	}
-	return ag, exitOK
+	return ag, shutdown, exitOK
 }
 
 // effectiveMode resolves -yes and -mode; an explicit -mode wins.
@@ -176,11 +215,10 @@ func effectiveMode(o options, stderr io.Writer) permission.Mode {
 	return ""
 }
 
-// repl reads prompts line by line until end of input or /exit. One state is
-// carried through all prompts so the model sees the whole conversation. The
+// repl reads prompts line by line until end of input or /exit. The
+// conversation carries through all prompts so the model sees all of it. The
 // exit code is 1 if any prompt failed, even though the session carried on.
-func repl(ctx context.Context, ag *agent.Agent, in *lineReader, rend *renderer, stderr io.Writer) int {
-	st := state.New()
+func repl(ctx context.Context, conv *conversation, in *lineReader, rend *renderer, stderr io.Writer) int {
 	code := exitOK
 	for {
 		fmt.Fprint(stderr, replPrompt)
@@ -189,12 +227,8 @@ func repl(ctx context.Context, ag *agent.Agent, in *lineReader, rend *renderer, 
 		if prompt == exitCommand {
 			return code
 		}
-		if prompt != "" {
-			next, ok := runTurn(ctx, ag, st, prompt, rend, stderr)
-			st = next
-			if !ok {
-				code = exitError
-			}
+		if prompt != "" && !conv.turn(ctx, prompt, rend, stderr) {
+			code = exitError
 		}
 		if err != nil {
 			return code
@@ -202,33 +236,60 @@ func repl(ctx context.Context, ag *agent.Agent, in *lineReader, rend *renderer, 
 	}
 }
 
-// runTurn runs one prompt on top of st, rendering events as they arrive, and
-// returns the state to continue from plus whether the run succeeded: it
-// completed without an error. A run stopped by a limit, Ctrl-C or a failure
-// did not. (A run cannot end interrupted here: the CLI's approver answers
-// every approval itself.) Ctrl-C cancels just this turn.
-func runTurn(ctx context.Context, ag *agent.Agent, st *state.State, prompt string, rend *renderer,
-	stderr io.Writer) (*state.State, bool) {
+// conversation is the exchange a CLI session holds with the agent: a saved
+// thread with -store, else a State carried through the prompts in memory.
+type conversation struct {
+	ag *agent.Agent
+	// thread is set with -store.
+	thread *agent.Thread
+	// st is the in-memory state when thread is nil.
+	st *state.State
+}
+
+func newConversation(ctx context.Context, ag *agent.Agent, o options) (*conversation, error) {
+	if o.store == "" {
+		return &conversation{ag: ag, st: state.New()}, nil
+	}
+	th, err := ag.Thread(ctx, o.thread)
+	if err != nil {
+		return nil, err
+	}
+	return &conversation{ag: ag, thread: th}, nil
+}
+
+// run starts one prompt and streams its events.
+func (c *conversation) run(ctx context.Context, prompt string) iter.Seq2[agent.Event, error] {
+	if c.thread != nil {
+		return c.thread.Prompt(ctx, prompt)
+	}
+	in := orchestrix.Text(prompt)
+	in.ThreadID = defaultThread
+	in.State = c.st
+	return c.ag.Run(ctx, in)
+}
+
+// turn runs one prompt, rendering events as they arrive, and reports whether
+// the run succeeded: it completed without an error. A run stopped by a
+// limit, Ctrl-C or a failure did not. (A run cannot end interrupted here:
+// the CLI's approver answers every approval itself.) Ctrl-C cancels just this
+// turn.
+func (c *conversation) turn(ctx context.Context, prompt string, rend *renderer, stderr io.Writer) bool {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
-	in := orchestrix.Text(prompt)
-	in.ThreadID = threadID
-	in.State = st
-
 	ok := true
-	for ev, err := range ag.Run(ctx, in) {
+	for ev, err := range c.run(ctx, prompt) {
 		if err != nil {
 			fmt.Fprintln(stderr, "orx:", err)
-			return st, false
+			return false
 		}
 		rend.render(ev)
 		if ev.Kind == agent.KindFinal {
 			ok = ev.Final.Reason == agent.ReasonCompleted && ev.Final.Err == nil
-			if ev.Final.State != nil {
-				st = ev.Final.State
+			if c.thread == nil && ev.Final.State != nil {
+				c.st = ev.Final.State
 			}
 		}
 	}
-	return st, ok
+	return ok
 }

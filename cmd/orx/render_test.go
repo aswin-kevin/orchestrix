@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/aswin-kevin/orchestrix/agent"
 )
 
 func TestTruncate(t *testing.T) {
@@ -52,5 +56,36 @@ func TestCompactJSON(t *testing.T) {
 				t.Errorf("compactJSON = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRenderSubagentPrefix(t *testing.T) {
+	var out, errOut bytes.Buffer
+	r := newRenderer(&out, &errOut)
+
+	r.render(agent.Event{Kind: agent.KindText, Agent: agent.DefaultAgentName, Text: "top\n"})
+	r.render(agent.Event{Kind: agent.KindText, Agent: "researcher", Text: "found it\nline two\n"})
+	r.render(agent.Event{Kind: agent.KindToolUse, Agent: "researcher", ToolName: "ls", Input: json.RawMessage(`{}`)})
+
+	if want := "top\n  [researcher] found it\n  [researcher] line two\n"; out.String() != want {
+		t.Errorf("stdout = %q, want %q", out.String(), want)
+	}
+	if want := "  [researcher] ⏺ ls({})\n"; errOut.String() != want {
+		t.Errorf("stderr = %q, want %q", errOut.String(), want)
+	}
+}
+
+func TestPromptEndsStreamedLine(t *testing.T) {
+	var out, errOut bytes.Buffer
+	r := newRenderer(&out, &errOut)
+	r.render(agent.Event{Kind: agent.KindText, Agent: agent.DefaultAgentName, Text: "partial"})
+
+	fmt.Fprint(r.prompts(), "Allow x? ")
+
+	if want := "partial\n"; out.String() != want {
+		t.Errorf("stdout = %q, want %q (open line ended before the prompt)", out.String(), want)
+	}
+	if errOut.String() != "Allow x? " {
+		t.Errorf("stderr = %q, want the prompt", errOut.String())
 	}
 }

@@ -385,7 +385,7 @@ Command rules are matched on the parsed command line, not the raw text. An allow
 
 ## CLI
 
-`orx` is a small coding-agent CLI built on the SDK. It works in a directory on disk and asks before running tools that need approval.
+`orx` is a small coding-agent CLI built on the SDK. It works in a directory on disk, can run shell commands there (also in the background) and asks before running tools that need approval. Subagent output is shown indented under `[name]`.
 
 ```sh
 go install github.com/aswin-kevin/orchestrix/cmd/orx@latest
@@ -403,6 +403,9 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 | `-mode` | Permission mode name; wins over `-yes`. |
 | `-system` | File holding the system prompt. |
 | `-dir` | Root directory of the workspace (default `.`). |
+| `-no-shell` | Use the plain disk workspace: no `execute` tool and no background tasks. |
+| `-store` | Directory for saved conversations (file checkpointer); enables persistence. |
+| `-thread` | Conversation name inside `-store` (default `cli`); the same name continues an earlier session. |
 | `-max-turns` | Maximum model turns per prompt (default 50). |
 | `-base-url` | Override the provider base URL. |
 | `-thinking`, `-effort` | Thinking and reasoning-effort settings passed to the provider. |
