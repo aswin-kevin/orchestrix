@@ -35,6 +35,9 @@ func TestDiskRipgrepParity(t *testing.T) {
 		"unicode.txt":           "héllo wörld Hello\n",
 		"bin.dat":               "hello\x00binary",
 		"src/hello-with-dash/p": "hello\n",
+		"digits.txt":            "\u0663 arabic-indic three\n",
+		"badutf8.txt":           "hello \xff\n",
+		"huge.txt":              "hello\n" + strings.Repeat("x", backend.MaxGrepFileBytes),
 	}
 	for name, content := range files {
 		p := filepath.Join(root, name)
@@ -62,6 +65,10 @@ func TestDiskRipgrepParity(t *testing.T) {
 		{"hello", backend.GrepOptions{Mode: backend.GrepContent, Path: "/b.txt"}},
 		{"hello", backend.GrepOptions{Mode: backend.GrepContent, MaxResults: 2}},
 		{"hello", backend.GrepOptions{Mode: backend.GrepFiles, MaxResults: 3}},
+		{"hello", backend.GrepOptions{Mode: backend.GrepContent, Path: "/bin.dat"}},
+		{`\d`, backend.GrepOptions{Mode: backend.GrepContent}},
+		{"hello", backend.GrepOptions{Mode: backend.GrepFiles, Glob: "*.{go,md}"}},
+		{"hello", backend.GrepOptions{Mode: backend.GrepFiles, Glob: "[ab].go"}},
 		{"^$", backend.GrepOptions{Mode: backend.GrepContent}},
 		{"nomatchanywhere", backend.GrepOptions{Mode: backend.GrepContent}},
 	}
@@ -101,5 +108,52 @@ func TestDiskGrepSkipsGitAndNodeModules(t *testing.T) {
 	}
 	if len(got) != 1 || !strings.HasSuffix(got[0].Path, "/ok.txt") {
 		t.Fatalf("got %+v, want only /ok.txt", got)
+	}
+}
+
+func TestDiskGrepSemantics(t *testing.T) {
+	ctx := context.Background()
+	for _, rg := range []bool{true, false} {
+		b, root := newDisk(t, disk.WithRipgrep(rg))
+		write := func(name, content string) {
+			if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write("bad.txt", "hello \xff\n")
+		write("bin.dat", "hello\n\x00x")
+		write("digits.txt", "\u0663\n")
+		write("huge.txt", "hello\n"+strings.Repeat("x", backend.MaxGrepFileBytes))
+		write("ok.txt", "hello\n")
+		for _, c := range []struct{ pattern, path string }{
+			{"hello", ""}, {"hello", "/bin.dat"}, {"hello", "/bad.txt"}, {"hello", "/huge.txt"}, {`\d`, ""},
+		} {
+			got, err := b.Grep(ctx, c.pattern, backend.GrepOptions{Mode: backend.GrepFiles, Path: c.path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if c.path == "" && c.pattern == "hello" {
+				want = 1 // only ok.txt: binary, invalid UTF-8 and oversized files are skipped
+			}
+			if len(got) != want {
+				t.Errorf("rg=%v Grep(%q, %q) = %+v, want %d result(s)", rg, c.pattern, c.path, got, want)
+			}
+		}
+	}
+}
+
+func TestDiskGrepFallsBackWhenRipgrepRejectsPattern(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("rg not installed")
+	}
+	b, root := newDisk(t)
+	if err := os.WriteFile(filepath.Join(root, "f.txt"), []byte("a.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// RE2 accepts \Q...\E quoting; Rust's regex engine rejects it.
+	got, err := b.Grep(context.Background(), `\Qa.\E`, backend.GrepOptions{Mode: backend.GrepFiles})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("got %+v, %v; want fallback to the Go walker", got, err)
 	}
 }

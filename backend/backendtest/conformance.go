@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -506,11 +507,5 @@ func matchPaths(ms []backend.GrepMatch) []string {
 }
 
 func sorted(s []string) []string {
-	out := append([]string(nil), s...)
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j] < out[j-1]; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
-	return out
+	return slices.Sorted(slices.Values(s))
 }

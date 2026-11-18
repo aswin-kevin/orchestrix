@@ -11,6 +11,10 @@ import (
 // is not set.
 const DefaultMaxResults = 1000
 
+// MaxGrepFileBytes is the largest file Grep searches; bigger files are skipped
+// so one huge file cannot dominate memory or time.
+const MaxGrepFileBytes = 10 << 20
+
 // LineMatch is one matching line of a file.
 type LineMatch struct {
 	Line int // 1-based
@@ -72,10 +76,11 @@ func (g *Grepper) WantsPath(p string) bool {
 	return g.glob == "" || MatchGlob(g.glob, p)
 }
 
-// AddFile searches one file's content, skipping binary files. It reports
+// AddFile searches one file's content, skipping binary files and files over
+// MaxGrepFileBytes. It reports
 // whether the result cap has been reached and the walk can stop.
 func (g *Grepper) AddFile(p string, content []byte) (full bool) {
-	if IsBinary(content) {
+	if len(content) > MaxGrepFileBytes || IsBinary(content) {
 		return false
 	}
 	return g.AddMatches(p, g.findLines(content))

@@ -3,6 +3,12 @@
 // and must stay inside the root, otherwise the call fails with
 // backend.ErrOutsideRoot (or, in directory walks, the entry is skipped).
 //
+// Threat model: hard links are not detected, so a file inside the root that
+// was already hard-linked to a file outside it can be read (writes are safe,
+// because they replace the file by rename instead of writing through the
+// link). Do not point the backend at a directory an untrusted party can
+// pre-populate with hard links.
+//
 // Race note: the containment check and the file operation are separate system
 // calls, so a process that can rewrite symlinks inside the root concurrently
 // could still win a race. The backend defends against the agent, not against
@@ -247,14 +253,29 @@ func (b *Backend) Read(_ context.Context, p string, offset, limit int) (backend.
 	if err != nil {
 		return backend.ReadResult{}, wrapFSError("read", clean, err)
 	}
-	if info.IsDir() {
-		return backend.ReadResult{}, fmt.Errorf("disk: read %s: %w", clean, backend.ErrIsDir)
+	if err := requireRegular("read", clean, info); err != nil {
+		return backend.ReadResult{}, err
 	}
 	content, err := os.ReadFile(realPath)
 	if err != nil {
 		return backend.ReadResult{}, wrapFSError("read", clean, err)
 	}
 	return backend.NewReadResult(content, info.ModTime(), offset, limit), nil
+}
+
+// errNotRegular reports a FIFO, device or socket, which the backend refuses to
+// open because reading one can block forever.
+var errNotRegular = errors.New("not a regular file")
+
+// requireRegular rejects directories (ErrIsDir) and other non-regular files.
+func requireRegular(op, clean string, info fs.FileInfo) error {
+	switch {
+	case info.IsDir():
+		return fmt.Errorf("disk: %s %s: %w", op, clean, backend.ErrIsDir)
+	case !info.Mode().IsRegular():
+		return fmt.Errorf("disk: %s %s: %w", op, clean, errNotRegular)
+	}
+	return nil
 }
 
 // Write replaces the file at p atomically, creating parent directories.
@@ -279,8 +300,8 @@ func (b *Backend) Edit(_ context.Context, p, old, replacement string, replaceAll
 	if err != nil {
 		return backend.EditResult{}, wrapFSError("edit", clean, err)
 	}
-	if info.IsDir() {
-		return backend.EditResult{}, fmt.Errorf("disk: edit %s: %w", clean, backend.ErrIsDir)
+	if err := requireRegular("edit", clean, info); err != nil {
+		return backend.EditResult{}, err
 	}
 	content, err := os.ReadFile(realPath)
 	if err != nil {
@@ -305,6 +326,8 @@ func replaceFile(realPath string, content []byte) error {
 	switch {
 	case err == nil && info.IsDir():
 		return backend.ErrIsDir
+	case err == nil && !info.Mode().IsRegular():
+		return errNotRegular
 	case err == nil:
 		mode = info.Mode().Perm()
 	case !errors.Is(err, fs.ErrNotExist):
