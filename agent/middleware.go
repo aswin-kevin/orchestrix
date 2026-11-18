@@ -110,6 +110,11 @@ type ToolProvider interface {
 	Tools() []tool.Tool
 }
 
+// SubagentToolName is the name of the tool that starts a subagent. Middleware
+// that must recognize subagent launches (hooks, the subagents package) share
+// this one definition.
+const SubagentToolName = "task"
+
 // ModelRequest is everything a model call needs, as seen by ModelWrappers.
 type ModelRequest struct {
 	Provider llm.Provider
