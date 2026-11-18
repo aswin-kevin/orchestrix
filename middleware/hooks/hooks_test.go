@@ -3,6 +3,7 @@ package hooks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -108,7 +109,10 @@ func drain(t *testing.T, seq func(func(agent.Event, error) bool)) *agent.Final {
 	var final *agent.Final
 	// A run that failed yields its error beside the final event; the tests
 	// assert on Final.Reason and Final.Err instead.
-	for ev := range seq {
+	for ev, err := range seq {
+		if ev.Kind == agent.KindFinal && err != ev.Final.Err {
+			t.Errorf("final event error = %v, want Final.Err %v", err, ev.Final.Err)
+		}
 		if ev.Kind == agent.KindFinal {
 			final = ev.Final
 		}
@@ -539,14 +543,18 @@ func TestHookErrStopRun(t *testing.T) {
 			call("w", "write_file", obj{"path": "/a"}), call("r", "read_file", obj{"path": "/b"})}},
 		llmtest.Turn{Text: "unreachable"})
 
-	if final.Reason != agent.ReasonHookStopped {
-		t.Fatalf("reason = %v (%v), want hook_stopped", final.Reason, final.Err)
+	if final.Reason != agent.ReasonHookStopped || !errors.Is(final.Err, agent.ErrStopRun) {
+		t.Fatalf("final = %v / %v, want hook_stopped wrapping ErrStopRun", final.Reason, final.Err)
+	}
+	if ran := rec.all(); len(ran) != 0 {
+		t.Fatalf("tools ran with %v, want neither write_file nor the skipped read_file to run", ran)
 	}
 	results := toolResults(final.State)
-	for _, id := range []string{"w", "r"} {
-		if r, ok := results[id]; !ok || !r.IsError {
-			t.Fatalf("tool_use %s has result %+v (present=%v), want a paired error result", id, r, ok)
-		}
+	if got := resultText(results["w"]); !results["w"].IsError || !strings.HasPrefix(got, "tool write_file stopped the run: x:") {
+		t.Fatalf("write_file result = %q (error=%v), want the stop notice", got, results["w"].IsError)
+	}
+	if got := resultText(results["r"]); !results["r"].IsError || got == "" {
+		t.Fatalf("read_file result = %q (error=%v), want a skipped error result", got, results["r"].IsError)
 	}
 }
 
@@ -588,5 +596,98 @@ func TestHooksFireAgainWhenAnInterruptedCallResumes(t *testing.T) {
 	}
 	if got := resultText(toolResults(resumed.State)["q"]); got != "answer: blue" {
 		t.Fatalf("result = %q", got)
+	}
+}
+
+func TestPreToolUseRewriteKeepsPermissionUpdatedInput(t *testing.T) {
+	rec := &recorder{}
+	// The tool's own permission check allows the call but normalises the
+	// path, like a tool that canonicalises its input.
+	normalising := tool.New("write_file", "Write a file.",
+		func(_ context.Context, in pathInput, _ *tool.Call) (tool.Result, error) {
+			rec.add(in.Path)
+			return tool.Text("wrote " + in.Path), nil
+		},
+		tool.WithPermission(func(context.Context, json.RawMessage, permission.Context) permission.Decision {
+			return permission.Decision{Behavior: permission.Allow, UpdatedInput: json.RawMessage(`{"path":"/tool.txt"}`)}
+		}))
+
+	final, _ := runWith(t, rewriteTo(`{"path":"/hook.txt"}`), agent.Config{Tools: []tool.Tool{normalising}}, "go",
+		llmtest.Turn{ToolCalls: []llmtest.Call{call("w", "write_file", obj{"path": "/orig.txt"})}},
+		llmtest.Turn{Text: "done"})
+	mustCompleted(t, final)
+	equal(t, "written paths", rec.all(), []string{"/tool.txt"})
+}
+
+func TestPreToolUsePermissionUpdatedInputIsValidated(t *testing.T) {
+	rec := &recorder{}
+	bad := tool.New("write_file", "Write a file.",
+		func(_ context.Context, in pathInput, _ *tool.Call) (tool.Result, error) {
+			rec.add(in.Path)
+			return tool.Text("wrote"), nil
+		},
+		tool.WithPermission(func(_ context.Context, in json.RawMessage, _ permission.Context) permission.Decision {
+			if strings.Contains(string(in), "hook") {
+				return permission.Decision{Behavior: permission.Allow, UpdatedInput: json.RawMessage(`{"path":7}`)}
+			}
+			return permission.Allowed()
+		}))
+	final, _ := runWith(t, rewriteTo(`{"path":"/hook.txt"}`), agent.Config{Tools: []tool.Tool{bad}}, "go",
+		llmtest.Turn{ToolCalls: []llmtest.Call{call("w", "write_file", obj{"path": "/orig.txt"})}},
+		llmtest.Turn{Text: "done"})
+	mustCompleted(t, final)
+	if res := toolResults(final.State)["w"]; !res.IsError || !strings.Contains(resultText(res), "invalid input for write_file") {
+		t.Fatalf("result = %q, want an invalid input error", resultText(res))
+	}
+	if len(rec.all()) != 0 {
+		t.Fatalf("tool ran with %v, want it not called", rec.all())
+	}
+}
+
+func TestStopHookThatAlwaysContinuesIsCapped(t *testing.T) {
+	var asked int
+	cfg := Config{Stop: []func(context.Context, StopInput) (StopOutput, error){
+		func(context.Context, StopInput) (StopOutput, error) {
+			asked++
+			return StopOutput{Continue: "again"}, nil
+		},
+	}}
+	turns := make([]llmtest.Turn, 0, agent.MaxStopContinuations+2)
+	for range agent.MaxStopContinuations + 2 {
+		turns = append(turns, llmtest.Turn{Text: "ok"})
+	}
+	final, p := runWith(t, cfg, agent.Config{}, "go", turns...)
+	mustCompleted(t, final)
+	if want := 1 + agent.MaxStopContinuations; p.Calls() != want || asked != agent.MaxStopContinuations {
+		t.Fatalf("model calls = %d (want %d), Stop asked %d times (want %d)", p.Calls(), want, asked, agent.MaxStopContinuations)
+	}
+}
+
+func TestPromptBlockFindsInputAmongOtherMessages(t *testing.T) {
+	var s = state.New()
+	prompt := llm.UserText("secret")
+	s.AppendMessages(prompt, llm.UserText("later"))
+	if err := removeInput(s, []llm.Message{prompt}); err != nil {
+		t.Fatal(err)
+	}
+	if msgs := s.Messages(); len(msgs) != 1 || msgs[0].Text() != "later" {
+		t.Fatalf("messages = %+v, want only the later one", msgs)
+	}
+	if err := removeInput(s, []llm.Message{prompt}); err == nil {
+		t.Fatal("removing an input that is not in State succeeded, want an error")
+	}
+}
+
+func TestSessionStartPanicEndsRunWithMiddlewareError(t *testing.T) {
+	cfg := Config{SessionStart: []func(context.Context, SessionInput) (SessionOutput, error){
+		func(context.Context, SessionInput) (SessionOutput, error) { panic("kaboom") },
+	}}
+	final, p := runWith(t, cfg, agent.Config{}, "go")
+	if final.Reason != agent.ReasonMiddlewareError || final.Err == nil ||
+		!strings.Contains(final.Err.Error(), `"hooks"`) || !strings.Contains(final.Err.Error(), "kaboom") {
+		t.Fatalf("final = %v / %v, want middleware_error naming hooks and the panic", final.Reason, final.Err)
+	}
+	if p.Calls() != 0 {
+		t.Fatalf("model called %d times, want none", p.Calls())
 	}
 }

@@ -68,7 +68,9 @@ func (m *middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 				return err
 			}
 			if out.Block {
-				removeInput(s, info.Input)
+				if err := removeInput(s, info.Input); err != nil {
+					return err
+				}
 				return fmt.Errorf("hooks: prompt blocked: %s: %w", out.Reason, agent.ErrStopRun)
 			}
 			injected = appendContext(injected, eventUserPromptSubmit, out.Context)
@@ -125,15 +127,17 @@ func appendContext(msgs []llm.Message, event, text string) []llm.Message {
 	return append(msgs, msg)
 }
 
-// removeInput drops the run's input messages from the end of State. They are
-// the last messages, because BeforeAgent appends nothing before the hooks
-// have all answered; a tail that differs (another middleware appended after
-// the input) is left alone rather than guessed at.
-func removeInput(s *state.State, input []llm.Message) {
+// removeInput drops the run's input messages from State, wherever they now
+// are: a middleware earlier in the stack may have appended after them. They
+// are found as one contiguous run; failing to find them is an error, since
+// carrying on would leave the blocked prompt in the conversation.
+func removeInput(s *state.State, input []llm.Message) error {
 	msgs := s.Messages()
-	keep := len(msgs) - len(input)
-	if keep < 0 || !slices.EqualFunc(msgs[keep:], input, func(a, b llm.Message) bool { return reflect.DeepEqual(a, b) }) {
-		return
+	for start := len(msgs) - len(input); start >= 0; start-- {
+		if slices.EqualFunc(msgs[start:start+len(input)], input, func(a, b llm.Message) bool { return reflect.DeepEqual(a, b) }) {
+			s.SetMessages(slices.Delete(msgs, start, start+len(input)))
+			return nil
+		}
 	}
-	s.SetMessages(msgs[:keep])
+	return errors.New("hooks: blocked prompt not found in State")
 }

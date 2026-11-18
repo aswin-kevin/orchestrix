@@ -54,7 +54,8 @@ type PreToolUseOutput struct {
 	// UpdatedInput, when non-empty, replaces the call's input. It is
 	// validated against the tool's schema and checked by the permission
 	// rules again: a Deny refuses the call, an Ask counts as allowed, since
-	// hooks are trusted host code. Nil keeps the input.
+	// hooks are trusted host code, and an Allow carrying its own input
+	// rewrite (the tool's normalisation) replaces it. Nil keeps the input.
 	UpdatedInput json.RawMessage
 	// Context, when non-empty, is appended to the tool result as an extra
 	// text block.
@@ -178,7 +179,10 @@ type PostToolUseHook struct {
 }
 
 // Config lists the hooks of each lifecycle point; a nil list has none. Hooks
-// of one point run in order. A hook returning an error wrapping
+// of one point run in order. The tool hooks (PreToolUse, PostToolUse,
+// PostToolUseFailure, SubagentStart) may run concurrently for the
+// concurrency-safe calls of one turn, so a hook that touches shared data must
+// synchronize. A hook returning an error wrapping
 // agent.ErrStopRun ends the run with agent.ReasonHookStopped; any other
 // error is a middleware error, or inside a tool call the call's failure.
 type Config struct {
@@ -195,7 +199,11 @@ type Config struct {
 	PostToolUseFailure []PostToolUseHook
 	// UserPromptSubmit runs at the start of a run that has input messages.
 	UserPromptSubmit []func(context.Context, PromptInput) (PromptOutput, error)
-	// SessionStart runs at the start of every run, resumed or not.
+	// SessionStart runs at the start of every run, resumed or not: each
+	// Resume and each turn of a Thread runs it again, and the Context it
+	// returns is appended to State every time, so it accumulates over a
+	// conversation. A hook that should inject only once must track that
+	// itself (for example in State).
 	SessionStart []func(context.Context, SessionInput) (SessionOutput, error)
 	// SessionEnd runs when every run ends, whatever the reason.
 	SessionEnd []func(context.Context, SessionInput) error

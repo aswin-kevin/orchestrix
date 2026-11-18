@@ -165,24 +165,42 @@ func setDescription(call *agent.ToolCall, fields map[string]json.RawMessage, des
 
 // rewriteInput applies a hook's input rewrite to call. The rewrite must pass
 // the tool's schema and the permission rules, like any input; an Ask counts
-// as allowed because hooks are trusted host code. It returns the error result
-// when the rewritten call may not run, nil otherwise.
+// as allowed because hooks are trusted host code. An Allow may itself rewrite
+// the input (the tool's own normalisation); that rewrite wins and is
+// validated in turn. It returns the error result when the rewritten call may
+// not run, nil otherwise.
 func rewriteInput(ctx context.Context, call *agent.ToolCall, updated json.RawMessage) *tool.Result {
-	call.Input = updated
-	if err := validateInput(call.Tool, updated); err != nil {
-		res := tool.Errorf("invalid input for %s after hook rewrite: %v", call.Name, err)
-		return &res
-	}
 	info, ok := agent.Info(ctx)
 	if !ok {
-		res := tool.Errorf("hooks: cannot check a rewritten input outside a run")
-		return &res
+		return errorResult("hooks: cannot check a rewritten input outside a run")
 	}
-	if d := info.Agent.CheckPermission(ctx, call); d.Behavior == permission.Deny {
-		res := tool.Errorf("Permission denied: %s", d.Message)
-		return &res
+	call.Input = updated
+	if res := checkInput(call); res != nil {
+		return res
+	}
+	d := info.Agent.CheckPermission(ctx, call)
+	switch {
+	case d.Behavior == permission.Deny:
+		return errorResult("Permission denied: %s", d.Message)
+	case d.Behavior == permission.Allow && len(d.UpdatedInput) > 0:
+		call.Input = d.UpdatedInput
+		return checkInput(call)
 	}
 	return nil
+}
+
+// checkInput validates call.Input against the tool's schema, returning the
+// error result for invalid input.
+func checkInput(call *agent.ToolCall) *tool.Result {
+	if err := validateInput(call.Tool, call.Input); err != nil {
+		return errorResult("invalid input for %s: %v", call.Name, err)
+	}
+	return nil
+}
+
+func errorResult(format string, args ...any) *tool.Result {
+	res := tool.Errorf(format, args...)
+	return &res
 }
 
 // validateInput checks in against t's schema unless t takes raw input.
@@ -210,8 +228,7 @@ func toolInput(ctx context.Context, call *agent.ToolCall) (ToolInput, error) {
 }
 
 func blockedResult(reason string) *tool.Result {
-	res := tool.Errorf("Blocked by hook: %s", reason)
-	return &res
+	return errorResult("Blocked by hook: %s", reason)
 }
 
 // derefResult returns *res, or the zero Result when res is nil.

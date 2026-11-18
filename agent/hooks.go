@@ -19,11 +19,14 @@ var ErrStopRun = errors.New("agent: run stopped on purpose")
 
 // Hook runners. Before* hooks run in stack order and After* hooks in reverse
 // stack order (see the package documentation); each stops at the first error.
+// A panic in a hook is recovered and becomes such an error (see guard), so a
+// host callback cannot crash the process: the run ends with
+// ReasonMiddlewareError.
 
 func (r *run) beforeAgent() error {
 	for _, mw := range r.agent.stack {
 		if h, ok := mw.(BeforeAgent); ok {
-			if err := h.BeforeAgent(r.ctx, r.state); err != nil {
+			if err := guard(func() error { return h.BeforeAgent(r.ctx, r.state) }); err != nil {
 				return hookError(mw, "BeforeAgent", err)
 			}
 		}
@@ -34,7 +37,7 @@ func (r *run) beforeAgent() error {
 func (r *run) beforeModel() error {
 	for _, mw := range r.agent.stack {
 		if h, ok := mw.(BeforeModel); ok {
-			if err := h.BeforeModel(r.ctx, r.state); err != nil {
+			if err := guard(func() error { return h.BeforeModel(r.ctx, r.state) }); err != nil {
 				return hookError(mw, "BeforeModel", err)
 			}
 		}
@@ -45,7 +48,7 @@ func (r *run) beforeModel() error {
 func (r *run) afterModel(resp *llm.Response) error {
 	for _, mw := range slices.Backward(r.agent.stack) {
 		if h, ok := mw.(AfterModel); ok {
-			if err := h.AfterModel(r.ctx, r.state, resp); err != nil {
+			if err := guard(func() error { return h.AfterModel(r.ctx, r.state, resp) }); err != nil {
 				return hookError(mw, "AfterModel", err)
 			}
 		}
@@ -62,7 +65,11 @@ func (r *run) beforeStop(resp *llm.Response) (string, error) {
 		if !ok {
 			continue
 		}
-		prompt, err := h.BeforeStop(r.ctx, r.state, resp)
+		var prompt string
+		err := guard(func() (err error) {
+			prompt, err = h.BeforeStop(r.ctx, r.state, resp)
+			return err
+		})
 		if err != nil {
 			return "", hookError(mw, "BeforeStop", err)
 		}
@@ -80,7 +87,7 @@ func (r *run) afterAgent() error {
 	ctx := context.WithoutCancel(r.ctx)
 	for _, mw := range slices.Backward(r.agent.stack) {
 		if h, ok := mw.(AfterAgent); ok {
-			if err := h.AfterAgent(ctx, r.state); err != nil {
+			if err := guard(func() error { return h.AfterAgent(ctx, r.state) }); err != nil {
 				return hookError(mw, "AfterAgent", err)
 			}
 		}
@@ -114,4 +121,14 @@ func (r *run) runAfterAgent(final *Final) {
 
 func hookError(mw Middleware, hook string, err error) error {
 	return fmt.Errorf("agent: middleware %q %s: %w", mw.Name(), hook, err)
+}
+
+// guard calls f and turns a panic into an error.
+func guard(f func() error) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("panicked: %v", v)
+		}
+	}()
+	return f()
 }
