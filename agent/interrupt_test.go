@@ -644,3 +644,81 @@ func TestPublicTypesJSONFieldNames(t *testing.T) {
 		}
 	}
 }
+
+// askTwice makes a turn whose first call interrupts and whose second call,
+// held back by the first, interrupts once it runs on resume.
+func askTwice() []llmtest.Call {
+	return []llmtest.Call{
+		{ID: "q1", Name: "ask_user", Input: map[string]any{"text": "one"}},
+		{ID: "q2", Name: "ask_user", Input: map[string]any{"text": "two"}},
+	}
+}
+
+func TestResumeAgainAfterHookAppendedAndCallReinterrupted(t *testing.T) {
+	log := newCallLog()
+	var on atomic.Bool
+	p := llmtest.New(llmtest.Turn{ToolCalls: askTwice()}, llmtest.Turn{Text: "done"})
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{askUserTool(log)}, Middleware: []Middleware{noteOnResume{&on}}})
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	if final.Reason != ReasonInterrupted {
+		t.Fatalf("final = %+v, want interrupted", final)
+	}
+
+	on.Store(true)
+	_, second := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "q1", Type: Respond, Message: "a"}}))
+	if second.Reason != ReasonInterrupted || second.Err != nil {
+		t.Fatalf("first resume = %+v, want interrupted again by q2", second)
+	}
+	resumeCompleted(t, a, second.State, Decision{ToolUseID: "q2", Type: Respond, Message: "b"})
+
+	msgs := second.State.Messages()
+	if len(msgs) != 6 || msgs[2].Content[0].ToolUseID != "q1" || msgs[2].Content[1].ToolUseID != "q2" ||
+		msgs[3].Text() != "hook note" || msgs[4].Text() != "hook note" {
+		t.Fatalf("history = %+v, want user, assistant, results, two hook notes, assistant", msgs)
+	}
+}
+
+// dropFirstOnResume is a BeforeAgent hook that, once on is set, removes the
+// oldest message, like a compaction would, and appends a note.
+type dropFirstOnResume struct{ on *atomic.Bool }
+
+func (dropFirstOnResume) Name() string { return "drop_first_on_resume" }
+
+func (h dropFirstOnResume) BeforeAgent(_ context.Context, s *state.State) error {
+	if h.on.Load() {
+		s.SetMessages(append(s.Messages()[1:], llm.UserText("hook note")))
+	}
+	return nil
+}
+
+func TestResumeAfterHookDroppedEarlierMessages(t *testing.T) {
+	log := newCallLog()
+	var on atomic.Bool
+	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{writeCall("w")}}, llmtest.Turn{Text: "done"})
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{writeTool(log)}, Middleware: []Middleware{dropFirstOnResume{&on}}})
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	on.Store(true)
+	_, resumed := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "w", Type: Approve}}))
+	if resumed.Reason != ReasonCompleted {
+		t.Fatalf("final = %+v, want completed", resumed)
+	}
+	msgs := resumed.State.Messages()
+	if len(msgs) != 4 || msgs[0].Role != llm.RoleAssistant || msgs[1].Content[0].ToolUseID != "w" || msgs[2].Text() != "hook note" {
+		t.Fatalf("history = %+v, want assistant, its results, hook note, assistant", msgs)
+	}
+}
+
+func TestResumeWithoutTheInterruptedMessageIsInvalid(t *testing.T) {
+	log := newCallLog()
+	a, _, final := interruptedRun(t, Config{Tools: []tool.Tool{writeTool(log)}}, writeCall("w"))
+	final.State.SetMessages([]llm.Message{llm.UserText("something else")})
+
+	_, invalid := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "w", Type: Approve}}))
+	if invalid.Reason != ReasonInvalidResume || invalid.Err == nil {
+		t.Fatalf("final = %+v, want invalid_resume", invalid)
+	}
+	if log.count("w") != 0 {
+		t.Fatal("call ran although the resume was invalid")
+	}
+}

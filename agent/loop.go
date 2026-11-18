@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -46,6 +48,12 @@ type run struct {
 	// neither follow KindFinal nor send on the closed channel.
 	mu     sync.RWMutex
 	sealed bool
+
+	// stopMu guards stopErr, the ErrStopRun a tool call of the current turn
+	// returned. Once it is set no further call starts, and the run ends when
+	// the turn's running calls are done.
+	stopMu  sync.Mutex
+	stopErr error
 
 	// attempts counts calls of the innermost model handler in this turn, so
 	// a retrying wrapper can be reported with KindRetry.
@@ -112,7 +120,7 @@ func (r *run) drive(input []llm.Message) {
 // turn.
 func (r *run) loop() *Final {
 	if err := r.beforeAgent(); err != nil {
-		return r.finish(ReasonMiddlewareError, err)
+		return r.hookFailure(err)
 	}
 	if r.resume != nil {
 		if final := r.resumeTurn(); final != nil {
@@ -152,14 +160,14 @@ func (r *run) afterReply(resp *llm.Response) *Final {
 // usage. It returns a Final when the run must end.
 func (r *run) modelTurn() (*llm.Response, *Final) {
 	if err := r.beforeModel(); err != nil {
-		return nil, r.finish(ReasonMiddlewareError, err)
+		return nil, r.hookFailure(err)
 	}
 	resp, err := r.callModel()
 	if err != nil {
 		return nil, r.modelFailure(err)
 	}
 	if err := r.afterModel(resp); err != nil {
-		return nil, r.finish(ReasonMiddlewareError, err)
+		return nil, r.hookFailure(err)
 	}
 	r.account(resp)
 	return resp, nil
@@ -184,7 +192,7 @@ func (r *run) modelRequest() *ModelRequest {
 			Model:         cfg.Model,
 			System:        slices.Clone(cfg.System),
 			CacheBoundary: cfg.CacheBoundary,
-			Messages:      repairHistory(withoutMeta(r.state.Messages())),
+			Messages:      repairHistory(requestView(r.state.Messages())),
 			Tools:         r.toolSchemas(),
 			MaxTokens:     r.maxTokens(),
 			Temperature:   clonePtr(cfg.Temperature),
@@ -196,13 +204,34 @@ func (r *run) modelRequest() *ModelRequest {
 	}
 }
 
-// withoutMeta drops the host-only Meta of each message; msgs must be a copy
-// owned by the caller.
-func withoutMeta(msgs []llm.Message) []llm.Message {
-	for i := range msgs {
-		msgs[i].Meta = nil
+// requestView copies msgs for a model request, dropping each message's
+// host-only Meta. The content is copied all the way down (nested tool_result
+// content, tool inputs, sources, provider data), because wrappers may edit
+// the view in place and State must not see it.
+func requestView(msgs []llm.Message) []llm.Message {
+	view := make([]llm.Message, len(msgs))
+	for i, m := range msgs {
+		m.Content = cloneBlocks(m.Content)
+		m.Meta = nil
+		view[i] = m
 	}
-	return msgs
+	return view
+}
+
+// cloneBlocks returns a deep copy of blocks.
+func cloneBlocks(blocks []llm.Block) []llm.Block {
+	if blocks == nil {
+		return nil
+	}
+	out := make([]llm.Block, len(blocks))
+	for i, b := range blocks {
+		b.Input = bytes.Clone(b.Input)
+		b.Content = cloneBlocks(b.Content)
+		b.Source = clonePtr(b.Source)
+		b.ProviderData = maps.Clone(b.ProviderData)
+		out[i] = b
+	}
+	return out
 }
 
 // streamModel is the innermost model handler: it streams the reply from the
@@ -311,6 +340,24 @@ func (r *run) record(resp *llm.Response) {
 	if text := resp.Message.Text(); text != "" {
 		r.lastText = text
 	}
+}
+
+// requestStop records that a tool call asked to stop the run; the first
+// request wins.
+func (r *run) requestStop(err error) {
+	r.stopMu.Lock()
+	defer r.stopMu.Unlock()
+	if r.stopErr == nil {
+		r.stopErr = err
+	}
+}
+
+// stopRequested returns the error of a tool call that asked to stop the run,
+// or nil.
+func (r *run) stopRequested() error {
+	r.stopMu.Lock()
+	defer r.stopMu.Unlock()
+	return r.stopErr
 }
 
 func (r *run) finish(reason TerminalReason, err error) *Final {

@@ -53,7 +53,9 @@ const (
 	ReasonInterrupted TerminalReason = "interrupted"
 	// ReasonInvalidResume: Agent.Resume was called without a pending
 	// interrupt or with decisions that do not answer it (Final.Err says
-	// which). Nothing ran and State is unchanged.
+	// which). Nothing ran and State is unchanged. It is also the reason when
+	// a BeforeAgent hook of the resumed run removed the interrupted turn's
+	// assistant message; the hooks have run then, but no tool call has.
 	ReasonInvalidResume TerminalReason = "invalid_resume"
 	// ReasonModelError: the model call failed and could not be recovered.
 	ReasonModelError TerminalReason = "model_error"
@@ -64,7 +66,8 @@ const (
 	ReasonAbortedStreaming TerminalReason = "aborted_streaming"
 	// ReasonAbortedTools: the context was cancelled during tool execution.
 	ReasonAbortedTools TerminalReason = "aborted_tools"
-	// ReasonHookStopped: a hook ended the run on purpose.
+	// ReasonHookStopped: a hook or a ToolWrapper ended the run on purpose by
+	// returning an error wrapping ErrStopRun (Final.Err).
 	ReasonHookStopped TerminalReason = "hook_stopped"
 	// ReasonMiddlewareError: a middleware hook returned an error.
 	ReasonMiddlewareError TerminalReason = "middleware_error"

@@ -73,8 +73,10 @@ type Config struct {
 	Rules          permission.Rules
 	Approver       permission.Approver
 
-	// MaxTokens and Temperature are passed through to each model request;
-	// zero and nil leave the provider default.
+	// MaxTokens caps the output tokens of each model request; zero means the
+	// profile's MaxOutput (Profile.MaxOutput), and when that is zero too the
+	// provider's own default applies. Temperature is passed through; nil
+	// leaves the provider default.
 	MaxTokens   int
 	Temperature *float64
 

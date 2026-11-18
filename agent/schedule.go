@@ -20,6 +20,10 @@ import (
 // stopped before it finished.
 const cancelledToolResult = "Tool call cancelled."
 
+// skippedToolResult answers a call that never ran because another call of
+// its turn stopped the run (see ErrStopRun).
+const skippedToolResult = "Tool call skipped: the run was stopped."
+
 // codeFence opens and closes a Markdown code block, which models sometimes
 // wrap around tool arguments.
 const codeFence = "```"
@@ -71,8 +75,11 @@ func (r *run) toolTurn(assistantIndex int, calls []*toolCall) *Final {
 	var halted atomic.Bool
 	r.schedule(decided, &halted)
 	r.schedule(fresh, &halted)
+	if err := r.stopRequested(); err != nil {
+		return r.stopTurn(assistantIndex, calls, err)
+	}
 	if slices.ContainsFunc(calls, (*toolCall).pending) {
-		return r.interrupt(assistantIndex, calls)
+		return r.interrupt(calls)
 	}
 	pendingKey.Delete(r.state)
 	r.insertAfter(assistantIndex, toolResultMessages(calls))
@@ -82,16 +89,30 @@ func (r *run) toolTurn(assistantIndex int, calls []*toolCall) *Final {
 	return nil
 }
 
+// stopTurn ends the run after a call of the turn returned ErrStopRun. Every
+// call without a result, including one awaiting a decision, is answered as
+// skipped, so each tool_use keeps its tool_result.
+func (r *run) stopTurn(assistantIndex int, calls []*toolCall, err error) *Final {
+	for _, c := range calls {
+		if !c.done() {
+			c.interrupt = nil
+			c.result = errorResult(skippedToolResult)
+		}
+	}
+	pendingKey.Delete(r.state)
+	r.insertAfter(assistantIndex, toolResultMessages(calls))
+	return r.finish(ReasonHookStopped, err)
+}
+
 func (c *toolCall) done() bool    { return c.result != nil }
 func (c *toolCall) pending() bool { return c.interrupt != nil }
 
 // insertAfter puts msgs right after the message at index. Tool results must
 // directly follow their assistant message, and a BeforeAgent hook of a
-// resumed run may have appended messages after it. An index past the end
-// (a hook dropped messages) appends.
+// resumed run may have appended messages after it.
 func (r *run) insertAfter(index int, msgs []llm.Message) {
 	history := r.state.Messages()
-	at := min(index+1, len(history))
+	at := index + 1
 	if at == len(history) {
 		r.state.AppendMessages(msgs...)
 		return
@@ -135,11 +156,15 @@ func batches(calls []*toolCall) [][]*toolCall {
 // runBatch executes batch. Permission is checked one call at a time, in call
 // order, so an Approver is never asked two things at once; admitted calls run
 // on their own goroutines, at most MaxConcurrency at a time. A pending call
-// sets halted. runBatch returns once every started call is done.
+// sets halted. Once a call has asked to stop the run, no further call starts;
+// toolTurn answers those. runBatch returns once every started call is done.
 func (r *run) runBatch(batch []*toolCall, halted *atomic.Bool) {
 	slots := make(chan struct{}, r.agent.cfg.MaxConcurrency)
 	var wg sync.WaitGroup
 	for _, c := range batch {
+		if r.stopRequested() != nil {
+			break
+		}
 		if r.heldBack(c, halted) {
 			r.hold(c)
 			continue
@@ -153,10 +178,11 @@ func (r *run) runBatch(batch []*toolCall, halted *atomic.Bool) {
 			r.settle(c, *res)
 		default:
 			slots <- struct{}{}
-			// An earlier call may have interrupted while this one waited for
-			// its slot; it was admitted but has not started, so it is left
-			// not started and evaluated afresh on resume.
-			if r.heldBack(c, halted) {
+			// An earlier call may have interrupted, or stopped the run, while
+			// this one waited for its slot; it was admitted but has not
+			// started, so it is left not started (evaluated afresh on resume,
+			// or answered as skipped when the run stops).
+			if r.heldBack(c, halted) || r.stopRequested() != nil {
 				<-slots
 				continue
 			}
@@ -424,6 +450,10 @@ func (r *run) runCall(c *toolCall) (res tool.Result, intr *Interrupt) {
 	res, err := r.agent.runTool(r.budget.toolCtx, call)
 	if err == nil {
 		return res, nil
+	}
+	if errors.Is(err, ErrStopRun) {
+		r.requestStop(err)
+		return *errorResult("tool %s stopped the run: %v", c.name, err), nil
 	}
 	if errors.As(err, &intr) && intr != nil {
 		return tool.Result{}, intr

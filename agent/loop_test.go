@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"reflect"
 	"runtime"
@@ -686,5 +687,199 @@ func TestModelRequestCarriesThreadBackend(t *testing.T) {
 
 	if len(seen) != 1 || seen[0] != byThread["t2"] {
 		t.Fatalf("request backend = %v, want the t2 backend", seen)
+	}
+}
+
+// viewScribbler is a ModelWrapper that rewrites every piece of content in
+// the request view in place.
+type viewScribbler struct{}
+
+func (viewScribbler) Name() string { return "scribbler" }
+
+func (viewScribbler) WrapModel(ctx context.Context, req *ModelRequest, next ModelHandler) (*llm.Response, error) {
+	for _, m := range req.Request.Messages {
+		for j := range m.Content {
+			scribble(&m.Content[j])
+		}
+	}
+	return next(ctx, req)
+}
+
+func scribble(b *llm.Block) {
+	b.Text = "scribbled"
+	for k := range b.ProviderData {
+		b.ProviderData[k] = "scribbled"
+	}
+	if len(b.Input) > 0 {
+		b.Input[0] = 'X'
+	}
+	if b.Source != nil {
+		b.Source.Data = "scribbled"
+	}
+	for i := range b.Content {
+		scribble(&b.Content[i])
+	}
+}
+
+func TestRequestViewEditsDoNotReachState(t *testing.T) {
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "t1", Name: "echo", Input: map[string]any{"text": "x"}}}},
+		llmtest.Turn{Text: "done"},
+	)
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, Middleware: []Middleware{viewScribbler{}}})
+	msg := llm.UserText("hi")
+	msg.Content = append(msg.Content, llm.Block{
+		Type: llm.BlockImage, Source: &llm.Source{Type: "base64", Data: "AAAA"},
+		ProviderData: map[string]string{"token": "keep"},
+	})
+
+	_, final := collect(t, a.Run(context.Background(), Input{Messages: []llm.Message{msg}}))
+
+	msgs := final.State.Messages()
+	if got := msgs[0].Content; got[0].Text != "hi" || got[1].Source.Data != "AAAA" || got[1].ProviderData["token"] != "keep" {
+		t.Fatalf("user message in State = %+v, want it untouched", got)
+	}
+	if use := msgs[1].Content[0]; string(use.Input) != `{"text":"x"}` {
+		t.Fatalf("tool_use input in State = %s, want it untouched", use.Input)
+	}
+	if res := msgs[2].Content[0]; resultText(res) != "x" {
+		t.Fatalf("tool_result in State = %+v, want it untouched", res)
+	}
+}
+
+// stopper ends the run on purpose from the named hook, recording every hook
+// it sees in trace.
+type stopper struct {
+	hook  string
+	trace *[]string
+}
+
+func (stopper) Name() string { return "stopper" }
+
+func (s stopper) at(hook string) error {
+	*s.trace = append(*s.trace, hook)
+	if hook == s.hook {
+		return fmt.Errorf("%s says enough: %w", hook, ErrStopRun)
+	}
+	return nil
+}
+
+func (s stopper) BeforeAgent(context.Context, *state.State) error { return s.at("BeforeAgent") }
+func (s stopper) BeforeModel(context.Context, *state.State) error { return s.at("BeforeModel") }
+func (s stopper) AfterModel(context.Context, *state.State, *llm.Response) error {
+	return s.at("AfterModel")
+}
+func (s stopper) AfterAgent(context.Context, *state.State) error { return s.at("AfterAgent") }
+
+func TestHookCanStopRun(t *testing.T) {
+	for _, hook := range []string{"BeforeAgent", "BeforeModel", "AfterModel"} {
+		t.Run(hook, func(t *testing.T) {
+			var trace []string
+			p := llmtest.New(llmtest.Turn{Text: "never recorded"})
+			a := mustNew(t, Config{Provider: p, Middleware: []Middleware{stopper{hook: hook, trace: &trace}}})
+
+			_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+			if final.Reason != ReasonHookStopped || !errors.Is(final.Err, ErrStopRun) {
+				t.Fatalf("final = %s (err %v), want hook_stopped wrapping ErrStopRun", final.Reason, final.Err)
+			}
+			if trace[len(trace)-1] != "AfterAgent" {
+				t.Fatalf("hook trace = %v, want AfterAgent to run last", trace)
+			}
+		})
+	}
+}
+
+// stopOn is a ToolWrapper that stops the run when the call with id runs.
+type stopOn struct{ id string }
+
+func (stopOn) Name() string { return "stop_on" }
+
+func (s stopOn) WrapTool(ctx context.Context, call *ToolCall, next ToolHandler) (tool.Result, error) {
+	if call.ID == s.id {
+		return tool.Result{}, fmt.Errorf("wrapper: %w", ErrStopRun)
+	}
+	return next(ctx, call)
+}
+
+func TestToolWrapperCanStopRun(t *testing.T) {
+	var trace []string
+	ran := map[string]bool{}
+	serial := tool.New("serial", "Not concurrency-safe.",
+		func(_ context.Context, in echoInput, c *tool.Call) (tool.Result, error) {
+			ran[c.ToolUseID] = true
+			return tool.Text(in.Text), nil
+		}, tool.WithReadOnly())
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{
+			{ID: "a", Name: "serial", Input: map[string]any{"text": "a"}},
+			{ID: "b", Name: "serial", Input: map[string]any{"text": "b"}},
+			{ID: "c", Name: "serial", Input: map[string]any{"text": "c"}},
+		}},
+		llmtest.Turn{Text: "never"},
+	)
+	a := mustNew(t, Config{
+		Provider:   p,
+		Tools:      []tool.Tool{serial},
+		Middleware: []Middleware{stopper{trace: &trace}, stopOn{id: "b"}},
+	})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonHookStopped || !errors.Is(final.Err, ErrStopRun) {
+		t.Fatalf("final = %s (err %v), want hook_stopped wrapping ErrStopRun", final.Reason, final.Err)
+	}
+	if p.Calls() != 1 {
+		t.Fatalf("model called %d times, want once", p.Calls())
+	}
+	if !ran["a"] || ran["b"] || ran["c"] {
+		t.Fatalf("ran = %v, want only a", ran)
+	}
+	results := lastToolResults(t, final.State)
+	if len(results) != 3 || results[0].IsError || !results[1].IsError || !results[2].IsError {
+		t.Fatalf("tool results = %+v, want a ok, b and c answered with errors", results)
+	}
+	if trace[len(trace)-1] != "AfterAgent" {
+		t.Fatalf("hook trace = %v, want AfterAgent to run last", trace)
+	}
+}
+
+type ctxKey struct{}
+
+// afterAgentCtx records the context AfterAgent receives.
+type afterAgentCtx struct {
+	err   *error
+	value *any
+}
+
+func (afterAgentCtx) Name() string { return "after_agent_ctx" }
+
+func (h afterAgentCtx) AfterAgent(ctx context.Context, _ *state.State) error {
+	*h.err, *h.value = ctx.Err(), ctx.Value(ctxKey{})
+	return nil
+}
+
+func TestAfterAgentContextOutlivesCancellation(t *testing.T) {
+	var gotErr error
+	var gotValue any
+	a := mustNew(t, Config{Provider: &blockingProvider{}, Middleware: []Middleware{afterAgentCtx{&gotErr, &gotValue}}})
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "kept"))
+	defer cancel()
+
+	var final *Final
+	for ev := range a.Run(ctx, userInput("hi")) {
+		if ev.Kind == KindText {
+			cancel()
+		}
+		if ev.Kind == KindFinal {
+			final = ev.Final
+		}
+	}
+
+	if final == nil || final.Reason != ReasonAbortedStreaming {
+		t.Fatalf("final = %+v, want aborted_streaming", final)
+	}
+	if gotErr != nil || gotValue != "kept" {
+		t.Fatalf("AfterAgent context: err %v, value %v; want a live context carrying the run's values", gotErr, gotValue)
 	}
 }

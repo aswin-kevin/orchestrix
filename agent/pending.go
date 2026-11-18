@@ -37,13 +37,17 @@ var defaultToolDecisions = []DecisionType{Approve, Reject, Respond}
 // or a new Run abandons it. It is private: a subagent never inherits it.
 var pendingKey = state.NewKey[pendingTurn]("agent.pending", state.Private[pendingTurn]())
 
+// errTurnMissing reports a State whose history no longer holds the assistant
+// message of the interrupted turn, so its results have nowhere to go.
+var errTurnMissing = errors.New("agent: resume: the interrupted turn is no longer in the conversation")
+
 // pendingTurn records how far an interrupted turn got. The assistant message
 // is in history; the user message with its tool results is not, because it
 // is appended only once every call has a result.
+//
+// The assistant message is found again by its tool_use ids rather than by
+// position, because hooks may add, drop or compact messages in between.
 type pendingTurn struct {
-	// AssistantIndex is the position of the turn's assistant message in
-	// State's messages.
-	AssistantIndex int `json:"assistant_index"`
 	// Calls are all the calls of the turn, in call order.
 	Calls []callRecord `json:"calls"`
 }
@@ -111,8 +115,8 @@ func toolInterrupt(c *toolCall, intr *Interrupt) *callInterrupt {
 
 // interrupt records the turn's progress in State, reports the pending
 // requests and ends the run waiting for decisions.
-func (r *run) interrupt(assistantIndex int, calls []*toolCall) *Final {
-	turn := pendingTurn{AssistantIndex: assistantIndex, Calls: make([]callRecord, len(calls))}
+func (r *run) interrupt(calls []*toolCall) *Final {
+	turn := pendingTurn{Calls: make([]callRecord, len(calls))}
 	var requests []ActionRequest
 	for i, c := range calls {
 		turn.Calls[i] = callRecord{
@@ -131,11 +135,16 @@ func (r *run) interrupt(assistantIndex int, calls []*toolCall) *Final {
 	return r.finish(ReasonInterrupted, nil)
 }
 
-// resumeTurn finishes the interrupted turn. It does not count toward
-// MaxTurns: the model call that produced the turn belonged to the run that
-// was interrupted.
+// resumeTurn finishes the interrupted turn. It runs after the BeforeAgent
+// hooks, so it locates the turn's assistant message afresh in case they
+// changed the history. It does not count toward MaxTurns: the model call that
+// produced the turn belonged to the run that was interrupted.
 func (r *run) resumeTurn() *Final {
-	return r.toolTurn(r.resume.turn.AssistantIndex, r.restoreCalls())
+	assistantIndex, ok := r.resume.turn.assistantIndex(r.state.Messages())
+	if !ok {
+		return r.finish(ReasonInvalidResume, errTurnMissing)
+	}
+	return r.toolTurn(assistantIndex, r.restoreCalls())
 }
 
 // restoreCalls rebuilds the calls of the interrupted turn. Recorded results
@@ -216,8 +225,8 @@ func newResumption(s *state.State, decisions []Decision) (*resumption, error) {
 	if !ok {
 		return nil, ErrNoPendingInterrupt
 	}
-	if err := turn.checkHistory(s.Messages()); err != nil {
-		return nil, err
+	if _, ok := turn.assistantIndex(s.Messages()); !ok {
+		return nil, errTurnMissing
 	}
 	byID, err := turn.matchDecisions(decisions)
 	if err != nil {
@@ -226,14 +235,25 @@ func newResumption(s *state.State, decisions []Decision) (*resumption, error) {
 	return &resumption{turn: turn, decisions: byID}, nil
 }
 
-// checkHistory verifies that the interrupted assistant message is still the
-// last message, so the turn's results can follow it.
-func (t pendingTurn) checkHistory(msgs []llm.Message) error {
-	i := t.AssistantIndex
-	if i < 0 || i != len(msgs)-1 || msgs[i].Role != llm.RoleAssistant {
-		return errors.New("agent: resume: the conversation changed after the interrupt")
+// assistantIndex returns the position in msgs of the turn's assistant
+// message: the last assistant message whose tool_use blocks include every
+// call of the turn.
+func (t pendingTurn) assistantIndex(msgs []llm.Message) (int, bool) {
+	for i, m := range slices.Backward(msgs) {
+		if m.Role == llm.RoleAssistant && t.madeIn(m) {
+			return i, true
+		}
 	}
-	return nil
+	return 0, false
+}
+
+// madeIn reports whether m carries a tool_use for every call of the turn.
+func (t pendingTurn) madeIn(m llm.Message) bool {
+	ids := make(map[string]bool)
+	for _, use := range m.ToolUses() {
+		ids[use.ID] = true
+	}
+	return !slices.ContainsFunc(t.Calls, func(rec callRecord) bool { return !ids[rec.ID] })
 }
 
 // matchDecisions pairs decisions with the pending calls. Every pending call

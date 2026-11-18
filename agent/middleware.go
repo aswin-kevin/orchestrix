@@ -45,19 +45,22 @@ type Middleware interface {
 }
 
 // BeforeAgent runs once before the first turn. A returned error ends the run
-// with ReasonMiddlewareError.
+// with ReasonMiddlewareError, or with ReasonHookStopped when it wraps
+// ErrStopRun; the same holds for BeforeModel and AfterModel.
 type BeforeAgent interface {
 	BeforeAgent(ctx context.Context, s *state.State) error
 }
 
 // AfterAgent runs once after the run has finished, whatever the reason,
-// unless the consumer stopped reading the run's events first.
+// unless the consumer stopped reading the run's events first. Its context
+// carries the run's values but is never cancelled, so it can still clean up
+// after a cancelled run.
 type AfterAgent interface {
 	AfterAgent(ctx context.Context, s *state.State) error
 }
 
-// BeforeModel runs before each model call, after the request has been built
-// from State.
+// BeforeModel runs before each model call, before the request is built from
+// State, so changes it makes to State are part of the request.
 type BeforeModel interface {
 	BeforeModel(ctx context.Context, s *state.State) error
 }
@@ -75,7 +78,8 @@ type ModelWrapper interface {
 }
 
 // ToolWrapper wraps a single tool execution. See the package documentation
-// for the wrapping semantics.
+// for the wrapping semantics. Returning an error wrapping ErrStopRun ends the
+// run with ReasonHookStopped once the calls already running are done.
 type ToolWrapper interface {
 	WrapTool(ctx context.Context, call *ToolCall, next ToolHandler) (tool.Result, error)
 }

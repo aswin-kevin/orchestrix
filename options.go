@@ -102,8 +102,8 @@ func WithMaxDuration(d time.Duration) Option {
 	return func(s *settings) { s.cfg.MaxDuration = d }
 }
 
-// WithMaxTokens caps the output tokens of each model response; zero keeps the
-// provider default.
+// WithMaxTokens caps the output tokens of each model response; zero uses the
+// model profile's output limit (see agent.Config.MaxTokens).
 func WithMaxTokens(n int) Option {
 	return func(s *settings) { s.cfg.MaxTokens = n }
 }
