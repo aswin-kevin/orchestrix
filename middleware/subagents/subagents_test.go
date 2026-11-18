@@ -521,3 +521,44 @@ func TestPromptAppendedAfterSystem(t *testing.T) {
 		t.Fatalf("system = %q, want the prompt disabled", got)
 	}
 }
+
+func TestTaskToolNeedsAllowRuleInDontAskMode(t *testing.T) {
+	allowTask, err := permission.ParseRule(ToolTask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		rules   permission.Rules
+		allowed bool
+	}{
+		{"no rule", permission.Rules{}, false},
+		{"allow rule", permission.Rules{Allow: []permission.Rule{allowTask}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := llmtest.New(
+				llmtest.Turn{ToolCalls: []llmtest.Call{taskCall("t1", GeneralPurpose, "do it")}},
+				llmtest.Turn{Text: "child answer"},
+				llmtest.Turn{Text: "done"},
+			)
+			a, err := agent.New(agent.Config{
+				Provider: p, Middleware: []agent.Middleware{newMiddleware(t, Config{})},
+				PermissionMode: permission.ModeDontAsk, Rules: tc.rules,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			collect(t, context.Background(), a, userInput("go"))
+			// The child shares the provider, so the parent's last request
+			// holds the task result.
+			results := toolResults(p.Requests[len(p.Requests)-1])
+			if len(results) != 1 {
+				t.Fatalf("parent got %d tool results, want 1", len(results))
+			}
+			res := results[0]
+			if allowed := !res.IsError; allowed != tc.allowed {
+				t.Fatalf("task result = %q (error %v), want allowed=%v", blockText(res), res.IsError, tc.allowed)
+			}
+		})
+	}
+}

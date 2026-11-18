@@ -30,7 +30,9 @@ func (m *middleware) taskTool(order []string) tool.Tool {
 		// Parallel task calls run together.
 		Concurrent: func(json.RawMessage) bool { return true },
 		// Starting a subagent is harmless in itself: each tool the subagent
-		// calls goes through the subagent's own permission checks.
+		// calls goes through the subagent's own permission checks. In
+		// dontAsk mode a tool's own allow does not count, so there the task
+		// tool needs an allow rule (see the package documentation).
 		Permission: func(context.Context, json.RawMessage, permission.Context) permission.Decision {
 			return permission.Allowed()
 		},

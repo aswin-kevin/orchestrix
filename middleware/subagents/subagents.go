@@ -31,6 +31,11 @@
 // decision, for instance when a new Run abandons the parent's interrupt. The
 // subagent's own KindInterrupt events are not forwarded.
 //
+// Permissions: the task tool allows itself, since every tool a subagent calls
+// is checked on its own. permission.ModeDontAsk ignores a tool's own allow,
+// so in that mode the task tool is denied unless an allow rule covers it
+// (for example "task").
+//
 // Token usage: a subagent's model calls are reported as forwarded KindUsage
 // events (with ParentToolID set) and are not included in the parent's
 // Final.Usage.
