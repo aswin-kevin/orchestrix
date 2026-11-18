@@ -12,8 +12,9 @@ import (
 
 // ContextMetaKey is the Meta key of a user message injected by a hook's
 // Context. Its value is the name of the event that produced it:
-// "SessionStart" or "UserPromptSubmit". The message stays in State, so the
-// conversation records what the hook added.
+// "SessionStart" or "UserPromptSubmit". The message is also marked with
+// agent.InjectedMetaKey ("hooks"). It stays in State, so the conversation
+// records what the hook added.
 const ContextMetaKey = "orchestrix.hook"
 
 // SubagentToolName is the tool name SubagentStart hooks fire for. It is

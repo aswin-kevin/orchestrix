@@ -19,15 +19,17 @@ const keptInputChars = 500
 // may be edited in place; State is never touched.
 func (m *middleware) view(s *state.State, current []llm.Message) []llm.Message {
 	msgs := current
+	history := s.Messages()
 	// A boundary beyond the history (State replaced by the host) is ignored
 	// rather than trusted.
-	if b, ok := Current(s); ok {
-		if all := s.Messages(); b.Index <= len(all) {
-			msgs = append([]llm.Message{llm.UserText(summaryMessage(b))}, agent.View(all[b.Index:])...)
-		}
+	if b, ok := Current(s); ok && b.Index <= len(history) {
+		history = history[b.Index:]
+		msgs = append([]llm.Message{llm.UserText(summaryMessage(b))}, agent.View(history)...)
 	}
 	m.clearOldResults(msgs)
-	m.shortenOldInputs(msgs)
+	// Turns are found in history, not in msgs: the view has lost the Meta
+	// that marks injected messages. Both hold the same assistant messages.
+	m.shortenOldInputs(msgs, assistantsBefore(history, lastIndex(history, isUserTurn)))
 	return msgs
 }
 
@@ -88,21 +90,37 @@ func resultText(b llm.Block) string {
 }
 
 // shortenOldInputs replaces, in place, every tool_use input longer than
-// MaxOldInputChars in assistant messages before the last plain user message
-// with a valid JSON object holding the input's beginning. The tool loop after
-// that message is left alone: it is the turn in progress, and providers may
-// validate its signed thinking against the inputs as they were sent.
-func (m *middleware) shortenOldInputs(msgs []llm.Message) {
-	for i := range max(lastIndex(msgs, isPlainUser), 0) {
+// MaxOldInputChars in the first settled assistant messages of msgs with a
+// valid JSON object holding the input's beginning. settled counts the
+// assistant messages before the last user turn; the tool loop after it is
+// left alone: it is the turn in progress, and providers may validate its
+// signed thinking against the inputs as they were sent.
+func (m *middleware) shortenOldInputs(msgs []llm.Message, settled int) {
+	for i := range msgs {
+		if settled == 0 {
+			return
+		}
 		if msgs[i].Role != llm.RoleAssistant {
 			continue
 		}
+		settled--
 		for j, b := range msgs[i].Content {
 			if b.Type == llm.BlockToolUse && utf8.RuneCount(b.Input) > m.cfg.MaxOldInputChars {
 				msgs[i].Content[j].Input = shortenedInput(b.Input)
 			}
 		}
 	}
+}
+
+// assistantsBefore counts the assistant messages of msgs before index end.
+func assistantsBefore(msgs []llm.Message, end int) int {
+	n := 0
+	for _, msg := range msgs[:max(end, 0)] {
+		if isAssistant(msg) {
+			n++
+		}
+	}
+	return n
 }
 
 // lastIndex returns the index of the last message matching f, or -1.
@@ -117,8 +135,11 @@ func lastIndex(msgs []llm.Message, f func(llm.Message) bool) int {
 
 func isAssistant(m llm.Message) bool { return m.Role == llm.RoleAssistant }
 
-// isPlainUser reports a user message that is not a set of tool results.
-func isPlainUser(m llm.Message) bool { return m.Role == llm.RoleUser && !carriesToolResult(m) }
+// isUserTurn reports a user message that starts a turn: neither a set of
+// tool results nor a message a middleware injected (agent.InjectedMetaKey).
+func isUserTurn(m llm.Message) bool {
+	return m.Role == llm.RoleUser && !carriesToolResult(m) && m.Meta[agent.InjectedMetaKey] == ""
+}
 
 // shortenedInput returns {"truncated": "<first keptInputChars chars>…"}.
 func shortenedInput(input json.RawMessage) json.RawMessage {

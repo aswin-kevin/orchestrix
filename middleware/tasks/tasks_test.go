@@ -430,3 +430,10 @@ func TestTaskOutputBlocksAndUnknownTask(t *testing.T) {
 		t.Fatalf("unknown task accepted: %q", resultText(t, p, "o2"))
 	}
 }
+
+func TestNotificationIsMarkedInjected(t *testing.T) {
+	msg := notification(JobRecord{ID: "bg_1", Command: "true", Status: StatusCompleted})
+	if msg.Meta[NotificationMetaKey] != "bg_1" || msg.Meta[agent.InjectedMetaKey] != "tasks" {
+		t.Fatalf("notification meta = %v, want the job id and the injected mark", msg.Meta)
+	}
+}

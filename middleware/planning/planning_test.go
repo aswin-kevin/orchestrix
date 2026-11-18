@@ -162,8 +162,12 @@ func TestReminderCadence(t *testing.T) {
 		t.Fatalf("reminders at request indexes %v, want %v", got, want)
 	}
 	want := "<system-reminder>Your todo list:\n[~] step one\n[ ] step two\nKeep it current with write_todos.</system-reminder>"
-	if text := p.Requests[11].Messages[len(p.Requests[11].Messages)-1].Text(); text != want {
-		t.Fatalf("reminder = %q, want %q", text, want)
+	reminder := p.Requests[11].Messages[len(p.Requests[11].Messages)-1]
+	if reminder.Text() != want {
+		t.Fatalf("reminder = %q, want %q", reminder.Text(), want)
+	}
+	if reminder.Meta[agent.InjectedMetaKey] != "planning" {
+		t.Fatalf("reminder meta = %v, want it marked as injected", reminder.Meta)
 	}
 	for _, m := range final.State.Messages() {
 		if strings.Contains(m.Text(), "<system-reminder>") {

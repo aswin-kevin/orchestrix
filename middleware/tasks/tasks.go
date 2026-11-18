@@ -56,7 +56,7 @@ const (
 )
 
 // NotificationMetaKey marks a job notification message: its llm.Message.Meta
-// holds the job's id under this key.
+// holds the job's id under this key, and "tasks" under agent.InjectedMetaKey.
 const NotificationMetaKey = "orchestrix.task_notification"
 
 // The values of JobRecord.Status.
@@ -258,7 +258,7 @@ func (m *Middleware) markNotified(r *JobRecord) {
 func notification(r JobRecord) llm.Message {
 	msg := llm.UserText(fmt.Sprintf("<task-notification>Background task %s (`%s`) %s (exit code %d). Use %s to read its output.</task-notification>",
 		r.ID, r.Command, r.Status, r.ExitCode, ToolTaskOutput))
-	msg.Meta = map[string]string{NotificationMetaKey: r.ID}
+	msg.Meta = map[string]string{NotificationMetaKey: r.ID, agent.InjectedMetaKey: "tasks"}
 	return msg
 }
 

@@ -133,7 +133,7 @@ func appendContext(msgs []llm.Message, event, text string) []llm.Message {
 		return msgs
 	}
 	msg := llm.UserText(text)
-	msg.Meta = map[string]string{ContextMetaKey: event}
+	msg.Meta = map[string]string{ContextMetaKey: event, agent.InjectedMetaKey: "hooks"}
 	return append(msgs, msg)
 }
 

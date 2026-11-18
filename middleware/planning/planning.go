@@ -178,8 +178,9 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 		req.Request.System = append(slices.Clone(req.Request.System), m.prompt)
 	}
 	if reminder, ok := m.dueReminder(req.State); ok {
-		msgs := slices.Clone(req.Request.Messages)
-		req.Request.Messages = append(msgs, llm.UserText(reminder))
+		msg := llm.UserText(reminder)
+		msg.Meta = map[string]string{agent.InjectedMetaKey: "planning"}
+		req.Request.Messages = append(slices.Clone(req.Request.Messages), msg)
 	}
 	return next(ctx, req)
 }

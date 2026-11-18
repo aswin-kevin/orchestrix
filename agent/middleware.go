@@ -115,6 +115,13 @@ type ToolProvider interface {
 // this one definition.
 const SubagentToolName = "task"
 
+// InjectedMetaKey marks, in llm.Message.Meta, a user message that a
+// middleware added to the conversation on its own, such as a background
+// job's notification, a hook's context or a reminder, rather than input from
+// the user. Its value names what added it. Such a message does not start a
+// new user turn: middleware that reasons about turns (summarize) skips it.
+const InjectedMetaKey = "orchestrix.injected"
+
 // ModelRequest is everything a model call needs, as seen by ModelWrappers.
 type ModelRequest struct {
 	Provider llm.Provider

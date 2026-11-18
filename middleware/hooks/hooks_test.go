@@ -771,3 +771,10 @@ func TestHookInputsCarryNesting(t *testing.T) {
 		"PostToolUse 1 sp", "Stop 1 sp", "SessionEnd 1 sp",
 	})
 }
+
+func TestContextMessageIsMarkedInjected(t *testing.T) {
+	msgs := appendContext(nil, eventSessionStart, "remember this")
+	if len(msgs) != 1 || msgs[0].Meta[ContextMetaKey] != eventSessionStart || msgs[0].Meta[agent.InjectedMetaKey] != "hooks" {
+		t.Fatalf("context messages = %+v, want one marked with the event and as injected", msgs)
+	}
+}

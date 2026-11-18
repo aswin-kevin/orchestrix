@@ -285,3 +285,30 @@ func TestBoundaryCheckpointRoundTrip(t *testing.T) {
 		t.Fatalf("restored boundary = %+v (ok %v), want %+v", got, ok, want)
 	}
 }
+
+func TestInjectedUserMessageIsNotATurn(t *testing.T) {
+	bigInput := fmt.Sprintf(`{"content":%q}`, strings.Repeat("x", 5000))
+	old := llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{toolUse("w1", bigInput)}}
+	loop1 := llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{toolUse("w2", bigInput)}}
+	loop2 := llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{toolUse("w3", bigInput)}}
+	// A middleware's notice in the middle of the tool loop, such as a
+	// background job's end, does not start a new user turn.
+	notice := llm.UserText("<task-notification>done</task-notification>")
+	notice.Meta = map[string]string{agent.InjectedMetaKey: "tasks"}
+	s := state.New()
+	s.SetMessages([]llm.Message{
+		llm.UserText("go"), old, userResults("ok", "w1"),
+		llm.UserText("next"), loop1, userResults("ok", "w2"), notice, loop2, userResults("ok", "w3"),
+	})
+
+	got := wrapOnce(t, Config{}, s)
+
+	if string(got[1].Content[0].Input) == bigInput {
+		t.Fatal("the tool input before the last user turn was not shortened")
+	}
+	for _, i := range []int{4, 7} {
+		if string(got[i].Content[0].Input) != bigInput {
+			t.Fatalf("tool input of message %d, in the current tool loop, was shortened", i)
+		}
+	}
+}
