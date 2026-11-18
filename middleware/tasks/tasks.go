@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
@@ -89,6 +90,27 @@ type JobRecord struct {
 	// Notified reports that the model was told the job ended, by a
 	// notification or because it stopped the job itself.
 	Notified bool `json:"notified,omitempty"`
+	// OutputTail is the end of the job's output, at most outputTailBytes,
+	// kept when its end is observed so task_output can still show it after
+	// the live job was released or evicted; empty for a lost job.
+	OutputTail string `json:"output_tail,omitempty"`
+}
+
+// outputTailBytes caps JobRecord.OutputTail; records live in State, which
+// is saved with every checkpoint, so they keep only a short tail.
+const outputTailBytes = 4 << 10
+
+// outputTail returns the last outputTailBytes of output at most, starting
+// on a rune boundary.
+func outputTail(output string) string {
+	if len(output) <= outputTailBytes {
+		return output
+	}
+	tail := output[len(output)-outputTailBytes:]
+	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+		tail = tail[1:]
+	}
+	return tail
 }
 
 // finished reports whether the record describes an ended job.
@@ -292,6 +314,8 @@ func (m *Middleware) refresh(r *JobRecord) {
 	}
 	if status, exitCode := j.outcome(); status != StatusRunning {
 		r.Status, r.ExitCode, r.Ended = status, exitCode, time.Now()
+		res, _ := j.proc.Result()
+		r.OutputTail = outputTail(res.Output)
 	}
 }
 

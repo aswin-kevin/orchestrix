@@ -103,7 +103,7 @@ func (m *Middleware) taskOutput(ctx context.Context, in taskOutputInput, c *tool
 	var sb strings.Builder
 	sb.WriteString(describe(r))
 	if j == nil {
-		sb.WriteString("\n[output not available]")
+		sb.WriteString(recordedOutput(r))
 		return tool.Text(sb.String()), nil
 	}
 	sb.WriteString("\n")
@@ -116,6 +116,14 @@ func (m *Middleware) taskOutput(ctx context.Context, in taskOutputInput, c *tool
 		sb.WriteString(j.proc.Output())
 	}
 	return tool.Text(sb.String()), nil
+}
+
+// recordedOutput renders the output kept in a record whose live job is gone.
+func recordedOutput(r JobRecord) string {
+	if r.OutputTail == "" {
+		return "\n[output not available]"
+	}
+	return "\n[end of output]\n" + r.OutputTail
 }
 
 // waitDone waits until j ends or limit passes; only ctx ending is an error.
@@ -201,7 +209,7 @@ func (m *Middleware) monitor(ctx context.Context, in monitorInput, c *tool.Call)
 	case !ok:
 		return tool.Errorf("unknown task %q", in.TaskID), nil
 	case j == nil:
-		return tool.Text(describe(r) + "\n[output not available]"), nil
+		return tool.Text(describe(r) + recordedOutput(r)), nil
 	}
 	limit := waitLimit(in.TimeoutSeconds)
 	deadline := time.NewTimer(limit)

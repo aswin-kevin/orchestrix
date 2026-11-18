@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
@@ -58,7 +59,7 @@ func TestSettledThreadIsDropped(t *testing.T) {
 	if got := resultText(t, p, "o1"); !strings.Contains(got, "hi") {
 		t.Fatalf("output in the notification turn = %q", got)
 	}
-	if got := resultText(t, p, "o2"); !strings.Contains(got, "completed (exit code 0)") || !strings.Contains(got, "[output not available]") {
+	if got := resultText(t, p, "o2"); !strings.Contains(got, "completed (exit code 0)") || !strings.Contains(got, "[end of output]\nhi") {
 		t.Fatalf("output after release = %q", got)
 	}
 	if n := threadCount(m); n != 0 {
@@ -176,5 +177,19 @@ func TestNotificationSurvivesCheckpoint(t *testing.T) {
 	}
 	if got := resultText(t, second, "o1"); !strings.Contains(got, "hi") {
 		t.Fatalf("task_output = %q", got)
+	}
+}
+
+func TestOutputTailIsBoundedAndRuneSafe(t *testing.T) {
+	if got := outputTail("short"); got != "short" {
+		t.Fatalf("short tail = %q", got)
+	}
+	long := strings.Repeat("é", outputTailBytes) // two bytes per rune
+	got := outputTail(long)
+	if len(got) > outputTailBytes || !utf8.ValidString(got) || !strings.HasSuffix(long, got) {
+		t.Fatalf("tail of %d bytes, valid %v", len(got), utf8.ValidString(got))
+	}
+	if odd := outputTail("x" + long); !utf8.ValidString(odd) {
+		t.Fatal("tail split a rune")
 	}
 }
