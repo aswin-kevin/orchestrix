@@ -30,6 +30,10 @@ type process struct {
 
 	timedOut  atomic.Bool
 	memKilled atomic.Bool
+	// groupGone is set once reapGroup has seen the process group empty.
+	// From then on the group id may be reused by unrelated processes, so
+	// nothing signals it any more.
+	groupGone atomic.Bool
 
 	stopOnce sync.Once
 	stopErr  error
@@ -102,7 +106,8 @@ func (p *process) Result() (backend.ExecResult, bool) {
 // Output returns the output captured so far.
 func (p *process) Output() string { return p.out.String() }
 
-// Stop kills the process group; it is a no-op once the process is done.
+// Stop kills the process group; it is a no-op once the process is done or
+// its group is gone.
 func (p *process) Stop() error {
 	select {
 	case <-p.done:
@@ -116,15 +121,21 @@ func (p *process) Stop() error {
 }
 
 // stop sends SIGTERM to the group now and SIGKILL after DefaultKillGrace if
-// the command is still running then. Only the first call signals.
+// the command is still running then. Only the first call signals, and
+// neither signal is sent once the group is known to be gone.
 func (p *process) stop() error {
 	p.stopOnce.Do(func() {
+		if p.groupGone.Load() {
+			return
+		}
 		p.stopErr = terminateGroup(p.cmd.Process)
 		time.AfterFunc(DefaultKillGrace, func() {
 			select {
 			case <-p.done:
 			default:
-				_ = killGroup(p.cmd.Process)
+				if !p.groupGone.Load() {
+					_ = killGroup(p.cmd.Process)
+				}
 			}
 		})
 	})
@@ -152,18 +163,22 @@ func (p *process) wait(timer *time.Timer) {
 // reapGroup kills whatever the shell left running in its process group:
 // SIGTERM, then SIGKILL for members that survive DefaultKillGrace. It gives up
 // after a further grace period, since a killed member can linger as a zombie
-// under an init that does not reap.
+// under an init that does not reap. Once it sees the group gone it sets
+// groupGone, so a late stop cannot signal a reused group id.
 func (p *process) reapGroup() {
 	proc := p.cmd.Process
 	if !groupAlive(proc) {
+		p.groupGone.Store(true)
 		return
 	}
 	_ = terminateGroup(proc)
-	if waitGroupGone(proc, DefaultKillGrace) {
-		return
+	if !waitGroupGone(proc, DefaultKillGrace) {
+		_ = killGroup(proc)
+		if !waitGroupGone(proc, DefaultKillGrace) {
+			return
+		}
 	}
-	_ = killGroup(proc)
-	waitGroupGone(proc, DefaultKillGrace)
+	p.groupGone.Store(true)
 }
 
 // waitGroupGone polls until proc's group has no members or within elapses,

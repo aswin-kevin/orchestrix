@@ -6,8 +6,14 @@
 // chain steps with `&&`. On Unix each command leads its own process group:
 // when the shell exits, times out or is stopped, the whole group is killed
 // (SIGTERM, then SIGKILL after DefaultKillGrace), so nothing a command spawns
-// outlives it. Long-lived work belongs in background tasks (Starter), not in
-// `cmd &`.
+// inside the group outlives it. Long-lived work belongs in background tasks
+// (Starter), not in `cmd &`.
+//
+// This is cleanup, not containment: a process that leaves the group (setsid,
+// a daemonizing double fork, a new session) is neither tracked nor killed and
+// keeps running after the command ends. Execute waits at most
+// DefaultKillGrace for such a process to release the output pipe, then
+// returns without it. Use an OS-level sandbox when commands must not escape.
 //
 // Commands get no stdin, a small allowlisted environment plus
 // NonInteractiveEnv (the host environment, which may hold API keys, is not
@@ -110,6 +116,9 @@ func New(root string, opts Options) (*Backend, error) {
 
 // Execute runs cmd and waits for it. When ctx ends first the command's group
 // is killed and ctx.Err() is returned with the output gathered so far.
+// Killing takes time: after ctx ends, Execute may block for up to about three
+// times DefaultKillGrace (SIGTERM grace, SIGKILL of the leftovers, and the
+// wait for the output pipe) before it returns.
 func (b *Backend) Execute(ctx context.Context, cmd string, opts backend.ExecOptions) (backend.ExecResult, error) {
 	p, err := b.Start(ctx, cmd, opts)
 	if err != nil {
