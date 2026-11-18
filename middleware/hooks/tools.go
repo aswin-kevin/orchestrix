@@ -127,6 +127,8 @@ func (m *middleware) startSubagent(ctx context.Context, call *agent.ToolCall) (*
 	}
 	in := SubagentInput{
 		ThreadID:     info.ThreadID,
+		Depth:        info.Depth,
+		ParentToolID: info.ParentToolID,
 		ToolUseID:    call.ID,
 		SubagentType: stringField(fields, subagentTypeField),
 		Description:  stringField(fields, descriptionField),
@@ -218,12 +220,14 @@ func toolInput(ctx context.Context, call *agent.ToolCall) (ToolInput, error) {
 		return ToolInput{}, errNoRun
 	}
 	return ToolInput{
-		ThreadID:  info.ThreadID,
-		Agent:     info.AgentName,
-		ToolUseID: call.ID,
-		Tool:      call.Name,
-		Input:     call.Input,
-		State:     call.State,
+		ThreadID:     info.ThreadID,
+		Agent:        info.AgentName,
+		Depth:        info.Depth,
+		ParentToolID: info.ParentToolID,
+		ToolUseID:    call.ID,
+		Tool:         call.Name,
+		Input:        call.Input,
+		State:        call.State,
 	}, nil
 }
 

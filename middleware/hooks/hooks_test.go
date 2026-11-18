@@ -691,3 +691,83 @@ func TestSessionStartPanicEndsRunWithMiddlewareError(t *testing.T) {
 		t.Fatalf("model called %d times, want none", p.Calls())
 	}
 }
+
+// spawn is a tool that runs child as a nested run of the call.
+func spawn(child *agent.Agent) tool.Tool {
+	return tool.New("spawn", "Run a nested agent.", func(ctx context.Context, _ struct{}, _ *tool.Call) (tool.Result, error) {
+		final := drainQuiet(child.Run(ctx, agent.Input{ThreadID: "th/child", Messages: []llm.Message{llm.UserText("child task")}}))
+		if final == nil || final.Err != nil {
+			return tool.Errorf("child failed"), nil
+		}
+		return tool.Text(final.Text), nil
+	})
+}
+
+// drainQuiet returns the Final of a run without failing the test.
+func drainQuiet(seq func(func(agent.Event, error) bool)) *agent.Final {
+	var final *agent.Final
+	for ev := range seq {
+		if ev.Kind == agent.KindFinal {
+			final = ev.Final
+		}
+	}
+	return final
+}
+
+func TestHookInputsCarryNesting(t *testing.T) {
+	rec := &recorder{}
+	note := func(event string, depth int, parent string) {
+		rec.add(fmt.Sprintf("%s %d %s", event, depth, parent))
+	}
+	cfg := Config{
+		SessionStart: []func(context.Context, SessionInput) (SessionOutput, error){func(_ context.Context, in SessionInput) (SessionOutput, error) {
+			note("SessionStart", in.Depth, in.ParentToolID)
+			return SessionOutput{}, nil
+		}},
+		UserPromptSubmit: []func(context.Context, PromptInput) (PromptOutput, error){func(_ context.Context, in PromptInput) (PromptOutput, error) {
+			note("UserPromptSubmit", in.Depth, in.ParentToolID)
+			return PromptOutput{}, nil
+		}},
+		PreToolUse: []PreToolUseHook{{Fn: func(_ context.Context, in ToolInput) (PreToolUseOutput, error) {
+			note("PreToolUse", in.Depth, in.ParentToolID)
+			return PreToolUseOutput{}, nil
+		}}},
+		PostToolUse: []PostToolUseHook{{Fn: func(_ context.Context, in ToolInput, _ tool.Result) (PostToolUseOutput, error) {
+			note("PostToolUse", in.Depth, in.ParentToolID)
+			return PostToolUseOutput{}, nil
+		}}},
+		SubagentStart: []func(context.Context, SubagentInput) (SubagentOutput, error){func(_ context.Context, in SubagentInput) (SubagentOutput, error) {
+			note("SubagentStart", in.Depth, in.ParentToolID)
+			return SubagentOutput{}, nil
+		}},
+		Stop: []func(context.Context, StopInput) (StopOutput, error){func(_ context.Context, in StopInput) (StopOutput, error) {
+			note("Stop", in.Depth, in.ParentToolID)
+			return StopOutput{}, nil
+		}},
+		SessionEnd: []func(context.Context, SessionInput) error{func(_ context.Context, in SessionInput) error {
+			note("SessionEnd", in.Depth, in.ParentToolID)
+			return nil
+		}},
+	}
+	child, err := agent.New(agent.Config{
+		Provider: llmtest.New(
+			llmtest.Turn{ToolCalls: []llmtest.Call{call("ct", "task", obj{"description": "x", "subagent_type": "y"})}},
+			llmtest.Turn{Text: "child done"},
+		),
+		Tools:          []tool.Tool{taskStub(&recorder{})},
+		Middleware:     []agent.Middleware{New(cfg)},
+		PermissionMode: permission.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final, _ := runWith(t, Config{}, agent.Config{Tools: []tool.Tool{spawn(child)}, PermissionMode: permission.ModeBypass}, "go",
+		llmtest.Turn{ToolCalls: []llmtest.Call{call("sp", "spawn", obj{})}},
+		llmtest.Turn{Text: "done"})
+	mustCompleted(t, final)
+
+	equal(t, "hook inputs of the nested run", rec.all(), []string{
+		"SessionStart 1 sp", "UserPromptSubmit 1 sp", "SubagentStart 1 sp", "PreToolUse 1 sp",
+		"PostToolUse 1 sp", "Stop 1 sp", "SessionEnd 1 sp",
+	})
+}

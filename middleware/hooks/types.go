@@ -33,6 +33,12 @@ type ToolInput struct {
 	ThreadID string
 	// Agent is the name of the agent executing the call.
 	Agent string
+	// Depth is 0 for a top-level run and the parent's Depth+1 inside a
+	// subagent run (agent.RunInfo.Depth).
+	Depth int
+	// ParentToolID is the tool_use id of the call that started this nested
+	// run; empty for a top-level run (agent.RunInfo.ParentToolID).
+	ParentToolID string
 	// ToolUseID is the id of the model's tool_use block.
 	ToolUseID string
 	// Tool is the tool name.
@@ -77,6 +83,12 @@ type PostToolUseOutput struct {
 type PromptInput struct {
 	// ThreadID is the run's thread id; empty for a run without one.
 	ThreadID string
+	// Depth is 0 for a top-level run and the parent's Depth+1 inside a
+	// subagent run (agent.RunInfo.Depth).
+	Depth int
+	// ParentToolID is the tool_use id of the call that started this nested
+	// run; empty for a top-level run (agent.RunInfo.ParentToolID).
+	ParentToolID string
 	// Messages are the messages this run's input appended to State.
 	Messages []llm.Message
 	// State is the run's state.
@@ -101,8 +113,12 @@ type SessionInput struct {
 	ThreadID string
 	// Resumed reports a run started by Resume or ResumeWith.
 	Resumed bool
-	// Depth is 0 for a top-level run, the parent's Depth+1 for a subagent.
+	// Depth is 0 for a top-level run and the parent's Depth+1 inside a
+	// subagent run (agent.RunInfo.Depth).
 	Depth int
+	// ParentToolID is the tool_use id of the call that started this nested
+	// run; empty for a top-level run (agent.RunInfo.ParentToolID).
+	ParentToolID string
 	// State is the run's state.
 	State *state.State
 }
@@ -119,6 +135,12 @@ type SessionOutput struct {
 type StopInput struct {
 	// ThreadID is the run's thread id; empty for a run without one.
 	ThreadID string
+	// Depth is 0 for a top-level run and the parent's Depth+1 inside a
+	// subagent run (agent.RunInfo.Depth).
+	Depth int
+	// ParentToolID is the tool_use id of the call that started this nested
+	// run; empty for a top-level run (agent.RunInfo.ParentToolID).
+	ParentToolID string
 	// Final is the text of the assistant's closing reply.
 	Final string
 	// State is the run's state.
@@ -137,6 +159,12 @@ type StopOutput struct {
 type SubagentInput struct {
 	// ThreadID is the run's thread id; empty for a run without one.
 	ThreadID string
+	// Depth is 0 for a top-level run and the parent's Depth+1 inside a
+	// subagent run (agent.RunInfo.Depth).
+	Depth int
+	// ParentToolID is the tool_use id of the call that started this nested
+	// run; empty for a top-level run (agent.RunInfo.ParentToolID).
+	ParentToolID string
 	// ToolUseID is the id of the tool_use block that launches the subagent.
 	ToolUseID string
 	// SubagentType is the input's subagent_type; empty when absent.
@@ -185,6 +213,12 @@ type PostToolUseHook struct {
 // synchronize. A hook returning an error wrapping
 // agent.ErrStopRun ends the run with agent.ReasonHookStopped; any other
 // error is a middleware error, or inside a tool call the call's failure.
+//
+// Hooks fire in every run of an agent that has the middleware, including
+// subagent runs (a subagent inherits its parent's middleware unless its spec
+// replaces it) and resumed runs; the Depth and ParentToolID of each input
+// tell a nested run from a top-level one, and SessionInput.Resumed a resumed
+// one.
 type Config struct {
 	// PreToolUse runs before a tool call, after the permission rules
 	// allowed it. Each hook sees the previous one's input rewrite.
@@ -205,7 +239,9 @@ type Config struct {
 	// conversation. A hook that should inject only once must track that
 	// itself (for example in State).
 	SessionStart []func(context.Context, SessionInput) (SessionOutput, error)
-	// SessionEnd runs when every run ends, whatever the reason.
+	// SessionEnd runs when a run ends, whatever the reason, unless the
+	// consumer stopped reading the run's events before the end (broke out of
+	// the range loop): then the run stops without running it.
 	SessionEnd []func(context.Context, SessionInput) error
 	// Stop runs when the model's reply would complete the run.
 	Stop []func(context.Context, StopInput) (StopOutput, error)

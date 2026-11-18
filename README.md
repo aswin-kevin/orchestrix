@@ -299,7 +299,7 @@ The `cache` middleware asks providers that support prompt caching to cache the s
 
 ## Hooks
 
-Hooks run your code at fixed points: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop` and `SubagentStart`. A `PreToolUse` hook runs after the permission rules allowed a call and can block it, rewrite its input or add context to its result. Returning an error that wraps `agent.ErrStopRun` ends the run with reason `hook_stopped`.
+Hooks run your code at fixed points: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop` and `SubagentStart`. A `PreToolUse` hook runs after the permission rules allowed a call and can block it, rewrite its input or add context to its result. Returning an error that wraps `agent.ErrStopRun` ends the run with reason `hook_stopped`. Hooks also fire inside subagent runs and resumed runs; every hook input carries `Depth` and `ParentToolID` to tell them apart. `SessionEnd` runs whatever the reason the run ended, but not when you stop reading the run's events early (break out of the loop).
 
 ```go
 // Imports omitted; model comes from surrounding code.

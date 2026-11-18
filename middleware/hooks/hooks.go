@@ -2,7 +2,8 @@
 // before and after tool calls, when a prompt is submitted, when a session
 // starts and ends, when the model is about to stop, and when a subagent is
 // launched. A hook can block, rewrite a tool's input, inject context into the
-// conversation and keep a run going past its natural end.
+// conversation and keep a run going past its natural end. Hooks also fire
+// inside subagent runs and resumed runs (see Config).
 //
 // Hooks are trusted host code: unlike the model, they may route a tool call
 // to a place the permission Ask would have questioned (a Deny rule still
@@ -51,7 +52,7 @@ func (m *middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 	}
 	var injected []llm.Message
 
-	session := SessionInput{ThreadID: info.ThreadID, Resumed: info.Resumed, Depth: info.Depth, State: s}
+	session := sessionInput(info, s)
 	for _, hook := range m.cfg.SessionStart {
 		out, err := hook(ctx, session)
 		if err != nil {
@@ -61,7 +62,7 @@ func (m *middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 	}
 
 	if len(info.Input) > 0 {
-		prompt := PromptInput{ThreadID: info.ThreadID, Messages: info.Input, State: s}
+		prompt := PromptInput{ThreadID: info.ThreadID, Depth: info.Depth, ParentToolID: info.ParentToolID, Messages: info.Input, State: s}
 		for _, hook := range m.cfg.UserPromptSubmit {
 			out, err := hook(ctx, prompt)
 			if err != nil {
@@ -87,13 +88,22 @@ func (m *middleware) AfterAgent(ctx context.Context, s *state.State) error {
 	if !ok {
 		return errNoRun
 	}
-	session := SessionInput{ThreadID: info.ThreadID, Resumed: info.Resumed, Depth: info.Depth, State: s}
+	session := sessionInput(info, s)
 	for _, hook := range m.cfg.SessionEnd {
 		if err := hook(ctx, session); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// sessionInput describes the run of info to SessionStart and SessionEnd
+// hooks.
+func sessionInput(info agent.RunInfo, s *state.State) SessionInput {
+	return SessionInput{
+		ThreadID: info.ThreadID, Resumed: info.Resumed,
+		Depth: info.Depth, ParentToolID: info.ParentToolID, State: s,
+	}
 }
 
 // BeforeStop implements agent.BeforeStop: the first Stop hook with a
@@ -103,7 +113,7 @@ func (m *middleware) BeforeStop(ctx context.Context, s *state.State, resp *llm.R
 	if !ok {
 		return "", errNoRun
 	}
-	stop := StopInput{ThreadID: info.ThreadID, Final: resp.Message.Text(), State: s}
+	stop := StopInput{ThreadID: info.ThreadID, Depth: info.Depth, ParentToolID: info.ParentToolID, Final: resp.Message.Text(), State: s}
 	for _, hook := range m.cfg.Stop {
 		out, err := hook(ctx, stop)
 		if err != nil {
