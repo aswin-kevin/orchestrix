@@ -134,6 +134,12 @@ type Request struct {
 }
 
 // Approver resolves an Ask decision, typically by prompting a human.
+//
+// An Approver may be called concurrently: one run asks about one call at a
+// time, but parallel subagents inherit their parent's Approver and ask it
+// from their own goroutines. An Approver that prompts a human must pair each
+// answer with its question, for instance by holding a lock across the
+// prompt. agent.Info(ctx) tells which run, and so which subagent, asks.
 type Approver func(ctx context.Context, req Request, reason string) Decision
 
 // Context carries the session's permission configuration.

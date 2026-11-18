@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
@@ -23,9 +24,18 @@ const deniedCancelled = "cancelled"
 // blocked ranging over the run's events, so the two never wait for a line at
 // the same time. Waiting also ends when the context is cancelled (Ctrl-C), so
 // a turn cannot get stuck at a prompt.
+//
+// The agent may call decide concurrently: parallel subagents share the
+// approver. A prompt and the answer typed to it must stay paired, so prompt
+// is held from printing a question until its answer is read, and a prompt
+// raised by a subagent names it.
 type approver struct {
 	in  *lineReader
 	out io.Writer
+
+	// prompt serializes the questions on the terminal; it is held while
+	// waiting for input.
+	prompt sync.Mutex
 
 	mu sync.Mutex // guards always only, never held while waiting for input
 	// always holds the tools the user allowed for the rest of the session.
@@ -43,7 +53,14 @@ func (a *approver) decide(ctx context.Context, req permission.Request, _ string)
 	if a.isAlways(req.Tool) {
 		return permission.Allowed()
 	}
-	fmt.Fprintf(a.out, "Allow %s? [y/N/a] ", describe(req))
+	a.prompt.Lock()
+	defer a.prompt.Unlock()
+	// The question answered while this call waited may have been "a" for
+	// the same tool.
+	if a.isAlways(req.Tool) {
+		return permission.Allowed()
+	}
+	fmt.Fprintf(a.out, "%sAllow %s? [y/N/a] ", askerLabel(agent.Info(ctx)), describe(req))
 	answer, err := a.in.next(ctx)
 	if ctx.Err() != nil {
 		return permission.Denied(deniedCancelled)
@@ -71,6 +88,16 @@ func (a *approver) allowAlways(tool string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.always[tool] = true
+}
+
+// askerLabel prefixes the prompt of a subagent's call with the subagent's
+// name, so the user knows which agent asks; a top-level run's prompt has no
+// prefix.
+func askerLabel(info agent.RunInfo, inRun bool) string {
+	if !inRun || info.Depth == 0 {
+		return ""
+	}
+	return "[" + info.AgentName + "] "
 }
 
 // describe names the call in a prompt: the tool plus its subject, or its
