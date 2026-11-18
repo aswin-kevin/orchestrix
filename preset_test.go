@@ -2,6 +2,7 @@ package orchestrix_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/checkpoint/file"
+	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
@@ -118,16 +120,18 @@ func TestDefaultWorkspaceSurvivesCheckpoint(t *testing.T) {
 	}
 	drain(th2, "read it")
 
-	var result strings.Builder
+	var got string
 	for _, msg := range reader.Requests[1].Messages {
 		for _, b := range msg.Content {
-			for _, c := range b.Content {
-				result.WriteString(c.Text)
+			if b.Type == llm.BlockToolResult && b.ToolUseID == "r1" {
+				for _, c := range b.Content {
+					got += c.Text
+				}
 			}
 		}
 	}
-	if !strings.Contains(result.String(), "kept") {
-		t.Errorf("second agent did not see the file; tool result context: %q", result.String())
+	if !strings.Contains(got, "kept") {
+		t.Errorf("read_file result = %q, want the file content written by the first agent", got)
 	}
 }
 
@@ -235,5 +239,41 @@ func TestWithSummarizeReplacesDefault(t *testing.T) {
 	}
 	if got := stackNames(a)[0]; got != "summarize" {
 		t.Errorf("first middleware = %q, want summarize", got)
+	}
+}
+
+func TestWithTasksOnFactoryBackendOffersBackgroundExecute(t *testing.T) {
+	tm := tasks.New(tasks.Config{})
+	defer tm.Shutdown()
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e1", Name: "execute",
+			Input: map[string]any{"command": "echo hi", "run_in_background": true}}}},
+		llmtest.Turn{Text: "ok"},
+	)
+	a, err := orchestrix.New(p,
+		orchestrix.WithBackendFactory(func(string) backend.Backend { return shellBackend(t) }),
+		orchestrix.WithTasks(tm),
+		orchestrix.WithPermissionMode(permission.ModeBypass),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := orchestrix.Text("run it")
+	in.ThreadID = "t1"
+	finalOf(t, a, in)
+
+	var schema string
+	for _, ts := range p.Requests[0].Tools {
+		if ts.Name == "execute" {
+			schema = fmt.Sprint(ts.InputSchema)
+		}
+	}
+	if !strings.Contains(schema, "run_in_background") {
+		t.Fatalf("execute schema %q lacks run_in_background", schema)
+	}
+	for _, b := range p.Requests[1].Messages[len(p.Requests[1].Messages)-1].Content {
+		if b.Type == llm.BlockToolResult && b.IsError {
+			t.Errorf("background execute failed: %+v", b.Content)
+		}
 	}
 }

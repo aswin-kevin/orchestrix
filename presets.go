@@ -34,7 +34,8 @@ func WithCheckpointer(c checkpoint.Checkpointer) Option {
 
 // WithSubagents adds subagent types the model can start with the task tool.
 // They join the built-in general-purpose and fork subagents. An invalid spec
-// makes New fail.
+// makes New fail, even when WithoutMiddleware("subagents") removes the
+// middleware afterwards.
 func WithSubagents(specs ...subagents.Subagent) Option {
 	return func(s *settings) { s.extraSubagents = append(s.extraSubagents, specs...) }
 }
@@ -149,7 +150,9 @@ func (s *settings) baseStack() []agent.Middleware {
 		stack = append(stack, hitl.New(hitl.Config{InterruptOn: maps.Clone(s.interruptOn)}))
 	}
 	stack = append(stack,
-		filesystem.New(filesystem.Config{Execute: s.shell != nil, Background: s.tasks != nil}),
+		// With a factory the backends are unknown when tools are collected, so
+		// tasks (which needs commands) is the promise that execute works.
+		filesystem.New(filesystem.Config{Execute: s.shell != nil || s.tasks != nil, Background: s.tasks != nil}),
 		planning.New(planning.Config{}),
 	)
 	if sub := s.subagentsMiddleware(); sub != nil {
