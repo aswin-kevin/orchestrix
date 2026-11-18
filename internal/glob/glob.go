@@ -20,9 +20,9 @@ const (
 //
 // Pattern syntax:
 //
-//   - any run of characters within one path segment (never '/')
-//     ?   exactly one character within a segment
-//     **  as a whole segment, zero or more whole segments
+//	"*"   any run of characters within one path segment (never '/')
+//	"?"   exactly one character within a segment
+//	"**"  as a whole segment, zero or more whole segments
 //
 // Every other character matches itself. "**" glued to other text in a
 // segment (e.g. "b**") behaves like a single "*".
