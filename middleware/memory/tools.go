@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path"
 	"strings"
 
@@ -20,12 +21,22 @@ type RecordInput struct {
 
 // RecallInput is the input of recall_memory.
 type RecallInput struct {
+	// Query holds keywords; empty lists the newest memories. Words shorter
+	// than two characters are ignored, so a query of only such words
+	// matches nothing.
 	Query string `json:"query,omitempty" desc:"Keywords; empty lists the most recent memories."`
 	Limit int    `json:"limit,omitempty" desc:"Maximum memories to return."`
 }
 
-const noMatches = "No matching memories."
+const (
+	noMatches    = "No matching memories."
+	recallCutOff = "\n\n[Output truncated; narrow the query or lower the limit.]"
+)
 
+// recallTool searches the store. Permission rules see only its directory
+// (the tool's input does not name the entries it will read), the same way ls
+// reports its root; each entry is then checked with Call.Visible, so a read
+// deny rule on one entry hides it.
 func (s *store) recallTool() tool.Tool {
 	return tool.New(ToolRecall,
 		"Search long-term memory for saved facts about the user, their preferences, the project, or where to find things. Entries carry their last-updated date; verify old ones before relying on them.",
@@ -41,7 +52,11 @@ func (s *store) recallTool() tool.Tool {
 			for i, e := range hits {
 				parts[i] = s.format(e)
 			}
-			return tool.Text(strings.Join(parts, "\n\n")), nil
+			out, cut := capBytes(strings.Join(parts, "\n\n"), MaxRecallBytes)
+			if cut {
+				out += recallCutOff
+			}
+			return tool.Text(out), nil
 		},
 		tool.WithReadOnly(), tool.WithConcurrent(),
 		// The entries read are not known before the call, so the rules see
@@ -55,11 +70,15 @@ func (s *store) recordTool() tool.Tool {
 	return tool.New(ToolRecord,
 		"Save a durable fact to long-term memory, such as a user preference, feedback on how to work, a project fact, or where to find something. Saving a name that exists updates that memory. Do not use it for task progress.",
 		func(ctx context.Context, in RecordInput, c *tool.Call) (tool.Result, error) {
-			p, err := s.record(ctx, c.Backend, in)
+			p, updated, err := s.record(ctx, c.Backend, in)
 			if err != nil {
 				return tool.Errorf("record failed: %v", err), nil
 			}
-			return tool.Text("Saved memory \"" + strings.TrimSpace(in.Name) + "\" to " + p + "."), nil
+			verb := "Saved"
+			if updated {
+				verb = "Updated"
+			}
+			return tool.Text(fmt.Sprintf("%s memory %q to %s.", verb, strings.TrimSpace(in.Name), p)), nil
 		},
 		tool.WithEdit(),
 		tool.WithPaths(func(raw json.RawMessage) []permission.PathAccess {

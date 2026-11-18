@@ -14,16 +14,16 @@ const (
 	commentClose = "-->"
 )
 
-// memoryTag matches the start of an opening or closing <memory> tag in any
-// case, with whitespace allowed inside it. Escaping its "<" keeps the content
-// from opening or ending an element.
-var memoryTag = regexp.MustCompile(`(?i)<(\s*/?\s*)memory\b`)
+// frameTag matches the start of an opening or closing <memory> or
+// <memory_index> tag in any case, with whitespace allowed inside it.
+var frameTag = regexp.MustCompile(`(?i)<(\s*/?\s*)(memory_index|memory)\b`)
 
-// indexTag is memoryTag for the <memory_index> element.
-var indexTag = regexp.MustCompile(`(?i)<(\s*/?\s*)memory_index\b`)
+// neutralizeTags escapes the "<" of every tag in s that could open or end one
+// of the prompt's own elements, so content cannot break out of its frame.
+func neutralizeTags(s string) string { return frameTag.ReplaceAllString(s, "&lt;${1}${2}") }
 
 // loadIndex reads the store index for the system prompt, neutralizing a
-// literal closing tag and capping it at DefaultMaxIndexBytes. A missing or
+// literal frame tag and capping it at DefaultMaxIndexBytes. A missing or
 // unreadable index is empty.
 func loadIndex(ctx context.Context, b backend.Backend, p string) string {
 	if b == nil {
@@ -34,7 +34,7 @@ func loadIndex(ctx context.Context, b backend.Backend, p string) string {
 		return ""
 	}
 	index := strings.TrimSpace(strings.Join(res.Lines, "\n"))
-	index = indexTag.ReplaceAllString(index, "&lt;${1}memory_index")
+	index = neutralizeTags(index)
 	index, _ = capBytes(index, DefaultMaxIndexBytes)
 	return strings.TrimSpace(index)
 }
@@ -56,7 +56,7 @@ func loadFiles(ctx context.Context, b backend.Backend, paths []string, maxBytes 
 		if content == "" {
 			continue
 		}
-		content = memoryTag.ReplaceAllString(content, "&lt;${1}memory")
+		content = neutralizeTags(content)
 		content, truncated := capBytes(content, maxBytes)
 		content = strings.TrimSpace(content)
 		files = append(files, File{Path: p, Content: content, Truncated: truncated})

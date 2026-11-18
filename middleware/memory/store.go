@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -38,6 +39,10 @@ const (
 	MaxEntryBytes = 16 << 10
 	// MaxDescriptionChars caps an entry's description, in runes.
 	MaxDescriptionChars = 300
+	// MaxNameChars caps an entry's name, in runes.
+	MaxNameChars = 100
+	// MaxRecallBytes caps the text one recall_memory call returns.
+	MaxRecallBytes = 32 << 10
 	// MaxSlugLen caps the file-name stem derived from an entry's name.
 	MaxSlugLen = 64
 
@@ -45,7 +50,9 @@ const (
 	ToolRecall = "recall_memory"
 	ToolRecord = "record_memory"
 
-	entryExt     = ".md"
+	entryExt = ".md"
+	// reservedSlug would collide with IndexFile on a case-insensitive disk.
+	reservedSlug = "memory"
 	indexHeading = "# Memory index\n\n"
 	hoursPerDay  = 24 * time.Hour
 	// minTermLen is the shortest query word that counts as a keyword.
@@ -116,8 +123,11 @@ func Slug(name string) (string, error) {
 	return slug, nil
 }
 
-// store is the resolved StoreConfig; it is immutable.
+// store is the resolved StoreConfig; only mu changes. mu serializes record,
+// whose read-modify-write of an entry and rebuild of the index must not
+// interleave.
 type store struct {
+	mu         sync.Mutex
 	dir        string
 	staleAfter time.Duration
 	now        func() time.Time
@@ -199,6 +209,8 @@ func (in RecordInput) validate() (string, error) {
 		return "", errors.New("name, description and content must not be empty")
 	case strings.ContainsAny(in.Name+in.Description, "\r\n"):
 		return "", errors.New("name and description must be a single line")
+	case len([]rune(in.Name)) > MaxNameChars:
+		return "", fmt.Errorf("name is over %d characters", MaxNameChars)
 	case len([]rune(in.Description)) > MaxDescriptionChars:
 		return "", fmt.Errorf("description is over %d characters", MaxDescriptionChars)
 	case len(in.Content) > MaxEntryBytes:
@@ -206,32 +218,40 @@ func (in RecordInput) validate() (string, error) {
 	case !slices.Contains(types, in.Type):
 		return "", fmt.Errorf("type %q is not one of user, feedback, project, reference", in.Type)
 	}
-	return Slug(in.Name)
+	slug, err := Slug(in.Name)
+	if err == nil && slug == reservedSlug {
+		return "", fmt.Errorf("name %q is reserved; pick a more specific one", in.Name)
+	}
+	return slug, err
 }
 
 // record creates or updates the entry for in and rebuilds the index. An
-// existing entry keeps its Created time. It returns the entry's path.
-func (s *store) record(ctx context.Context, b backend.Backend, in RecordInput) (string, error) {
+// existing entry keeps its Created time. It returns the entry's path and
+// whether it replaced an existing entry.
+func (s *store) record(ctx context.Context, b backend.Backend, in RecordInput) (p string, updated bool, err error) {
 	slug, err := in.validate()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	p, now := s.entryPath(slug), s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	p = s.entryPath(slug)
 	e := Entry{
 		Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description),
 		Type: in.Type, Created: now, Updated: now,
 	}
 	if old, ok := s.readEntry(ctx, b, slug+entryExt); ok {
-		e.Created = old.Created
+		e.Created, updated = old.Created, true
 	}
 	data, err := frontmatter.Render(e, strings.TrimSpace(in.Content)+"\n")
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if err := b.Write(ctx, p, data); err != nil {
-		return "", err
+		return "", false, err
 	}
-	return p, s.rebuildIndex(ctx, b)
+	return p, updated, s.rebuildIndex(ctx, b)
 }
 
 // rebuildIndex regenerates MEMORY.md from the directory, which is the ground
@@ -261,7 +281,11 @@ func (s *store) recall(ctx context.Context, b backend.Backend, query string, lim
 		return nil, err
 	}
 	entries = slices.DeleteFunc(entries, func(e Entry) bool { return !keep(path.Join(s.dir, e.File)) })
-	if terms := queryTerms(query); len(terms) > 0 {
+	if strings.TrimSpace(query) != "" {
+		terms := queryTerms(query)
+		if len(terms) == 0 {
+			return nil, nil // only one-letter words: matches nothing
+		}
 		scores := make(map[string]int, len(entries))
 		for _, e := range entries {
 			scores[e.File] = score(e, terms)

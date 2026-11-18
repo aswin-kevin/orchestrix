@@ -22,7 +22,10 @@
 // entries as untrusted data, not instructions: keep DisableIndexInPrompt set
 // where that matters, and deny the record_memory tool or write access to the
 // store directory where the agent must not remember. recall_memory honors
-// read deny rules per entry; the instruction files above are not filtered.
+// read deny rules per entry, but the index in the system prompt lists the
+// name and description of every entry regardless of them, so keep secrets
+// out of names and descriptions or set DisableIndexInPrompt. The instruction
+// files above are not filtered either.
 package memory
 
 import (
