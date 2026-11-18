@@ -196,6 +196,29 @@ func (b *Backend) Edit(_ context.Context, p, old, replacement string, replaceAll
 	return backend.EditResult{Occurrences: count}, nil
 }
 
+// MultiEdit applies edits to the file at p all or nothing.
+func (b *Backend) MultiEdit(_ context.Context, p string, edits []backend.EditOp) (backend.EditResult, error) {
+	p, err := backend.Clean(p)
+	if err != nil {
+		return backend.EditResult{}, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	f, ok := b.files[p]
+	if !ok {
+		if b.kindOf(p) == isDir {
+			return backend.EditResult{}, fail("multi-edit", p, backend.ErrIsDir)
+		}
+		return backend.EditResult{}, fail("multi-edit", p, backend.ErrNotFound)
+	}
+	updated, count, err := backend.ApplyEdits(f.content, edits)
+	if err != nil {
+		return backend.EditResult{}, fmt.Errorf("memory: multi-edit %s: %w", p, err)
+	}
+	b.files[p] = file{content: updated, modTime: b.now()}
+	return backend.EditResult{Occurrences: count}, nil
+}
+
 // Delete removes the file at p, or every file beneath the directory p.
 func (b *Backend) Delete(_ context.Context, p string) error {
 	p, err := backend.Clean(p)

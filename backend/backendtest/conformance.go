@@ -46,6 +46,7 @@ func Run(t *testing.T, newBackend func(t *testing.T) backend.Backend) {
 		{"ReadHugeLine", testReadHugeLine},
 		{"Edit", testEdit},
 		{"EditErrors", testEditErrors},
+		{"MultiEdit", testMultiEdit},
 		{"Delete", testDelete},
 		{"Ls", testLs},
 		{"Glob", testGlob},
@@ -508,4 +509,78 @@ func matchPaths(ms []backend.GrepMatch) []string {
 
 func sorted(s []string) []string {
 	return slices.Sorted(slices.Values(s))
+}
+
+// bytesOf reveals a file's exact line endings and trailing newline, which
+// Read hides, by replacing them with visible markers. It rewrites the file,
+// so call it last.
+func bytesOf(t *testing.T, b backend.Backend, path string) string {
+	t.Helper()
+	ctx := context.Background()
+	for _, r := range [][2]string{{"\r\n", "<CRLF>"}, {"\n", "<LF>"}} {
+		if _, err := b.Edit(ctx, path, r[0], r[1], true); err != nil && !errors.Is(err, backend.ErrNoMatch) {
+			t.Fatalf("probe %q: %v", r[0], err)
+		}
+	}
+	got, err := b.Read(ctx, path, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(got.Lines, "\n")
+}
+
+func testMultiEdit(t *testing.T, b backend.Backend) {
+	me, ok := b.(backend.MultiEditor)
+	if !ok {
+		t.Skip("backend does not implement MultiEditor")
+	}
+	ctx := context.Background()
+
+	// A line-spanning edit on a CRLF file, after an earlier edit.
+	write(t, b, "/crlf.txt", "one\r\ntwo\r\nthree\r\n")
+	res, err := me.MultiEdit(ctx, "/crlf.txt", []backend.EditOp{
+		{Old: "one", New: "1"},
+		{Old: "1\r\ntwo", New: "12"},
+	})
+	if err != nil || res.Occurrences != 2 {
+		t.Fatalf("CRLF multi-edit: %+v, %v", res, err)
+	}
+	if got, want := bytesOf(t, b, "/crlf.txt"), "12<CRLF>three<CRLF>"; got != want {
+		t.Fatalf("CRLF content = %q, want %q", got, want)
+	}
+
+	// No trailing newline is preserved; an old_string ending in "\n" on the
+	// last line is matched.
+	write(t, b, "/nonl.txt", "a\nb")
+	if _, err := me.MultiEdit(ctx, "/nonl.txt", []backend.EditOp{{Old: "a", New: "A"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := bytesOf(t, b, "/nonl.txt"), "A<LF>b"; got != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+	write(t, b, "/last.txt", "x\ny\n")
+	if _, err := me.MultiEdit(ctx, "/last.txt", []backend.EditOp{{Old: "y\n", New: "z\n"}}); err != nil {
+		t.Fatalf("old_string ending in newline: %v", err)
+	}
+	if got, want := bytesOf(t, b, "/last.txt"), "x<LF>z<LF>"; got != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+
+	// A failing edit leaves the file byte-identical and names the edit.
+	write(t, b, "/fail.txt", "p\r\nq\r\n")
+	_, err = me.MultiEdit(ctx, "/fail.txt", []backend.EditOp{
+		{Old: "p", New: "P"},
+		{Old: "absent", New: "x"},
+	})
+	wantErr(t, err, backend.ErrNoMatch)
+	var step *backend.EditStepError
+	if !errors.As(err, &step) || step.Index != 1 || step.Total != 2 {
+		t.Fatalf("error = %v, want EditStepError for edit 2 of 2", err)
+	}
+	if got, want := bytesOf(t, b, "/fail.txt"), "p<CRLF>q<CRLF>"; got != want {
+		t.Fatalf("file changed after failed multi-edit: %q", got)
+	}
+
+	_, err = me.MultiEdit(ctx, "/missing.txt", []backend.EditOp{{Old: "a", New: "b"}})
+	wantErr(t, err, backend.ErrNotFound)
 }

@@ -2,7 +2,7 @@ package filesystem
 
 import (
 	"context"
-	"strings"
+	"errors"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -33,7 +33,7 @@ func (m *middleware) resolveTarget(ctx context.Context, c *tool.Call, rawPath st
 		return fail(errorResult(err, path))
 	}
 	if !fresh {
-		return fail(tool.Errorf(staleReadMessage))
+		return fail(tool.Errorf("%s", staleReadMessage))
 	}
 	return target{backend: b, path: path}, nil
 }
@@ -125,18 +125,16 @@ func (m *middleware) multiEdit(ctx context.Context, in multiEditInput, c *tool.C
 	if failure != nil {
 		return *failure, nil
 	}
-	if failure := dryRun(ctx, t, in.Edits); failure != nil {
-		return *failure, nil
+	editor, ok := t.backend.(backend.MultiEditor)
+	if !ok {
+		return tool.Errorf("this backend does not support atomic multi_edit; use edit_file"), nil
 	}
-	// Every edit is known to apply, so applying them through the backend
-	// cannot leave the file half edited. Going through backend.Edit rather
-	// than rewriting the file keeps its exact bytes (line endings, trailing
-	// newline), which a read-modify-write of the line-based read would lose.
+	ops := make([]backend.EditOp, len(in.Edits))
 	for i, e := range in.Edits {
-		if _, err := t.backend.Edit(ctx, t.path, e.OldString, e.NewString, e.ReplaceAll); err != nil {
-			res := errorResult(err, t.path)
-			return tool.Errorf("edit %d of %d failed after %d were applied: %s", i+1, len(in.Edits), i, res.Flatten()), nil
-		}
+		ops[i] = backend.EditOp{Old: e.OldString, New: e.NewString, ReplaceAll: e.ReplaceAll}
+	}
+	if _, err := editor.MultiEdit(ctx, t.path, ops); err != nil {
+		return multiEditFailure(err, t.path), nil
 	}
 	if err := recordCurrent(ctx, t.backend, c, t.path); err != nil {
 		return errorResult(err, t.path), nil
@@ -144,27 +142,13 @@ func (m *middleware) multiEdit(ctx context.Context, in multiEditInput, c *tool.C
 	return textf("Applied %d edit(s) to %s", len(in.Edits), t.path), nil
 }
 
-// dryRun applies edits to an in-memory copy of the file and reports the first
-// one that fails.
-func dryRun(ctx context.Context, t target, edits []editStep) *tool.Result {
-	res, err := t.backend.Read(ctx, t.path, 0, 0)
-	if err != nil {
-		r := errorResult(err, t.path)
-		return &r
+// multiEditFailure names the failing edit when the backend says which it was.
+func multiEditFailure(err error, path string) tool.Result {
+	var step *backend.EditStepError
+	if !errors.As(err, &step) {
+		return errorResult(err, path)
 	}
-	if res.Binary {
-		r := tool.Errorf("%s is a binary file and cannot be edited", t.path)
-		return &r
-	}
-	content := []byte(strings.Join(res.Lines, "\n"))
-	for i, e := range edits {
-		content, _, err = backend.ApplyEdit(content, e.OldString, e.NewString, e.ReplaceAll)
-		if err != nil {
-			r := stepError(i, len(edits), errorResult(err, t.path))
-			return &r
-		}
-	}
-	return nil
+	return stepError(step.Index, step.Total, errorResult(step.Err, path))
 }
 
 type deleteInput struct {
@@ -192,6 +176,6 @@ func (m *middleware) deleteFile(ctx context.Context, in deleteInput, c *tool.Cal
 	if err := b.Delete(ctx, path); err != nil {
 		return errorResult(err, path), nil
 	}
-	forget(c, path)
+	forgetUnder(c, path)
 	return textf("Deleted %s", path), nil
 }

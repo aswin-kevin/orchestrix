@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"strings"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
@@ -24,11 +25,14 @@ func markRead(c *tool.Call, path string, modTime time.Time) {
 	})
 }
 
-// forget drops the record for a deleted path.
-func forget(c *tool.Call, path string) {
+// forgetUnder drops the records for a deleted path and, when it was a
+// directory, for everything beneath it.
+func forgetUnder(c *tool.Call, path string) {
 	ReadKey.Update(c.State, func(read map[string]time.Time) map[string]time.Time {
 		updated := maps.Clone(read)
-		delete(updated, path)
+		maps.DeleteFunc(updated, func(p string, _ time.Time) bool {
+			return p == path || strings.HasPrefix(p, strings.TrimSuffix(path, "/")+"/")
+		})
 		return updated
 	})
 }

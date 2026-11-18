@@ -3,6 +3,7 @@ package filesystem
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -162,27 +163,91 @@ func TestWriteNewFileNoReadNeeded(t *testing.T) {
 
 func TestMultiEditAtomic(t *testing.T) {
 	b := newClockBackend()
-	seed(t, b, "/a.txt", "alpha\nbeta\n")
+	seed(t, b, "/a.txt", "alpha\r\nbeta\r\n")
 	f := newFixture(t, Config{Backend: b})
 	f.run(t, "read_file", obj{"path": "/a.txt"})
+	lines := func() string {
+		got, _ := b.Read(context.Background(), "/a.txt", 0, 0)
+		return strings.Join(got.Lines, "|")
+	}
 
+	// The second edit spans a CRLF line break and the third fails: nothing
+	// may be applied.
 	res := f.run(t, "multi_edit", obj{"path": "/a.txt", "edits": []obj{
 		{"old_string": "alpha", "new_string": "ALPHA"},
+		{"old_string": "ALPHA\r\nbeta", "new_string": "AB"},
 		{"old_string": "gamma", "new_string": "GAMMA"},
 	}})
-	wantText(t, res, true, "edit 2 of 2 failed: old_string not found in /a.txt; no changes were made")
-	got, _ := b.Read(context.Background(), "/a.txt", 0, 0)
-	if strings.Join(got.Lines, "|") != "alpha|beta" {
-		t.Fatalf("file changed despite failure: %v", got.Lines)
+	wantText(t, res, true, "edit 3 of 3 failed: old_string not found in /a.txt; no changes were made")
+	if got := lines(); got != "alpha|beta" {
+		t.Fatalf("file changed despite failure: %q", got)
 	}
 
 	wantText(t, f.run(t, "multi_edit", obj{"path": "/a.txt", "edits": []obj{
 		{"old_string": "alpha", "new_string": "ALPHA"},
-		{"old_string": "ALPHA", "new_string": "Alpha"}, // sees the previous edit
+		{"old_string": "ALPHA\r\nbeta", "new_string": "AB"},
 	}}), false, "Applied 2 edit(s) to /a.txt")
-	got, _ = b.Read(context.Background(), "/a.txt", 0, 0)
-	if strings.Join(got.Lines, "|") != "Alpha|beta" {
-		t.Fatalf("lines = %v", got.Lines)
+	if got := lines(); got != "AB" {
+		t.Fatalf("lines = %q", got)
+	}
+}
+
+// plainBackend hides the optional MultiEditor capability of a memory backend.
+type plainBackend struct{ backend.Backend }
+
+func TestMultiEditRequiresMultiEditor(t *testing.T) {
+	inner := newClockBackend()
+	seed(t, inner, "/a.txt", "x")
+	f := newFixture(t, Config{Backend: plainBackend{inner}})
+	f.run(t, "read_file", obj{"path": "/a.txt"})
+	wantText(t, f.run(t, "multi_edit", obj{"path": "/a.txt", "edits": []obj{{"old_string": "x", "new_string": "y"}}}), true,
+		"this backend does not support atomic multi_edit; use edit_file")
+}
+
+func TestReadBinaryPDF(t *testing.T) {
+	b := newClockBackend()
+	seed(t, b, "/d.pdf", "%PDF-1.4\n\x00\xff\xfe")
+	f := newFixture(t, Config{Backend: b})
+	f.call.Profile = llm.Profile{PDFs: true}
+	res := f.run(t, "read_file", obj{"path": "/d.pdf"})
+	if len(res.Content) != 1 || res.Content[0].Type != llm.BlockDocument || res.Content[0].Source.MediaType != "application/pdf" {
+		t.Fatalf("content = %+v, want one application/pdf document block", res.Content)
+	}
+}
+
+func TestGrepCapFooterOnlyWhenCapped(t *testing.T) {
+	b := newClockBackend()
+	for i := 0; i < backend.DefaultMaxResults; i++ {
+		seed(t, b, fmt.Sprintf("/f%04d.txt", i), "hit")
+	}
+	f := newFixture(t, Config{Backend: b})
+	out := f.run(t, "grep", obj{"pattern": "hit"}).Flatten()
+	if strings.Contains(out, "capped") || len(strings.Split(out, "\n")) != backend.DefaultMaxResults {
+		t.Fatalf("exactly %d results must not show a footer", backend.DefaultMaxResults)
+	}
+	seed(t, b, "/extra.txt", "hit")
+	out = f.run(t, "grep", obj{"pattern": "hit"}).Flatten()
+	if !strings.Contains(out, "results capped at") {
+		t.Fatal("missing cap footer when results were truncated")
+	}
+}
+
+func TestDeleteDirectoryForgetsReads(t *testing.T) {
+	b := newClockBackend()
+	seed(t, b, "/d/a.txt", "a")
+	seed(t, b, "/dd/b.txt", "b")
+	f := newFixture(t, Config{Backend: b})
+	f.run(t, "read_file", obj{"path": "/d/a.txt"})
+	f.run(t, "read_file", obj{"path": "/dd/b.txt"})
+
+	f.run(t, "delete", obj{"path": "/d"})
+
+	read, _ := ReadKey.Get(f.call.State)
+	if _, ok := read["/d/a.txt"]; ok {
+		t.Fatal("entry under deleted directory kept")
+	}
+	if _, ok := read["/dd/b.txt"]; !ok {
+		t.Fatal("sibling with a shared name prefix was pruned")
 	}
 }
 

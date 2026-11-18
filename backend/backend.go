@@ -111,3 +111,18 @@ type Snapshotter interface {
 	Snapshot() (json.RawMessage, error)
 	Restore(json.RawMessage) error
 }
+
+// EditOp is one replacement within a MultiEditor.MultiEdit call.
+type EditOp struct {
+	Old, New   string
+	ReplaceAll bool
+}
+
+// MultiEditor is an optional capability of a Backend: applying several edits
+// to one file as a single all-or-nothing operation. Edits apply in order, each
+// seeing the result of the previous ones, to the file's exact bytes. If any
+// edit fails the file is left untouched and the error is an *EditStepError.
+// EditResult.Occurrences is the total number of replacements.
+type MultiEditor interface {
+	MultiEdit(ctx context.Context, path string, edits []EditOp) (EditResult, error)
+}

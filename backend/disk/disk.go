@@ -317,6 +317,34 @@ func (b *Backend) Edit(_ context.Context, p, old, replacement string, replaceAll
 	return backend.EditResult{Occurrences: count}, nil
 }
 
+// MultiEdit applies edits to the file at p all or nothing: the edits run on
+// the file's bytes in memory and a single atomic replace writes the result.
+func (b *Backend) MultiEdit(_ context.Context, p string, edits []backend.EditOp) (backend.EditResult, error) {
+	clean, realPath, err := b.resolve("multi-edit", p)
+	if err != nil {
+		return backend.EditResult{}, err
+	}
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return backend.EditResult{}, wrapFSError("multi-edit", clean, err)
+	}
+	if err := requireRegular("multi-edit", clean, info); err != nil {
+		return backend.EditResult{}, err
+	}
+	content, err := os.ReadFile(realPath)
+	if err != nil {
+		return backend.EditResult{}, wrapFSError("multi-edit", clean, err)
+	}
+	updated, count, err := backend.ApplyEdits(content, edits)
+	if err != nil {
+		return backend.EditResult{}, fmt.Errorf("disk: multi-edit %s: %w", clean, err)
+	}
+	if err := replaceFile(realPath, updated); err != nil {
+		return backend.EditResult{}, wrapFSError("multi-edit", clean, err)
+	}
+	return backend.EditResult{Occurrences: count}, nil
+}
+
 // replaceFile atomically replaces the file at real (a resolved path) with
 // content: it writes a temporary file next to it and renames that over the
 // target, so readers never see a partial file. An existing file keeps its mode.

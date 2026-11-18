@@ -54,7 +54,9 @@ func (m *middleware) execute(ctx context.Context, in executeInput, c *tool.Call)
 	if err != nil {
 		return tool.Errorf("execute failed: %v", err), nil
 	}
-	return tool.Result{Content: tool.Text(formatExec(res, timeout)).Content, IsError: res.TimedOut}, nil
+	out := tool.Text(formatExec(res, timeout))
+	out.IsError = res.TimedOut
+	return out, nil
 }
 
 // execTimeout applies the default and the cap to the model's request.

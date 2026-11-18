@@ -117,13 +117,13 @@ func (m *middleware) formatPage(res backend.ReadResult) string {
 	return strings.TrimSuffix(sb.String(), "\n")
 }
 
-// truncateLine caps line at max bytes without splitting a UTF-8 sequence, so
-// one huge line cannot flood the context.
-func truncateLine(line string, max int) string {
-	if len(line) <= max {
+// truncateLine caps line at limit bytes, cutting at a rune boundary so no
+// UTF-8 sequence is split; one huge line cannot flood the context.
+func truncateLine(line string, limit int) string {
+	if len(line) <= limit {
 		return line
 	}
-	cut := max
+	cut := limit
 	for cut > 0 && !utf8.RuneStart(line[cut]) {
 		cut--
 	}

@@ -81,7 +81,7 @@ func (m *middleware) grep(ctx context.Context, in grepInput, c *tool.Call) (tool
 		Mode:       backend.GrepMode(in.Mode),
 		IgnoreCase: in.IgnoreCase,
 		Literal:    in.Literal,
-		MaxResults: backend.DefaultMaxResults,
+		MaxResults: backend.DefaultMaxResults + 1, // one extra reveals truncation
 	})
 	if err != nil {
 		return errorResult(err, path), nil
@@ -89,8 +89,12 @@ func (m *middleware) grep(ctx context.Context, in grepInput, c *tool.Call) (tool
 	if len(matches) == 0 {
 		return tool.Text("no matches"), nil
 	}
+	capped := len(matches) > backend.DefaultMaxResults
+	if capped {
+		matches = matches[:backend.DefaultMaxResults]
+	}
 	out := m.formatMatches(matches, backend.GrepMode(in.Mode))
-	if len(matches) >= backend.DefaultMaxResults {
+	if capped {
 		out += fmt.Sprintf("\n[results capped at %d; narrow the pattern, path or glob]", backend.DefaultMaxResults)
 	}
 	return tool.Text(out), nil

@@ -89,3 +89,35 @@ func ApplyEdit(content []byte, old, replacement string, replaceAll bool) ([]byte
 	}
 	return []byte(strings.ReplaceAll(text, old, replacement)), count, nil
 }
+
+// EditStepError reports which edit of a multi-edit failed. It wraps the
+// underlying sentinel (ErrNoMatch, ErrAmbiguous, ErrInvalidEdit).
+type EditStepError struct {
+	Index int // 0-based
+	Total int
+	Err   error
+}
+
+func (e *EditStepError) Error() string {
+	return fmt.Sprintf("edit %d of %d: %v", e.Index+1, e.Total, e.Err)
+}
+
+func (e *EditStepError) Unwrap() error { return e.Err }
+
+// ApplyEdits applies edits to content in order with the ApplyEdit rules and
+// returns the new content and the total number of replacements. It never
+// modifies content; on failure it returns an *EditStepError and the caller
+// has nothing to undo.
+func ApplyEdits(content []byte, edits []EditOp) ([]byte, int, error) {
+	total := 0
+	for i, e := range edits {
+		var n int
+		var err error
+		content, n, err = ApplyEdit(content, e.Old, e.New, e.ReplaceAll)
+		if err != nil {
+			return nil, 0, &EditStepError{Index: i, Total: len(edits), Err: err}
+		}
+		total += n
+	}
+	return content, total, nil
+}
