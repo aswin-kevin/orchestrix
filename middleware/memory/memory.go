@@ -14,6 +14,15 @@
 // and use Config.Prompt to drop the invitation if the agent should not edit
 // them. The only transformation that protects the framing is that a literal
 // closing tag inside a file is neutralized so it cannot end its element.
+//
+// The structured store (Config.Store) raises the same concern: record_memory
+// persists whatever the model passes it, so content the model read from an
+// untrusted page or tool result can be recalled in later runs, and its
+// descriptions reach the system prompt through the index. Treat recorded
+// entries as untrusted data, not instructions: keep DisableIndexInPrompt set
+// where that matters, and deny the record_memory tool or write access to the
+// store directory where the agent must not remember. recall_memory honors
+// read deny rules per entry; the instruction files above are not filtered.
 package memory
 
 import (
@@ -25,6 +34,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // DefaultMaxFileBytes is the per-file size cap applied when
@@ -49,8 +59,13 @@ type Config struct {
 	// Prompt is the guidance appended after the files. nil uses
 	// DefaultPrompt, which tells the model to record durable notes in the
 	// files (see Trust in the package documentation); a pointer to ""
-	// appends the files alone.
+	// appends the files alone. With a Store, a short note on recall_memory
+	// and record_memory follows unless Prompt is a pointer to "".
 	Prompt *string
+	// Store enables the structured long-term store: the recall_memory and
+	// record_memory tools, and the MEMORY.md index in the system prompt. nil
+	// disables it.
+	Store *StoreConfig
 }
 
 // File is one instruction file as loaded for a run.
@@ -66,6 +81,7 @@ type File struct {
 var (
 	filesKey  = state.NewKey[[]File]("memory.files", state.RunLocal[[]File]())
 	loadedKey = state.NewKey[bool]("memory.loaded", state.RunLocal[bool]())
+	indexKey  = state.NewKey[string]("memory.index", state.RunLocal[string]())
 )
 
 // Files returns the instruction files this run loaded, in configured order;
@@ -80,6 +96,7 @@ type middleware struct {
 	files        []string
 	maxFileBytes int
 	prompt       string
+	store        *store // nil without a Store
 }
 
 // New returns the memory middleware. It fails when a configured path is
@@ -104,6 +121,12 @@ func New(cfg Config) (agent.Middleware, error) {
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
 	}
+	if cfg.Store != nil {
+		var err error
+		if m.store, err = newStore(*cfg.Store); err != nil {
+			return nil, err
+		}
+	}
 	return m, nil
 }
 
@@ -114,19 +137,34 @@ func (m *middleware) Name() string { return "memory" }
 func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
 	filesKey.Delete(s)
 	loadedKey.Delete(s)
+	indexKey.Delete(s)
 	return nil
 }
 
+// Tools implements agent.ToolProvider: the store's tools, or none without a
+// Store.
+func (m *middleware) Tools() []tool.Tool {
+	if m.store == nil {
+		return nil
+	}
+	return []tool.Tool{m.store.recallTool(), m.store.recordTool()}
+}
+
 // WrapModel implements agent.ModelWrapper. The run's first call loads the
-// files; every call appends them after the host's segments, outside the
-// cached prefix.
+// files and the store index; every call appends them after the host's
+// segments, outside the cached prefix.
 func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if loaded, _ := loadedKey.Get(req.State); !loaded {
 		filesKey.Set(req.State, loadFiles(ctx, req.Backend, m.files, m.maxFileBytes))
+		if m.store != nil && m.store.showIndex {
+			indexKey.Set(req.State, loadIndex(ctx, req.Backend, m.store.indexPath()))
+		}
 		loadedKey.Set(req.State, true)
 	}
-	if files, _ := filesKey.Get(req.State); len(files) > 0 {
-		req.Request.System = append(slices.Clone(req.Request.System), segment(files, m.prompt))
+	files, _ := filesKey.Get(req.State)
+	index, _ := indexKey.Get(req.State)
+	if seg := m.segment(files, index); seg != "" {
+		req.Request.System = append(slices.Clone(req.Request.System), seg)
 	}
 	return next(ctx, req)
 }

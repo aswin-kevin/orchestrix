@@ -19,6 +19,26 @@ const (
 // from opening or ending an element.
 var memoryTag = regexp.MustCompile(`(?i)<(\s*/?\s*)memory\b`)
 
+// indexTag is memoryTag for the <memory_index> element.
+var indexTag = regexp.MustCompile(`(?i)<(\s*/?\s*)memory_index\b`)
+
+// loadIndex reads the store index for the system prompt, neutralizing a
+// literal closing tag and capping it at DefaultMaxIndexBytes. A missing or
+// unreadable index is empty.
+func loadIndex(ctx context.Context, b backend.Backend, p string) string {
+	if b == nil {
+		return ""
+	}
+	res, err := b.Read(ctx, p, 0, 0)
+	if err != nil || res.Binary {
+		return ""
+	}
+	index := strings.TrimSpace(strings.Join(res.Lines, "\n"))
+	index = indexTag.ReplaceAllString(index, "&lt;${1}memory_index")
+	index, _ = capBytes(index, DefaultMaxIndexBytes)
+	return strings.TrimSpace(index)
+}
+
 // loadFiles reads each path from b and returns the files that have content.
 // Instruction files are optional: one that cannot be read for any reason, is
 // binary, or is empty once cleaned is skipped.
