@@ -150,7 +150,7 @@ func TestDoCancelDuringRetryWait(t *testing.T) {
 
 func TestRetryDelay(t *testing.T) {
 	cfg := &Config{}
-	rateLimited := &APIError{Status: 429, RetryAfter: 3 * time.Second}
+	rateLimited := &APIError{Status: 429, RetryAfter: 3 * time.Second, hasRetryAfter: true}
 	plain := &APIError{Status: 500}
 
 	if got := cfg.retryDelay(0, rateLimited); got != 3*time.Second {
@@ -169,18 +169,83 @@ func TestRetryDelay(t *testing.T) {
 
 func TestParseRetryAfter(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	tests := map[string]time.Duration{
-		"":                              0,
-		"7":                             7 * time.Second,
-		"-3":                            0,
-		"junk":                          0,
-		"Thu, 01 Jan 2026 12:00:30 GMT": 30 * time.Second,
-		"Wed, 31 Dec 2025 12:00:00 GMT": 0,
+	tests := []struct {
+		value string
+		delay time.Duration
+		ok    bool
+	}{
+		{"", 0, false},
+		{"junk", 0, false},
+		{"-3", 0, false},
+		{"0", 0, true},
+		{"7", 7 * time.Second, true},
+		{"Thu, 01 Jan 2026 12:00:30 GMT", 30 * time.Second, true},
+		{"Wed, 31 Dec 2025 12:00:00 GMT", 0, true},
 	}
-	for value, want := range tests {
-		if got := parseRetryAfter(value, now); got != want {
-			t.Errorf("parseRetryAfter(%q) = %v, want %v", value, got, want)
+	for _, tt := range tests {
+		delay, ok := parseRetryAfter(tt.value, now)
+		if delay != tt.delay || ok != tt.ok {
+			t.Errorf("parseRetryAfter(%q) = %v, %v; want %v, %v", tt.value, delay, ok, tt.delay, tt.ok)
 		}
+	}
+}
+
+func TestDoBuildErrorIsNotRetried(t *testing.T) {
+	var builds int
+	cfg := testConfig(t)
+	_, err := cfg.do(context.Background(), func() (*http.Request, error) {
+		builds++
+		return http.NewRequest(http.MethodPost, "http://bad host/", nil)
+	})
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if builds != 1 {
+		t.Errorf("builds = %d, want 1", builds)
+	}
+	if IsRetryable(err) {
+		t.Errorf("build error must not be retryable: %v", err)
+	}
+}
+
+func TestDoRetryAfterZeroRetriesImmediately(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := &Config{} // default backoff would wait 500ms
+	if err := cfg.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	resp, err := cfg.do(context.Background(), requestTo(srv.URL))
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	resp.Body.Close()
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		t.Errorf("retry took %v, want prompt", elapsed)
+	}
+}
+
+func TestAPIErrorMessageTruncatesBody(t *testing.T) {
+	body := strings.Repeat("x", 5000)
+	err := &APIError{Status: 500, Body: body}
+	if len(err.Error()) > 700 {
+		t.Errorf("message length %d, want truncated", len(err.Error()))
+	}
+	if err.Body != body {
+		t.Error("Body field must stay complete")
+	}
+	if short := (&APIError{Status: 400, Body: "oops"}).Error(); !strings.Contains(short, "oops") || strings.Contains(short, "truncated") {
+		t.Errorf("short body altered: %q", short)
 	}
 }
 

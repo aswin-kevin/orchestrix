@@ -46,7 +46,9 @@ func (c *Config) attempt(ctx context.Context, build func() (*http.Request, error
 	}
 	req, err := build()
 	if err != nil {
-		return nil, fmt.Errorf("llm: build request: %w", err)
+		// %v, not %w: a malformed URL surfaces as *url.Error, which would
+		// otherwise be mistaken for a retryable network failure.
+		return nil, fmt.Errorf("llm: build request: %v", err)
 	}
 	resp, err := c.httpClient().Do(req.WithContext(ctx))
 	if err != nil {
@@ -62,10 +64,12 @@ func (c *Config) attempt(ctx context.Context, build func() (*http.Request, error
 	// A failed read still leaves the status, which is what classification
 	// needs, so the partial body is kept and the read error dropped.
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+	retryAfter, hasRetryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	return nil, &APIError{
-		Status:     resp.StatusCode,
-		Body:       string(body),
-		RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+		Status:        resp.StatusCode,
+		Body:          string(body),
+		RetryAfter:    retryAfter,
+		hasRetryAfter: hasRetryAfter,
 	}
 }
 
@@ -83,7 +87,7 @@ func (c *Config) maxRetries() int {
 // exponential backoff.
 func (c *Config) retryDelay(attempt int, err error) time.Duration {
 	var apiErr *APIError
-	if errors.As(err, &apiErr) && apiErr.RetryAfter > 0 {
+	if errors.As(err, &apiErr) && apiErr.hasRetryAfter {
 		return apiErr.RetryAfter
 	}
 	if c.RetryInterval > 0 {

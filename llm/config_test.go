@@ -1,6 +1,9 @@
 package llm
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+)
 
 func TestParseModel(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "ak")
@@ -48,5 +51,20 @@ func TestParseModelErrors(t *testing.T) {
 		if _, err := ParseModel(spec); err == nil {
 			t.Errorf("ParseModel(%q) succeeded, want error", spec)
 		}
+	}
+}
+
+func TestPrepareProxy(t *testing.T) {
+	cfg := &Config{Proxy: "http://proxy.local:3128"}
+	if err := cfg.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, "http://example.com/", nil)
+	got, err := cfg.httpClient().Transport.(*http.Transport).Proxy(req)
+	if err != nil || got.Host != "proxy.local:3128" {
+		t.Errorf("proxy = %v, %v", got, err)
+	}
+	if err := (&Config{Proxy: "http://bad host"}).prepare(); err == nil {
+		t.Error("invalid proxy URL should fail")
 	}
 }

@@ -131,7 +131,10 @@ func (c *Config) newHTTPClient() (*http.Client, error) {
 	if c.HTTPClient != nil {
 		return c.HTTPClient, nil
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := &http.Transport{}
+	if def, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = def.Clone()
+	}
 	if c.Proxy != "" {
 		proxyURL, err := url.Parse(c.Proxy)
 		if err != nil {
@@ -139,8 +142,10 @@ func (c *Config) newHTTPClient() (*http.Client, error) {
 		}
 		transport.Proxy = http.ProxyURL(proxyURL)
 	}
-	// Without a Proxy the cloned default transport already uses
-	// http.ProxyFromEnvironment. No overall client timeout: streams are
+	if c.Proxy == "" {
+		transport.Proxy = http.ProxyFromEnvironment
+	}
+	// No overall client timeout: streams are
 	// long-lived and callers bound them with a context.
 	return &http.Client{Transport: transport}, nil
 }
