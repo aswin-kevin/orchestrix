@@ -74,9 +74,9 @@ func (m *middleware) execute(ctx context.Context, in backgroundExecuteInput, c *
 }
 
 // executeInBackground hands the command to the run's background starter,
-// with the backend the foreground command would use. A timeout the model did
-// not ask for is left to the starter, whose default suits long-running jobs
-// better than the foreground one.
+// with the backend the foreground command would use. The timeout is passed
+// as asked, zero when none was: the starter applies its own default and cap,
+// which suit long-running jobs better than the foreground ones.
 func (m *middleware) executeInBackground(ctx context.Context, in executeInput, c *tool.Call) tool.Result {
 	if c == nil || c.Background == nil {
 		return tool.Errorf("background execution is not available")
@@ -87,10 +87,7 @@ func (m *middleware) executeInBackground(ctx context.Context, in executeInput, c
 	}
 	withBackend := *c
 	withBackend.Backend = b
-	var timeout time.Duration
-	if in.TimeoutSeconds > 0 {
-		timeout = m.execTimeout(in.TimeoutSeconds)
-	}
+	timeout := time.Duration(max(in.TimeoutSeconds, 0)) * time.Second
 	id, err := c.Background.Start(ctx, &withBackend, in.Command, timeout)
 	if err != nil {
 		return tool.Errorf("background start failed: %v", err)

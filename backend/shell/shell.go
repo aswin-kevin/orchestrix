@@ -43,8 +43,8 @@ const (
 	// half are kept.
 	DefaultMaxOutputBytes = 256 << 10
 	// DefaultKillGrace is how long a process group gets to exit after SIGTERM
-	// before it is sent SIGKILL.
-	DefaultKillGrace = 2 * time.Second
+	// before it is sent SIGKILL; see backend.DefaultKillGrace.
+	DefaultKillGrace = backend.DefaultKillGrace
 	// DefaultMemSample is how often the memory watchdog samples a group.
 	DefaultMemSample = 500 * time.Millisecond
 	// Shell is the interpreter every command runs under.

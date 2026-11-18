@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/permission"
-	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -152,18 +151,14 @@ func (m *Middleware) taskStop(ctx context.Context, in taskIDInput, c *tool.Call)
 		return tool.Errorf("%v", err), nil
 	}
 	// The model asked for the stop, so it needs no notification about it.
-	m.markNotified(c.State, in.TaskID)
-	return tool.Text(fmt.Sprintf("Stopped task %s.", in.TaskID)), nil
-}
-
-func (m *Middleware) markNotified(s *state.State, id string) {
-	m.updateRecords(s, func(records []JobRecord) {
+	m.updateRecords(c.State, func(records []JobRecord) {
 		for i := range records {
-			if records[i].ID == id && records[i].finished() {
-				records[i].Notified = true
+			if records[i].ID == in.TaskID && records[i].finished() {
+				m.markNotified(&records[i])
 			}
 		}
 	})
+	return tool.Text(fmt.Sprintf("Stopped task %s.", in.TaskID)), nil
 }
 
 func (m *Middleware) taskList(_ context.Context, _ taskListInput, c *tool.Call) (tool.Result, error) {

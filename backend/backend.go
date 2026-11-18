@@ -112,6 +112,11 @@ type Executor interface {
 	Execute(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
 }
 
+// DefaultKillGrace is how long a stopped command's process group gets to exit
+// after SIGTERM before it is sent SIGKILL. Callers waiting for a stopped
+// Process can bound the wait by it.
+const DefaultKillGrace = 2 * time.Second
+
 // Process is a command started by a Starter.
 type Process interface {
 	// Done is closed once the command has finished and its whole process

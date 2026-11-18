@@ -12,13 +12,12 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
-	"github.com/aswin-kevin/orchestrix/backend/shell"
 )
 
 // stopWait bounds how long stopping jobs waits for them to end: a job that
 // ignores SIGTERM is killed after the backend's grace period, and the second
 // period covers reaping what it left behind.
-const stopWait = 2 * shell.DefaultKillGrace
+const stopWait = 2 * backend.DefaultKillGrace
 
 // jobIDPrefix starts every job id; the rest is the job's number in its thread.
 const jobIDPrefix = "bg_"
@@ -31,9 +30,12 @@ type job struct {
 	id, threadID, command string
 	started               time.Time
 	proc                  backend.Process
-	// stopped is set before the job is stopped on purpose, so its end is
-	// reported as stopped rather than failed.
+	// stopped is set before a running job is stopped on purpose, so its end
+	// is reported as stopped rather than failed.
 	stopped atomic.Bool
+	// notified is set once the model was told the job ended; the thread's
+	// entry may be dropped when every job it holds is.
+	notified atomic.Bool
 }
 
 // done reports whether the job has ended.
@@ -49,7 +51,8 @@ func (j *job) outcome() (status string, exitCode int) {
 	switch {
 	case !ok:
 		return StatusRunning, 0
-	case j.stopped.Load():
+	case j.stopped.Load() && res.ExitCode != 0:
+		// A job that exited cleanly as the stop raced it completed.
 		return StatusStopped, res.ExitCode
 	case res.TimedOut:
 		return StatusTimedOut, res.ExitCode
@@ -74,6 +77,16 @@ type threadJobs struct {
 
 func newThreadJobs() *threadJobs {
 	return &threadJobs{jobs: map[string]*job{}, changed: make(chan struct{})}
+}
+
+// settled reports whether the model was told about the end of every job.
+func (tj *threadJobs) settled() bool {
+	for _, j := range tj.jobs {
+		if !j.notified.Load() {
+			return false
+		}
+	}
+	return true
 }
 
 func (tj *threadJobs) running() int {
@@ -162,12 +175,21 @@ func (mg *manager) watch(tj *threadJobs, j *job) {
 	}
 	tj.finished = append(tj.finished, j.id)
 	for len(tj.finished) > mg.maxFinished {
-		delete(tj.jobs, tj.finished[0])
-		tj.finished = tj.finished[1:]
+		tj.evictOne()
 	}
 	tj.lastFinished = j.id
 	close(tj.changed)
 	tj.changed = make(chan struct{})
+}
+
+// evictOne forgets the oldest ended job the model was told about, or the
+// oldest ended job when it was told about none, so a job whose end has not
+// been announced yet is not reported as lost while others can go first.
+func (tj *threadJobs) evictOne() {
+	i := slices.IndexFunc(tj.finished, func(id string) bool { return tj.jobs[id].notified.Load() })
+	i = max(i, 0)
+	delete(tj.jobs, tj.finished[i])
+	tj.finished = slices.Delete(tj.finished, i, i+1)
 }
 
 // job returns the job id of threadID, or nil when the manager does not know
@@ -182,11 +204,15 @@ func (mg *manager) job(threadID, id string) *job {
 }
 
 // changed returns a channel closed when the next job of threadID ends, and a
-// function reporting the id of the job that ended last.
+// function reporting the id of the job that ended last. A thread without
+// jobs gets a nil channel, which never fires: nothing can end there.
 func (mg *manager) changed(threadID string) (<-chan struct{}, func() string) {
 	mg.mu.Lock()
 	defer mg.mu.Unlock()
-	tj := mg.thread(threadID)
+	tj, ok := mg.threads[threadID]
+	if !ok {
+		return nil, func() string { return "" }
+	}
 	return tj.changed, func() string {
 		mg.mu.Lock()
 		defer mg.mu.Unlock()
@@ -194,11 +220,48 @@ func (mg *manager) changed(threadID string) (<-chan struct{}, func() string) {
 	}
 }
 
-// stop stops j and waits, up to stopWait or until ctx ends, for it to end.
-func stop(ctx context.Context, j *job) error {
+// markNotified records that the model was told the jobs ids of threadID
+// ended.
+func (mg *manager) markNotified(threadID string, ids []string) {
+	for _, id := range ids {
+		if j := mg.job(threadID, id); j != nil {
+			j.notified.Store(true)
+		}
+	}
+}
+
+// release drops the entry of threadID once no job runs there and the model
+// was told about every job's end, so memory stays bounded by the threads
+// with something left to report. A thread released this way starts its
+// next ids after the highest one its records hold (see start).
+func (mg *manager) release(threadID string) {
+	mg.mu.Lock()
+	defer mg.mu.Unlock()
+	if tj, ok := mg.threads[threadID]; ok && tj.running() == 0 && tj.settled() {
+		delete(mg.threads, threadID)
+	}
+}
+
+// requestStop stops j if it is still running, reporting whether it was. A
+// job that already ended keeps its outcome.
+func requestStop(j *job) (bool, error) {
+	if j.done() {
+		return false, nil
+	}
 	j.stopped.Store(true)
 	if err := j.proc.Stop(); err != nil {
-		return fmt.Errorf("stop %s: %w", j.id, err)
+		return true, fmt.Errorf("stop %s: %w", j.id, err)
+	}
+	return true, nil
+}
+
+// stop stops j and waits, up to stopWait or until ctx ends, for it to end.
+func stop(ctx context.Context, j *job) error {
+	if j == nil {
+		return errors.New("stop: no such job")
+	}
+	if _, err := requestStop(j); err != nil {
+		return err
 	}
 	timer := time.NewTimer(stopWait)
 	defer timer.Stop()
@@ -216,10 +279,7 @@ func stop(ctx context.Context, j *job) error {
 // stopWait deadline; it reports whether every job ended.
 func stopAll(jobs []*job) bool {
 	for _, j := range jobs {
-		if !j.done() {
-			j.stopped.Store(true)
-			_ = j.proc.Stop() // a failed signal still ends in Done via the kill escalation
-		}
+		_, _ = requestStop(j) // a failed signal still ends in Done via the kill escalation
 	}
 	deadline := time.NewTimer(stopWait)
 	defer deadline.Stop()
@@ -262,7 +322,8 @@ func (mg *manager) stopAndForget(threadID string, ids []string, refresh func()) 
 }
 
 // shutdown refuses new jobs, stops every job and waits for them, up to
-// stopWait.
+// stopWait. The entries are kept, so records refreshed afterwards show the
+// jobs as stopped rather than lost.
 func (mg *manager) shutdown() {
 	mg.mu.Lock()
 	mg.closed = true
@@ -272,7 +333,6 @@ func (mg *manager) shutdown() {
 			jobs = append(jobs, j)
 		}
 	}
-	mg.threads = map[string]*threadJobs{}
 	mg.mu.Unlock()
 	if stopAll(jobs) {
 		mg.watchers.Wait()

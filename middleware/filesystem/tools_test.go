@@ -624,4 +624,10 @@ func TestExecuteBackgroundSchemaOnlyWhenEnabled(t *testing.T) {
 	if bg.gotTimeout != 9*time.Second {
 		t.Fatalf("background timeout = %v, want 9s", bg.gotTimeout)
 	}
+	// The starter caps background timeouts itself; the foreground cap is
+	// for commands the agent waits on.
+	f.run(t, "execute", obj{"command": "make", "run_in_background": true, "timeout_seconds": 99999})
+	if bg.gotTimeout != 99999*time.Second {
+		t.Fatalf("background timeout = %v, want 99999s uncapped", bg.gotTimeout)
+	}
 }

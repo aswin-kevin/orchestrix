@@ -82,7 +82,9 @@ type JobRecord struct {
 	// ExitCode is set once the job ended; -1 when it was killed or lost.
 	ExitCode int       `json:"exit_code"`
 	Started  time.Time `json:"started"`
-	// Ended is zero while the job runs.
+	// Ended is when the middleware observed the end (a tool or the next
+	// turn looked at the job), not the exact exit time; zero while the job
+	// runs.
 	Ended time.Time `json:"ended,omitzero"`
 	// Notified reports that the model was told the job ended, by a
 	// notification or because it stopped the job itself.
@@ -143,8 +145,9 @@ func positiveOr[T int | time.Duration](v, fallback T) T {
 func (m *Middleware) Name() string { return "tasks" }
 
 // Shutdown stops every job of every thread and waits for them to end, for at
-// most twice the shell backend's kill grace period. Jobs cannot be started
-// afterwards.
+// most twice backend.DefaultKillGrace. A job still running after that keeps
+// one goroutine waiting for it. Jobs cannot be started afterwards, and the
+// records of the jobs it stopped show them as stopped.
 func (m *Middleware) Shutdown() { m.jobs.shutdown() }
 
 // WrapTool implements agent.ToolWrapper: it offers background execution to
@@ -162,6 +165,11 @@ type starter struct{ m *Middleware }
 
 // Start implements tool.Background.
 func (s starter) Start(ctx context.Context, c *tool.Call, command string, timeout time.Duration) (string, error) {
+	if c.ThreadID == "" {
+		// Jobs are found by thread: without one, unrelated runs would share
+		// them and nobody could pick up a job after its run ended.
+		return "", errors.New("background jobs need a thread id")
+	}
 	b, ok := c.Backend.(backend.Starter)
 	if !ok {
 		return "", errors.New("this backend cannot run background commands")
@@ -187,18 +195,33 @@ func (s starter) Start(ctx context.Context, c *tool.Call, command string, timeou
 
 // BeforeModel implements agent.BeforeModel: every job that ended since the
 // last turn, or was lost, is announced with one user message.
-func (m *Middleware) BeforeModel(_ context.Context, s *state.State) error {
+//
+// Before that, a thread whose jobs all ended and were announced in earlier
+// turns is released (see manager.release): the model had the turn of each
+// notification to read the output, and afterwards task_output reports the
+// recorded outcome only.
+func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
+	if info, ok := agent.Info(ctx); ok && info.ThreadID != "" {
+		m.jobs.release(info.ThreadID)
+	}
 	var notices []llm.Message
 	m.updateRecords(s, func(records []JobRecord) {
 		for i := range records {
 			if records[i].finished() && !records[i].Notified {
 				notices = append(notices, notification(records[i]))
-				records[i].Notified = true
+				m.markNotified(&records[i])
 			}
 		}
 	})
 	s.AppendMessages(notices...)
 	return nil
+}
+
+// markNotified records, in r and on its job, that the model was told the job
+// ended.
+func (m *Middleware) markNotified(r *JobRecord) {
+	r.Notified = true
+	m.jobs.markNotified(r.ThreadID, []string{r.ID})
 }
 
 func notification(r JobRecord) llm.Message {
@@ -227,7 +250,7 @@ func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 			m.updateRecords(s, func(records []JobRecord) {
 				for i := range records {
 					if slices.Contains(ids, records[i].ID) {
-						records[i].Notified = true
+						m.markNotified(&records[i])
 					}
 				}
 			})
