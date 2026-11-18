@@ -38,13 +38,13 @@ const (
 
 // ActionRequest is one action a paused run needs a decision for.
 type ActionRequest struct {
-	ToolUseID string
-	Tool      string
-	Input     json.RawMessage
+	ToolUseID string          `json:"tool_use_id"`
+	Tool      string          `json:"tool"`
+	Input     json.RawMessage `json:"input,omitempty"`
 	// Reason explains to the human why a decision is needed.
-	Reason string
+	Reason string `json:"reason,omitempty"`
 	// Allowed lists the decision types the host may answer with.
-	Allowed []DecisionType
+	Allowed []DecisionType `json:"allowed,omitempty"`
 }
 
 // Interrupt pauses a run until a human decides on the listed actions.
@@ -59,7 +59,7 @@ type ActionRequest struct {
 // The run emits KindInterrupt carrying an Interrupt that lists every pending
 // action of the turn, then ends with ReasonInterrupted.
 type Interrupt struct {
-	Requests []ActionRequest
+	Requests []ActionRequest `json:"requests"`
 }
 
 // Error implements error.
@@ -69,12 +69,12 @@ func (i *Interrupt) Error() string {
 
 // Decision is a human's answer to one ActionRequest, matched by ToolUseID.
 type Decision struct {
-	ToolUseID string
-	Type      DecisionType
+	ToolUseID string       `json:"tool_use_id"`
+	Type      DecisionType `json:"type"`
 	// Input is the replacement input for Edit.
-	Input json.RawMessage
+	Input json.RawMessage `json:"input,omitempty"`
 	// Message is the rejection reason for Reject or the answer for Respond.
-	Message string
+	Message string `json:"message,omitempty"`
 }
 
 // Resume continues a run that ended with ReasonInterrupted, from the State it
@@ -86,7 +86,8 @@ type Decision struct {
 // untouched.
 //
 // The interrupted turn is finished first; a call whose result was recorded
-// is never run again:
+// is never run again. The decided calls are carried out first, in call
+// order, and none is held back by another call interrupting:
 //   - Approve runs the call; a tool that raised the interrupt is invoked
 //     again with tool.Call.Resume set.
 //   - Edit runs the call with Decision.Input, which is validated against the
@@ -96,9 +97,11 @@ type Decision struct {
 //     result, and re-invokes a tool that raised the interrupt with the
 //     message in tool.Call.Resume.
 //
-// Calls that never started run normally and may interrupt again. Then the
-// run goes on like one started by Run, with the same hooks, a fresh budget,
-// and threadID selecting the backend.
+// Calls that never started run after that, normally, and may interrupt
+// again; so may a re-invoked tool. Once every call has a result, the results
+// are placed right after the turn's assistant message (before anything a
+// BeforeAgent hook added) and the run goes on like one started by Run, with
+// the same hooks, a fresh budget, and threadID selecting the backend.
 func (a *Agent) Resume(ctx context.Context, threadID string, s *state.State, decisions []Decision) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
 		resume, err := newResumption(s, decisions)

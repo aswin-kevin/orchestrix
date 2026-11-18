@@ -34,11 +34,12 @@ type toolCall struct {
 	input json.RawMessage
 	// concurrent reports whether the call may run alongside its neighbours.
 	concurrent bool
-	// rejected, when set, is the result of a call that failed preparation
-	// (unknown tool, unparsable or schema-invalid input) and must not run.
-	rejected *tool.Result
+	// blocked, when set, is the result of a call that must not run: it
+	// failed preparation (unknown tool, unparsable or schema-invalid input),
+	// or a human's decision answered it (see applyDecision).
+	blocked *tool.Result
 	// resumed, when set, is the decision on the interrupt this call raised
-	// in an earlier run.
+	// in an earlier run. A decided call is never held back by a halt.
 	resumed *resumedCall
 	// resume is handed to the tool as tool.Call.Resume.
 	resume *tool.ResumeValue
@@ -50,16 +51,31 @@ type toolCall struct {
 }
 
 // toolTurn schedules the calls of one assistant reply that have no result
-// yet. Once every call has one, the results are appended to State; while a
-// call awaits a decision, the turn is recorded as pending instead and the run
-// ends interrupted. It also returns a Final when the run was cancelled.
+// yet: first, in call order, those a human decided on, then the ones never
+// started, so a decided call is never held back by a call that interrupts.
+// Once every call has a result, the results go into State right after the
+// assistant message; while a call awaits a decision, the turn is recorded as
+// pending instead and the run ends interrupted. It also returns a Final when
+// the run was cancelled.
 func (r *run) toolTurn(assistantIndex int, calls []*toolCall) *Final {
-	r.schedule(slices.DeleteFunc(slices.Clone(calls), (*toolCall).done))
+	var decided, fresh []*toolCall
+	for _, c := range calls {
+		switch {
+		case c.done():
+		case c.resumed != nil:
+			decided = append(decided, c)
+		default:
+			fresh = append(fresh, c)
+		}
+	}
+	var halted atomic.Bool
+	r.schedule(decided, &halted)
+	r.schedule(fresh, &halted)
 	if slices.ContainsFunc(calls, (*toolCall).pending) {
 		return r.interrupt(assistantIndex, calls)
 	}
 	pendingKey.Delete(r.state)
-	r.state.AppendMessages(toolResultMessages(calls)...)
+	r.insertAfter(assistantIndex, toolResultMessages(calls))
 	if err := r.ctx.Err(); err != nil {
 		return r.finish(ReasonAbortedTools, fmt.Errorf("agent: tool calls: %w", err))
 	}
@@ -68,6 +84,20 @@ func (r *run) toolTurn(assistantIndex int, calls []*toolCall) *Final {
 
 func (c *toolCall) done() bool    { return c.result != nil }
 func (c *toolCall) pending() bool { return c.interrupt != nil }
+
+// insertAfter puts msgs right after the message at index. Tool results must
+// directly follow their assistant message, and a BeforeAgent hook of a
+// resumed run may have appended messages after it. An index past the end
+// (a hook dropped messages) appends.
+func (r *run) insertAfter(index int, msgs []llm.Message) {
+	history := r.state.Messages()
+	at := min(index+1, len(history))
+	if at == len(history) {
+		r.state.AppendMessages(msgs...)
+		return
+	}
+	r.state.SetMessages(slices.Insert(history, at, msgs...))
+}
 
 // prepareAll prepares the calls of an assistant reply.
 func (r *run) prepareAll(uses []llm.Block) []*toolCall {
@@ -78,13 +108,12 @@ func (r *run) prepareAll(uses []llm.Block) []*toolCall {
 	return calls
 }
 
-// schedule executes calls batch by batch. Once a call is pending, no later
-// call starts (calls already running finish); see hold for what happens to
-// the rest.
-func (r *run) schedule(calls []*toolCall) {
-	var halted atomic.Bool
+// schedule executes calls batch by batch. Once a call is pending (halted is
+// set), no later undecided call starts (calls already running finish); see
+// hold for what happens to them.
+func (r *run) schedule(calls []*toolCall, halted *atomic.Bool) {
 	for _, batch := range batches(calls) {
-		r.runBatch(batch, &halted)
+		r.runBatch(batch, halted)
 	}
 }
 
@@ -111,7 +140,7 @@ func (r *run) runBatch(batch []*toolCall, halted *atomic.Bool) {
 	slots := make(chan struct{}, r.agent.cfg.MaxConcurrency)
 	var wg sync.WaitGroup
 	for _, c := range batch {
-		if halted.Load() {
+		if r.heldBack(c, halted) {
 			r.hold(c)
 			continue
 		}
@@ -124,6 +153,13 @@ func (r *run) runBatch(batch []*toolCall, halted *atomic.Bool) {
 			r.settle(c, *res)
 		default:
 			slots <- struct{}{}
+			// An earlier call may have interrupted while this one waited for
+			// its slot; it was admitted but has not started, so it is left
+			// not started and evaluated afresh on resume.
+			if r.heldBack(c, halted) {
+				<-slots
+				continue
+			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -153,34 +189,40 @@ func (r *run) settle(c *toolCall, res tool.Result) {
 	r.emit(Event{Kind: KindToolResult, ToolID: c.id, ToolName: c.name, ToolResult: &res})
 }
 
-// hold handles a call reached after the turn halted: it does not start. A
-// decision that answers it without running it, such as a rejection, still
-// settles it. Otherwise, when there is no Approver, its permission is still
-// evaluated so that every approval the turn needs is asked for in the same
-// interrupt. Anything else is left not started and evaluated afresh on
-// resume.
-func (r *run) hold(c *toolCall) {
-	// A panicking tool method leaves the call not started; it panics again,
-	// and settles with a panic result, once the call is scheduled for real.
-	defer func() { _ = recover() }()
+// heldBack reports whether c must not start because the turn has halted.
+// Calls a human decided on are exempt: the decision is carried out.
+func (r *run) heldBack(c *toolCall, halted *atomic.Bool) bool {
+	return c.resumed == nil && halted.Load()
+}
 
-	if c.rejected != nil {
+// hold handles a call that may not start because the turn halted. When there
+// is no Approver, its permission is still evaluated so that every approval
+// the turn needs is asked for in the same interrupt. Anything else is left
+// not started and evaluated afresh on resume.
+func (r *run) hold(c *toolCall) {
+	if c.blocked != nil || r.agent.cfg.Approver != nil {
 		return
 	}
-	if c.resumed != nil {
-		if res := c.answerWithoutRunning(); res != nil {
-			r.emit(Event{Kind: KindToolUse, ToolID: c.id, ToolName: c.name, Input: c.input})
-			r.settle(c, *res)
-			return
-		}
-	}
-	if r.agent.cfg.Approver != nil {
+	req, ok := r.heldPermissionRequest(c)
+	if !ok {
 		return
 	}
-	decision := permission.Evaluate(r.permissionRequest(c), r.agent.permissionContext())
+	decision := permission.Evaluate(req, r.agent.permissionContext())
 	if decision.Behavior == permission.Ask {
 		c.interrupt = askInterrupt(c, decision.Message)
 	}
+}
+
+// heldPermissionRequest is permissionRequest for a held call. The tool's
+// methods may panic; that leaves the call not started (ok is false), and it
+// settles with a panic result once it is scheduled for real.
+func (r *run) heldPermissionRequest(c *toolCall) (req permission.Request, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	return r.permissionRequest(c), true
 }
 
 // prepare resolves the tool named by use and checks its input.
@@ -188,28 +230,28 @@ func (r *run) prepare(use llm.Block) (c *toolCall) {
 	c = &toolCall{id: use.ID, name: use.Name, input: use.Input}
 	defer func() {
 		if v := recover(); v != nil {
-			c.rejected = panicResult(c.name, v)
+			c.blocked = panicResult(c.name, v)
 		}
 	}()
 
 	// The model may still call a tool hidden from it during settlement.
 	if r.disabled(use.Name) {
-		c.rejected = errorResult("tool %s is not available while the run is wrapping up", use.Name)
+		c.blocked = errorResult("tool %s is not available while the run is wrapping up", use.Name)
 		return c
 	}
 	t, ok := r.agent.registry.Get(use.Name)
 	if !ok {
-		c.rejected = errorResult("unknown tool %q", use.Name)
+		c.blocked = errorResult("unknown tool %q", use.Name)
 		return c
 	}
 	c.tool = t
 	input, err := parseToolInput(use.Input)
 	if err != nil {
-		c.rejected = errorResult("invalid JSON arguments: %v. Re-issue the call with valid JSON.", err)
+		c.blocked = errorResult("invalid JSON arguments: %v. Re-issue the call with valid JSON.", err)
 		return c
 	}
 	c.input = input
-	if c.rejected = validateInput(t, input); c.rejected != nil {
+	if c.blocked = validateInput(t, input); c.blocked != nil {
 		return c
 	}
 	c.concurrent = t.ConcurrencySafe(input)
@@ -264,10 +306,11 @@ func checkInput(t tool.Tool, in json.RawMessage) error {
 }
 
 // start decides how c proceeds. It returns nil for a call that may run, or
-// the result of a call that must not: one rejected while preparing, one the
-// run's cancellation reached first, one permission refused, or one a human
-// answered without running it. A call that needs an approval no Approver can
-// give is marked pending instead.
+// the result of a call that must not: a blocked one, one the run's
+// cancellation reached first, or one permission refused. A decided call
+// skips the permission check: the human has just decided on this very call.
+// A call that needs an approval no Approver can give is marked pending
+// instead.
 func (r *run) start(c *toolCall) (res *tool.Result) {
 	defer func() {
 		if v := recover(); v != nil {
@@ -275,14 +318,14 @@ func (r *run) start(c *toolCall) (res *tool.Result) {
 		}
 	}()
 
-	if c.rejected != nil {
-		return c.rejected
+	if c.blocked != nil {
+		return c.blocked
 	}
 	if stopped := r.stoppedResult(); stopped != nil {
 		return stopped
 	}
 	if c.resumed != nil {
-		return c.applyDecision()
+		return nil
 	}
 	return r.admit(c)
 }

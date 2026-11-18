@@ -139,8 +139,9 @@ func (r *run) resumeTurn() *Final {
 }
 
 // restoreCalls rebuilds the calls of the interrupted turn. Recorded results
-// are kept as they are; every other call is prepared afresh, carrying the
-// decision on its interrupt if it had one.
+// are kept as they are; every other call is prepared afresh, and a pending
+// one gets its decision applied, so that its KindToolUse event already shows
+// the input it runs with.
 func (r *run) restoreCalls() []*toolCall {
 	calls := make([]*toolCall, len(r.resume.turn.Calls))
 	for i, rec := range r.resume.turn.Calls {
@@ -149,8 +150,9 @@ func (r *run) restoreCalls() []*toolCall {
 			continue
 		}
 		c := r.prepare(llm.Block{Type: llm.BlockToolUse, ID: rec.ID, Name: rec.Name, Input: json.RawMessage(rec.Input)})
-		if rec.Interrupt != nil {
+		if rec.Interrupt != nil && c.blocked == nil {
 			c.resumed = &resumedCall{origin: rec.Interrupt.Origin, decision: r.resume.decisions[rec.ID]}
+			c.blocked = c.applyDecision()
 		}
 		calls[i] = c
 	}
@@ -158,9 +160,9 @@ func (r *run) restoreCalls() []*toolCall {
 }
 
 // applyDecision prepares a resumed call to continue as the human decided. It
-// returns the result of a decision that answers the call without running it,
-// or nil when the call runs. Either way no permission is checked: the human
-// has just decided on this very call.
+// returns the result of a decision that answers the call without running it
+// (a rejection, a response to a permission ask, or an edit with invalid
+// input), or nil when the call runs.
 func (c *toolCall) applyDecision() *tool.Result {
 	if res := c.answerWithoutRunning(); res != nil {
 		return res
@@ -176,9 +178,7 @@ func (c *toolCall) applyDecision() *tool.Result {
 }
 
 // answerWithoutRunning returns the result of a decision that settles a
-// resumed call without running it: a rejection, a response to a permission
-// ask, or an edit with invalid input. It returns nil for a decision that
-// runs the call.
+// resumed call without running it, or nil for a decision that runs it.
 func (c *toolCall) answerWithoutRunning() *tool.Result {
 	d := c.resumed.decision
 	switch {

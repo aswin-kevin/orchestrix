@@ -17,7 +17,9 @@ const (
 	KindText EventKind = "text"
 	// KindThinking is a delta of model reasoning (Event.Text).
 	KindThinking EventKind = "thinking"
-	// KindToolUse announces a tool call (ToolID, ToolName, Input).
+	// KindToolUse announces an attempt to run a tool call (ToolID, ToolName,
+	// Input). A call that pauses for a decision is announced again when it
+	// is resumed, then with the input it runs with.
 	KindToolUse EventKind = "tool_use"
 	// KindToolResult reports a finished tool call (ToolID, ToolName, ToolResult).
 	KindToolResult EventKind = "tool_result"

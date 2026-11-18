@@ -175,7 +175,6 @@ func TestPermissionDenyAndApprover(t *testing.T) {
 			t.Fatal("tool ran with invalid approver input")
 		}
 	})
-
 }
 
 func TestPermissionRequestFromOptionalInterfaces(t *testing.T) {

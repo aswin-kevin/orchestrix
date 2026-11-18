@@ -107,3 +107,11 @@ func TestResultHelpers(t *testing.T) {
 		t.Errorf("Text = %+v", r)
 	}
 }
+
+func TestResultJSONFieldNames(t *testing.T) {
+	res := Errorf("bad")
+	got, err := json.Marshal(res)
+	if want := `{"content":[{"type":"text","text":"bad"}],"is_error":true}`; err != nil || string(got) != want {
+		t.Fatalf("json.Marshal(Result) = %s, %v; want %s", got, err, want)
+	}
+}

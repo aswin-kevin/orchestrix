@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -470,5 +473,174 @@ func TestRunClearsPendingInterrupt(t *testing.T) {
 	_, resumed := collect(t, a.Resume(context.Background(), "", next.State, nil))
 	if !errors.Is(resumed.Err, ErrNoPendingInterrupt) {
 		t.Fatalf("Resume after Run: err = %v, want ErrNoPendingInterrupt", resumed.Err)
+	}
+}
+
+func TestDecidedCallsRunBeforeNeverStartedOnes(t *testing.T) {
+	log := newCallLog()
+	a, events, final := interruptedRun(t, Config{Tools: []tool.Tool{writeTool(log), askUserTool(log)}},
+		writeCall("w1"), llmtest.Call{ID: "x", Name: "ask_user", Input: map[string]any{"text": "x"}}, writeCall("w2"))
+	if ids := requestIDs(interruptEvent(t, events)); !slices.Equal(ids, []string{"w1", "w2"}) {
+		t.Fatalf("first interrupt = %v, want [w1 w2]", ids)
+	}
+
+	events, again := collect(t, a.Resume(context.Background(), "", final.State, []Decision{
+		{ToolUseID: "w1", Type: Approve},
+		{ToolUseID: "w2", Type: Edit, Input: json.RawMessage(`{"text":"edited"}`)},
+	}))
+
+	if again.Reason != ReasonInterrupted {
+		t.Fatalf("final = %+v, want interrupted again by x", again)
+	}
+	if ids := requestIDs(interruptEvent(t, events)); !slices.Equal(ids, []string{"x"}) {
+		t.Fatalf("second interrupt = %v, want [x]", ids)
+	}
+	if ran := log.ran(); !slices.Equal(ran, []string{"w1", "w2", "x"}) {
+		t.Fatalf("calls run = %v, want the decided w1 and w2, then x", ran)
+	}
+	if in := toolUseInput(events, "w2"); in != `{"text":"edited"}` {
+		t.Fatalf("KindToolUse input for w2 = %s, want the edited input", in)
+	}
+
+	results := resumeCompleted(t, a, again.State, Decision{ToolUseID: "x", Type: Respond, Message: "ok"})
+
+	want := []string{"wrote w1", "answer: ok", "wrote edited"}
+	for i := range want {
+		if got := resultText(results[i]); got != want[i] {
+			t.Fatalf("result %d = %q, want %q", i, got, want[i])
+		}
+	}
+	if log.count("w1") != 1 || log.count("w2") != 1 {
+		t.Fatalf("runs: w1 %d, w2 %d; want each exactly once", log.count("w1"), log.count("w2"))
+	}
+}
+
+// toolUseInput returns the input of the KindToolUse event for id.
+func toolUseInput(events []Event, id string) string {
+	for _, ev := range events {
+		if ev.Kind == KindToolUse && ev.ToolID == id {
+			return string(ev.Input)
+		}
+	}
+	return ""
+}
+
+func TestNoCallStartsAfterHaltWhileWaitingForSlot(t *testing.T) {
+	log := newCallLog()
+	pause := tool.New("pause", "Interrupt until resumed.",
+		func(_ context.Context, _ echoInput, c *tool.Call) (tool.Result, error) {
+			log.add(c)
+			if c.Resume == nil {
+				return tool.Result{}, &Interrupt{}
+			}
+			return tool.Text("paused"), nil
+		},
+		tool.WithReadOnly(), tool.WithConcurrent())
+	next := tool.New("next", "Run after pause.",
+		func(_ context.Context, _ echoInput, c *tool.Call) (tool.Result, error) {
+			log.add(c)
+			return tool.Text("next done"), nil
+		},
+		tool.WithReadOnly(), tool.WithConcurrent())
+
+	// With one slot, n waits for p's slot; p interrupts before releasing it.
+	a, _, final := interruptedRun(t, Config{Tools: []tool.Tool{pause, next}, MaxConcurrency: 1},
+		llmtest.Call{ID: "p", Name: "pause", Input: map[string]any{"text": "p"}},
+		llmtest.Call{ID: "n", Name: "next", Input: map[string]any{"text": "n"}})
+
+	if n := log.count("n"); n != 0 {
+		t.Fatalf("n ran %d times before the resume, want 0: it got its slot after p interrupted", n)
+	}
+	results := resumeCompleted(t, a, final.State, Decision{ToolUseID: "p", Type: Approve})
+	if log.count("n") != 1 || resultText(results[1]) != "next done" {
+		t.Fatalf("n ran %d times with result %+v, want once after the resume", log.count("n"), results[1])
+	}
+}
+
+// noteOnResume is a BeforeAgent hook that appends a message once on is set.
+type noteOnResume struct{ on *atomic.Bool }
+
+func (noteOnResume) Name() string { return "note_on_resume" }
+
+func (h noteOnResume) BeforeAgent(_ context.Context, s *state.State) error {
+	if h.on.Load() {
+		s.AppendMessages(llm.UserText("hook note"))
+	}
+	return nil
+}
+
+func TestResumeInsertsResultsBeforeHookMessages(t *testing.T) {
+	log := newCallLog()
+	var on atomic.Bool
+	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{writeCall("w")}}, llmtest.Turn{Text: "done"})
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{writeTool(log)}, Middleware: []Middleware{noteOnResume{&on}}})
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	if final.Reason != ReasonInterrupted {
+		t.Fatalf("final = %+v, want interrupted", final)
+	}
+
+	on.Store(true)
+	resumeCompleted(t, a, final.State, Decision{ToolUseID: "w", Type: Approve})
+
+	msgs := final.State.Messages()
+	if len(msgs) != 5 || msgs[2].Content[0].ToolUseID != "w" || msgs[3].Text() != "hook note" {
+		t.Fatalf("history = %+v, want user, assistant, tool results, hook note, assistant", msgs)
+	}
+	sent := p.Requests[1].Messages
+	if r := sent[2].Content[0]; r.Type != llm.BlockToolResult || r.ToolUseID != "w" || r.IsError || resultText(r) != "wrote w" {
+		t.Fatalf("message after the tool_use in the request = %+v, want w's real result", sent[2])
+	}
+}
+
+func TestHeldCallPanickingPermissionCheckIsNotStarted(t *testing.T) {
+	log := newCallLog()
+	boom := tool.New("boom", "Panic in the permission check.",
+		func(context.Context, struct{}, *tool.Call) (tool.Result, error) { return tool.Text("ok"), nil },
+		tool.WithPermission(func(context.Context, json.RawMessage, permission.Context) permission.Decision {
+			panic("bad check")
+		}))
+	a, events, final := interruptedRun(t, Config{Tools: []tool.Tool{writeTool(log), boom}},
+		writeCall("w"), llmtest.Call{ID: "b", Name: "boom"})
+
+	if ids := requestIDs(interruptEvent(t, events)); !slices.Equal(ids, []string{"w"}) {
+		t.Fatalf("interrupt = %v, want [w]", ids)
+	}
+	results := resumeCompleted(t, a, final.State, Decision{ToolUseID: "w", Type: Approve})
+	if r := results[1]; !r.IsError || resultText(r) != "tool boom panicked: bad check" {
+		t.Fatalf("boom result = %+v, want the panic result once it is scheduled", r)
+	}
+}
+
+func TestPendingRecordUsesSnakeCaseFields(t *testing.T) {
+	log := newCallLog()
+	_, _, final := interruptedRun(t, Config{Tools: []tool.Tool{readTool(log), writeTool(log)}},
+		readCall("r"), writeCall("w"))
+
+	data, err := json.Marshal(final.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"tool_use_id":"w"`, `"tool":"write_file"`, `"allowed":["approve"`, `"reason":"approve write_file?"`, `"content":[`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("serialized state lacks %s: %s", want, data)
+		}
+	}
+}
+
+func TestPublicTypesJSONFieldNames(t *testing.T) {
+	cases := []struct {
+		value any
+		want  string
+	}{
+		{Decision{ToolUseID: "t", Type: Edit, Input: json.RawMessage(`{}`), Message: "m"},
+			`{"tool_use_id":"t","type":"edit","input":{},"message":"m"}`},
+		{Interrupt{Requests: []ActionRequest{{ToolUseID: "t", Tool: "x", Input: json.RawMessage(`{}`), Reason: "r", Allowed: []DecisionType{Approve}}}},
+			`{"requests":[{"tool_use_id":"t","tool":"x","input":{},"reason":"r","allowed":["approve"]}]}`},
+	}
+	for _, c := range cases {
+		got, err := json.Marshal(c.value)
+		if err != nil || string(got) != c.want {
+			t.Errorf("json.Marshal(%T) = %s, %v; want %s", c.value, got, err, c.want)
+		}
 	}
 }

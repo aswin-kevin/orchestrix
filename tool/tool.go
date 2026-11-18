@@ -95,11 +95,11 @@ func (c *Call) Progress(msg string) {
 
 // Result is what a tool returns to the model.
 type Result struct {
-	Content []llm.Block
-	IsError bool
+	Content []llm.Block `json:"content"`
+	IsError bool        `json:"is_error,omitempty"`
 	// Extra holds additional messages to append to the conversation after the
 	// tool result.
-	Extra []llm.Message
+	Extra []llm.Message `json:"extra,omitempty"`
 }
 
 // Text returns a successful single-text result.
