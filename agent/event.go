@@ -46,8 +46,13 @@ const (
 	ReasonMaxTurns TerminalReason = "max_turns"
 	// ReasonTimeout: Config.MaxDuration elapsed.
 	ReasonTimeout TerminalReason = "timeout"
-	// ReasonInterrupted: a tool or middleware asked for human input.
+	// ReasonInterrupted: a tool call awaits a human decision; see
+	// Agent.Resume.
 	ReasonInterrupted TerminalReason = "interrupted"
+	// ReasonInvalidResume: Agent.Resume was called without a pending
+	// interrupt or with decisions that do not answer it (Final.Err says
+	// which). Nothing ran and State is unchanged.
+	ReasonInvalidResume TerminalReason = "invalid_resume"
 	// ReasonModelError: the model call failed and could not be recovered.
 	ReasonModelError TerminalReason = "model_error"
 	// ReasonPromptTooLong: the conversation no longer fits the context window

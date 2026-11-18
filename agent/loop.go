@@ -34,6 +34,9 @@ type run struct {
 	model ModelHandler
 	// budget tracks the run limits; see budget.go.
 	budget *budget
+	// resume, when set, is the interrupted turn this run finishes before
+	// its first model call; see Agent.Resume.
+	resume *resumption
 
 	events chan Event
 	// gone is closed by the consumer when it stops reading events.
@@ -89,6 +92,11 @@ func (r *run) drive(input []llm.Message) {
 	defer r.seal()
 	defer r.budget.stopClock()
 
+	if r.resume == nil {
+		// A new run abandons an interrupt left in State; repairHistory
+		// answers the calls it left unanswered in the model's view.
+		pendingKey.Delete(r.state)
+	}
 	r.state.AppendMessages(input...)
 	final := r.loop()
 	if r.abandoned() {
@@ -100,10 +108,16 @@ func (r *run) drive(input []llm.Message) {
 }
 
 // loop runs turns until the model is done, a run limit is reached, or
-// something ends the run early.
+// something ends the run early. A resumed run first finishes the interrupted
+// turn.
 func (r *run) loop() *Final {
 	if err := r.beforeAgent(); err != nil {
 		return r.finish(ReasonMiddlewareError, err)
+	}
+	if r.resume != nil {
+		if final := r.resumeTurn(); final != nil {
+			return final
+		}
 	}
 	for {
 		resp, final := r.modelTurn()
@@ -127,7 +141,8 @@ func (r *run) afterReply(resp *llm.Response) *Final {
 	if len(uses) == 0 {
 		return r.afterNoToolTurn(resp)
 	}
-	if final := r.toolTurn(uses); final != nil {
+	assistantIndex := len(r.state.Messages()) - 1 // record just appended it
+	if final := r.toolTurn(assistantIndex, r.prepareAll(uses)); final != nil {
 		return final
 	}
 	return r.afterToolTurn()

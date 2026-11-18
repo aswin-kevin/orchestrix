@@ -73,10 +73,21 @@ func (a *Agent) Config() Config {
 // model and tool calls see their context cancelled, and the iterator returns
 // once they have stopped, so no goroutine outlives it. Once the run notices
 // the break it sends nothing more and skips the AfterAgent hooks.
+//
+// When in.State holds a run that ended interrupted, Run abandons that
+// interrupt and starts afresh: the model sees the calls it left unanswered
+// as interrupted. Use Resume to continue it instead.
 func (a *Agent) Run(ctx context.Context, in Input) iter.Seq2[Event, error] {
+	return a.stream(ctx, in, nil)
+}
+
+// stream starts a run, which first finishes the interrupted turn when resume
+// is set, and streams its events as described on Run.
+func (a *Agent) stream(ctx context.Context, in Input, resume *resumption) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
 		ctx, cancel := context.WithCancel(ctx)
 		r := a.newRun(ctx, in)
+		r.resume = resume
 		go r.drive(in.Messages)
 		// After a normal finish this only releases the context.
 		defer r.abandon(cancel)

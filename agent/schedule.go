@@ -3,10 +3,12 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -35,33 +37,55 @@ type toolCall struct {
 	// rejected, when set, is the result of a call that failed preparation
 	// (unknown tool, unparsable or schema-invalid input) and must not run.
 	rejected *tool.Result
+	// resumed, when set, is the decision on the interrupt this call raised
+	// in an earlier run.
+	resumed *resumedCall
+	// resume is handed to the tool as tool.Call.Resume.
+	resume *tool.ResumeValue
+
+	// The outcome: result once the call is done, interrupt while it awaits
+	// a decision; neither for a call that was not started.
+	result    *tool.Result
+	interrupt *callInterrupt
 }
 
-// toolTurn executes the calls of one assistant reply and appends their
-// results to State. It returns a Final when the run was cancelled meanwhile.
-func (r *run) toolTurn(uses []llm.Block) *Final {
-	results := r.runTools(uses)
-	r.state.AppendMessages(toolResultMessages(uses, results)...)
+// toolTurn schedules the calls of one assistant reply that have no result
+// yet. Once every call has one, the results are appended to State; while a
+// call awaits a decision, the turn is recorded as pending instead and the run
+// ends interrupted. It also returns a Final when the run was cancelled.
+func (r *run) toolTurn(assistantIndex int, calls []*toolCall) *Final {
+	r.schedule(slices.DeleteFunc(slices.Clone(calls), (*toolCall).done))
+	if slices.ContainsFunc(calls, (*toolCall).pending) {
+		return r.interrupt(assistantIndex, calls)
+	}
+	pendingKey.Delete(r.state)
+	r.state.AppendMessages(toolResultMessages(calls)...)
 	if err := r.ctx.Err(); err != nil {
 		return r.finish(ReasonAbortedTools, fmt.Errorf("agent: tool calls: %w", err))
 	}
 	return nil
 }
 
-// runTools executes uses batch by batch and returns their results in call
-// order.
-func (r *run) runTools(uses []llm.Block) []tool.Result {
+func (c *toolCall) done() bool    { return c.result != nil }
+func (c *toolCall) pending() bool { return c.interrupt != nil }
+
+// prepareAll prepares the calls of an assistant reply.
+func (r *run) prepareAll(uses []llm.Block) []*toolCall {
 	calls := make([]*toolCall, len(uses))
 	for i, use := range uses {
 		calls[i] = r.prepare(use)
 	}
-	results := make([]tool.Result, len(calls))
-	next := 0
+	return calls
+}
+
+// schedule executes calls batch by batch. Once a call is pending, no later
+// call starts (calls already running finish); see hold for what happens to
+// the rest.
+func (r *run) schedule(calls []*toolCall) {
+	var halted atomic.Bool
 	for _, batch := range batches(calls) {
-		r.runBatch(batch, results[next:next+len(batch)])
-		next += len(batch)
+		r.runBatch(batch, &halted)
 	}
-	return results
 }
 
 // batches groups consecutive concurrency-safe calls so they can run in
@@ -79,34 +103,84 @@ func batches(calls []*toolCall) [][]*toolCall {
 	return out
 }
 
-// runBatch executes batch, writing the result of batch[i] to out[i].
-// Permission is checked one call at a time, in call order, so an Approver is
-// never asked two things at once; admitted calls run on their own goroutines,
-// at most MaxConcurrency at a time. runBatch returns once every call is done.
-func (r *run) runBatch(batch []*toolCall, out []tool.Result) {
+// runBatch executes batch. Permission is checked one call at a time, in call
+// order, so an Approver is never asked two things at once; admitted calls run
+// on their own goroutines, at most MaxConcurrency at a time. A pending call
+// sets halted. runBatch returns once every started call is done.
+func (r *run) runBatch(batch []*toolCall, halted *atomic.Bool) {
 	slots := make(chan struct{}, r.agent.cfg.MaxConcurrency)
 	var wg sync.WaitGroup
-	for i, c := range batch {
-		r.emit(Event{Kind: KindToolUse, ToolID: c.id, ToolName: c.name, Input: c.input})
-		if res := r.admit(c); res != nil {
-			out[i] = r.settle(c, *res)
+	for _, c := range batch {
+		if halted.Load() {
+			r.hold(c)
 			continue
 		}
-		slots <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-slots }()
-			out[i] = r.settle(c, r.runCall(c))
-		}()
+		r.emit(Event{Kind: KindToolUse, ToolID: c.id, ToolName: c.name, Input: c.input})
+		res := r.start(c)
+		switch {
+		case c.pending():
+			halted.Store(true)
+		case res != nil:
+			r.settle(c, *res)
+		default:
+			slots <- struct{}{}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-slots }()
+				r.execute(c, halted)
+			}()
+		}
 	}
 	wg.Wait()
 }
 
-// settle reports the result of c to the consumer and returns it.
-func (r *run) settle(c *toolCall, res tool.Result) tool.Result {
+// execute runs an admitted call. A call whose tool chain returns *Interrupt
+// becomes pending and halts the turn.
+func (r *run) execute(c *toolCall, halted *atomic.Bool) {
+	res, intr := r.runCall(c)
+	if intr != nil {
+		c.interrupt = toolInterrupt(c, intr)
+		halted.Store(true)
+		return
+	}
+	r.settle(c, res)
+}
+
+// settle records the result of c and reports it to the consumer.
+func (r *run) settle(c *toolCall, res tool.Result) {
+	c.result = &res
 	r.emit(Event{Kind: KindToolResult, ToolID: c.id, ToolName: c.name, ToolResult: &res})
-	return res
+}
+
+// hold handles a call reached after the turn halted: it does not start. A
+// decision that answers it without running it, such as a rejection, still
+// settles it. Otherwise, when there is no Approver, its permission is still
+// evaluated so that every approval the turn needs is asked for in the same
+// interrupt. Anything else is left not started and evaluated afresh on
+// resume.
+func (r *run) hold(c *toolCall) {
+	// A panicking tool method leaves the call not started; it panics again,
+	// and settles with a panic result, once the call is scheduled for real.
+	defer func() { _ = recover() }()
+
+	if c.rejected != nil {
+		return
+	}
+	if c.resumed != nil {
+		if res := c.answerWithoutRunning(); res != nil {
+			r.emit(Event{Kind: KindToolUse, ToolID: c.id, ToolName: c.name, Input: c.input})
+			r.settle(c, *res)
+			return
+		}
+	}
+	if r.agent.cfg.Approver != nil {
+		return
+	}
+	decision := permission.Evaluate(r.permissionRequest(c), r.agent.permissionContext())
+	if decision.Behavior == permission.Ask {
+		c.interrupt = askInterrupt(c, decision.Message)
+	}
 }
 
 // prepare resolves the tool named by use and checks its input.
@@ -175,20 +249,26 @@ func stripCodeFence(s string) (string, bool) {
 // validateInput checks in against t's schema unless t takes raw input. It
 // returns the error result for invalid input, nil otherwise.
 func validateInput(t tool.Tool, in json.RawMessage) *tool.Result {
-	if raw, ok := t.(tool.RawInputer); ok && raw.AcceptsRawInput() {
-		return nil
-	}
-	if err := tool.Validate(t.Schema(), in); err != nil {
+	if err := checkInput(t, in); err != nil {
 		return errorResult("invalid input for %s: %v", t.Name(), err)
 	}
 	return nil
 }
 
-// admit decides whether c may run. It returns nil for a call that may run,
-// or the result of a call that must not: one rejected while preparing, one
-// the run's cancellation reached first, or one permission refused. An input
-// rewrite carried by an Allow decision is applied to c.
-func (r *run) admit(c *toolCall) (res *tool.Result) {
+// checkInput checks in against t's schema unless t takes raw input.
+func checkInput(t tool.Tool, in json.RawMessage) error {
+	if raw, ok := t.(tool.RawInputer); ok && raw.AcceptsRawInput() {
+		return nil
+	}
+	return tool.Validate(t.Schema(), in)
+}
+
+// start decides how c proceeds. It returns nil for a call that may run, or
+// the result of a call that must not: one rejected while preparing, one the
+// run's cancellation reached first, one permission refused, or one a human
+// answered without running it. A call that needs an approval no Approver can
+// give is marked pending instead.
+func (r *run) start(c *toolCall) (res *tool.Result) {
 	defer func() {
 		if v := recover(); v != nil {
 			res = panicResult(c.name, v)
@@ -201,11 +281,21 @@ func (r *run) admit(c *toolCall) (res *tool.Result) {
 	if stopped := r.stoppedResult(); stopped != nil {
 		return stopped
 	}
+	if c.resumed != nil {
+		return c.applyDecision()
+	}
+	return r.admit(c)
+}
+
+// admit checks the permission of a new call: see start for the outcomes. An
+// input rewrite carried by an Allow decision is applied to c.
+func (r *run) admit(c *toolCall) *tool.Result {
 	req := r.permissionRequest(c)
 	decision := permission.Evaluate(req, r.agent.permissionContext())
 	if decision.Behavior == permission.Ask {
 		if r.agent.cfg.Approver == nil {
-			return handleAsk(c, decision.Message)
+			c.interrupt = askInterrupt(c, decision.Message)
+			return nil
 		}
 		decision = r.agent.cfg.Approver(r.ctx, req, decision.Message)
 	}
@@ -217,12 +307,6 @@ func (r *run) admit(c *toolCall) (res *tool.Result) {
 	}
 	c.input = decision.UpdatedInput
 	return validateInput(c.tool, c.input)
-}
-
-// handleAsk settles a call that needs approval when no Approver is
-// configured: the model is told, and the run goes on.
-func handleAsk(c *toolCall, reason string) *tool.Result {
-	return errorResult("Approval required for %s: %s. No approver is configured.", c.name, reason)
 }
 
 // permissionRequest describes c for permission.Evaluate, using whichever
@@ -253,8 +337,9 @@ func (a *Agent) permissionContext() permission.Context {
 
 // runCall executes an admitted call through the tool handler chain. A panic
 // or Go error becomes an error result, and the result is truncated to
-// MaxToolOutputChars.
-func (r *run) runCall(c *toolCall) (res tool.Result) {
+// MaxToolOutputChars. When the chain returns *Interrupt, that is returned
+// instead of a result.
+func (r *run) runCall(c *toolCall) (res tool.Result, intr *Interrupt) {
 	limit := r.agent.cfg.MaxToolOutputChars
 	defer func() {
 		if v := recover(); v != nil {
@@ -266,7 +351,7 @@ func (r *run) runCall(c *toolCall) (res tool.Result) {
 	// The call may have waited for a concurrency slot while the run was
 	// being cancelled or ran out of time.
 	if stopped := r.stoppedResult(); stopped != nil {
-		return *stopped
+		return *stopped, nil
 	}
 	call := &ToolCall{
 		ID:    c.id,
@@ -278,12 +363,15 @@ func (r *run) runCall(c *toolCall) (res tool.Result) {
 	}
 	res, err := r.agent.runTool(r.budget.toolCtx, call)
 	if err == nil {
-		return res
+		return res, nil
+	}
+	if errors.As(err, &intr) && intr != nil {
+		return tool.Result{}, intr
 	}
 	if stopped := r.stoppedResult(); stopped != nil {
-		return *stopped
+		return *stopped, nil
 	}
-	return *errorResult("tool %s failed: %v", c.name, err)
+	return *errorResult("tool %s failed: %v", c.name, err), nil
 }
 
 // stoppedResult returns the result for a call that the run's cancellation or
@@ -317,6 +405,7 @@ func (r *run) toolEnv(c *toolCall) *tool.Call {
 		State:          r.state,
 		Profile:        *cfg.Profile,
 		MaxOutputChars: cfg.MaxToolOutputChars,
+		Resume:         c.resume,
 		Emit: func(msg string) {
 			r.emit(Event{Kind: KindProgress, ToolID: c.id, ToolName: c.name, Text: msg})
 		},
@@ -352,18 +441,18 @@ func omittedMarker(s string) string {
 
 // toolResultMessages builds what follows an assistant reply: one user message
 // with a tool_result per call, in call order, then each result's Extra
-// messages, also in call order.
-func toolResultMessages(uses []llm.Block, results []tool.Result) []llm.Message {
-	blocks := make([]llm.Block, len(uses))
+// messages, also in call order. Every call must be done.
+func toolResultMessages(calls []*toolCall) []llm.Message {
+	blocks := make([]llm.Block, len(calls))
 	var extra []llm.Message
-	for i, use := range uses {
+	for i, c := range calls {
 		blocks[i] = llm.Block{
 			Type:      llm.BlockToolResult,
-			ToolUseID: use.ID,
-			Content:   results[i].Content,
-			IsError:   results[i].IsError,
+			ToolUseID: c.id,
+			Content:   c.result.Content,
+			IsError:   c.result.IsError,
 		}
-		extra = append(extra, results[i].Extra...)
+		extra = append(extra, c.result.Extra...)
 	}
 	return append([]llm.Message{{Role: llm.RoleUser, Content: blocks}}, extra...)
 }

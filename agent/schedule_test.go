@@ -176,14 +176,6 @@ func TestPermissionDenyAndApprover(t *testing.T) {
 		}
 	})
 
-	t.Run("ask without approver", func(t *testing.T) {
-		received = nil
-		results := runOneTurn(t, Config{Tools: []tool.Tool{write}}, turn)
-		want := "Approval required for write_file: approve write_file?. No approver is configured."
-		if r := results[0]; !r.IsError || resultText(r) != want {
-			t.Fatalf("result = %+v, want %q", r, want)
-		}
-	})
 }
 
 func TestPermissionRequestFromOptionalInterfaces(t *testing.T) {
