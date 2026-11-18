@@ -12,6 +12,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// MaxBytes bounds the YAML block of a document; a longer block is an error.
+// It does not bound data as a whole: callers limit the size of what they
+// pass to Parse.
+const MaxBytes = 1 << 20
+
 const (
 	fence = "---"
 	bom   = "\xef\xbb\xbf"
@@ -21,7 +26,8 @@ const (
 // returns the rest. ok is false (v untouched, body == whole input) when data
 // has no frontmatter: it does not open with a fence line or the fence is never
 // closed. A UTF-8 BOM and CRLF line endings are accepted; body keeps the
-// file's own line endings. Malformed YAML is an error.
+// file's own line endings. Malformed YAML, or a block over MaxBytes, is an
+// error, and v is then in an undefined state.
 func Parse(data []byte, v any) (body string, ok bool, err error) {
 	text := strings.TrimPrefix(string(data), bom)
 	rest, found := strings.CutPrefix(text, fence)
@@ -43,6 +49,9 @@ func Parse(data []byte, v any) (body string, ok bool, err error) {
 			return string(data), false, nil
 		}
 		pos = next
+	}
+	if yamlEnd > MaxBytes {
+		return "", false, fmt.Errorf("frontmatter: block is %d bytes, over the %d limit", yamlEnd, MaxBytes)
 	}
 	if err := yaml.NewDecoder(strings.NewReader(rest[:yamlEnd])).Decode(v); err != nil && !errors.Is(err, io.EOF) { // io.EOF: an empty block
 		return "", false, fmt.Errorf("frontmatter: %w", err)
@@ -100,6 +109,9 @@ func (l *StringList) UnmarshalYAML(n *yaml.Node) error {
 		var items []string
 		if err := n.Decode(&items); err != nil {
 			return err
+		}
+		for i := range items {
+			items[i] = strings.TrimSpace(items[i])
 		}
 		*l = items
 		return nil

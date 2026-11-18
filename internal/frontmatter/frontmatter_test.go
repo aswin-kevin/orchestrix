@@ -127,3 +127,23 @@ func TestMetadata(t *testing.T) {
 		t.Fatalf("Meta = %v", f.Meta)
 	}
 }
+
+func TestBlockOverMaxBytesRejected(t *testing.T) {
+	in := "---\nname: " + strings.Repeat("x", MaxBytes) + "\n---\nbody"
+	var d doc
+	if _, ok, err := Parse([]byte(in), &d); err == nil || ok {
+		t.Fatalf("ok=%v err=%v, want an error for an oversized block", ok, err)
+	}
+}
+
+func TestStringListTrimsSequenceElements(t *testing.T) {
+	var f struct {
+		Tools StringList `yaml:"tools"`
+	}
+	if _, _, err := Parse([]byte("---\ntools: [\" a \", b ]\n---\n"), &f); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(f.Tools, StringList{"a", "b"}) {
+		t.Fatalf("Tools = %#v", f.Tools)
+	}
+}

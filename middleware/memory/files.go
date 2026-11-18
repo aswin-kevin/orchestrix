@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -12,6 +13,9 @@ const (
 	commentOpen  = "<!--"
 	commentClose = "-->"
 )
+
+// closingTag matches the tag that ends a file's <memory> element.
+var closingTag = regexp.MustCompile(`(?i)</memory>`)
 
 // loadFiles reads each path from b and returns the files that have content.
 // Instruction files are optional: one that cannot be read for any reason, is
@@ -27,10 +31,12 @@ func loadFiles(ctx context.Context, b backend.Backend, paths []string, maxBytes 
 			continue
 		}
 		content := strings.TrimSpace(stripComments(strings.Join(res.Lines, "\n")))
+		content = closingTag.ReplaceAllString(content, "&lt;/memory>")
 		if content == "" {
 			continue
 		}
 		content, truncated := capBytes(content, maxBytes)
+		content = strings.TrimSpace(content)
 		files = append(files, File{Path: p, Content: content, Truncated: truncated})
 	}
 	return files

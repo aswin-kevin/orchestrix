@@ -1,6 +1,19 @@
 // Package memory puts standing instructions into the system prompt: files
 // such as AGENTS.md that the host names, read from the run's backend once per
 // run and appended after the host's own system segments.
+//
+// # Trust
+//
+// A file's content goes into the system prompt as written, so whoever can
+// write a configured file can steer the agent. The default prompt also invites
+// the model to save durable notes into these files with edit_file: anything
+// the model read during a run, including untrusted web pages or tool output,
+// can thereby become standing instructions in later runs. The files are
+// named by the host, so they are read directly from the backend and are not
+// subject to permission path rules; only list files whose writers you trust,
+// and use Config.Prompt to drop the invitation if the agent should not edit
+// them. The only transformation that protects the framing is that a literal
+// closing tag inside a file is neutralized so it cannot end its element.
 package memory
 
 import (
@@ -25,13 +38,18 @@ var DefaultFiles = []string{"/AGENTS.md"}
 // Config configures the memory middleware.
 type Config struct {
 	// Files are the backend paths of the instruction files, general first.
-	// Each must be absolute. Empty loads no files.
+	// Each must be absolute. Empty loads no files. A file that cannot be
+	// read is skipped. HTML comments are stripped from every file, including
+	// inside fenced code blocks.
 	Files []string
 	// MaxFileBytes caps each file's size after comment stripping; 0 means
-	// DefaultMaxFileBytes. A longer file is cut on a rune boundary.
+	// DefaultMaxFileBytes and a negative value is rejected by New. A longer
+	// file is cut on a rune boundary.
 	MaxFileBytes int
 	// Prompt is the guidance appended after the files. nil uses
-	// DefaultPrompt; a pointer to "" appends the files alone.
+	// DefaultPrompt, which tells the model to record durable notes in the
+	// files (see Trust in the package documentation); a pointer to ""
+	// appends the files alone.
 	Prompt *string
 }
 
@@ -67,6 +85,9 @@ type middleware struct {
 // New returns the memory middleware. It fails when a configured path is
 // empty or not absolute.
 func New(cfg Config) (agent.Middleware, error) {
+	if cfg.MaxFileBytes < 0 {
+		return nil, fmt.Errorf("memory: MaxFileBytes must not be negative, got %d", cfg.MaxFileBytes)
+	}
 	for _, p := range cfg.Files {
 		if !path.IsAbs(p) {
 			return nil, fmt.Errorf("memory: instruction file path %q must be absolute", p)
