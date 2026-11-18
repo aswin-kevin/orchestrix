@@ -1,6 +1,13 @@
 # Orchestrix
 
-A Go SDK for building agents: a streaming tool-use loop with provider-neutral models, composable middleware and a permission system, in a few lines of code and with no dependencies beyond the standard library.
+[![CI](https://github.com/aswin-kevin/orchestrix/actions/workflows/ci.yml/badge.svg)](https://github.com/aswin-kevin/orchestrix/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/aswin-kevin/orchestrix.svg)](https://pkg.go.dev/github.com/aswin-kevin/orchestrix)
+[![Go Report Card](https://goreportcard.com/badge/github.com/aswin-kevin/orchestrix)](https://goreportcard.com/report/github.com/aswin-kevin/orchestrix)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
+**An AI agent framework for Go.** Orchestrix is an LLM agent harness SDK that turns Claude, GPT or any OpenAI-compatible model into an autonomous, tool-using agent, with streaming, middleware, permissions and human-in-the-loop approval built in.
+
+You get a production-ready agent loop in a few lines of code, with no dependencies beyond the Go standard library.
 
 > Orchestrix is under active development. Milestone 1 (the core) is complete; the API may still change before 1.0.
 
