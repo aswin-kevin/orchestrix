@@ -76,6 +76,11 @@ type Config struct {
 	// means DefaultMaxLineChars.
 	MaxLineChars int
 
+	// OffloadChars is the size above which the output of other middleware's
+	// tools is saved to the backend and replaced by a head and a pointer; 0
+	// means DefaultOffloadChars.
+	OffloadChars int
+
 	// ExecTimeout is the timeout execute uses when the model gives none and
 	// MaxExecTimeout is the most it may ask for; 0 means DefaultExecTimeout
 	// and DefaultMaxExecTimeout.
@@ -125,6 +130,9 @@ func withDefaults(cfg Config) Config {
 	if cfg.MaxLineChars <= 0 {
 		cfg.MaxLineChars = DefaultMaxLineChars
 	}
+	if cfg.OffloadChars <= 0 {
+		cfg.OffloadChars = DefaultOffloadChars
+	}
 	if cfg.ExecTimeout <= 0 {
 		cfg.ExecTimeout = DefaultExecTimeout
 	}
@@ -164,7 +172,8 @@ func (m *middleware) Tools() []tool.Tool {
 
 // WrapModel implements agent.ModelWrapper. It appends the tool guidance after
 // the host's system segments, so it stays outside the cached prefix, and
-// drops schemas of tools the allowlist excludes.
+// drops schemas of tools the allowlist excludes. With a configured backend it
+// also moves oversized user text out of the request (see offloadLargeMessages).
 func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if m.prompt != "" {
 		req.Request.System = append(slices.Clone(req.Request.System), m.prompt)
@@ -173,6 +182,11 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 		req.Request.Tools = slices.DeleteFunc(slices.Clone(req.Request.Tools), func(s llm.ToolSchema) bool {
 			return slices.Contains(m.excluded, s.Name)
 		})
+	}
+	// A model request carries no per-call backend, so only a configured one
+	// can receive offloaded messages.
+	if m.cfg.Backend != nil {
+		req.Request.Messages = m.offloadLargeMessages(ctx, m.cfg.Backend, req.Request.Messages)
 	}
 	return next(ctx, req)
 }
