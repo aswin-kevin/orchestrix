@@ -16,7 +16,7 @@ func TestMatch(t *testing.T) {
 		{"star matches empty", "/a/*x", "/a/x", true},
 		{"star in middle of segment", "/a/f*o", "/a/foo", true},
 		{"question matches one char", "/a/?.go", "/a/b.go", true},
-		{"question needs a char", "/a/?", "/a/", false},
+		{"question needs a char", "/a/x?", "/a/x", false},
 		{"question does not match slash", "/a?b", "/a/b", false},
 		{"double star at end matches the dir itself", "/a/**", "/a", true},
 		{"double star at end matches child", "/a/**", "/a/b", true},

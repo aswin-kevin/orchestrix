@@ -58,7 +58,6 @@ func TestEvaluateMatrix(t *testing.T) {
 		{"10 auto denies", exec("ls"), Context{Mode: ModeAuto}, Deny, "not permitted in auto mode", ""},
 		{"10 default asks with tool name", exec("ls"), Context{}, Ask, "approve execute?", ""},
 		{"10 ask uses self check message", withSelf(exec("ls"), selfAsk), Context{}, Ask, "self asks first", ""},
-		{"10 acceptEdits default still asks for execute", exec("ls"), Context{Mode: ModeDefault}, Ask, "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

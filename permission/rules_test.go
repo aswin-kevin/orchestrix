@@ -25,6 +25,11 @@ func TestParseRule(t *testing.T) {
 		{in: "write()", wantErr: true},
 		{in: "(x)", wantErr: true},
 		{in: "execute(a)b", wantErr: true},
+		{in: "write (/x)", wantErr: true},
+		{in: "execute(a))", wantErr: true},
+		{in: "execute x", wantErr: true},
+		{in: "mcp__srv__tool", want: Rule{Tool: "mcp__srv__tool"}},
+		{in: "execute(echo (hi))", want: Rule{Tool: "execute", Pattern: "echo (hi)"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -101,6 +106,8 @@ func TestPathRuleMatching(t *testing.T) {
 		{"read rule ignores write", "read(/etc/**)", []PathAccess{{"/etc/passwd", OpWrite}}, false},
 		{"any path may match", "write(/secrets/**)", []PathAccess{{"/tmp/x", OpWrite}, {"/secrets/k", OpWrite}}, true},
 		{"op and path must match on the same access", "write(/secrets/**)", []PathAccess{{"/tmp/x", OpWrite}, {"/secrets/k", OpRead}}, false},
+		{"relative path is rooted", "write(/secrets/**)", []PathAccess{{"secrets/x", OpWrite}}, true},
+		{"dot-relative path is rooted", "write(/secrets/**)", []PathAccess{{"./secrets/x", OpWrite}}, true},
 		{"no paths", "write(/secrets/**)", nil, false},
 		{"access path is cleaned", "write(/secrets/**)", []PathAccess{{"/tmp/../secrets/k", OpWrite}}, true},
 	}

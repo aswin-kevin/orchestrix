@@ -68,6 +68,8 @@ const (
 
 // PathAccess is one filesystem access a tool call intends to make.
 type PathAccess struct {
+	// Path is a virtual absolute path. A relative path is treated as rooted at
+	// the virtual root when rules are matched.
 	Path string
 	Op   Op
 }
@@ -85,6 +87,9 @@ type Request struct {
 	// a shell command or a URL.
 	Subject string
 	// Paths lists the filesystem accesses, matched by path rules.
+	//
+	// Every tool that touches the filesystem must report every path it
+	// touches here; path rules cannot see accesses that are not listed.
 	Paths []PathAccess
 	// SelfCheck is the tool's own CheckPermission verdict.
 	SelfCheck Decision
