@@ -4,6 +4,12 @@ A Go SDK for building agents: a streaming tool-use loop with provider-neutral mo
 
 > Orchestrix is under active development. Milestone 1 (the core) is complete; the API may still change before 1.0.
 
+<p align="center">
+  <img src="assets/architecture.png" alt="Orchestrix architecture: your application runs the agent loop, which is wrapped by a middleware stack, calls LLM providers, sends every tool call through a permission gate to tools and backends, and keeps its conversation in serializable state." width="900">
+</p>
+
+Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and receives streamed events back. The agent loop builds each request, calls the model, schedules tool calls and appends their results. Middleware wraps the model and tool calls. Every tool call passes the permission gate before it touches a backend, and the whole conversation lives in typed, JSON-serializable state.
+
 ## Features
 
 - **Three providers, one interface.** Anthropic Messages, OpenAI Chat Completions and OpenAI Responses, selected with a `format:model` string.
