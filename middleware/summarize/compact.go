@@ -9,16 +9,55 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/pathsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/state"
 )
 
 // minTailMessages is the fewest messages a compaction keeps verbatim.
 const minTailMessages = 2
 
+// observed is what the last model response reported about the request it
+// answered.
+type observed struct {
+	// Input is the input-side tokens of that request: Input, CacheRead and
+	// CacheWrite of the response's usage.
+	Input int `json:"input"`
+	// Messages is how many State messages the request was built from.
+	Messages int `json:"messages"`
+}
+
+// observedKey holds the last observed; absent until a response reported usage,
+// and again after a compaction, which makes the observation stale.
+var observedKey = state.NewKey[observed]("summarize.observed", state.Private[observed]())
+
+// failuresKey counts compaction failures in a row. At MaxFailures automatic
+// compaction stops until a compaction succeeds or a new run starts.
+var failuresKey = state.NewKey[int]("summarize.failures", state.Private[int]())
+
+// Estimate returns the estimated size, in tokens, of the next request: the
+// input tokens the last response reported plus the messages added since; a
+// pure character estimate of view when nothing was observed.
+func Estimate(s *state.State, view []llm.Message) int {
+	msgs := s.Messages()
+	if o, ok := observedKey.Get(s); ok && o.Messages <= len(msgs) {
+		return o.Input + charCount(msgs[o.Messages:])/CharsPerToken
+	}
+	return charCount(view) / CharsPerToken
+}
+
+// charCount is the size of msgs in characters, as rendered for a summary.
+func charCount(msgs []llm.Message) int {
+	n := 0
+	for _, m := range msgs {
+		n += len(renderMessage(m, noBlockCap))
+	}
+	return n
+}
+
 // compact summarizes the messages between the current boundary and the
 // recent tail of about keepTokens, and moves the boundary past them. It
 // reports whether the boundary moved; false with a nil error means there was
-// nothing to summarize. A summarizer error is also recorded in
-// Boundary.LastError; success clears it. State messages are never changed.
+// nothing to summarize. A summarizer error is counted and recorded by
+// fail; success clears the error and the failure count. State messages are never changed.
 func (m *middleware) compact(ctx context.Context, req *agent.ModelRequest, keepTokens int) (bool, error) {
 	msgs := req.State.Messages()
 	prev, _ := Current(req.State)
@@ -32,16 +71,49 @@ func (m *middleware) compact(ctx context.Context, req *agent.ModelRequest, keepT
 	older := msgs[prev.Index:k]
 	summary, err := m.summarize(ctx, req, prev.Summary, render(older, DefaultMaxBlockChars))
 	if err != nil {
-		BoundaryKey.Update(req.State, func(b Boundary) Boundary {
-			b.LastError = err.Error()
-			return b
-		})
+		m.fail(req.State, err)
 		return false, err
 	}
 	next := Boundary{Index: k, Summary: summary, Compactions: prev.Compactions + 1}
 	next.Path = m.offload(ctx, req, next.Compactions, render(older, noBlockCap))
 	BoundaryKey.Set(req.State, next)
+	failuresKey.Delete(req.State)
+	observedKey.Delete(req.State) // describes the view before this compaction
 	return true, nil
+}
+
+// fail counts a failed compaction and records its cause in
+// Boundary.LastError, where it stays until a compaction succeeds. The failure
+// that opens the circuit breaker says so, so a host reading the Boundary can
+// tell that automatic compaction has stopped.
+func (m *middleware) fail(s *state.State, cause error) {
+	failures, _ := failuresKey.Get(s)
+	failures++
+	failuresKey.Set(s, failures)
+	msg := cause.Error()
+	if failures >= m.cfg.MaxFailures {
+		msg = fmt.Sprintf("automatic compaction stopped after %d failures: %s", failures, msg)
+	}
+	BoundaryKey.Update(s, func(b Boundary) Boundary {
+		b.LastError = msg
+		return b
+	})
+}
+
+// errNoProgress is the failure of a compaction that left the boundary where
+// it was, for example when the system prompt and tools alone exceed the
+// trigger. Counting it keeps the trigger from firing on every turn.
+var errNoProgress = errors.New("compaction made no progress")
+
+// compactCounted is compact for the automatic and the reactive path: a
+// compaction that did not move the boundary counts as a failure. It reports
+// whether the boundary moved.
+func (m *middleware) compactCounted(ctx context.Context, req *agent.ModelRequest, keepTokens int) bool {
+	moved, err := m.compact(ctx, req, keepTokens)
+	if err == nil && !moved {
+		m.fail(req.State, errNoProgress)
+	}
+	return moved
 }
 
 // tailCount returns the length of the shortest suffix of msgs whose

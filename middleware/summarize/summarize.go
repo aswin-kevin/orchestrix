@@ -16,6 +16,13 @@
 // message, which may carry signed thinking that providers validate. The
 // model can ask for a compaction itself with the compact_conversation tool.
 //
+// Compaction also runs by itself: before a model call when the estimated
+// request size passes TriggerFraction of the context window, and, once per
+// call, when the provider rejects a request as too long (the retry keeps a
+// smaller tail). After MaxFailures failed or fruitless compactions in a row
+// the automatic trigger stops, which Boundary.LastError reports; the next
+// successful compaction or the start of a new run closes the breaker again.
+//
 // The cut between summary and kept messages never separates a tool_result
 // from its tool_use, so the view is always a valid conversation.
 //
@@ -183,26 +190,87 @@ func (m *middleware) Name() string { return "summarize" }
 // Tools implements agent.ToolProvider.
 func (m *middleware) Tools() []tool.Tool { return []tool.Tool{compactTool()} }
 
-// WrapModel implements agent.ModelWrapper. It runs a compaction the model
-// asked for, then replaces the request messages with the compacted,
-// micro-compacted view of State.
+// BeforeAgent implements agent.BeforeAgent: a new run starts with the
+// circuit breaker closed.
+func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
+	failuresKey.Delete(s)
+	return nil
+}
+
+// AfterModel implements agent.AfterModel. It records how large the request
+// just answered was, which is what the automatic trigger measures; a
+// response without usage drops the record, as it would be stale.
+func (m *middleware) AfterModel(_ context.Context, s *state.State, resp *llm.Response) error {
+	u := resp.Usage
+	input := u.Input + u.CacheRead + u.CacheWrite
+	if input == 0 {
+		observedKey.Delete(s)
+		return nil
+	}
+	observedKey.Set(s, observed{Input: input, Messages: len(s.Messages())})
+	return nil
+}
+
+// WrapModel implements agent.ModelWrapper. It compacts when the model asked
+// for it or the conversation nears the context window, then replaces the
+// request messages with the compacted, micro-compacted view of State. A
+// context overflow reported by the provider compacts harder and retries
+// once.
+//
+// A compaction that fails never fails the turn: State still holds the whole
+// conversation, so the request just goes out uncompacted and the error is
+// recorded in Boundary.LastError. After MaxFailures failures in a row
+// automatic compaction stops; a successful compaction (one the model
+// requested, or a reactive one) or a new run resets the count.
 func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if requested, _ := requestedKey.Get(req.State); requested {
 		requestedKey.Delete(req.State)
-		// A failed compaction must not fail the turn: State still holds the
-		// whole conversation, so the request just goes out uncompacted. The
-		// error is recorded in Boundary.LastError.
-		_, _ = m.compact(ctx, req, m.keepTokens(req.Profile))
+		_, _ = m.compact(ctx, req, m.keepTokens(req.Profile, fullKeepShare))
+	} else if m.shouldCompact(req) {
+		m.compactCounted(ctx, req, m.keepTokens(req.Profile, fullKeepShare))
 	}
-	req.Request.Messages = m.view(req.State, req.Request.Messages)
+	base := req.Request.Messages
+	req.Request.Messages = m.view(req.State, base)
+	resp, err := next(ctx, req)
+	if err == nil || !llm.IsContextOverflow(err) {
+		return resp, err
+	}
+	// The breaker does not apply here: the provider has just proven that
+	// compacting is needed.
+	if !m.compactCounted(ctx, req, m.keepTokens(req.Profile, reactiveKeepShare)) {
+		return resp, err
+	}
+	req.Request.Messages = m.view(req.State, base)
 	return next(ctx, req)
 }
 
-// keepTokens is the size of the recent tail a compaction keeps verbatim.
-func (m *middleware) keepTokens(p llm.Profile) int {
-	window := p.ContextWindow
-	if window <= 0 {
-		window = llm.DefaultProfile.ContextWindow
+// shouldCompact reports whether the request is large enough for an automatic
+// compaction and the circuit breaker is closed.
+func (m *middleware) shouldCompact(req *agent.ModelRequest) bool {
+	if failures, _ := failuresKey.Get(req.State); failures >= m.cfg.MaxFailures {
+		return false
 	}
-	return int(m.cfg.KeepFraction * float64(window))
+	return float64(Estimate(req.State, req.Request.Messages)) > m.cfg.TriggerFraction*float64(contextWindow(req.Profile))
+}
+
+// contextWindow is the profile's context window in tokens, or the default
+// profile's when the profile leaves it unset.
+func contextWindow(p llm.Profile) int {
+	if p.ContextWindow > 0 {
+		return p.ContextWindow
+	}
+	return llm.DefaultProfile.ContextWindow
+}
+
+// Shares of the configured tail a compaction keeps.
+const (
+	fullKeepShare = 1.0
+	// reactiveKeepShare is smaller: the usual tail evidently did not fit.
+	reactiveKeepShare = 0.5
+)
+
+// keepTokens is the size of the recent tail a compaction keeps verbatim: the
+// configured share of the context window, scaled by share.
+func (m *middleware) keepTokens(p llm.Profile, share float64) int {
+	return int(share * m.cfg.KeepFraction * float64(contextWindow(p)))
 }

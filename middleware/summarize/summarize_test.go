@@ -20,6 +20,10 @@ import (
 // so each padded message below (3000+ characters) moves the cut by one.
 const testWindow = 4000
 
+// noAutoTrigger is a TriggerFraction that never fires, so tests of the
+// compact_conversation tool see only the compactions they ask for.
+const noAutoTrigger = 100
+
 // padded returns a message text starting with marker and long enough that a
 // few of them exceed the kept tail.
 func padded(marker string) string {
@@ -54,25 +58,32 @@ func noopTool() tool.Tool {
 
 func runInput(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, in agent.Input) *agent.Final {
 	t.Helper()
+	final := runWindow(main, b, cfg, in, testWindow)
+	if final == nil || final.Reason != agent.ReasonCompleted {
+		t.Fatalf("run did not complete: %+v", final)
+	}
+	return final
+}
+
+// runWindow runs the test agent with the given context window and returns
+// its Final whatever the reason.
+func runWindow(main llm.Provider, b backend.Backend, cfg Config, in agent.Input, window int) *agent.Final {
 	a, err := agent.New(agent.Config{
 		Provider:       main,
-		Profile:        &llm.Profile{ContextWindow: testWindow, MaxOutput: 500},
+		Profile:        &llm.Profile{ContextWindow: window, MaxOutput: 500},
 		Backend:        b,
 		Tools:          []tool.Tool{noopTool()},
 		Middleware:     []agent.Middleware{New(cfg)},
 		PermissionMode: permission.ModeBypass,
 	})
 	if err != nil {
-		t.Fatalf("agent.New: %v", err)
+		panic(err)
 	}
 	var final *agent.Final
 	for ev := range a.Run(context.Background(), in) {
 		if ev.Kind == agent.KindFinal {
 			final = ev.Final
 		}
-	}
-	if final == nil || final.Reason != agent.ReasonCompleted {
-		t.Fatalf("run did not complete: %+v", final)
 	}
 	return final
 }
@@ -209,7 +220,7 @@ func TestDisableOffloadAndDefaultSummarizer(t *testing.T) {
 	)
 	b := memory.New()
 
-	final := runAgent(t, main, b, Config{DisableOffload: true}, paddedHistory())
+	final := runAgent(t, main, b, Config{DisableOffload: true, TriggerFraction: noAutoTrigger}, paddedHistory())
 
 	if main.Calls() != 3 || main.Requests[1].System[0] != DefaultSummaryPrompt {
 		t.Fatalf("main provider got %d requests, want the summarizer call second", main.Calls())
@@ -238,10 +249,12 @@ func TestThreadlessRunSkipsOffload(t *testing.T) {
 }
 
 func TestFailedCompactionRecordedAndRequestUncompacted(t *testing.T) {
+	cfg := Config{TriggerFraction: noAutoTrigger}
 	main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}}, llmtest.Turn{Text: "done"})
 	summarizer := llmtest.New(llmtest.Turn{Err: errors.New("summarizer down")})
 
-	final := runAgent(t, main, memory.New(), Config{Provider: summarizer}, paddedHistory())
+	cfg.Provider = summarizer
+	final := runAgent(t, main, memory.New(), cfg, paddedHistory())
 
 	if summarizer.Calls() != 1 {
 		t.Fatalf("summarizer called %d times, want 1", summarizer.Calls())
