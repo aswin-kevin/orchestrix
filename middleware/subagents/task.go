@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"maps"
 	"strings"
 
@@ -15,7 +16,7 @@ import (
 
 // TaskInput is the input of the task tool.
 type TaskInput struct {
-	Description  string `json:"description" desc:"The complete task, with every detail the subagent needs; it does not see this conversation."`
+	Description  string `json:"description" desc:"The complete task, with every detail the subagent needs; only a fork sees this conversation."`
 	SubagentType string `json:"subagent_type" desc:"Which subagent to use."`
 }
 
@@ -52,27 +53,51 @@ func taskSchema(order []string) map[string]any {
 	return schema
 }
 
+// describe is the description of subagent_type name.
+func (m *middleware) describe(name string) string {
+	if name == Fork {
+		return forkDescription
+	}
+	return m.specs[name].Description
+}
+
 // describeTask lists every subagent with its description after the tool's
 // own description.
 func (m *middleware) describeTask(order []string) string {
 	var b strings.Builder
 	b.WriteString(taskDescription)
 	for _, name := range order {
-		fmt.Fprintf(&b, "\n- %s: %s", name, m.specs[name].Description)
+		fmt.Fprintf(&b, "\n- %s: %s", name, m.describe(name))
 	}
 	return b.String()
 }
 
-// runTask runs one task call: it starts the selected subagent on the
-// description alone, forwards its events, merges its state back and turns
-// its outcome into the result.
+// childRun is one subagent run of a task call.
+type childRun struct {
+	// typ is the subagent_type, which is also the name the run reports.
+	typ   string
+	agent *agent.Agent
+	// in is the run's input; a continuation replaces its State and Messages.
+	in agent.Input
+	// schema is the subagent's OutputSchema; nil for free text.
+	schema map[string]any
+}
+
+// runTask runs one task call: it starts the selected subagent, or continues
+// the one suspended under a resumed call, forwards its events, merges its
+// state back and turns its outcome into the result.
 func (m *middleware) runTask(ctx context.Context, raw json.RawMessage, c *tool.Call) (tool.Result, error) {
 	var in TaskInput
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return tool.Errorf("invalid input: %v", err), nil
 	}
-	spec, ok := m.specs[in.SubagentType]
-	if !ok {
+	if forked, _ := forkedKey.Get(c.State); forked {
+		return tool.Errorf(forkCannotDelegate), nil
+	}
+	if c.Resume != nil {
+		return m.resumeTask(ctx, c)
+	}
+	if !m.offers(in.SubagentType) {
 		return tool.Errorf("unknown subagent type %q", in.SubagentType), nil
 	}
 	info, ok := agent.Info(ctx)
@@ -80,17 +105,64 @@ func (m *middleware) runTask(ctx context.Context, raw json.RawMessage, c *tool.C
 		return tool.Errorf("the task tool can only run inside an agent run"), nil
 	}
 	if info.Depth >= m.maxDepth {
-		return tool.Errorf("cannot start subagent %s: the maximum nesting depth of %d is reached; do the task yourself", spec.Name, m.maxDepth), nil
+		return tool.Errorf("cannot start subagent %s: the maximum nesting depth of %d is reached; do the task yourself", in.SubagentType, m.maxDepth), nil
 	}
-	child, err := m.child(info.Agent, spec)
+	run, err := m.start(info, in, c)
 	if err != nil {
-		return tool.Errorf("cannot start subagent %s: %v", spec.Name, err), nil
+		return tool.Errorf("cannot start subagent %s: %v", in.SubagentType, err), nil
 	}
-	childIn := childInput(info.ThreadID, spec.Name, in.Description, c)
-	final := runChild(ctx, child, childIn)
+	final := runChild(ctx, run.agent, run.in)
+	return m.settle(ctx, c, run, final)
+}
+
+// offers reports whether typ is a subagent the task tool can start.
+func (m *middleware) offers(typ string) bool {
+	if typ == Fork {
+		return m.fork
+	}
+	_, ok := m.specs[typ]
+	return ok
+}
+
+// start prepares a fresh run of the subagent in selects.
+func (m *middleware) start(info agent.RunInfo, in TaskInput, c *tool.Call) (childRun, error) {
+	child, schema, err := m.subagent(info.Agent, in.SubagentType)
+	if err != nil {
+		return childRun{}, err
+	}
+	run := childRun{typ: in.SubagentType, agent: child, schema: schema}
+	if in.SubagentType == Fork {
+		run.in, err = forkInput(info.ThreadID, in.Description, c)
+	} else {
+		run.in = childInput(info.ThreadID, in.SubagentType, in.Description, c)
+	}
+	return run, err
+}
+
+// subagent returns the agent that runs subagent_type typ when started from
+// parent, with its OutputSchema. A fork is the parent itself.
+func (m *middleware) subagent(parent *agent.Agent, typ string) (*agent.Agent, map[string]any, error) {
+	if !m.offers(typ) {
+		return nil, nil, fmt.Errorf("unknown subagent type %q", typ)
+	}
+	if typ == Fork {
+		return parent, nil, nil
+	}
+	spec := m.specs[typ]
+	child, err := m.child(parent, spec)
+	return child, spec.OutputSchema, err
+}
+
+// settle turns a child's Final into the task result: it checks a structured
+// answer, suspends a child waiting for a decision, and otherwise merges the
+// child's state back. A suspended child's state is merged once it finishes.
+func (m *middleware) settle(ctx context.Context, c *tool.Call, run childRun, final *agent.Final) (tool.Result, error) {
 	var structured *tool.Result
-	if spec.OutputSchema != nil {
-		final, structured = structuredOutput(ctx, child, childIn, final, spec.OutputSchema)
+	if run.schema != nil {
+		final, structured = structuredOutput(ctx, run.agent, run.in, final, run.schema)
+	}
+	if final.Reason == agent.ReasonInterrupted && ctx.Err() == nil {
+		return suspend(c, run, final)
 	}
 	if final.State != nil {
 		c.State.MergeChild(final.State)
@@ -98,14 +170,20 @@ func (m *middleware) runTask(ctx context.Context, raw json.RawMessage, c *tool.C
 	if structured != nil {
 		return *structured, nil
 	}
-	return outcome(ctx, spec.Name, final)
+	return outcome(ctx, run.typ, final)
 }
 
-// childInput starts a subagent run on the task description alone, with the
-// parent's shareable state and backend, under a thread id unique to the call.
+// childThread is the thread id of the subagent a task call starts.
+func childThread(parentThread, typ, toolUseID string) string {
+	return parentThread + "/" + typ + "/" + toolUseID
+}
+
+// childInput starts an isolated subagent run on the task description alone,
+// with the parent's shareable state and backend, under a thread id unique to
+// the call.
 func childInput(parentThread, name, description string, c *tool.Call) agent.Input {
 	return agent.Input{
-		ThreadID:  parentThread + "/" + name + "/" + c.ToolUseID,
+		ThreadID:  childThread(parentThread, name, c.ToolUseID),
 		State:     c.State.ChildFor(),
 		Messages:  []llm.Message{llm.UserText(description)},
 		Backend:   c.Backend,
@@ -115,18 +193,29 @@ func childInput(parentThread, name, description string, c *tool.Call) agent.Inpu
 	}
 }
 
-// runChild runs child to its end, forwarding every event but the Final to
-// the parent's stream, and returns the Final. It always drains the stream,
-// so the child's goroutines have stopped when it returns; cancelling ctx
-// (the parent's call context) stops the child.
+// runChild runs child to its end and returns its Final (see drain).
 func runChild(ctx context.Context, child *agent.Agent, in agent.Input) *agent.Final {
+	return drain(ctx, child.Run(ctx, in))
+}
+
+// drain consumes a child's event stream, forwarding its events to the
+// parent's stream, and returns the Final. The Final becomes the task result,
+// and a KindInterrupt is not forwarded either: the parent raises its own
+// interrupt for the task call, so consumers see exactly one per call. drain
+// always consumes the whole stream, so the child's goroutines have stopped
+// when it returns; cancelling ctx (the parent's call context) stops the
+// child.
+func drain(ctx context.Context, events iter.Seq2[agent.Event, error]) *agent.Final {
 	var final *agent.Final
-	for ev := range child.Run(ctx, in) {
-		if ev.Kind == agent.KindFinal {
+	for ev := range events {
+		switch ev.Kind {
+		case agent.KindFinal:
 			final = ev.Final
-			continue
+		case agent.KindInterrupt:
+			// Raised again by the parent for the task call (see suspend).
+		default:
+			agent.Forward(ctx, ev)
 		}
-		agent.Forward(ctx, ev)
 	}
 	return final
 }
@@ -143,8 +232,6 @@ func outcome(ctx context.Context, name string, final *agent.Final) (tool.Result,
 		return tool.Text(finalText(final)), nil
 	case agent.ReasonMaxTurns, agent.ReasonTimeout:
 		return tool.Text(fmt.Sprintf("%s\n[subagent stopped: %s]", finalText(final), final.Reason)), nil
-	case agent.ReasonInterrupted:
-		return tool.Errorf("subagent needs approval"), nil
 	default:
 		return tool.Errorf("subagent %s failed (%s): %v", name, final.Reason, final.Err), nil
 	}

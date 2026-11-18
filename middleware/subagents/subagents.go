@@ -1,9 +1,33 @@
 // Package subagents lets an agent delegate work to subagents through the
-// task tool. Each task call starts a separate agent run that sees only the
-// task description, shares the parent's backend, streams its events into the
-// parent's stream, and returns its final answer as the tool result. A
-// general-purpose subagent, which inherits the parent's whole configuration,
-// is available unless disabled.
+// task tool. Each task call starts a separate agent run that shares the
+// parent's backend, streams its events into the parent's stream, and returns
+// its final answer as the tool result. Its non-private state is merged back
+// into the parent's when it finishes.
+//
+// A subagent runs in one of two modes:
+//   - Isolated (every configured subagent, and the built-in general-purpose
+//     one unless disabled): the run sees only the task description, under
+//     its own system prompt.
+//   - Fork (subagent_type Fork, unless Config.DisableFork): the run is the
+//     parent's own agent continuing the parent's conversation, with the task
+//     handed over as the result of its task call (ForkPrefix). System
+//     prompt, tools and history prefix match the parent's, so the provider's
+//     prompt cache is reused. A fork cannot delegate further, never
+//     checkpoints and never syncs the workspace.
+//
+// Interrupts: with a parent Approver, subagents inherit it and ask it
+// synchronously. Without one, a subagent that needs a decision ends
+// interrupted; the parent keeps it (Suspended) and pauses the task call with
+// one request that lists the subagent's pending actions and accepts approve
+// or reject. Resuming the parent with that decision applies it to every
+// pending action of the subagent and continues the subagent, which may pause
+// again. Per-action decisions on a subagent's requests are not available
+// through the parent. The subagent's own KindInterrupt events are not
+// forwarded.
+//
+// Token usage: a subagent's model calls are reported as forwarded KindUsage
+// events (with ParentToolID set) and are not included in the parent's
+// Final.Usage.
 package subagents
 
 import (
@@ -26,8 +50,9 @@ const (
 	// tools, middleware and model, with DefaultGeneralPurposePrompt (or
 	// Config.GeneralPurposePrompt) as its system prompt.
 	GeneralPurpose = "general-purpose"
-	// Fork is reserved for a subagent that continues the parent's own
-	// conversation; no configured subagent may use the name.
+	// Fork is the subagent that continues the parent's own conversation
+	// (see the package documentation); no configured subagent may use the
+	// name.
 	Fork = "fork"
 )
 
@@ -51,8 +76,7 @@ type Config struct {
 	// DisableGeneralPurpose removes the built-in general-purpose subagent;
 	// false offers it (unless a spec replaces it).
 	DisableGeneralPurpose bool
-	// DisableFork removes the fork subagent; false offers it once it is
-	// available.
+	// DisableFork removes the fork subagent; false offers it.
 	DisableFork bool
 	// MaxDepth bounds subagent nesting; 0 means DefaultMaxDepth. Negative
 	// values are rejected.
@@ -72,7 +96,9 @@ type middleware struct {
 	specs    map[string]Subagent
 	maxDepth int
 	prompt   string
-	task     tool.Tool
+	// fork reports whether the fork subagent is offered.
+	fork bool
+	task tool.Tool
 	// children maps a childKey to its *agent.Agent.
 	children sync.Map
 }
@@ -92,7 +118,10 @@ func New(cfg Config) (agent.Middleware, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &middleware{specs: specs, maxDepth: DefaultMaxDepth, prompt: DefaultPrompt}
+	m := &middleware{specs: specs, maxDepth: DefaultMaxDepth, prompt: DefaultPrompt, fork: !cfg.DisableFork}
+	if m.fork {
+		order = append(order, Fork)
+	}
 	if cfg.MaxDepth > 0 {
 		m.maxDepth = cfg.MaxDepth
 	}

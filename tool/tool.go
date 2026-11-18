@@ -98,8 +98,10 @@ const (
 	ResumeApprove = "approve"
 	// ResumeEdit: run the call with ResumeValue.Input instead.
 	ResumeEdit = "edit"
-	// ResumeReject: the call was refused. The agent answers a rejected call
-	// itself without re-invoking the tool; the name completes the set.
+	// ResumeReject: the call was refused, with ResumeValue.Message as the
+	// reason. The agent answers a rejected call itself without re-invoking
+	// the tool, unless the tool's interrupt set ReinvokeOnReject (see the
+	// agent package's Interrupt); only such a tool sees this type.
 	ResumeReject = "reject"
 	// ResumeRespond: ResumeValue.Message is the human's answer.
 	ResumeRespond = "respond"

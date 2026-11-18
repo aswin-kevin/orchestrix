@@ -313,6 +313,61 @@ func TestToolOriginInterruptRespond(t *testing.T) {
 	}
 }
 
+// rejectAwareTool raises an interrupt, flagged ReinvokeOnReject when flag is
+// set, and answers a resumed call with the decision it was re-invoked with.
+func rejectAwareTool(log *callLog, flag bool) tool.Tool {
+	return tool.New("ask_user", "Ask the user.",
+		func(_ context.Context, _ echoInput, c *tool.Call) (tool.Result, error) {
+			log.add(c)
+			if c.Resume == nil {
+				return tool.Result{}, &Interrupt{ReinvokeOnReject: flag}
+			}
+			return tool.Text("tool saw " + c.Resume.Type + ": " + c.Resume.Message), nil
+		},
+		tool.WithReadOnly())
+}
+
+func TestToolOriginInterruptReinvokeOnReject(t *testing.T) {
+	t.Run("flagged tool handles the rejection", func(t *testing.T) {
+		log := newCallLog()
+		a, _, final := interruptedRun(t, Config{Tools: []tool.Tool{rejectAwareTool(log, true)}},
+			llmtest.Call{ID: "q", Name: "ask_user", Input: map[string]any{"text": "colour?"}})
+		// The flag is part of the pending record, so it survives a checkpoint.
+		data, err := json.Marshal(final.State)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restored := state.New()
+		if err := json.Unmarshal(data, restored); err != nil {
+			t.Fatal(err)
+		}
+
+		results := resumeCompleted(t, a, restored, Decision{ToolUseID: "q", Type: Reject, Message: "no"})
+
+		if r := results[0]; resultText(r) != "tool saw reject: no" {
+			t.Fatalf("result = %+v, want the tool's own answer to the rejection", r)
+		}
+		resumes := log.resumes["q"]
+		if len(resumes) != 2 || resumes[1] == nil || resumes[1].Type != tool.ResumeReject || resumes[1].Message != "no" {
+			t.Fatalf("resume values seen by the tool = %+v, want nil then reject/no", resumes)
+		}
+	})
+	t.Run("unflagged tool is answered without running", func(t *testing.T) {
+		log := newCallLog()
+		a, _, final := interruptedRun(t, Config{Tools: []tool.Tool{rejectAwareTool(log, false)}},
+			llmtest.Call{ID: "q", Name: "ask_user", Input: map[string]any{"text": "colour?"}})
+
+		results := resumeCompleted(t, a, final.State, Decision{ToolUseID: "q", Type: Reject, Message: "no"})
+
+		if r := results[0]; !r.IsError || resultText(r) != "User rejected this action: no" {
+			t.Fatalf("result = %+v, want the agent's rejection", r)
+		}
+		if n := len(log.resumes["q"]); n != 1 {
+			t.Fatalf("tool ran %d times, want once (not re-invoked on reject)", n)
+		}
+	})
+}
+
 // confirmWrapper is a ToolWrapper that pauses every call until it is resumed.
 type confirmWrapper struct{}
 

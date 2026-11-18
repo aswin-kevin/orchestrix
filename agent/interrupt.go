@@ -35,7 +35,8 @@ const (
 	Approve DecisionType = tool.ResumeApprove
 	// Edit runs the action with Decision.Input instead of the original input.
 	Edit DecisionType = tool.ResumeEdit
-	// Reject refuses the action; Decision.Message is shown to the model.
+	// Reject refuses the action; Decision.Message is shown to the model (or
+	// handed to the tool, see Interrupt.ReinvokeOnReject).
 	Reject DecisionType = tool.ResumeReject
 	// Respond answers on the tool's behalf with Decision.Message.
 	Respond DecisionType = tool.ResumeRespond
@@ -65,6 +66,15 @@ type ActionRequest struct {
 // action of the turn, then ends with ReasonInterrupted.
 type Interrupt struct {
 	Requests []ActionRequest `json:"requests"`
+	// ReinvokeOnReject, set by a tool or ToolWrapper raising the interrupt,
+	// asks for a Reject decision to re-invoke it with tool.Call.Resume of
+	// type tool.ResumeReject and the decision's message, so it can handle
+	// the rejection itself (a subagent's task call passes it on to the
+	// subagent). False keeps the default: the agent answers a rejected call
+	// with an error result and never re-invokes the tool. It is recorded
+	// with the pending call, so it survives a checkpoint. Interrupts the
+	// agent raises for permission asks never set it.
+	ReinvokeOnReject bool `json:"reinvoke_on_reject,omitempty"`
 }
 
 // Error implements error.
@@ -97,7 +107,9 @@ type Decision struct {
 //     again with tool.Call.Resume set.
 //   - Edit runs the call with Decision.Input, which is validated against the
 //     tool's schema first; invalid input becomes an error result.
-//   - Reject answers the call with an error result carrying Decision.Message.
+//   - Reject answers the call with an error result carrying Decision.Message;
+//     a tool whose interrupt set ReinvokeOnReject is invoked again instead,
+//     with tool.Call.Resume carrying the rejection.
 //   - Respond answers a permission ask with Decision.Message as a successful
 //     result, and re-invokes a tool that raised the interrupt with the
 //     message in tool.Call.Resume.

@@ -70,12 +70,16 @@ type callRecord struct {
 type callInterrupt struct {
 	Origin  interruptOrigin `json:"origin"`
 	Request ActionRequest   `json:"request"`
+	// ReinvokeOnReject is Interrupt.ReinvokeOnReject of a tool interrupt.
+	ReinvokeOnReject bool `json:"reinvoke_on_reject,omitempty"`
 }
 
 // resumedCall is the human's answer to the interrupt a call raised earlier.
 type resumedCall struct {
 	origin   interruptOrigin
 	decision Decision
+	// reinvokeOnReject: a Reject re-invokes the tool instead of answering it.
+	reinvokeOnReject bool
 }
 
 // resumption is a validated request to finish an interrupted turn.
@@ -111,7 +115,7 @@ func toolInterrupt(c *toolCall, intr *Interrupt) *callInterrupt {
 	if len(req.Allowed) == 0 {
 		req.Allowed = slices.Clone(defaultToolDecisions)
 	}
-	return &callInterrupt{Origin: originTool, Request: req}
+	return &callInterrupt{Origin: originTool, Request: req, ReinvokeOnReject: intr.ReinvokeOnReject}
 }
 
 // interrupt records the turn's progress in State and saves it, reports the
@@ -197,7 +201,11 @@ func (r *run) restoreCalls() []*toolCall {
 		}
 		c := r.prepare(llm.Block{Type: llm.BlockToolUse, ID: rec.ID, Name: rec.Name, Input: json.RawMessage(rec.Input)})
 		if rec.Interrupt != nil && c.blocked == nil {
-			c.resumed = &resumedCall{origin: rec.Interrupt.Origin, decision: r.resume.decisions[rec.ID]}
+			c.resumed = &resumedCall{
+				origin:           rec.Interrupt.Origin,
+				decision:         r.resume.decisions[rec.ID],
+				reinvokeOnReject: rec.Interrupt.ReinvokeOnReject,
+			}
 			c.blocked = c.applyDecision()
 		}
 		calls[i] = c
@@ -224,11 +232,13 @@ func (c *toolCall) applyDecision() *tool.Result {
 }
 
 // answerWithoutRunning returns the result of a decision that settles a
-// resumed call without running it, or nil for a decision that runs it.
+// resumed call without running it, or nil for a decision that runs it. A
+// Reject runs the call only when its tool asked to handle rejections
+// (Interrupt.ReinvokeOnReject).
 func (c *toolCall) answerWithoutRunning() *tool.Result {
 	d := c.resumed.decision
 	switch {
-	case d.Type == Reject:
+	case d.Type == Reject && !c.resumed.reinvokeOnReject:
 		if d.Message == "" {
 			return errorResult(rejectedToolResult)
 		}
