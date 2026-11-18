@@ -110,10 +110,12 @@ func (l *StringList) UnmarshalYAML(n *yaml.Node) error {
 		if err := n.Decode(&items); err != nil {
 			return err
 		}
-		for i := range items {
-			items[i] = strings.TrimSpace(items[i])
+		*l = nil
+		for _, item := range items {
+			if item = strings.TrimSpace(item); item != "" {
+				*l = append(*l, item)
+			}
 		}
-		*l = items
 		return nil
 	}
 	return fmt.Errorf("line %d: expected a string or a list of strings", n.Line)

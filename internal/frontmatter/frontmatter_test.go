@@ -140,7 +140,7 @@ func TestStringListTrimsSequenceElements(t *testing.T) {
 	var f struct {
 		Tools StringList `yaml:"tools"`
 	}
-	if _, _, err := Parse([]byte("---\ntools: [\" a \", b ]\n---\n"), &f); err != nil {
+	if _, _, err := Parse([]byte("---\ntools: [\" a \", \"  \", b ]\n---\n"), &f); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(f.Tools, StringList{"a", "b"}) {

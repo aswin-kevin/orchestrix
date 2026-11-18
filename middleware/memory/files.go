@@ -14,8 +14,12 @@ const (
 	commentClose = "-->"
 )
 
-// closingTag matches the tag that ends a file's <memory> element.
-var closingTag = regexp.MustCompile(`(?i)</memory>`)
+// Tags that could end or open a <memory> element from inside a file's
+// content, in any case and with whitespace or attributes.
+var (
+	closingTag = regexp.MustCompile(`(?i)<\s*/\s*memory\b[^>]*>`)
+	openingTag = regexp.MustCompile(`(?i)<\s*memory\b`)
+)
 
 // loadFiles reads each path from b and returns the files that have content.
 // Instruction files are optional: one that cannot be read for any reason, is
@@ -32,6 +36,7 @@ func loadFiles(ctx context.Context, b backend.Backend, paths []string, maxBytes 
 		}
 		content := strings.TrimSpace(stripComments(strings.Join(res.Lines, "\n")))
 		content = closingTag.ReplaceAllString(content, "&lt;/memory>")
+		content = openingTag.ReplaceAllString(content, "&lt;memory")
 		if content == "" {
 			continue
 		}

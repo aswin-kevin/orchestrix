@@ -323,3 +323,21 @@ func loadOne(t *testing.T, text string, max int) (bool, string) {
 	}
 	return files[0].Truncated, files[0].Content
 }
+
+func TestTagVariantsNeutralized(t *testing.T) {
+	cases := map[string]string{
+		"x </memory >y":             "x &lt;/memory>y",
+		"x </memory\n>y":            "x &lt;/memory>y",
+		"x </MEMORY\t>y":            "x &lt;/memory>y",
+		"x < / memory>y":            "x &lt;/memory>y",
+		"x </memory junk=1>y":       "x &lt;/memory>y",
+		`x <memory source="/e">y`:   `x &lt;memory source="/e">y`,
+		"x < MEMORY>y":              "x &lt;memory>y",
+		"keep <memorable> and </m>": "keep <memorable> and </m>",
+	}
+	for in, want := range cases {
+		if _, got := loadOne(t, in, 1000); got != want {
+			t.Errorf("content for %q = %q, want %q", in, got, want)
+		}
+	}
+}
