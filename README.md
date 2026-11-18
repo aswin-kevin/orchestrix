@@ -399,7 +399,7 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 | --- | --- |
 | `-model` | Model spec `format:model` (default: `$ORX_MODEL`). |
 | `-p` | Run this prompt once and exit; without it, start an interactive session. |
-| `-yes` | Allow every tool call without asking (`bypassPermissions`). |
+| `-yes` | Allow every tool call without asking (`bypassPermissions`). With the shell on (the default) this includes running commands unprompted; use `-no-shell` or `-mode` to restrict it. |
 | `-mode` | Permission mode name; wins over `-yes`. |
 | `-system` | File holding the system prompt. |
 | `-dir` | Root directory of the workspace (default `.`). |

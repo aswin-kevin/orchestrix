@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -49,7 +50,12 @@ const (
 )
 
 func main() {
-	os.Exit(run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr, llm.New))
+	// SIGTERM and SIGHUP end the whole process, cleanly: run returns through
+	// its deferred shutdown. Ctrl-C is handled inside run, per prompt and turn.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGHUP)
+	code := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, llm.New)
+	stop()
+	os.Exit(code)
 }
 
 // options holds the parsed command line.
@@ -81,6 +87,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitUsage
 	}
 
+	// abort lets a second Ctrl-C end the whole run while a turn is stopping.
+	ctx, abort := context.WithCancel(ctx)
+	defer abort()
+
 	in := newLineReader(stdin)
 	rend := newRenderer(stdout, stderr)
 	stderr = rend.stderr // the shared, locked writer
@@ -90,7 +100,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	defer shutdown()
 
-	conv, err := newConversation(ctx, ag, opts)
+	conv, err := newConversation(ctx, ag, opts, abort)
 	if err != nil {
 		fmt.Fprintln(stderr, "orx:", err)
 		return exitError
@@ -124,7 +134,14 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
-	fs.Visit(func(f *flag.Flag) { o.modeGiven = o.modeGiven || f.Name == "mode" })
+	threadGiven := false
+	fs.Visit(func(f *flag.Flag) {
+		o.modeGiven = o.modeGiven || f.Name == "mode"
+		threadGiven = threadGiven || f.Name == "thread"
+	})
+	if threadGiven && o.store == "" {
+		return options{}, errors.New("-thread needs -store")
+	}
 	if o.model == "" {
 		return options{}, fmt.Errorf("no model: pass -model or set %s", modelEnv)
 	}
@@ -222,7 +239,7 @@ func repl(ctx context.Context, conv *conversation, in *lineReader, rend *rendere
 	code := exitOK
 	for {
 		fmt.Fprint(stderr, replPrompt)
-		line, err := in.next(ctx)
+		line, err := readIdle(ctx, in)
 		prompt := strings.TrimSpace(line)
 		if prompt == exitCommand {
 			return code
@@ -236,6 +253,15 @@ func repl(ctx context.Context, conv *conversation, in *lineReader, rend *rendere
 	}
 }
 
+// readIdle reads the next line at the idle prompt. Ctrl-C there cancels the
+// read, so the REPL returns and the deferred shutdown runs; the default
+// handler would kill the process and orphan background jobs.
+func readIdle(ctx context.Context, in *lineReader) (string, error) {
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	defer stop()
+	return in.next(ctx)
+}
+
 // conversation is the exchange a CLI session holds with the agent: a saved
 // thread with -store, else a State carried through the prompts in memory.
 type conversation struct {
@@ -244,17 +270,22 @@ type conversation struct {
 	thread *agent.Thread
 	// st is the in-memory state when thread is nil.
 	st *state.State
+	// abort ends the whole run; a second Ctrl-C during a turn calls it.
+	abort context.CancelFunc
 }
 
-func newConversation(ctx context.Context, ag *agent.Agent, o options) (*conversation, error) {
+// newConversation opens the conversation o asks for: the thread o.thread of
+// the store, continuing its saved state, or a fresh in-memory one when there
+// is no store. abort is what a repeated Ctrl-C calls.
+func newConversation(ctx context.Context, ag *agent.Agent, o options, abort context.CancelFunc) (*conversation, error) {
 	if o.store == "" {
-		return &conversation{ag: ag, st: state.New()}, nil
+		return &conversation{ag: ag, st: state.New(), abort: abort}, nil
 	}
 	th, err := ag.Thread(ctx, o.thread)
 	if err != nil {
 		return nil, err
 	}
-	return &conversation{ag: ag, thread: th}, nil
+	return &conversation{ag: ag, thread: th, abort: abort}, nil
 }
 
 // run starts one prompt and streams its events.
@@ -271,11 +302,12 @@ func (c *conversation) run(ctx context.Context, prompt string) iter.Seq2[agent.E
 // turn runs one prompt, rendering events as they arrive, and reports whether
 // the run succeeded: it completed without an error. A run stopped by a
 // limit, Ctrl-C or a failure did not. (A run cannot end interrupted here:
-// the CLI's approver answers every approval itself.) Ctrl-C cancels just this
-// turn.
+// the CLI's approver answers every approval itself.) The first Ctrl-C cancels
+// just this turn; a second one ends the run.
 func (c *conversation) turn(ctx context.Context, prompt string, rend *renderer, stderr io.Writer) bool {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer c.cancelOnInterrupt(cancel)()
 
 	ok := true
 	for ev, err := range c.run(ctx, prompt) {
@@ -292,4 +324,26 @@ func (c *conversation) turn(ctx context.Context, prompt string, rend *renderer, 
 		}
 	}
 	return ok
+}
+
+// cancelOnInterrupt cancels a turn on the first Ctrl-C and the whole run on
+// the second. The returned func stops watching.
+func (c *conversation) cancelOnInterrupt(cancelTurn context.CancelFunc) (stop func()) {
+	sigs := make(chan os.Signal, 2)
+	signal.Notify(sigs, os.Interrupt)
+	done := make(chan struct{})
+	go func() {
+		for _, cancel := range []context.CancelFunc{cancelTurn, c.abort} {
+			select {
+			case <-sigs:
+				cancel()
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() {
+		signal.Stop(sigs)
+		close(done)
+	}
 }

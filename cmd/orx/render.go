@@ -136,7 +136,8 @@ func (r *renderer) text(agentName, pre, s string) {
 	r.textAgent = agentName
 }
 
-// endText (called with mu held) finishes a streamed text line so later output starts on a new one.
+// endText finishes a streamed text line so later output starts on a new
+// one. The caller holds mu.
 func (r *renderer) endText() {
 	if r.midLine {
 		fmt.Fprintln(r.stdout)
