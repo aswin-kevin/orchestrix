@@ -73,6 +73,7 @@ type Backend interface {
 	Write(ctx context.Context, path string, content []byte) error
 	// Edit replaces old with new. It fails with ErrNoMatch when old is absent
 	// and with ErrAmbiguous when old is not unique and replaceAll is false.
+	// An empty old, or old equal to new, is an error (ErrInvalidEdit).
 	Edit(ctx context.Context, path, old, new string, replaceAll bool) (EditResult, error)
 	// Delete removes a file, or a directory recursively.
 	Delete(ctx context.Context, path string) error

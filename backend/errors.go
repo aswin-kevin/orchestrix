@@ -20,4 +20,6 @@ var (
 	ErrAmbiguous = errors.New("backend: ambiguous match")
 	// ErrInvalidPath means a path is empty or contains a NUL byte.
 	ErrInvalidPath = errors.New("backend: invalid path")
+	// ErrInvalidEdit means an edit's old text is empty or equals its new text.
+	ErrInvalidEdit = errors.New("backend: invalid edit")
 )
