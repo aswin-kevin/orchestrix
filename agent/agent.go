@@ -46,6 +46,10 @@ type Input struct {
 	// reports in Event.Agent, tool.Call.AgentID and RunInfo.AgentName; empty
 	// keeps Config.Name.
 	AgentName string
+	// Ephemeral keeps the run out of Config.Checkpointer even when ThreadID
+	// is set; nested (subagent) runs set it because their parent's thread is
+	// the one that is saved. False saves as Config.Checkpointer describes.
+	Ephemeral bool
 }
 
 // New validates cfg, applies its defaults and builds the agent. It fails for a
@@ -88,7 +92,8 @@ func (a *Agent) Config() Config {
 // Breaking out of the loop (or panicking in it) cancels the run: in-flight
 // model and tool calls see their context cancelled, and the iterator returns
 // once they have stopped, so no goroutine outlives it. Once the run notices
-// the break it sends nothing more and skips the AfterAgent hooks.
+// the break it sends nothing more and skips the AfterAgent hooks and the
+// end-of-run checkpoint; the checkpoints saved before the break remain.
 //
 // When in.State holds a run that ended interrupted, Run abandons that
 // interrupt and starts afresh: the model sees the calls it left unanswered

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 )
@@ -32,6 +33,11 @@ type run struct {
 	name    string
 	state   *state.State
 	backend backend.Backend
+	// store is where the run saves State, nil when it is not persisted;
+	// workspace is the backend synced into State, nil when it is not. See
+	// checkpoint.go.
+	store     checkpoint.Checkpointer
+	workspace backend.Snapshotter
 	// model is the model handler chain wrapped around streamModel (or
 	// completeModel); it is built per run because the innermost handler
 	// emits to this run.
@@ -82,18 +88,21 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 		info.Input = in.Messages
 	}
 	ctx = runContext(ctx, info)
+	be := a.backendFor(in)
 	r := &run{
-		agent:    a,
-		ctx:      ctx,
-		info:     info,
-		threadID: in.ThreadID,
-		name:     info.AgentName,
-		state:    s,
-		backend:  a.backendFor(in),
-		resume:   resume,
-		events:   make(chan Event),
-		gone:     make(chan struct{}),
-		budget:   newBudget(ctx, a.cfg.MaxDuration),
+		agent:     a,
+		ctx:       ctx,
+		info:      info,
+		threadID:  in.ThreadID,
+		name:      info.AgentName,
+		state:     s,
+		backend:   be,
+		store:     a.storeFor(in),
+		workspace: a.workspaceFor(in, be),
+		resume:    resume,
+		events:    make(chan Event),
+		gone:      make(chan struct{}),
+		budget:    newBudget(ctx, a.cfg.MaxDuration),
 	}
 	innermost := r.streamModel
 	if a.cfg.NonStreaming {
@@ -133,6 +142,7 @@ func (r *run) drive(input []llm.Message) {
 		return
 	}
 	r.runAfterAgent(final)
+	r.finalCheckpoint(final)
 	r.seal()
 	r.send(Event{Kind: KindFinal, Final: final})
 }
@@ -141,8 +151,14 @@ func (r *run) drive(input []llm.Message) {
 // something ends the run early. A resumed run first finishes the interrupted
 // turn.
 func (r *run) loop() *Final {
+	if err := r.restoreWorkspace(); err != nil {
+		return r.checkpointFailure(err)
+	}
 	if err := r.beforeAgent(); err != nil {
 		return r.hookFailure(err)
+	}
+	if err := r.checkpoint(false); err != nil {
+		return r.checkpointFailure(err)
 	}
 	if r.resume != nil {
 		if final := r.resumeTurn(); final != nil {
@@ -158,6 +174,9 @@ func (r *run) loop() *Final {
 			continue
 		}
 		r.record(resp)
+		if err := r.checkpoint(false); err != nil {
+			return r.checkpointFailure(err)
+		}
 		if final := r.afterReply(resp); final != nil {
 			return final
 		}

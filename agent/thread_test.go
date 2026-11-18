@@ -1,0 +1,255 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"iter"
+	"slices"
+	"sync/atomic"
+	"testing"
+
+	"github.com/aswin-kevin/orchestrix/checkpoint"
+	"github.com/aswin-kevin/orchestrix/checkpoint/file"
+	cpmemory "github.com/aswin-kevin/orchestrix/checkpoint/memory"
+	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/tool"
+)
+
+// mustThread opens thread id of a or fails the test.
+func mustThread(t *testing.T, a *Agent, id string) *Thread {
+	t.Helper()
+	th, err := a.Thread(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Thread(%q): %v", id, err)
+	}
+	return th
+}
+
+// mustFileCheckpointer opens a file checkpointer on dir, as a new process
+// would.
+func mustFileCheckpointer(t *testing.T, dir string) *file.Checkpointer {
+	t.Helper()
+	cp, err := file.New(dir)
+	if err != nil {
+		t.Fatalf("file.New: %v", err)
+	}
+	return cp
+}
+
+// toolResultText returns the text of the KindToolResult event for id.
+func toolResultText(t *testing.T, events []Event, id string) string {
+	t.Helper()
+	for _, ev := range events {
+		if ev.Kind == KindToolResult && ev.ToolID == id {
+			return ev.ToolResult.Flatten()
+		}
+	}
+	t.Fatalf("no tool result for %s", id)
+	return ""
+}
+
+func TestThreadRejectsInvalidID(t *testing.T) {
+	a := mustNew(t, Config{Provider: llmtest.New()})
+	if _, err := a.Thread(context.Background(), ""); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
+		t.Fatalf("err = %v, want ErrInvalidThreadID", err)
+	}
+}
+
+func TestResumeAcrossAgents(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	var reads atomic.Int32
+
+	a := mustNew(t, Config{
+		Provider: llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{
+			readFileCall("r1", "/notes.txt"),
+			writeFileCall("w1", "/out.txt", "hello"),
+		}}),
+		Tools:          []tool.Tool{fsReadTool(&reads), fsWriteTool()},
+		Checkpointer:   mustFileCheckpointer(t, dir),
+		BackendFactory: newBackends().factory,
+		SyncWorkspace:  true,
+	})
+	_, final := collect(t, mustThread(t, a, "t1").Prompt(ctx, "go"))
+	if final.Reason != ReasonInterrupted {
+		t.Fatalf("first process: final = %+v, want interrupted", final)
+	}
+
+	// A new process: new checkpointer on the same directory, new workspaces.
+	ws := newBackends()
+	b := mustNew(t, Config{
+		Provider:       llmtest.New(llmtest.Turn{Text: "done"}),
+		Tools:          []tool.Tool{fsReadTool(&reads), fsWriteTool()},
+		Checkpointer:   mustFileCheckpointer(t, dir),
+		BackendFactory: ws.factory,
+		SyncWorkspace:  true,
+	})
+	th := mustThread(t, b, "t1")
+	intr, ok := th.Pending()
+	if !ok || !slices.Equal(requestIDs(intr), []string{"w1"}) || intr.Requests[0].Tool != "write_file" {
+		t.Fatalf("Pending() = %+v, %v; want the write_file call w1", intr, ok)
+	}
+	_, final = collect(t, th.Resume(ctx, []Decision{{ToolUseID: "w1", Type: Approve}}))
+	if final.Reason != ReasonCompleted || final.Text != "done" {
+		t.Fatalf("resumed final = %+v, want completed", final)
+	}
+	if got := ws.content(t, "t1", "/out.txt"); got != "hello" {
+		t.Fatalf("/out.txt = %q, want hello", got)
+	}
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("read_file ran %d times, want 1: its recorded result must be reused", n)
+	}
+	if _, ok := th.Pending(); ok {
+		t.Fatal("thread still pending after the resumed run completed")
+	}
+	if n := len(th.Messages()); n != 4 {
+		t.Fatalf("thread holds %d messages, want 4", n)
+	}
+}
+
+func TestWorkspaceSurvivesNewProcess(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	var reads atomic.Int32
+	cfg := func(provider *llmtest.Scripted, ws *backends) Config {
+		return Config{
+			Provider:       provider,
+			Tools:          []tool.Tool{fsReadTool(&reads), fsWriteTool()},
+			Checkpointer:   mustFileCheckpointer(t, dir),
+			BackendFactory: ws.factory,
+			SyncWorkspace:  true,
+			PermissionMode: permission.ModeBypass,
+		}
+	}
+
+	a := mustNew(t, cfg(llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{writeFileCall("w1", "/a.txt", "from A")}},
+		llmtest.Turn{Text: "written"},
+	), newBackends()))
+	if _, final := collect(t, mustThread(t, a, "t1").Prompt(ctx, "write")); final.Reason != ReasonCompleted {
+		t.Fatalf("first process: final = %+v, want completed", final)
+	}
+
+	b := mustNew(t, cfg(llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{readFileCall("r1", "/a.txt")}},
+		llmtest.Turn{Text: "read"},
+	), newBackends()))
+	events, final := collect(t, mustThread(t, b, "t1").Prompt(ctx, "read"))
+	if final.Reason != ReasonCompleted {
+		t.Fatalf("second process: final = %+v, want completed", final)
+	}
+	if got := toolResultText(t, events, "r1"); got != "from A" {
+		t.Fatalf("read_file result = %q, want the restored content", got)
+	}
+}
+
+func TestThreadForkIndependent(t *testing.T) {
+	ctx := context.Background()
+	cp := cpmemory.New()
+	ws := newBackends()
+	var reads atomic.Int32
+	a := mustNew(t, Config{
+		Provider: llmtest.New(
+			llmtest.Turn{ToolCalls: []llmtest.Call{writeFileCall("w1", "/a.txt", "one")}},
+			llmtest.Turn{Text: "done"},
+			llmtest.Turn{ToolCalls: []llmtest.Call{readFileCall("r1", "/a.txt")}},
+			llmtest.Turn{Text: "forked"},
+		),
+		Tools:          []tool.Tool{fsReadTool(&reads), fsWriteTool()},
+		Checkpointer:   cp,
+		BackendFactory: ws.factory,
+		SyncWorkspace:  true,
+		PermissionMode: permission.ModeBypass,
+	})
+	t1 := mustThread(t, a, "t1")
+	collect(t, t1.Prompt(ctx, "write"))
+	before := t1.Messages()
+
+	t2, err := t1.Fork(ctx, "t2")
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if t2.ID() != "t2" {
+		t.Fatalf("ID() = %q, want t2", t2.ID())
+	}
+	saved, err := cp.Load(ctx, "t2")
+	if err != nil || len(saved.Messages()) != len(before) {
+		t.Fatalf("fork checkpoint: err = %v, want %d saved messages", err, len(before))
+	}
+
+	events, final := collect(t, t2.Prompt(ctx, "read"))
+	if final.Reason != ReasonCompleted {
+		t.Fatalf("fork run: final = %+v, want completed", final)
+	}
+	if got := toolResultText(t, events, "r1"); got != "one" {
+		t.Fatalf("fork read %q, want t1's file", got)
+	}
+	if got := ws.content(t, "t2", "/a.txt"); got != "one" {
+		t.Fatalf("t2 backend /a.txt = %q, want one", got)
+	}
+	if got := len(t1.Messages()); got != len(before) {
+		t.Fatalf("t1 has %d messages after the fork ran, want %d", got, len(before))
+	}
+	if got, want := len(t2.Messages()), len(before)+4; got != want {
+		t.Fatalf("t2 has %d messages, want %d", got, want)
+	}
+	stored, err := cp.Load(ctx, "t1")
+	if err != nil || len(stored.Messages()) != len(before) {
+		t.Fatalf("t1 checkpoint changed: err = %v, %d messages", err, len(stored.Messages()))
+	}
+}
+
+func TestThreadStateIsACopy(t *testing.T) {
+	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"})})
+	th := mustThread(t, a, "t1")
+	collect(t, th.Prompt(context.Background(), "hi"))
+	th.State().SetMessages(nil)
+	if n := len(th.Messages()); n != 2 {
+		t.Fatalf("thread holds %d messages, want 2: State must return a copy", n)
+	}
+}
+
+func TestThreadBusy(t *testing.T) {
+	ctx := context.Background()
+	a := mustNew(t, Config{Provider: llmtest.New(
+		llmtest.Turn{Text: "first"},
+		llmtest.Turn{Text: "abandoned"},
+		llmtest.Turn{Text: "after"},
+	)})
+	th := mustThread(t, a, "t1")
+
+	checked := false
+	for ev := range th.Prompt(ctx, "one") {
+		if ev.Kind != KindText || checked {
+			continue
+		}
+		checked = true
+		assertBusy(t, th.Prompt(ctx, "two"))
+		assertBusy(t, th.Resume(ctx, nil))
+	}
+	if !checked {
+		t.Fatal("first run streamed no text")
+	}
+	if n := len(th.Messages()); n != 2 {
+		t.Fatalf("thread holds %d messages, want 2", n)
+	}
+
+	// A consumer that stops reading early still frees the thread.
+	for range th.Prompt(ctx, "break") {
+		break
+	}
+	_, final := collect(t, th.Prompt(ctx, "three"))
+	if final.Reason != ReasonCompleted || final.Text != "after" {
+		t.Fatalf("final after an early break = %+v, want completed", final)
+	}
+}
+
+// assertBusy requires seq to be a lone KindFinal rejecting a busy thread.
+func assertBusy(t *testing.T, seq iter.Seq2[Event, error]) {
+	t.Helper()
+	events, final := collect(t, seq)
+	if len(events) != 1 || final.Reason != ReasonBusy || !errors.Is(final.Err, ErrThreadBusy) || final.State != nil {
+		t.Fatalf("busy run: %d events, final = %+v; want a lone busy KindFinal without State", len(events), final)
+	}
+}

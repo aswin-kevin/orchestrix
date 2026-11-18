@@ -114,8 +114,8 @@ func toolInterrupt(c *toolCall, intr *Interrupt) *callInterrupt {
 	return &callInterrupt{Origin: originTool, Request: req}
 }
 
-// interrupt records the turn's progress in State, reports the pending
-// requests and ends the run waiting for decisions.
+// interrupt records the turn's progress in State and saves it, reports the
+// pending requests and ends the run waiting for decisions.
 func (r *run) interrupt(calls []*toolCall) *Final {
 	turn := pendingTurn{Calls: make([]callRecord, len(calls))}
 	for i, c := range calls {
@@ -128,6 +128,9 @@ func (r *run) interrupt(calls []*toolCall) *Final {
 		}
 	}
 	pendingKey.Set(r.state, turn)
+	if err := r.checkpoint(true); err != nil {
+		return r.checkpointFailure(err)
+	}
 	r.emit(Event{Kind: KindInterrupt, Interrupt: &Interrupt{Requests: turn.requests()}})
 	return r.finish(ReasonInterrupted, nil)
 }

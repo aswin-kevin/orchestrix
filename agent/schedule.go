@@ -64,8 +64,8 @@ type toolCall struct {
 // yet: first, in call order, those a human decided on, then the ones never
 // started, so a decided call is never held back by a call that interrupts.
 // Once every call has a result, the results go into State right after the
-// assistant message; while a call awaits a decision, the turn is recorded as
-// pending instead and the run ends interrupted. It also returns a Final when
+// assistant message and saved; while a call awaits a decision, the turn is
+// recorded as pending instead and the run ends interrupted. It also returns a Final when
 // the run was cancelled.
 func (r *run) toolTurn(assistantIndex int, calls []*toolCall) *Final {
 	var decided, fresh []*toolCall
@@ -91,6 +91,9 @@ func (r *run) toolTurn(assistantIndex int, calls []*toolCall) *Final {
 	r.insertAfter(assistantIndex, toolResultMessages(calls))
 	if err := r.ctx.Err(); err != nil {
 		return r.finish(ReasonAbortedTools, fmt.Errorf("agent: tool calls: %w", err))
+	}
+	if err := r.checkpoint(true); err != nil {
+		return r.checkpointFailure(err)
 	}
 	return nil
 }

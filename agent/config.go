@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -67,6 +68,23 @@ type Config struct {
 	// takes precedence and builds one backend per thread.
 	Backend        backend.Backend
 	BackendFactory func(threadID string) backend.Backend
+	// SyncWorkspace stores the content of a run's backend in its State
+	// (WorkspaceKey) and restores it into an empty backend when a run
+	// starts, so a thread's files survive a restart along with its
+	// checkpoint. It applies only to a backend the run resolves itself (not
+	// Input.Backend) that implements backend.Snapshotter. Use it only with
+	// per-thread backends (BackendFactory), never with a backend shared
+	// between threads. False keeps the workspace out of State.
+	SyncWorkspace bool
+
+	// Checkpointer, when set, saves a run's State under Input.ThreadID
+	// after every state change: once the BeforeAgent hooks have run, after
+	// each assistant reply, after each turn's tool results, on interrupt and
+	// at the end of the run. The conversation can then be continued in
+	// another process (see Agent.Thread). A failed save ends the run with
+	// ReasonCheckpointError. Runs without a ThreadID and ephemeral runs
+	// (Input.Ephemeral) are never saved. Nil persists nothing.
+	Checkpointer checkpoint.Checkpointer
 
 	// PermissionMode, Rules and Approver drive tool permission checks.
 	PermissionMode permission.Mode

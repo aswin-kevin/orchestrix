@@ -75,6 +75,16 @@ const (
 	ReasonHookStopped TerminalReason = "hook_stopped"
 	// ReasonMiddlewareError: a middleware hook returned an error.
 	ReasonMiddlewareError TerminalReason = "middleware_error"
+	// ReasonCheckpointError: saving the run's State to Config.Checkpointer,
+	// or capturing or restoring its workspace (Config.SyncWorkspace),
+	// failed (Final.Err wraps the error). A failure at the end of the run
+	// is joined into Final.Err and sets this reason only when the run had
+	// otherwise succeeded.
+	ReasonCheckpointError TerminalReason = "checkpoint_error"
+	// ReasonBusy: a Thread was asked to run while one of its runs was still
+	// in progress (Final.Err is ErrThreadBusy). Nothing ran and Final.State
+	// is nil.
+	ReasonBusy TerminalReason = "busy"
 )
 
 // Event is one item of a run's output stream. Kind selects which of the other
