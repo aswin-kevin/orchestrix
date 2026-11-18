@@ -10,14 +10,16 @@ import (
 //
 //  1. a matching deny rule denies
 //  2. the tool's own deny verdict denies
-//  3. bypass mode allows
-//  4. plan mode denies anything not read-only
-//  5. a matching ask rule asks
-//  6. the tool's own allow verdict allows (not in dontAsk mode)
-//  7. a matching allow rule allows
-//  8. acceptEdits mode allows file edits
-//  9. read-only calls are allowed
-//  10. dontAsk and auto modes deny; every other mode asks
+//  3. a shell command the parser cannot vouch for asks (denies in dontAsk,
+//     auto and plan modes) when deny or ask rules have patterns for its tool
+//  4. bypass mode allows
+//  5. plan mode denies anything not read-only
+//  6. a matching ask rule asks
+//  7. the tool's own allow verdict allows (not in dontAsk mode)
+//  8. a matching allow rule allows
+//  9. acceptEdits mode allows file edits
+//  10. read-only calls are allowed
+//  11. dontAsk and auto modes deny; every other mode asks
 //
 // Deny rules come first so that nothing, not even bypass mode, can override
 // an explicit prohibition, and a tool's own refusal is likewise final, even
@@ -27,7 +29,9 @@ import (
 //
 // For a shell subject (Request.Shell), a deny or ask rule with a pattern
 // matches if any single command of the line matches, while allow rules must
-// cover every command.
+// cover every command. Step 3 makes deny and ask rules over commands fail
+// closed: a command line that may run something the rules cannot see needs
+// a human, even in bypass mode.
 func Evaluate(req Request, pc Context) Decision {
 	m := newMatcher(req)
 	// Step 1.
@@ -39,35 +43,50 @@ func Evaluate(req Request, pc Context) Decision {
 		return Denied(req.SelfCheck.Message)
 	}
 	// Step 3.
+	if m.unanalyzed(pc.Rules) {
+		return unanalyzedDecision(req.Tool, pc.Mode)
+	}
+	// Step 4.
 	if pc.Mode == ModeBypass {
 		return Allowed()
 	}
-	// Step 4.
+	// Step 5.
 	if pc.Mode == ModePlan && !req.ReadOnly {
 		return Denied("plan mode: read-only")
 	}
-	// Step 5.
+	// Step 6.
 	if rule, ok := m.first(pc.Rules.Ask); ok {
 		return AskUser(fmt.Sprintf("approval required by rule %s", rule))
 	}
-	// Step 6.
+	// Step 7.
 	if req.SelfCheck.Behavior == Allow && pc.Mode != ModeDontAsk {
 		return req.SelfCheck
 	}
-	// Step 7.
+	// Step 8.
 	if m.allowMatch(pc.Rules.Allow) {
 		return Allowed()
 	}
-	// Step 8.
+	// Step 9.
 	if pc.Mode == ModeAcceptEdits && req.Edit {
 		return Allowed()
 	}
-	// Step 9.
+	// Step 10.
 	if req.ReadOnly {
 		return Allowed()
 	}
-	// Step 10.
+	// Step 11.
 	return fallback(req, pc.Mode)
+}
+
+// unanalyzedDecision refuses to pass a command the deny or ask rules could not be
+// checked against: modes that never prompt (and plan mode, which runs
+// nothing that changes state) deny it, the others ask a human.
+func unanalyzedDecision(tool string, mode Mode) Decision {
+	msg := fmt.Sprintf("command could not be fully analyzed against deny rules for %s", tool)
+	if mode == ModeDontAsk || mode == ModeAuto || mode == ModePlan {
+		return Denied(msg)
+	}
+	return AskUser(msg)
 }
 
 // fallback handles a call that no earlier step settled: non-interactive modes
@@ -99,6 +118,18 @@ func newMatcher(req Request) matcher {
 		m.segments, m.vouched = SplitCommand(req.Subject)
 	}
 	return m
+}
+
+// unanalyzed reports whether the request is a shell command SplitCommand
+// could not vouch for while deny or ask rules have patterns for its tool, so
+// that matching its best-effort segments may have missed a command.
+func (m matcher) unanalyzed(rules Rules) bool {
+	if !m.req.Shell || m.vouched {
+		return false
+	}
+	return slices.ContainsFunc(slices.Concat(rules.Deny, rules.Ask), func(r Rule) bool {
+		return !r.isPathRule() && r.Tool == m.req.Tool && r.Pattern != ""
+	})
 }
 
 // first returns the first rule that matches the request. A tool rule's

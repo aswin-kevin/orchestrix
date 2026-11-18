@@ -48,11 +48,41 @@ var findExecActions = map[string]bool{"-exec": true, "-execdir": true, "-ok": tr
 // findExecEnd lists the words that end a find -exec command.
 var findExecEnd = map[string]bool{";": true, "+": true}
 
+// endOfOptions ends a command's options.
+const endOfOptions = "--"
+
+// wrapperValueOptions lists, for every wrapper, the options whose value is
+// the next word; wrapperTail uses it to skip options it cannot validate.
+var wrapperValueOptions = map[string][]string{
+	"command": nil, "builtin": nil, "nohup": nil, "time": nil,
+	"exec":    {"-a"},
+	"nice":    {"-n", "--adjustment"},
+	"env":     {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"},
+	"timeout": {"-s", "-k", "--signal", "--kill-after"},
+	"stdbuf":  {"-i", "-o", "-e", "--input", "--output", "--error"},
+}
+
+// stateBuiltins set variables, aliases, traps or shell options, which can
+// change what a later command in the line runs (PATH, an alias for git, a
+// trap's command string).
+var stateBuiltins = map[string]bool{
+	"export": true, "declare": true, "typeset": true, "readonly": true,
+	"local": true, "read": true, "unset": true, "alias": true, "trap": true,
+	"enable": true, "shopt": true,
+}
+
+// stateOptionLetters are builtins that change shell state only with one
+// option: printf -v assigns a variable, hash -p binds a name to a path.
+var stateOptionLetters = map[string]byte{"printf": 'v', "hash": 'p'}
+
 var (
-	integerPattern    = regexp.MustCompile(`^-?[0-9]+$`)
-	durationPattern   = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?[smhd]?$`)
-	signalPattern     = regexp.MustCompile(`^[A-Za-z0-9]+$`)
-	bufferModePattern = regexp.MustCompile(`^(L|[0-9]+[KMGTPEZY]?B?)$`)
+	// looseDurationPattern accepts anything timeout might read as a
+	// duration (.5, 1e1, inf); it only guesses for deny rules.
+	looseDurationPattern = regexp.MustCompile(`^(([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?|inf(inity)?)[smhd]?$`)
+	integerPattern       = regexp.MustCompile(`^-?[0-9]+$`)
+	durationPattern      = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?[smhd]?$`)
+	signalPattern        = regexp.MustCompile(`^[A-Za-z0-9]+$`)
+	bufferModePattern    = regexp.MustCompile(`^(L|[0-9]+[KMGTPEZY]?B?)$`)
 )
 
 // optionSpec maps a wrapper's options to the check their value must pass;
@@ -78,25 +108,38 @@ func normalizeSegment(words []word) (segments []string, ok bool) {
 	words, assigned := dropAssignments(words)
 	ok = !assigned
 	var name string
+	var guesses []string
 	for len(words) > 0 {
 		var hadPath bool
 		name, hadPath = commandName(words[0].text)
-		rest, stripped, wrapperOK := stripWrapper(name, words[0].quotedAt, words[1:])
+		args := words[1:]
+		rest, stripped, wrapperOK := stripWrapper(name, words[0].quotedAt, args)
 		ok = ok && !hadPath && wrapperOK
 		if !stripped {
 			break
 		}
+		// A wrapper whose arguments did not validate still most likely runs
+		// what follows its options; give deny rules that guess as well.
+		if tail := wrapperTail(name, args); !wrapperOK && len(tail) > 0 && len(tail) != len(rest) {
+			guessed, _ := normalizeSegment(tail)
+			guesses = append(guesses, guessed...)
+		}
+		// time and reserved words come before assignments, not after them.
+		if name == "time" || (reservedWords[name] && words[0].quotedAt == notQuoted) {
+			rest, assigned = dropAssignments(rest)
+			ok = ok && !assigned
+		}
 		words = rest
 	}
 	if len(words) == 0 {
-		return nil, ok
+		return guesses, ok
 	}
-	ok = ok && vouchableName(name)
+	ok = ok && vouchableName(name) && !changesShellState(name, words[1:])
 	texts := []string{name}
 	for _, w := range words[1:] {
 		texts = append(texts, w.text)
 	}
-	segments = []string{strings.Join(texts, " ")}
+	segments = append([]string{strings.Join(texts, " ")}, guesses...)
 	if name == "find" {
 		for _, command := range findExecCommands(words[1:]) {
 			ok = false
@@ -105,6 +148,68 @@ func normalizeSegment(words []word) (segments []string, ok bool) {
 		}
 	}
 	return segments, ok
+}
+
+// wrapperTail guesses the command a wrapper runs, without validating its
+// arguments: what follows its leading options (and their values) and, for
+// timeout, one duration and, for env, its assignments.
+func wrapperTail(name string, args []word) []word {
+	valueOptions, isWrapper := wrapperValueOptions[name]
+	if !isWrapper {
+		return nil
+	}
+	for startsWithOption(args) {
+		opt := args[0].text
+		args = args[1:]
+		if opt == endOfOptions {
+			break
+		}
+		if takesValue(opt, valueOptions) && len(args) > 0 {
+			args = args[1:]
+		}
+	}
+	switch {
+	case name == "timeout" && len(args) > 0 && looseDurationPattern.MatchString(args[0].text):
+		args = args[1:]
+	case name == "env":
+		args, _ = dropAssignments(args)
+	}
+	return args
+}
+
+// takesValue reports whether opt is one of valueOptions, or an abbreviation
+// of a long one, without an attached "=value".
+func takesValue(opt string, valueOptions []string) bool {
+	if strings.Contains(opt, "=") {
+		return false
+	}
+	for _, v := range valueOptions {
+		if opt == v || (strings.HasPrefix(opt, "--") && strings.HasPrefix(v, opt)) {
+			return true
+		}
+	}
+	return false
+}
+
+// changesShellState reports whether a command sets variables, aliases,
+// traps or other shell state that changes what later commands run.
+func changesShellState(name string, args []word) bool {
+	if stateBuiltins[name] {
+		return true
+	}
+	letter, ok := stateOptionLetters[name]
+	if !ok {
+		return false
+	}
+	for _, a := range args {
+		if a.text == endOfOptions || !strings.HasPrefix(a.text, "-") {
+			return false
+		}
+		if !strings.HasPrefix(a.text, "--") && strings.IndexByte(a.text[1:], letter) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // vouchableName reports whether a command word names one known command.

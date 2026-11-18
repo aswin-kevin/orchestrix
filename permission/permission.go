@@ -18,10 +18,13 @@
 // any one of them. A command line the parser cannot vouch for, such as one
 // with command substitution, one that pipes into sh, one that sets a
 // variable (PATH=..., LD_PRELOAD=...) or one that runs a program by path
-// (./npm), is never allowed by a pattern rule. Deny rules over commands remain a best effort: a command
-// can be reached in ways the text does not show (a script, an alias for
-// another program, a wrapper the parser does not know). Permission rules
-// decide which calls the agent makes; they are not a sandbox.
+// (./npm), is never allowed by a pattern rule. Deny and ask rules over
+// commands are enforced fail closed: a command line the parser cannot vouch
+// for, when such rules exist for its tool, needs a human (or is denied in
+// modes that never prompt), even in bypass mode. Rules still name programs,
+// not behaviors: a vouched-for command such as a script or a program that
+// runs others can reach anything. Permission rules decide which calls the
+// agent makes; they are not a sandbox.
 package permission
 
 import (

@@ -2,6 +2,7 @@ package permission
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -99,19 +100,53 @@ func TestSplitCommand(t *testing.T) {
 		{"timeout 1 rm x", []string{"rm x"}, true},
 		{"timeout -k 5s -s KILL --preserve-status 1.5m rm x", []string{"rm x"}, true},
 		{"timeout --signal=TERM --kill-after=2 10 rm x", []string{"rm x"}, true},
-		{"timeout -z 1 rm x", []string{"-z 1 rm x"}, false},
-		{"timeout -s 'a b' 1 rm x", []string{"-s a b 1 rm x"}, false},
+		{"timeout -z 1 rm x", []string{"-z 1 rm x", "rm x"}, false},
+		{"timeout -s 'a b' 1 rm x", []string{"-s a b 1 rm x", "rm x"}, false},
 		{"timeout abc rm x", []string{"abc rm x"}, false},
 		{"stdbuf -oL -e0 grep x", []string{"grep x"}, true},
 		{"stdbuf --output=L -i 4K grep x", []string{"grep x"}, true},
-		{"stdbuf -oQ grep x", []string{"-oQ grep x"}, false},
+		{"stdbuf -oQ grep x", []string{"-oQ grep x", "grep x"}, false},
 		{"find . -name x", []string{"find . -name x"}, true},
 		{`find . -name x -exec rm {} \;`, []string{"find . -name x -exec rm {} ;", "rm {}"}, false},
 		{"find . -execdir /bin/rm {} + -print", []string{"find . -execdir /bin/rm {} + -print", "rm {}"}, false},
 		{"find . -ok", []string{"find . -ok"}, false},
-		{"command -p rm x", []string{"-p rm x"}, false},
-		{"env -u A rm x", []string{"-u A rm x"}, false},
-		{"nice -5 rm x", []string{"-5 rm x"}, false},
+		{"command -p rm x", []string{"-p rm x", "rm x"}, false},
+		{"env -u A rm x", []string{"-u A rm x", "rm x"}, false},
+		{"nice -5 rm x", []string{"-5 rm x", "rm x"}, false},
+
+		// When a wrapper's arguments do not validate, deny rules also get a
+		// guess at the wrapped command.
+		{"timeout .5 rm x", []string{".5 rm x", "rm x"}, false},
+		{"timeout 1e1s rm x", []string{"1e1s rm x", "rm x"}, false},
+		{"timeout inf rm x", []string{"inf rm x", "rm x"}, false},
+		{"timeout --kill=1 1 rm x", []string{"--kill=1 1 rm x", "rm x"}, false},
+		{"timeout --kill 1 1 rm x", []string{"--kill 1 1 rm x", "rm x"}, false},
+		{"timeout -- 1 rm x", []string{"-- 1 rm x", "rm x"}, false},
+		{"stdbuf --out=L rm x", []string{"--out=L rm x", "rm x"}, false},
+		{"stdbuf -o 1KiB rm x", []string{"-o 1KiB rm x", "rm x"}, false},
+		{"nice -n5 rm x", []string{"-n5 rm x", "rm x"}, false},
+		{"time -p rm x", []string{"-p rm x", "rm x"}, false},
+		{"exec -a name rm x", []string{"-a name rm x", "rm x"}, false},
+		{"env -S 'rm x'", []string{"-S rm x"}, false},
+
+		// Assignments after time or a reserved word are still assignments.
+		{"time FOO=1 rm x", []string{"rm x"}, false},
+		{"! FOO=1 rm x", []string{"rm x"}, false},
+
+		// Builtins that change what later commands run.
+		{"export PATH=/tmp/evil; git status", []string{"export PATH=/tmp/evil", "git status"}, false},
+		{"declare -x A=1", []string{"declare -x A=1"}, false},
+		{"typeset A=1", []string{"typeset A=1"}, false},
+		{"readonly A", []string{"readonly A"}, false},
+		{"local A=1", []string{"local A=1"}, false},
+		{"read A", []string{"read A"}, false},
+		{"unset PATH", []string{"unset PATH"}, false},
+		{"alias git=rm", []string{"alias git=rm"}, false},
+		{"trap 'rm x' EXIT", []string{"trap rm x EXIT"}, false},
+		{"printf -v A x", []string{"printf -v A x"}, false},
+		{"printf %s x", []string{"printf %s x"}, true},
+		{"hash -p /tmp/evil/git git", []string{"hash -p /tmp/evil/git git"}, false},
+		{"hash -r", []string{"hash -r"}, true},
 		{"/bin/ x", []string{" x"}, false},
 		{"$CMD x", []string{"$CMD x"}, false},
 		{"/bin/r? x", []string{"r? x"}, false},
@@ -261,6 +296,85 @@ func TestNonShellSubjectUnchanged(t *testing.T) {
 	if got := Evaluate(Request{Tool: "execute", Subject: "ls && rm x"}, deny); got.Behavior == Deny {
 		t.Fatalf("non-shell subject: deny rule matched a segment: %+v", got)
 	}
+}
+
+func TestUnanalyzedCommandFailsClosed(t *testing.T) {
+	shell := func(cmd string) Request { return Request{Tool: "execute", Subject: cmd, Shell: true} }
+	denyRm := Rules{Deny: []Rule{mustRule(t, "execute(rm:*)")}}
+	const msg = "command could not be fully analyzed against deny rules for execute"
+
+	unanalyzable := []string{
+		"env -S 'rm x'",
+		"timeout -s 'x y' 1 sh",
+		"bash -c 'rm x'",
+		"echo \"$(rm x)\"",
+		"PATH=/tmp/evil ls",
+	}
+	for _, cmd := range unanalyzable {
+		for _, tt := range []struct {
+			mode Mode
+			want Behavior
+		}{
+			{ModeBypass, Ask}, {ModeDefault, Ask}, {ModeAcceptEdits, Ask},
+			{ModeDontAsk, Deny}, {ModeAuto, Deny}, {ModePlan, Deny},
+		} {
+			t.Run(string(tt.mode)+"/"+cmd, func(t *testing.T) {
+				got := Evaluate(shell(cmd), Context{Mode: tt.mode, Rules: denyRm})
+				if got.Behavior != tt.want || got.Message != msg {
+					t.Fatalf("Evaluate(%q) = %+v, want %q %q", cmd, got, tt.want, msg)
+				}
+			})
+		}
+	}
+
+	// Commands whose wrapped rm is still found are denied outright.
+	for _, cmd := range []string{
+		"rm x",
+		"env -u A rm x",
+		"command -p rm x",
+		"timeout .5 rm x",
+		"timeout --kill=1 1 rm x",
+		"timeout -- 1 rm x",
+		"stdbuf --out=L rm x",
+		"nice -n5 rm x",
+		"time -p rm x",
+		"time FOO=1 rm x",
+		"! FOO=1 rm x",
+	} {
+		t.Run("deny/"+cmd, func(t *testing.T) {
+			got := Evaluate(shell(cmd), Context{Mode: ModeBypass, Rules: denyRm})
+			if got.Behavior != Deny || !strings.HasPrefix(got.Message, "denied by rule") {
+				t.Fatalf("Evaluate(%q) = %+v, want a deny-rule Deny", cmd, got)
+			}
+		})
+	}
+
+	t.Run("vouched command passes", func(t *testing.T) {
+		if got := Evaluate(shell("ls"), Context{Mode: ModeBypass, Rules: denyRm}); got.Behavior != Allow {
+			t.Fatalf("Evaluate(ls) = %+v, want Allow", got)
+		}
+	})
+	t.Run("patterned ask rule also fails closed", func(t *testing.T) {
+		pc := Context{Mode: ModeBypass, Rules: Rules{Ask: []Rule{mustRule(t, "execute(rm:*)")}}}
+		if got := Evaluate(shell("bash -c 'rm x'"), pc); got.Behavior != Ask || got.Message != msg {
+			t.Fatalf("got %+v, want Ask %q", got, msg)
+		}
+	})
+	t.Run("rules without a pattern or for another tool do not", func(t *testing.T) {
+		pc := Context{Mode: ModeBypass, Rules: Rules{Deny: []Rule{
+			mustRule(t, "fetch(rm:*)"), mustRule(t, "write(/secrets/**)"),
+		}}}
+		if got := Evaluate(shell("bash -c 'rm x'"), pc); got.Behavior != Allow {
+			t.Fatalf("got %+v, want Allow", got)
+		}
+	})
+	t.Run("self deny still wins", func(t *testing.T) {
+		req := shell("bash -c 'rm x'")
+		req.SelfCheck = Denied("no")
+		if got := Evaluate(req, Context{Mode: ModeBypass, Rules: denyRm}); got.Behavior != Deny || got.Message != "no" {
+			t.Fatalf("got %+v, want Deny %q", got, "no")
+		}
+	})
 }
 
 func TestSelfDenyBeatsBypass(t *testing.T) {
