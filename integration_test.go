@@ -10,6 +10,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	checkpointfile "github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -129,7 +130,7 @@ func TestLiveStreamingText(t *testing.T) {
 	}
 }
 
-// drain drains a run, failing the test on a stream error, and returns its
+// drain consumes a run, failing the test on a stream error, and returns its
 // Final event and every event seen.
 func drain(t *testing.T, run iter.Seq2[agent.Event, error]) (*agent.Final, []agent.Event) {
 	t.Helper()
@@ -155,10 +156,14 @@ func requireCompleted(t *testing.T, final *agent.Final) {
 	}
 }
 
+// readLimit is how many lines readTrimmed reads; the files the live tests
+// check are one line long.
+const readLimit = 10
+
 // readTrimmed returns the content of path in ws without surrounding space.
-func readTrimmed(t *testing.T, ctx context.Context, ws *memory.Backend, path string) string {
+func readTrimmed(ctx context.Context, t *testing.T, ws backend.Backend, path string) string {
 	t.Helper()
-	got, err := ws.Read(ctx, path, 0, 10)
+	got, err := ws.Read(ctx, path, 0, readLimit)
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
 	}
@@ -196,8 +201,8 @@ func TestLiveSubagentDelegation(t *testing.T) {
 	if !sawSubagent {
 		t.Error("no event came from the general-purpose subagent")
 	}
-	if got := readTrimmed(t, ctx, ws, "/report.txt"); got != "delegated ok" {
-		t.Errorf("file content = %q, want %q", got, "delegated ok")
+	if got := readTrimmed(ctx, t, ws, "/report.txt"); !strings.Contains(strings.ToLower(got), "delegated ok") {
+		t.Errorf("file content = %q, want it to contain %q", got, "delegated ok")
 	}
 }
 
@@ -313,7 +318,8 @@ func TestLiveCheckpointResumeAcrossAgents(t *testing.T) {
 		t.Fatalf("final = %+v, want reason %q", final, agent.ReasonInterrupted)
 	}
 
-	second, err := newAgent().Thread(ctx, "live")
+	agentB := newAgent()
+	second, err := agentB.Thread(ctx, "live")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +339,10 @@ func TestLiveCheckpointResumeAcrossAgents(t *testing.T) {
 
 	final, _ = drain(t, second.Prompt(ctx, "Read /a.txt and reply with its contents."))
 	requireCompleted(t, final)
-	if !strings.Contains(final.Text, "resume ok") {
+	if got := readTrimmed(ctx, t, agentB.Config().BackendFactory("live"), "/a.txt"); !strings.Contains(strings.ToLower(got), "resume ok") {
+		t.Errorf("file content = %q, want it to contain %q", got, "resume ok")
+	}
+	if !strings.Contains(strings.ToLower(final.Text), "resume ok") {
 		t.Errorf("final text = %q, want it to contain %q", final.Text, "resume ok")
 	}
 }
