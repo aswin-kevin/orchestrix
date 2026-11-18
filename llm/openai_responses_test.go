@@ -341,3 +341,33 @@ func TestResponsesStreamContextCancelClosesConnection(t *testing.T) {
 	}
 	waitClosed(t, gone)
 }
+
+func TestResponsesRawReasoningTextDelta(t *testing.T) {
+	stream := responsesBody(
+		`{"type":"response.reasoning_text.delta","output_index":0,"delta":"raw "}`,
+		`{"type":"response.reasoning_text.delta","output_index":0,"delta":"thought"}`,
+		responsesCompleted,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectResponses(t, newTestResponses(t, srv.URL), Request{})
+
+	if got := resp.Message.Content[0]; got.Type != BlockThinking || got.Thinking != "raw thought" {
+		t.Errorf("block = %+v", got)
+	}
+}
+
+func TestResponsesFunctionCallOnlyOnDoneItem(t *testing.T) {
+	stream := responsesBody(
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"c9","name":"ls","arguments":"{\"a\":1}"}}`,
+		responsesCompleted,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectResponses(t, newTestResponses(t, srv.URL), Request{})
+
+	if resp.StopReason != StopToolUse {
+		t.Errorf("stop = %q, want tool_use", resp.StopReason)
+	}
+	if tu := resp.Message.ToolUses(); len(tu) != 1 || tu[0].ID != "c9" || tu[0].Name != "ls" || string(tu[0].Input) != `{"a":1}` {
+		t.Errorf("tool uses = %+v", tu)
+	}
+}

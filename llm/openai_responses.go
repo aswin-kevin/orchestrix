@@ -22,6 +22,7 @@ const (
 	respEvOutputItemDone     = "response.output_item.done"
 	respEvTextDelta          = "response.output_text.delta"
 	respEvReasoningDelta     = "response.reasoning_summary_text.delta"
+	respEvReasoningText      = "response.reasoning_text.delta"
 	respEvArgumentsDelta     = "response.function_call_arguments.delta"
 	respEvCompleted          = "response.completed"
 	respEvIncomplete         = "response.incomplete"
@@ -129,7 +130,7 @@ type responsesEvent struct {
 // truncated replies are never mistaken for complete ones. It returns nil
 // without further reading once emit reports the consumer is gone.
 func streamResponsesEvents(ctx context.Context, body io.Reader, emit func(StreamEvent) bool) error {
-	state := &responsesStreamState{argumentsSeen: make(map[int]bool)}
+	state := &responsesStreamState{argumentsSeen: make(map[int]bool), startedTools: make(map[int]bool)}
 	if !emit(StreamEvent{Type: EvMessageStart}) {
 		return nil
 	}
@@ -158,6 +159,7 @@ type responsesStreamState struct {
 	// argumentsSeen records tool calls whose arguments streamed as deltas, so
 	// the full text on the finished item is not applied twice.
 	argumentsSeen map[int]bool
+	startedTools  map[int]bool
 	sawToolCall   bool
 }
 
@@ -172,7 +174,7 @@ func (s *responsesStreamState) translate(data string) (events []StreamEvent, don
 	switch ev.Type {
 	case respEvTextDelta:
 		return []StreamEvent{{Type: EvTextDelta, Index: index, Text: ev.Delta}}, false, nil
-	case respEvReasoningDelta:
+	case respEvReasoningDelta, respEvReasoningText:
 		return []StreamEvent{{Type: EvThinkingDelta, Index: index, Text: ev.Delta}}, false, nil
 	case respEvArgumentsDelta:
 		s.argumentsSeen[index] = true
@@ -194,7 +196,16 @@ func (s *responsesStreamState) itemAdded(ev responsesEvent) []StreamEvent {
 	if ev.Item.Type != responsesFunctionCallType {
 		return nil
 	}
+	return s.startTool(ev)
+}
+
+// startTool records the call and announces it once per output index.
+func (s *responsesStreamState) startTool(ev responsesEvent) []StreamEvent {
 	s.sawToolCall = true
+	if s.startedTools[ev.OutputIndex] {
+		return nil
+	}
+	s.startedTools[ev.OutputIndex] = true
 	return []StreamEvent{{Type: EvToolStart, Index: ev.OutputIndex, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}
 }
 
@@ -207,10 +218,13 @@ func (s *responsesStreamState) itemDone(ev responsesEvent) []StreamEvent {
 			{Type: EvProviderData, Index: index, Key: responsesReasoningIDKey, Value: ev.Item.ID},
 		}
 	case responsesFunctionCallType:
-		// Some servers send arguments only on the finished item.
+		// Some servers send the call only on the finished item, arguments
+		// included.
+		events := s.startTool(ev)
 		if !s.argumentsSeen[index] && ev.Item.Arguments != "" {
-			return []StreamEvent{{Type: EvToolInputDelta, Index: index, Text: ev.Item.Arguments}}
+			events = append(events, StreamEvent{Type: EvToolInputDelta, Index: index, Text: ev.Item.Arguments})
 		}
+		return events
 	}
 	return nil
 }
