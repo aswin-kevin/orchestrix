@@ -10,7 +10,9 @@
 // Hooks run in this order: BeforeAgent once at the start of a run; per turn,
 // BeforeModel, the model call (through every ModelWrapper), then AfterModel;
 // each tool call goes through every ToolWrapper; AfterAgent once at the end.
-// Within one hook, middleware run in stack order.
+// Before* hooks (BeforeAgent, BeforeModel) run in stack order; After* hooks
+// (AfterModel, AfterAgent) run in reverse stack order, mirroring how wrappers
+// unwind.
 //
 // Wrappers follow the usual onion model: the first middleware in the stack is
 // the outermost. A wrapper may call next zero times (short-circuit), once, or

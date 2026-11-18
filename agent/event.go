@@ -83,22 +83,6 @@ type Event struct {
 	Final *Final
 }
 
-// Interrupt describes the human input a paused run is waiting for.
-type Interrupt struct {
-	// Requests lists the pending actions, one per tool call that needs a
-	// decision.
-	Requests []InterruptRequest
-}
-
-// InterruptRequest is one pending action inside an Interrupt.
-type InterruptRequest struct {
-	ToolID   string
-	ToolName string
-	Input    json.RawMessage
-	// Reason explains to the human why a decision is needed.
-	Reason string
-}
-
 // Final is the outcome of a run, delivered with KindFinal.
 type Final struct {
 	Reason TerminalReason

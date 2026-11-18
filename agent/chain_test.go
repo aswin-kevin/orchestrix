@@ -117,3 +117,63 @@ func TestChainToolRewriteInput(t *testing.T) {
 		t.Fatalf("result = %q", got)
 	}
 }
+
+// toolRecorder logs entry and exit of WrapTool into a shared trace.
+type toolRecorder struct {
+	name         string
+	trace        *[]string
+	shortCircuit bool
+}
+
+func (r toolRecorder) Name() string { return r.name }
+
+func (r toolRecorder) WrapTool(ctx context.Context, call *ToolCall, next ToolHandler) (tool.Result, error) {
+	*r.trace = append(*r.trace, r.name)
+	if r.shortCircuit {
+		return tool.Text("short"), nil
+	}
+	res, err := next(ctx, call)
+	*r.trace = append(*r.trace, r.name)
+	return res, err
+}
+
+func TestChainToolOrder(t *testing.T) {
+	var trace []string
+	mws := []Middleware{
+		toolRecorder{name: "a", trace: &trace},
+		plain{},
+		toolRecorder{name: "b", trace: &trace},
+	}
+	h := chainTool(mws, func(context.Context, *ToolCall) (tool.Result, error) {
+		trace = append(trace, "inner")
+		return tool.Text("ok"), nil
+	})
+	if _, err := h(context.Background(), &ToolCall{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a", "b", "inner", "b", "a"}
+	if !reflect.DeepEqual(trace, want) {
+		t.Fatalf("trace = %v, want %v", trace, want)
+	}
+}
+
+func TestChainToolShortCircuit(t *testing.T) {
+	var trace []string
+	mws := []Middleware{
+		toolRecorder{name: "a", trace: &trace},
+		toolRecorder{name: "b", trace: &trace, shortCircuit: true},
+		toolRecorder{name: "c", trace: &trace},
+	}
+	h := chainTool(mws, func(context.Context, *ToolCall) (tool.Result, error) {
+		t.Fatal("inner must not run when a wrapper short-circuits")
+		return tool.Result{}, nil
+	})
+	res, err := h(context.Background(), &ToolCall{})
+	if err != nil || res.Flatten() != "short" {
+		t.Fatalf("res=%q err=%v", res.Flatten(), err)
+	}
+	want := []string{"a", "b", "a"}
+	if !reflect.DeepEqual(trace, want) {
+		t.Fatalf("trace = %v, want %v", trace, want)
+	}
+}
