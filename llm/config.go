@@ -82,7 +82,7 @@ type Config struct {
 }
 
 // ParseModel builds a Config from a "format:model" spec such as
-// "openai:gpt-oss:120b". Only the first colon separates the format, so model
+// "openai:my-model:v2". Only the first colon separates the format, so model
 // names may contain colons. The API key and base URL come from the format's
 // environment variables.
 func ParseModel(spec string) (Config, error) {

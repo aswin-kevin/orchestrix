@@ -2,7 +2,7 @@
 // one-call preset: New turns a model and a few options into a ready agent with
 // file tools, planning and permission checks already wired.
 //
-//	agent, err := orchestrix.New("anthropic:claude-sonnet-4-5",
+//	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 //		orchestrix.WithSystemPrompt("You are a careful code reviewer."),
 //		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
 //		orchestrix.WithMaxTurns(20),
@@ -10,8 +10,16 @@
 //	if err != nil {
 //		log.Fatal(err)
 //	}
-//	for ev, err := range agent.Run(ctx, orchestrix.Text("Review main.go")) {
-//		// handle events; the last one is agent.KindFinal
+//	for ev, err := range a.Run(ctx, orchestrix.Text("Review main.go")) {
+//		if err != nil {
+//			log.Fatal(err) // only the final event carries an error
+//		}
+//		switch ev.Kind {
+//		case agent.KindText:
+//			fmt.Print(ev.Text)
+//		case agent.KindFinal:
+//			fmt.Println("\nfinished:", ev.Final.Reason)
+//		}
 //	}
 //
 // Everything New configures can be inspected and overridden: the options cover

@@ -600,6 +600,7 @@ func TestNewValidation(t *testing.T) {
 		"duplicate across sources": {Provider: p, Tools: []tool.Tool{echoTool()}, Middleware: []Middleware{toolOwner{tool: echoTool()}}},
 		"nil middleware":           {Provider: p, Middleware: []Middleware{nil}},
 		"duplicate middleware":     {Provider: p, Middleware: []Middleware{retryTwice{}, retryTwice{}}},
+		"unknown permission mode":  {Provider: p, PermissionMode: "acceptEdit"},
 	}
 	for name, cfg := range cases {
 		t.Run(name, func(t *testing.T) {

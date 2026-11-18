@@ -14,8 +14,8 @@ const (
 	// DefaultMaxConcurrency is how many concurrency-safe tool calls of one
 	// turn run in parallel.
 	DefaultMaxConcurrency = 10
-	// DefaultMaxToolOutputChars caps the size of a single tool result sent
-	// to the model.
+	// DefaultMaxToolOutputChars caps the size, in bytes, of a single tool
+	// result sent to the model.
 	DefaultMaxToolOutputChars = 200_000
 	// DefaultAgentName is the agent id used when Config.Name is empty.
 	DefaultAgentName = "main"
@@ -99,7 +99,9 @@ type Config struct {
 
 	// WorkingDir is the directory tools treat as the current one.
 	WorkingDir string
-	// MaxToolOutputChars caps each tool result; zero means
+	// MaxToolOutputChars caps the combined size, in bytes, of the text blocks
+	// of each tool result; text is cut at a rune boundary so no UTF-8
+	// sequence is split (see tool.Truncate). Zero means
 	// DefaultMaxToolOutputChars.
 	MaxToolOutputChars int
 }

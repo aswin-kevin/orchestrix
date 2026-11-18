@@ -18,11 +18,13 @@ import (
 
 // Offload settings.
 const (
-	// DefaultOffloadChars is the result size above which another tool's output
-	// is saved to the backend, when Config.OffloadChars is zero.
+	// DefaultOffloadChars is the result size, in characters (runes), above
+	// which another tool's output is saved to the backend, when
+	// Config.OffloadChars is zero.
 	DefaultOffloadChars = 80_000
-	// MessageOffloadChars is the size above which a user text block is saved to
-	// the backend and replaced, in the request only, by a preview.
+	// MessageOffloadChars is the size, in characters (runes), above which a
+	// user text block is saved to the backend and replaced, in the request
+	// only, by a preview.
 	MessageOffloadChars = 200_000
 
 	toolResultDir  = "/large_tool_results"

@@ -146,6 +146,20 @@ func TestModelErrorExitsOne(t *testing.T) {
 	}
 }
 
+func TestUnfinishedRunExitsOne(t *testing.T) {
+	// The model keeps calling tools, so the one allowed turn runs out.
+	provider := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "c1", Name: "ls", Input: map[string]string{}}}},
+		llmtest.Turn{Text: "never"},
+	)
+
+	code, _, stderr := invoke(t, "", provider, "-model", "openai:test", "-dir", t.TempDir(), "-max-turns", "1", "-p", "hi")
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1 for a run that stopped at max turns (stderr %q)", code, stderr)
+	}
+}
+
 func TestUsageErrorsExitTwo(t *testing.T) {
 	t.Setenv("ORX_MODEL", "")
 	tests := []struct {

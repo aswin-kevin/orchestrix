@@ -9,7 +9,7 @@ func TestParseModel(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "ak")
 	t.Setenv("ANTHROPIC_BASE_URL", "")
 	t.Setenv("OPENAI_API_KEY", "ok")
-	t.Setenv("OPENAI_BASE_URL", "http://localhost:11434/v1")
+	t.Setenv("OPENAI_BASE_URL", "http://localhost:8080/v1")
 
 	tests := []struct {
 		spec    string
@@ -19,8 +19,8 @@ func TestParseModel(t *testing.T) {
 		baseURL string
 	}{
 		{"anthropic:claude-x", FormatAnthropic, "claude-x", "ak", "https://api.anthropic.com"},
-		{"openai:gpt-oss:120b", FormatOpenAI, "gpt-oss:120b", "ok", "http://localhost:11434/v1"},
-		{"openai-responses:m", FormatOpenAIResponses, "m", "ok", "http://localhost:11434/v1"},
+		{"openai:my-model:v2", FormatOpenAI, "my-model:v2", "ok", "http://localhost:8080/v1"},
+		{"openai-responses:m", FormatOpenAIResponses, "m", "ok", "http://localhost:8080/v1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.spec, func(t *testing.T) {

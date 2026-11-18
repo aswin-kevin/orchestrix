@@ -46,7 +46,7 @@ type Todo struct {
 }
 
 // TodosKey holds the current todo list. It is private to the run that owns it.
-var TodosKey = state.NewKey[[]Todo]("todos", state.Private[[]Todo]())
+var TodosKey = state.NewKey[[]Todo]("planning.todos", state.Private[[]Todo]())
 
 // remindedTurnKey records the assistant-turn count at which the last reminder
 // was added, so reminders keep their spacing.

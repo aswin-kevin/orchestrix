@@ -3,7 +3,6 @@ package orchestrix
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 
@@ -15,16 +14,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/planning"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
-
-// validModes lists every permission mode New accepts.
-var validModes = []permission.Mode{
-	permission.ModeDefault,
-	permission.ModeAcceptEdits,
-	permission.ModeBypass,
-	permission.ModePlan,
-	permission.ModeDontAsk,
-	permission.ModeAuto,
-}
 
 // New builds an agent for model with a sensible default middleware stack:
 // filesystem tools and planning (write_todos). Options adjust the result.
@@ -85,8 +74,8 @@ func (s *settings) resolveModel(model any) error {
 // validate records configuration mistakes that would otherwise be silently
 // absorbed, so a typo fails closed instead of falling back to a default.
 func (s *settings) validate() {
-	if mode := s.cfg.PermissionMode; mode != "" && !slices.Contains(validModes, mode) {
-		s.errs = append(s.errs, fmt.Errorf("unknown permission mode %q, valid modes: %s", mode, joinModes(validModes)))
+	if mode := s.cfg.PermissionMode; mode != "" && !mode.Valid() {
+		s.errs = append(s.errs, fmt.Errorf("unknown permission mode %q, valid modes: %s", mode, joinModes(permission.Modes())))
 	}
 	if s.cfg.Backend != nil && s.cfg.BackendFactory != nil {
 		s.errs = append(s.errs, errors.New("WithBackend and WithBackendFactory are mutually exclusive"))
@@ -146,7 +135,7 @@ func joinModes(modes []permission.Mode) string {
 
 // Text wraps s as the user message that starts a run:
 //
-//	agent.Run(ctx, orchestrix.Text("hello"))
+//	a.Run(ctx, orchestrix.Text("hello"))
 func Text(s string) agent.Input {
 	return agent.Input{Messages: []llm.Message{llm.UserText(s)}}
 }

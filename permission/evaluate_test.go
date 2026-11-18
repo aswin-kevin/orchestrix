@@ -88,3 +88,24 @@ func TestDecisionConstructors(t *testing.T) {
 		t.Errorf("AskUser() = %+v", d)
 	}
 }
+
+func TestModeValid(t *testing.T) {
+	modes := Modes()
+	if len(modes) != 6 {
+		t.Fatalf("Modes() = %v, want the six modes", modes)
+	}
+	for _, m := range modes {
+		if !m.Valid() {
+			t.Errorf("%q.Valid() = false", m)
+		}
+	}
+	for _, m := range []Mode{"", "acceptEdit", "Plan"} {
+		if m.Valid() {
+			t.Errorf("%q.Valid() = true", m)
+		}
+	}
+	modes[0] = "changed"
+	if Modes()[0] == "changed" {
+		t.Error("Modes returns the package's own slice")
+	}
+}

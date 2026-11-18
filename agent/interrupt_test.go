@@ -308,7 +308,7 @@ func TestToolOriginInterruptRespond(t *testing.T) {
 	}
 	resumes := log.resumes["q"]
 	if len(resumes) != 2 || resumes[0] != nil || resumes[1] == nil ||
-		resumes[1].Type != string(Respond) || resumes[1].Message != "blue" {
+		resumes[1].Type != tool.ResumeRespond || resumes[1].Message != "blue" {
 		t.Fatalf("resume values seen by the tool = %+v, want nil then respond/blue", resumes)
 	}
 }

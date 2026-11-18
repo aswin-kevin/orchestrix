@@ -11,7 +11,7 @@ A Go SDK for building agents: a streaming tool-use loop with provider-neutral mo
 - **Middleware.** Every optional behavior (file tools, planning, your own hooks) is a middleware wrapping the model call or tool calls.
 - **Permissions.** Six modes plus allow, ask and deny rules, evaluated before any tool runs.
 - **Pluggable file backends.** In-memory per-thread workspaces or a real directory on disk.
-- **Human in the loop.** A tool call that needs approval pauses the run; resume it with your decision, even from a serialized state.
+- **Human in the loop.** A tool call that needs approval pauses the run; resume it with your decision, even from a serialized state (files in the default in-memory workspace are not part of that state; see below).
 - **Budgets.** Limit model turns and wall-clock time, and cap output tokens per response; a total token target (`TokenBudget`) is available through `agent.Config` and `WithConfig`.
 - **Zero dependencies.** Standard library only.
 
@@ -125,9 +125,10 @@ Every tool call is checked before it runs. Choose a mode with `WithPermissionMod
 | `dontAsk` | Never asks; denies whatever is not explicitly allowed. |
 | `auto` | Never asks; denies unless a rule or the tool itself allows. |
 
-Rules refine the mode. Deny rules always win, even over `bypassPermissions`.
+Rules refine the mode. Deny rules always win, even over `bypassPermissions`, and an ask rule always asks, even for a tool that considers itself safe. A path hidden by a `read(...)` deny or ask rule is also left out of `ls`, `glob` and `grep` results.
 
 ```go
+// Imports omitted; model comes from surrounding code.
 orchestrix.New(model,
 	orchestrix.WithAllow("read_file", "write(/notes/**)"),
 	orchestrix.WithAsk("delete"),
@@ -139,6 +140,8 @@ orchestrix.New(model,
 
 Rule grammar: `Tool` matches a tool by name, `Tool(pattern)` narrows it by the call's main string (such as a shell command; `git:*` matches `git` followed by arguments), and `read(glob)` / `write(glob)` match file paths. A malformed rule makes `New` return an error. Calls that need approval go to the `WithApprover` callback, or interrupt the run when there is none (see below).
 
+Rules are matched lexically, so know their limits. Path rules are case-sensitive and do not resolve symlinks (the disk backend still refuses paths that resolve outside its root). Command prefix rules do not parse shell syntax: `execute(git:*)` also matches `git status && rm -rf x`. Permissions decide which calls the agent makes; they are not a sandbox.
+
 ## Backends
 
 A backend is the file system the file tools operate on.
@@ -147,6 +150,7 @@ A backend is the file system the file tools operate on.
 - **`backend/disk`**: a real directory. Paths the model sees are relative to the root, and access outside it is refused.
 
 ```go
+// Imports omitted; model comes from surrounding code.
 ws, err := disk.New("./workspace")
 if err != nil {
 	log.Fatal(err)
@@ -202,6 +206,8 @@ if final.Reason == agent.ReasonInterrupted {
 
 Pass the same thread ID to `Resume` so the run keeps using the same backend.
 
+`Final.State` can be serialized with `encoding/json` and resumed later, but it holds only the conversation and run state, not the workspace. The default in-memory workspace lives in the process: its files do not survive a restart, so a resumed run in a new process sees an empty workspace. Use the disk backend (or your own) when files must outlast the process; a workspace stored in the state arrives with checkpointing in milestone 2.
+
 ## CLI
 
 `orx` is a small coding-agent CLI built on the SDK. It works in a directory on disk and asks before running tools that need approval.
@@ -225,6 +231,8 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 | `-max-turns` | Maximum model turns per prompt (default 50). |
 | `-base-url` | Override the provider base URL. |
 | `-thinking`, `-effort` | Thinking and reasoning-effort settings passed to the provider. |
+
+`orx` exits with status 1 when a prompt does not complete (a model error, a limit such as `-max-turns`, or Ctrl-C) and 2 for usage errors.
 
 ## Roadmap
 

@@ -1,6 +1,8 @@
 // Command orx is a small demo of the Orchestrix SDK: a coding-agent CLI that
 // runs one prompt (-p) or an interactive session, streams the reply, and asks
-// before running tools that need approval.
+// before running tools that need approval. It exits with status 1 when a
+// prompt does not complete (a model error, a limit such as -max-turns, or
+// Ctrl-C) and 2 for usage errors.
 package main
 
 import (
@@ -201,8 +203,10 @@ func repl(ctx context.Context, ag *agent.Agent, in *lineReader, rend *renderer, 
 }
 
 // runTurn runs one prompt on top of st, rendering events as they arrive, and
-// returns the state to continue from plus whether the run succeeded. Ctrl-C
-// cancels just this turn.
+// returns the state to continue from plus whether the run succeeded: it
+// completed without an error. A run stopped by a limit, Ctrl-C or a failure
+// did not. (A run cannot end interrupted here: the CLI's approver answers
+// every approval itself.) Ctrl-C cancels just this turn.
 func runTurn(ctx context.Context, ag *agent.Agent, st *state.State, prompt string, rend *renderer,
 	stderr io.Writer) (*state.State, bool) {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
@@ -220,7 +224,7 @@ func runTurn(ctx context.Context, ag *agent.Agent, st *state.State, prompt strin
 		}
 		rend.render(ev)
 		if ev.Kind == agent.KindFinal {
-			ok = ev.Final.Reason != agent.ReasonModelError
+			ok = ev.Final.Reason == agent.ReasonCompleted && ev.Final.Err == nil
 			if ev.Final.State != nil {
 				st = ev.Final.State
 			}

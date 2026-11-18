@@ -194,3 +194,15 @@ func TestWriteTodosIsReadOnly(t *testing.T) {
 		t.Fatal("write_todos is not read-only, so plan and dontAsk modes refuse it")
 	}
 }
+
+func TestTodosKeyIsNamespaced(t *testing.T) {
+	s := state.New()
+	callWriteTodos(t, s, obj{"todos": []obj{{"content": "a", "status": "pending"}}})
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"planning.todos"`) {
+		t.Fatalf("serialized state %s lacks the planning.todos key", data)
+	}
+}

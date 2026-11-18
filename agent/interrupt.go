@@ -8,6 +8,7 @@ import (
 	"iter"
 
 	"github.com/aswin-kevin/orchestrix/state"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // Errors Resume reports, through Final.Err, when its request cannot be
@@ -27,13 +28,13 @@ type DecisionType string
 // The ways to answer an ActionRequest.
 const (
 	// Approve lets the action run as requested.
-	Approve DecisionType = "approve"
+	Approve DecisionType = tool.ResumeApprove
 	// Edit runs the action with Decision.Input instead of the original input.
-	Edit DecisionType = "edit"
+	Edit DecisionType = tool.ResumeEdit
 	// Reject refuses the action; Decision.Message is shown to the model.
-	Reject DecisionType = "reject"
+	Reject DecisionType = tool.ResumeReject
 	// Respond answers on the tool's behalf with Decision.Message.
-	Respond DecisionType = "respond"
+	Respond DecisionType = tool.ResumeRespond
 )
 
 // ActionRequest is one action a paused run needs a decision for.

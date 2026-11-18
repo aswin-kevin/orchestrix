@@ -37,11 +37,15 @@ type Input struct {
 }
 
 // New validates cfg, applies its defaults and builds the agent. It fails for a
-// missing Provider, an invalid middleware stack (see Compose), or tools with
-// clashing or illegal names across Config.Tools and every ToolProvider.
+// missing Provider, an unknown non-empty PermissionMode, an invalid middleware
+// stack (see Compose), or tools with clashing or illegal names across
+// Config.Tools and every ToolProvider.
 func New(cfg Config) (*Agent, error) {
 	if cfg.Provider == nil {
 		return nil, errors.New("agent: Config.Provider is required")
+	}
+	if mode := cfg.PermissionMode; mode != "" && !mode.Valid() {
+		return nil, fmt.Errorf("agent: unknown permission mode %q", mode)
 	}
 	cfg = withDefaults(cloneConfig(cfg))
 	stack, err := Compose(nil, cfg.Middleware, nil)

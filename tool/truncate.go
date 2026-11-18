@@ -5,9 +5,11 @@ import (
 	"unicode/utf8"
 )
 
-// Truncate shortens s to at most max bytes without splitting a UTF-8 sequence,
-// appending a marker that says how many characters were dropped so the model
-// knows the output is incomplete. A non-positive max disables truncation.
+// Truncate shortens s to at most max bytes (not characters), cutting at a
+// rune boundary so no UTF-8 sequence is split, and appends a marker that says
+// how many characters (runes) were dropped so the model knows the output is
+// incomplete. The marker is not counted in max. A non-positive max disables
+// truncation.
 func Truncate(s string, max int) string {
 	if max <= 0 || len(s) <= max {
 		return s

@@ -76,9 +76,9 @@ type Config struct {
 	// means DefaultMaxLineChars.
 	MaxLineChars int
 
-	// OffloadChars is the size above which the output of other middleware's
-	// tools is saved to the backend and replaced by a head and a pointer; 0
-	// means DefaultOffloadChars.
+	// OffloadChars is the size, counted in characters (runes), above which
+	// the output of other middleware's tools is saved to the backend and
+	// replaced by a head and a pointer; 0 means DefaultOffloadChars.
 	OffloadChars int
 
 	// ExecTimeout is the timeout execute uses when the model gives none and

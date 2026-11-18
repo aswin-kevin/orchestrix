@@ -3,11 +3,23 @@
 // own verdict, in a fixed order that is the SDK's safety boundary.
 //
 // It is a leaf package: it knows nothing about tools, backends or models.
+//
+// # Limits
+//
+// Rules are matched lexically. Path rules compare cleaned virtual paths,
+// case-sensitively, and do not resolve symlinks: a rule for /secrets/** does
+// not cover a link elsewhere that points into /secrets (the disk backend
+// still refuses anything that resolves outside its root). Tool patterns
+// match the call's subject as plain text, so a command prefix rule such as
+// execute(git:*) does not parse shell syntax: "git status && rm -rf x" starts
+// with "git " and matches. Permission rules decide which calls the agent
+// makes; they are not a sandbox.
 package permission
 
 import (
 	"context"
 	"encoding/json"
+	"slices"
 )
 
 // Behavior is the outcome of a permission check.
@@ -56,6 +68,17 @@ const (
 	// ModeAuto never prompts either, but honors a tool's own allow verdict.
 	ModeAuto Mode = "auto"
 )
+
+// Modes returns every permission mode, in documentation order.
+func Modes() []Mode {
+	return []Mode{ModeDefault, ModeAcceptEdits, ModeBypass, ModePlan, ModeDontAsk, ModeAuto}
+}
+
+// Valid reports whether m is one of the defined modes. The empty Mode is not
+// valid; configuration treats it as "unset" and applies ModeDefault rules.
+func (m Mode) Valid() bool {
+	return slices.Contains(Modes(), m)
+}
 
 // Op is the kind of access made to a path.
 type Op string

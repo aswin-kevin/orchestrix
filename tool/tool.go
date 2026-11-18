@@ -70,8 +70,8 @@ type Call struct {
 	Profile    llm.Profile
 	// Emit receives progress messages; use Progress, which tolerates nil.
 	Emit func(progress string)
-	// MaxOutputChars is the cap the tool should apply to its output; zero
-	// means the caller imposes none.
+	// MaxOutputChars is the cap, in bytes, the tool should apply to its
+	// output (see Truncate); zero means the caller imposes none.
 	MaxOutputChars int
 	// Resume is set when the tool is re-invoked after an interrupt.
 	Resume *ResumeValue
@@ -83,8 +83,24 @@ type Call struct {
 	ReadVisible func(path string) bool
 }
 
+// The values of ResumeValue.Type: how the human answered the interrupt. They
+// are the strings of the agent package's decision types.
+const (
+	// ResumeApprove: run the call as requested.
+	ResumeApprove = "approve"
+	// ResumeEdit: run the call with ResumeValue.Input instead.
+	ResumeEdit = "edit"
+	// ResumeReject: the call was refused. The agent answers a rejected call
+	// itself without re-invoking the tool; the name completes the set.
+	ResumeReject = "reject"
+	// ResumeRespond: ResumeValue.Message is the human's answer.
+	ResumeRespond = "respond"
+)
+
 // ResumeValue is the answer to an interrupt a tool raised earlier.
 type ResumeValue struct {
+	// Type is one of ResumeApprove, ResumeEdit, ResumeReject or
+	// ResumeRespond.
 	Type    string
 	Input   json.RawMessage
 	Message string
