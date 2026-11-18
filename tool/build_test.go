@@ -115,3 +115,14 @@ func TestResultJSONFieldNames(t *testing.T) {
 		t.Fatalf("json.Marshal(Result) = %s, %v; want %s", got, err, want)
 	}
 }
+
+func TestCallVisibleIsNilSafe(t *testing.T) {
+	var nilCall *Call
+	if !nilCall.Visible("/a") || !(&Call{}).Visible("/a") {
+		t.Fatal("a call without ReadVisible hides paths")
+	}
+	c := &Call{ReadVisible: func(p string) bool { return p != "/hidden" }}
+	if c.Visible("/hidden") || !c.Visible("/shown") {
+		t.Fatal("Visible does not consult ReadVisible")
+	}
+}

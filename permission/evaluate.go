@@ -8,16 +8,18 @@ import "fmt"
 //  1. a matching deny rule denies
 //  2. bypass mode allows
 //  3. plan mode denies anything not read-only
-//  4. the tool's own deny verdict denies
-//  5. the tool's own allow verdict allows (not in dontAsk mode)
-//  6. a matching ask rule asks
+//  4. a matching ask rule asks
+//  5. the tool's own deny verdict denies
+//  6. the tool's own allow verdict allows (not in dontAsk mode)
 //  7. a matching allow rule allows
 //  8. acceptEdits mode allows file edits
 //  9. read-only calls are allowed
 //  10. dontAsk and auto modes deny; every other mode asks
 //
 // Deny rules come first so that nothing, not even bypass mode, can override
-// an explicit prohibition.
+// an explicit prohibition. Ask rules come before the tool's own verdict so
+// that a host's explicit request for approval is never waived by a tool that
+// considers itself safe.
 func Evaluate(req Request, pc Context) Decision {
 	// Step 1.
 	if rule, ok := firstMatch(pc.Rules.Deny, req); ok {
@@ -32,16 +34,16 @@ func Evaluate(req Request, pc Context) Decision {
 		return Denied("plan mode: read-only")
 	}
 	// Step 4.
+	if rule, ok := firstMatch(pc.Rules.Ask, req); ok {
+		return AskUser(fmt.Sprintf("approval required by rule %s", rule))
+	}
+	// Step 5.
 	if req.SelfCheck.Behavior == Deny {
 		return Denied(req.SelfCheck.Message)
 	}
-	// Step 5.
+	// Step 6.
 	if req.SelfCheck.Behavior == Allow && pc.Mode != ModeDontAsk {
 		return req.SelfCheck
-	}
-	// Step 6.
-	if rule, ok := firstMatch(pc.Rules.Ask, req); ok {
-		return AskUser(fmt.Sprintf("approval required by rule %s", rule))
 	}
 	// Step 7.
 	if _, ok := firstMatch(pc.Rules.Allow, req); ok {

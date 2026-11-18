@@ -532,3 +532,18 @@ func TestWrapModelDoesNotAliasHostSystem(t *testing.T) {
 		t.Fatal("WrapModel wrote into the host's system slice")
 	}
 }
+
+func TestSearchToolsDropInvisiblePaths(t *testing.T) {
+	b := newClockBackend()
+	seed(t, b, "/secrets/key.txt", "token")
+	seed(t, b, "/notes/a.txt", "token")
+	f := newFixture(t, Config{Backend: b})
+	f.call.ReadVisible = func(p string) bool { return !strings.HasPrefix(p, "/secrets") }
+
+	wantText(t, f.run(t, "ls", obj{}), false, "/notes/")
+	wantText(t, f.run(t, "glob", obj{"pattern": "**/*"}), false, "/notes/a.txt")
+	wantText(t, f.run(t, "grep", obj{"pattern": "token", "mode": "content"}), false, "/notes/a.txt:1:token")
+	wantText(t, f.run(t, "grep", obj{"pattern": "token", "path": "/secrets"}), false, "no matches")
+	wantText(t, f.run(t, "glob", obj{"pattern": "*", "path": "/secrets"}), false, "no files matched")
+	wantText(t, f.run(t, "ls", obj{"path": "/secrets"}), false, emptyDirText)
+}

@@ -3,6 +3,7 @@ package permission
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/internal/glob"
@@ -123,6 +124,24 @@ func (r Rule) matchesPaths(accesses []PathAccess) bool {
 		}
 	}
 	return false
+}
+
+// ReadVisible reports whether a search tool (ls, glob, grep) may show the
+// path p in its results. Rules only see the root a search starts from, so the
+// tool must filter what it finds below that root with this check.
+//
+// A path is hidden when a deny or an ask path rule for reading matches it.
+// Ask-gated paths are hidden as well (fail closed): a search reports many
+// paths at once and cannot pause to ask about each one, so the safe answer is
+// to leave them out. Reading such a file directly with a read tool still asks.
+func (r Rules) ReadVisible(p string) bool {
+	access := []PathAccess{{Path: p, Op: OpRead}}
+	for _, rule := range slices.Concat(r.Deny, r.Ask) {
+		if rule.isPathRule() && rule.matchesPaths(access) {
+			return false
+		}
+	}
+	return true
 }
 
 // matchSubject matches a tool rule pattern against a call's Subject. The

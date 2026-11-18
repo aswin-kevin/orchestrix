@@ -129,3 +129,33 @@ func mustRule(t *testing.T, s string) Rule {
 	}
 	return r
 }
+
+func TestReadVisible(t *testing.T) {
+	rules := Rules{
+		Deny:  []Rule{mustRule(t, "read(/secrets/**)"), mustRule(t, "write(/locked/**)"), mustRule(t, "grep")},
+		Ask:   []Rule{mustRule(t, "read(/private/*.txt)")},
+		Allow: []Rule{mustRule(t, "read(/secrets/public.txt)")},
+	}
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/notes/a.txt", true},
+		{"/secrets", false},
+		{"/secrets/key.txt", false},
+		{"/secrets/public.txt", false}, // allow rules never override a deny
+		{"/notes/../secrets/key.txt", false},
+		{"secrets/key.txt", false}, // relative paths are rooted, fail closed
+		{"/private/a.txt", false},  // ask-gated paths are hidden too
+		{"/private/sub/a.txt", true},
+		{"/locked/a.txt", true}, // only read rules hide paths
+	}
+	for _, tt := range tests {
+		if got := rules.ReadVisible(tt.path); got != tt.want {
+			t.Errorf("ReadVisible(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+	if !(Rules{}).ReadVisible("/anything") {
+		t.Error("empty rules hide a path")
+	}
+}

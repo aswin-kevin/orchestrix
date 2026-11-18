@@ -3,6 +3,7 @@ package filesystem
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/backend"
@@ -37,6 +38,7 @@ func (m *middleware) glob(ctx context.Context, in globInput, c *tool.Call) (tool
 	if err != nil {
 		return errorResult(err, path), nil
 	}
+	files = visibleEntries(c, files)
 	if len(files) == 0 {
 		return tool.Text("no files matched"), nil
 	}
@@ -86,11 +88,14 @@ func (m *middleware) grep(ctx context.Context, in grepInput, c *tool.Call) (tool
 	if err != nil {
 		return errorResult(err, path), nil
 	}
+	// Measured before hidden matches are dropped: they still used up the
+	// backend's result budget, so visible matches may be missing.
+	capped := len(matches) > backend.DefaultMaxResults
+	matches = slices.DeleteFunc(matches, func(match backend.GrepMatch) bool { return !c.Visible(match.Path) })
 	if len(matches) == 0 {
 		return tool.Text("no matches"), nil
 	}
-	capped := len(matches) > backend.DefaultMaxResults
-	if capped {
+	if len(matches) > backend.DefaultMaxResults {
 		matches = matches[:backend.DefaultMaxResults]
 	}
 	out := m.formatMatches(matches, backend.GrepMode(in.Mode))

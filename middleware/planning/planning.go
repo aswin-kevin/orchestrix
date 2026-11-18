@@ -6,14 +6,12 @@ package planning
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
-	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -114,10 +112,11 @@ func writeTodosTool() tool.Tool {
 	return tool.New(ToolWriteTodos,
 		"Replace your todo list. Send the complete list every time, with each item's current status. At most one item may be in_progress.",
 		writeTodos,
-		// The tool only edits private run state, so it needs no approval.
-		tool.WithPermission(func(context.Context, json.RawMessage, permission.Context) permission.Decision {
-			return permission.Allowed()
-		}),
+		// The tool changes nothing but the run's own private state, never the
+		// workspace or the outside world, so it counts as read-only. That lets
+		// it run without approval in every mode, plan and dontAsk included,
+		// while an explicit ask or deny rule for it still applies.
+		tool.WithReadOnly(),
 	)
 }
 

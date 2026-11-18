@@ -188,3 +188,9 @@ func TestNoReminderWhenAllCompleted(t *testing.T) {
 		t.Fatal("no reminder expected when every todo is completed")
 	}
 }
+
+func TestWriteTodosIsReadOnly(t *testing.T) {
+	if !registeredWriteTodos(t).ReadOnly(json.RawMessage(`{"todos":[]}`)) {
+		t.Fatal("write_todos is not read-only, so plan and dontAsk modes refuse it")
+	}
+}

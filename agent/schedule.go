@@ -307,10 +307,8 @@ func checkInput(t tool.Tool, in json.RawMessage) error {
 
 // start decides how c proceeds. It returns nil for a call that may run, or
 // the result of a call that must not: a blocked one, one the run's
-// cancellation reached first, or one permission refused. A decided call
-// skips the permission check: the human has just decided on this very call.
-// A call that needs an approval no Approver can give is marked pending
-// instead.
+// cancellation reached first, or one permission refused. A call that needs
+// an approval no Approver can give is marked pending instead.
 func (r *run) start(c *toolCall) (res *tool.Result) {
 	defer func() {
 		if v := recover(); v != nil {
@@ -325,7 +323,7 @@ func (r *run) start(c *toolCall) (res *tool.Result) {
 		return stopped
 	}
 	if c.resumed != nil {
-		return nil
+		return r.recheck(c)
 	}
 	return r.admit(c)
 }
@@ -342,6 +340,25 @@ func (r *run) admit(c *toolCall) *tool.Result {
 		}
 		decision = r.agent.cfg.Approver(r.ctx, req, decision.Message)
 	}
+	return r.applyPermission(c, decision)
+}
+
+// recheck evaluates the permission of a call a human decided to run, on the
+// input it will run with: an edit may point the call somewhere the rules
+// forbid. The human's decision is the approval, so an Ask counts as granted;
+// a Deny still refuses the call.
+func (r *run) recheck(c *toolCall) *tool.Result {
+	decision := permission.Evaluate(r.permissionRequest(c), r.agent.permissionContext())
+	if decision.Behavior == permission.Ask {
+		decision = permission.Allowed()
+	}
+	return r.applyPermission(c, decision)
+}
+
+// applyPermission turns a final permission decision into start's outcome:
+// a refusal becomes an error result, and an Allow's input rewrite is applied
+// to c and validated.
+func (r *run) applyPermission(c *toolCall, decision permission.Decision) *tool.Result {
 	if decision.Behavior != permission.Allow {
 		return errorResult("Permission denied: %s", decision.Message)
 	}
@@ -449,6 +466,7 @@ func (r *run) toolEnv(c *toolCall) *tool.Call {
 		Profile:        *cfg.Profile,
 		MaxOutputChars: cfg.MaxToolOutputChars,
 		Resume:         c.resume,
+		ReadVisible:    cfg.Rules.ReadVisible,
 		Emit: func(msg string) {
 			r.emit(Event{Kind: KindProgress, ToolID: c.id, ToolName: c.name, Text: msg})
 		},

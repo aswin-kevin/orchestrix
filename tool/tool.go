@@ -75,6 +75,12 @@ type Call struct {
 	MaxOutputChars int
 	// Resume is set when the tool is re-invoked after an interrupt.
 	Resume *ResumeValue
+	// ReadVisible reports whether a path found while searching may be shown
+	// to the model; nil means every path is visible. Permission rules only
+	// see the root a search starts from, so tools that list or search many
+	// paths (ls, glob, grep) must drop what this rejects. Use Visible, which
+	// tolerates nil.
+	ReadVisible func(path string) bool
 }
 
 // ResumeValue is the answer to an interrupt a tool raised earlier.
@@ -91,6 +97,15 @@ func (c *Call) Progress(msg string) {
 		return
 	}
 	c.Emit(msg)
+}
+
+// Visible reports whether path may appear in search results; see
+// ReadVisible. It is true when the receiver or its ReadVisible is nil.
+func (c *Call) Visible(path string) bool {
+	if c == nil || c.ReadVisible == nil {
+		return true
+	}
+	return c.ReadVisible(path)
 }
 
 // Result is what a tool returns to the model.

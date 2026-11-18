@@ -97,6 +97,11 @@ type Decision struct {
 //     result, and re-invokes a tool that raised the interrupt with the
 //     message in tool.Call.Resume.
 //
+// Every decided call that runs (approve, edit, or respond to a tool) is
+// checked against the permission rules again, on the input it runs with: the
+// decision stands in for an approval, but a deny rule still refuses the call
+// with a "Permission denied" error result.
+//
 // Calls that never started run after that, normally, and may interrupt
 // again; so may a re-invoked tool. Once every call has a result, the results
 // are placed right after the turn's assistant message (before anything a

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -43,10 +44,17 @@ func (m *middleware) ls(ctx context.Context, in lsInput, c *tool.Call) (tool.Res
 	if err != nil {
 		return errorResult(err, path), nil
 	}
+	entries = visibleEntries(c, entries)
 	if len(entries) == 0 {
 		return tool.Text(emptyDirText), nil
 	}
 	return tool.Text(formatEntries(entries)), nil
+}
+
+// visibleEntries drops the entries the run's read rules hide; see
+// tool.Call.ReadVisible.
+func visibleEntries(c *tool.Call, entries []backend.FileInfo) []backend.FileInfo {
+	return slices.DeleteFunc(entries, func(e backend.FileInfo) bool { return !c.Visible(e.Path) })
 }
 
 func formatEntries(entries []backend.FileInfo) string {
