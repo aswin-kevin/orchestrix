@@ -235,10 +235,13 @@ func TestMergeChildSkipsPrivate(t *testing.T) {
 func TestMergeChildDecodesRawOnBothSides(t *testing.T) {
 	notes := NewKey[[]string]("notes", MergeWith(appendSlices))
 	s := New()
-	json.Unmarshal([]byte(`{"version":1,"messages":[],"values":{"notes":["p"]}}`), s)
-	s.register("notes", notes.meta())
+	if err := json.Unmarshal([]byte(`{"version":1,"messages":[],"values":{"notes":["p"]}}`), s); err != nil {
+		t.Fatalf("Unmarshal parent: %v", err)
+	}
 	child := New()
-	json.Unmarshal([]byte(`{"version":1,"messages":[],"values":{"notes":["c"]}}`), child)
+	if err := json.Unmarshal([]byte(`{"version":1,"messages":[],"values":{"notes":["c"]}}`), child); err != nil {
+		t.Fatalf("Unmarshal child: %v", err)
+	}
 
 	s.MergeChild(child)
 
@@ -289,5 +292,76 @@ func TestUpdateConcurrent(t *testing.T) {
 	wg.Wait()
 	if got, _ := counter.Get(s); got != 100 {
 		t.Fatalf("counter = %d; want 100", got)
+	}
+}
+
+func TestPrivateKeySurvivesCheckpointResume(t *testing.T) {
+	secret := NewKey[string]("resume-secret", Private[string]())
+	original := New()
+	secret.Set(original, "hidden")
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	restored := New()
+	if err := json.Unmarshal(data, restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	child := restored.ChildFor() // secret never touched on restored
+
+	if _, leaked := child.raw["resume-secret"]; leaked {
+		t.Fatal("private key copied to child after resume")
+	}
+}
+
+func TestMergeChildSkipsChildOnlyPrivate(t *testing.T) {
+	secret := NewKey[string]("child-only-secret", Private[string]())
+	parent := New()
+	child := New()
+	secret.Set(child, "child")
+
+	parent.MergeChild(child)
+
+	if _, ok := secret.Get(parent); ok {
+		t.Fatal("child-only private value merged into parent")
+	}
+}
+
+func TestRedeclareKey(t *testing.T) {
+	NewKey[int]("redeclared")
+	NewKey[int]("redeclared") // identical: fine
+
+	mustPanic := func(name string, f func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("%s did not panic", name)
+			}
+		}()
+		f()
+	}
+	mustPanic("different type", func() { NewKey[string]("redeclared") })
+	mustPanic("different privacy", func() { NewKey[int]("redeclared", Private[int]()) })
+}
+
+func TestSetUnencodableValuePanics(t *testing.T) {
+	type holder struct{ C chan int }
+	key := NewKey[holder]("unencodable")
+	s := New()
+
+	assertPanics := func(name string, f func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("%s did not panic", name)
+			}
+		}()
+		f()
+	}
+	assertPanics("Set", func() { key.Set(s, holder{C: make(chan int)}) })
+	assertPanics("Update", func() { key.Update(s, func(holder) holder { return holder{C: make(chan int)} }) })
+	if _, ok := key.Get(s); ok {
+		t.Fatal("rejected value was stored")
 	}
 }

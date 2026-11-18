@@ -22,6 +22,9 @@ const formatVersion = 1
 // with New; the zero value is not usable. Methods must not be called on a nil
 // *State.
 //
+// Key options (private, merge) live in the package-level key registry, not
+// in the State, so they survive a round trip through JSON.
+//
 // Every value is held in exactly one of two forms: decoded (values) or still
 // serialized (raw, awaiting its first Key access).
 type State struct {
@@ -29,7 +32,6 @@ type State struct {
 	messages []llm.Message
 	values   map[string]any
 	raw      map[string]json.RawMessage
-	keys     map[string]keyMeta
 }
 
 // New returns an empty State.
@@ -37,15 +39,6 @@ func New() *State {
 	return &State{
 		values: make(map[string]any),
 		raw:    make(map[string]json.RawMessage),
-		keys:   make(map[string]keyMeta),
-	}
-}
-
-// register remembers a key's metadata the first time the key touches the
-// State. s.mu must be held.
-func (s *State) register(name string, meta keyMeta) {
-	if _, ok := s.keys[name]; !ok {
-		s.keys[name] = meta
 	}
 }
 
@@ -73,7 +66,6 @@ func (s *State) AppendMessages(m ...llm.Message) {
 
 // Clone returns an independent deep copy: messages and values are copied
 // through JSON, so later changes to either State never show in the other.
-// Values that cannot be JSON-encoded are omitted from the copy.
 func (s *State) Clone() *State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -84,28 +76,22 @@ func (s *State) Clone() *State {
 
 // ChildFor returns a State for a subagent: it carries a deep copy of every
 // non-private value and no messages. Keys the State has never seen are
-// treated as non-private. Values that cannot be JSON-encoded are omitted.
+// treated as non-private.
 func (s *State) ChildFor() *State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.copyLocked(func(name string) bool { return !s.keys[name].private })
+	return s.copyLocked(func(name string) bool { return !lookupKey(name).private })
 }
 
-// copyLocked deep-copies the keys accepted by include, plus the whole key
-// registry, into a new State. Copies stay serialized until first read.
+// copyLocked deep-copies the entries accepted by include into a new State. Copies stay serialized until first read.
 // s.mu must be held.
 func (s *State) copyLocked(include func(name string) bool) *State {
 	c := New()
-	for name, meta := range s.keys {
-		c.keys[name] = meta
-	}
 	for name := range s.values {
 		if !include(name) {
 			continue
 		}
-		if raw, err := s.serializedLocked(name); err == nil {
-			c.raw[name] = raw
-		}
+		c.raw[name] = s.mustSerializedLocked(name)
 	}
 	for name, raw := range s.raw {
 		if include(name) {
@@ -128,10 +114,23 @@ func (s *State) serializedLocked(name string) (json.RawMessage, error) {
 	return raw, nil
 }
 
+// mustSerializedLocked is serializedLocked for copy paths that cannot return
+// an error. Key.Set rejects unencodable values, so a failure here means a
+// caller mutated a stored value in place against the read-only rule.
+// s.mu must be held.
+func (s *State) mustSerializedLocked(name string) json.RawMessage {
+	raw, err := s.serializedLocked(name)
+	if err != nil {
+		panic(fmt.Sprintf("%v (a stored value was mutated into an unencodable form)", err))
+	}
+	return raw
+}
+
 // MergeChild folds a child's values back into s. For each key the child
-// holds: private keys are skipped; a key with a MergeWith function (known to
-// s) gets merge(parentValue, childValue); every other key takes the child's
-// value. A key whose merge inputs cannot be decoded is left unchanged. Merge
+// holds: private keys are skipped; a key declared with a MergeWith function gets merge(parentValue, childValue); every other key takes the child's
+// value. A key whose merge inputs cannot be decoded is left unchanged. The
+// child's value already contains what ChildFor copied from s, which MergeWith
+// funcs must account for. Merge
 // functions run while s is locked and must not use any State. The child is
 // not modified.
 func (s *State) MergeChild(child *State) {
@@ -140,7 +139,7 @@ func (s *State) MergeChild(child *State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for name, raw := range incoming {
-		meta := s.keys[name]
+		meta := lookupKey(name)
 		switch {
 		case meta.private:
 			continue
@@ -153,19 +152,16 @@ func (s *State) MergeChild(child *State) {
 	}
 }
 
-// snapshot returns the serialized form of every entry. Entries that cannot
-// be encoded are omitted.
+// snapshot returns the serialized form of every entry.
 func (s *State) snapshot() map[string]json.RawMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(map[string]json.RawMessage, len(s.values)+len(s.raw))
 	for name := range s.values {
-		if raw, err := s.serializedLocked(name); err == nil {
-			out[name] = raw
-		}
+		out[name] = s.mustSerializedLocked(name)
 	}
-	for name := range s.raw {
-		out[name], _ = s.serializedLocked(name)
+	for name, raw := range s.raw {
+		out[name] = append(json.RawMessage(nil), raw...)
 	}
 	return out
 }
@@ -227,10 +223,9 @@ func (s *State) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// UnmarshalJSON replaces the State's entire contents (including remembered
-// key options) with the decoded data. Values stay serialized until a Key
-// reads them, so entries unknown to this process survive a later
-// MarshalJSON. It fails on a missing or unsupported version.
+// UnmarshalJSON replaces the State's entire contents with the decoded data.
+// Values stay serialized until a Key reads them, so entries unknown to this
+// process survive a later MarshalJSON. It fails on a missing or unsupported version.
 func (s *State) UnmarshalJSON(data []byte) error {
 	var in stateJSON
 	if err := json.Unmarshal(data, &in); err != nil {
@@ -248,7 +243,6 @@ func (s *State) UnmarshalJSON(data []byte) error {
 	for name, raw := range in.Values {
 		s.raw[name] = raw
 	}
-	s.keys = make(map[string]keyMeta)
 	return nil
 }
 
