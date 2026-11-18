@@ -205,12 +205,7 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request) iter.Seq2[S
 func streamAnthropicEvents(ctx context.Context, body io.Reader, yield func(StreamEvent, error) bool) {
 	for sse, err := range readSSE(body) {
 		if err != nil {
-			// A cancelled context surfaces from the transport as a wrapped
-			// read error; report the cause callers test for.
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				err = ctxErr
-			}
-			yield(StreamEvent{}, err)
+			yield(StreamEvent{}, streamReadError(ctx, err))
 			return
 		}
 		events, done, err := translateAnthropicEvent(sse)

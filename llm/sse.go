@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"iter"
@@ -73,4 +74,14 @@ func readSSE(r io.Reader) iter.Seq2[sseEvent, error] {
 func splitSSELine(line string) (field, value string) {
 	field, value, _ = strings.Cut(line, ":")
 	return field, strings.TrimPrefix(value, " ")
+}
+
+// streamReadError reports the cause callers test for when a stream read
+// fails. A cancelled context surfaces from the transport as a wrapped read
+// error, so the context's own error takes its place.
+func streamReadError(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }

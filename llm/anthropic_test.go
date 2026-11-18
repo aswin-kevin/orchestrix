@@ -319,29 +319,28 @@ func TestNewValidation(t *testing.T) {
 	cases := map[string]Config{
 		"no model":       {Format: FormatAnthropic},
 		"unknown format": {Format: "bogus", Model: "m"},
-		"openai":         {Format: FormatOpenAI, Model: "m"},
+		"responses":      {Format: FormatOpenAIResponses, Model: "m"},
 	}
 	for name, cfg := range cases {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
 	}
-	if _, err := New(Config{Format: FormatAnthropic, Model: "m"}); err != nil {
-		t.Errorf("anthropic: %v", err)
+	for _, format := range []Format{FormatAnthropic, FormatOpenAI} {
+		if _, err := New(Config{Format: format, Model: "m"}); err != nil {
+			t.Errorf("%s: %v", format, err)
+		}
 	}
 }
 
-// newBlockingServer sends one text delta and then holds the connection open,
-// reporting when the client goes away.
-func newBlockingServer(t *testing.T) (url string, gone <-chan struct{}) {
+// newBlockingServer sends first and then holds the connection open, reporting
+// when the client goes away.
+func newBlockingServer(t *testing.T, first string) (url string, gone <-chan struct{}) {
 	t.Helper()
 	ch := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, `event: content_block_delta
-data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}
-
-`)
+		_, _ = io.WriteString(w, first)
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 		close(ch)
@@ -359,8 +358,13 @@ func waitClosed(t *testing.T, gone <-chan struct{}) {
 	}
 }
 
+const anthropicFirstDelta = `event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}
+
+`
+
 func TestAnthropicStreamConsumerBreakClosesConnection(t *testing.T) {
-	url, gone := newBlockingServer(t)
+	url, gone := newBlockingServer(t, anthropicFirstDelta)
 	p := newTestAnthropic(t, url)
 
 	for _, err := range p.Stream(context.Background(), Request{Messages: []Message{UserText("x")}}) {
@@ -373,7 +377,7 @@ func TestAnthropicStreamConsumerBreakClosesConnection(t *testing.T) {
 }
 
 func TestAnthropicStreamContextCancelClosesConnection(t *testing.T) {
-	url, gone := newBlockingServer(t)
+	url, gone := newBlockingServer(t, anthropicFirstDelta)
 	p := newTestAnthropic(t, url)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
