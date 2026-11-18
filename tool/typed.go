@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"strings"
 )
 
 // New builds a tool whose input is the struct In. The schema is generated from
@@ -34,7 +33,9 @@ func New[In any](name, description string, fn func(ctx context.Context, in In, c
 
 // decodeInput validates raw against schema, then decodes it into In rejecting
 // unknown fields. Models sometimes send nothing for parameterless tools, which
-// is treated as an empty object.
+// is treated as an empty object. The leniencies Validate allows (null
+// optional properties, integral numbers like 1e2) are normalized away first,
+// since Go's decoder would reject 1e2 for an int field.
 func decodeInput[In any](schema map[string]any, raw json.RawMessage) (In, error) {
 	var in In
 	if len(bytes.TrimSpace(raw)) == 0 {
@@ -43,7 +44,11 @@ func decodeInput[In any](schema map[string]any, raw json.RawMessage) (In, error)
 	if err := Validate(schema, raw); err != nil {
 		return in, err
 	}
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	raw, err := normalize(schema, raw)
+	if err != nil {
+		return in, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		return in, err

@@ -72,3 +72,29 @@ func TestNewTypedOptionsAndSchema(t *testing.T) {
 		t.Errorf("schema = %v", tl.Schema())
 	}
 }
+
+type countIn struct {
+	Count int     `json:"count"`
+	Limit int     `json:"limit,omitempty"`
+	Label *string `json:"label"`
+	Tags  []int   `json:"tags,omitempty"`
+}
+
+func TestNewTypedToleratesNullOptionalsAndIntegralNumbers(t *testing.T) {
+	var got countIn
+	tl := New("count", "counts", func(_ context.Context, in countIn, _ *Call) (Result, error) {
+		got = in
+		return Text("ok"), nil
+	})
+	res, err := tl.Call(context.Background(), json.RawMessage(`{"count":1e2,"limit":null,"label":null,"tags":[2.0,3]}`), &Call{})
+	if err != nil || res.IsError {
+		t.Fatalf("call = %+v, %v; want success", res, err)
+	}
+	if got.Count != 100 || got.Limit != 0 || got.Label != nil || len(got.Tags) != 2 || got.Tags[0] != 2 {
+		t.Fatalf("decoded = %+v, want count 100, limit 0, nil label, tags [2 3]", got)
+	}
+	res, _ = tl.Call(context.Background(), json.RawMessage(`{"count":1.5}`), &Call{})
+	if !res.IsError {
+		t.Fatal("a fractional count was accepted")
+	}
+}

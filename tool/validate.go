@@ -6,24 +6,97 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"slices"
 	"sort"
+	"strconv"
 )
 
 // Validate checks the JSON document in against a JSON schema. It supports the
 // subset tools need: type (object, string, integer, number, boolean, array,
 // null), properties, required, enum, items and additionalProperties:false.
 // Errors name the offending location, for example "edits[1].old_string: required".
+//
+// Two leniencies match what models commonly send: null for a property that is
+// not required counts as leaving it out, and a number with an integral value
+// written as a decimal or with an exponent (1.0, 1e2) is an integer.
 func Validate(schema map[string]any, in json.RawMessage) error {
-	dec := json.NewDecoder(bytes.NewReader(in))
-	dec.UseNumber() // keeps 1.5 distinguishable from 1 for integer checks
-	var v any
-	if err := dec.Decode(&v); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
-	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("invalid JSON: unexpected data after the top-level value")
+	v, err := decodeJSON(in)
+	if err != nil {
+		return err
 	}
 	return validateValue(schema, v, "")
+}
+
+// decodeJSON decodes a single JSON document, keeping numbers as json.Number
+// so that 1.5 stays distinguishable from 1 for integer checks.
+func decodeJSON(in json.RawMessage) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(in))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("invalid JSON: unexpected data after the top-level value")
+	}
+	return v, nil
+}
+
+// normalize rewrites a document that passed Validate into the form Go's
+// decoder accepts for the same schema: null optional properties are removed
+// and integral numbers in integer positions are written as plain integers.
+func normalize(schema map[string]any, in json.RawMessage) (json.RawMessage, error) {
+	v, err := decodeJSON(in)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(normalizeValue(schema, v))
+}
+
+func normalizeValue(schema map[string]any, v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		props, _ := schema["properties"].(map[string]any)
+		for key, item := range val {
+			propSchema, known := props[key].(map[string]any)
+			switch {
+			case known && isAbsent(schema, key, item):
+				delete(val, key)
+			case known:
+				val[key] = normalizeValue(propSchema, item)
+			}
+		}
+	case []any:
+		itemSchema, _ := schema["items"].(map[string]any)
+		for i, item := range val {
+			val[i] = normalizeValue(itemSchema, item)
+		}
+	case json.Number:
+		if schema["type"] == "integer" {
+			return integerNumber(val)
+		}
+	}
+	return v
+}
+
+// isAbsent reports whether the property key of an object counts as left out:
+// it is null and not required.
+func isAbsent(schema map[string]any, key string, v any) bool {
+	return v == nil && !slices.Contains(requiredNames(schema), key)
+}
+
+// integerNumber writes an integral number such as 1e2 as plain digits (100).
+// Anything else is returned unchanged.
+func integerNumber(n json.Number) json.Number {
+	if _, err := n.Int64(); err == nil {
+		return n
+	}
+	f, err := n.Float64()
+	if err != nil || f != math.Trunc(f) {
+		return n
+	}
+	return json.Number(strconv.FormatFloat(f, 'f', -1, 64))
 }
 
 func validateValue(schema map[string]any, v any, path string) error {
@@ -59,6 +132,9 @@ func validateObject(schema map[string]any, obj map[string]any, path string) erro
 			if schema["additionalProperties"] == false {
 				return pathError(joinPath(path, key), "unexpected property")
 			}
+			continue
+		}
+		if isAbsent(schema, key, obj[key]) {
 			continue
 		}
 		if err := validateValue(propSchema, obj[key], joinPath(path, key)); err != nil {
@@ -127,13 +203,19 @@ func matchesType(typ string, v any) bool {
 		return ok
 	case "integer":
 		n, ok := v.(json.Number)
-		if !ok {
-			return false
-		}
-		_, err := n.Int64()
-		return err == nil
+		return ok && isIntegral(n)
 	}
 	return true // unknown type keywords are not enforced
+}
+
+// isIntegral reports whether n has no fractional part, however it is
+// written: 3, 3.0 and 3e0 all qualify.
+func isIntegral(n json.Number) bool {
+	if _, err := n.Int64(); err == nil {
+		return true
+	}
+	f, err := n.Float64()
+	return err == nil && f == math.Trunc(f)
 }
 
 func jsonTypeName(v any) string {
