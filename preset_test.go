@@ -1,0 +1,239 @@
+package orchestrix_test
+
+import (
+	"context"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/checkpoint/file"
+	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/middleware/hooks"
+	"github.com/aswin-kevin/orchestrix/middleware/subagents"
+	"github.com/aswin-kevin/orchestrix/middleware/summarize"
+	"github.com/aswin-kevin/orchestrix/middleware/tasks"
+	"github.com/aswin-kevin/orchestrix/permission"
+)
+
+func stackNames(a *agent.Agent) []string {
+	var names []string
+	for _, m := range a.Config().Middleware {
+		names = append(names, m.Name())
+	}
+	return names
+}
+
+func TestDefaultStackOrder(t *testing.T) {
+	a, err := orchestrix.New(llmtest.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"summarize", "cache", "filesystem", "planning", "subagents"}
+	if got := stackNames(a); !slices.Equal(got, want) {
+		t.Errorf("default stack = %v, want %v", got, want)
+	}
+}
+
+func TestFullStackOrder(t *testing.T) {
+	sh := t.TempDir()
+	tm := tasks.New(tasks.Config{})
+	defer tm.Shutdown()
+	a, err := orchestrix.New(llmtest.New(),
+		orchestrix.WithShell(sh, shell.Options{}),
+		orchestrix.WithTasks(tm),
+		orchestrix.WithHooks(hooks.Config{}),
+		orchestrix.WithInterruptOn("write_file"),
+		orchestrix.WithCheckpointer(mustFileCheckpointer(t)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"summarize", "cache", "hooks", "hitl", "filesystem", "planning", "subagents", "tasks"}
+	if got := stackNames(a); !slices.Equal(got, want) {
+		t.Errorf("full stack = %v, want %v", got, want)
+	}
+}
+
+func TestWithoutDefaultMiddleware(t *testing.T) {
+	a, err := orchestrix.New(llmtest.New(), orchestrix.WithoutMiddleware("subagents", "summarize", "cache"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"filesystem", "planning"}
+	if got := stackNames(a); !slices.Equal(got, want) {
+		t.Errorf("stack = %v, want %v", got, want)
+	}
+}
+
+func mustFileCheckpointer(t *testing.T) *file.Checkpointer {
+	t.Helper()
+	c, err := file.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestDefaultWorkspaceSurvivesCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	newAgent := func(m *llmtest.Scripted) *agent.Agent {
+		c, err := file.New(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, err := orchestrix.New(m, orchestrix.WithCheckpointer(c),
+			orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	drain := func(th *agent.Thread, text string) {
+		for _, err := range th.Prompt(context.Background(), text) {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	first := newAgent(writeThenAnswer("/notes.txt", "kept"))
+	th, err := first.Thread(context.Background(), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(th, "write")
+
+	reader := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "r1", Name: "read_file", Input: map[string]string{"path": "/notes.txt"}}}},
+		llmtest.Turn{Text: "read"},
+	)
+	second := newAgent(reader)
+	th2, err := second.Thread(context.Background(), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(th2, "read it")
+
+	var result strings.Builder
+	for _, msg := range reader.Requests[1].Messages {
+		for _, b := range msg.Content {
+			for _, c := range b.Content {
+				result.WriteString(c.Text)
+			}
+		}
+	}
+	if !strings.Contains(result.String(), "kept") {
+		t.Errorf("second agent did not see the file; tool result context: %q", result.String())
+	}
+}
+
+func TestWithInterruptOnPauses(t *testing.T) {
+	a, err := orchestrix.New(writeThenAnswer("/a.txt", "x"),
+		orchestrix.WithInterruptOn("write_file"),
+		orchestrix.WithPermissionMode(permission.ModeBypass),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final := finalOf(t, a, orchestrix.Text("write")); final.Reason != agent.ReasonInterrupted {
+		t.Errorf("reason = %s, want interrupted", final.Reason)
+	}
+}
+
+func TestWithShellRegistersExecute(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{Text: "ok"})
+	a, err := orchestrix.New(p, orchestrix.WithShell(t.TempDir(), shell.Options{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalOf(t, a, orchestrix.Text("hi"))
+	if !slices.Contains(toolNames(p), "execute") {
+		t.Errorf("tools %v lack execute", toolNames(p))
+	}
+}
+
+func TestWithTasksOffersBackgroundTools(t *testing.T) {
+	tm := tasks.New(tasks.Config{})
+	defer tm.Shutdown()
+	p := llmtest.New(llmtest.Turn{Text: "ok"})
+	a, err := orchestrix.New(p, orchestrix.WithShell(t.TempDir(), shell.Options{}), orchestrix.WithTasks(tm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalOf(t, a, orchestrix.Text("hi"))
+	if !slices.Contains(toolNames(p), "task_output") {
+		t.Errorf("tools %v lack task_output", toolNames(p))
+	}
+}
+
+func TestWithTasksRequiresShell(t *testing.T) {
+	tm := tasks.New(tasks.Config{})
+	defer tm.Shutdown()
+	_, err := orchestrix.New(llmtest.New(), orchestrix.WithTasks(tm))
+	if err == nil || !strings.Contains(err.Error(), "WithTasks") {
+		t.Errorf("err = %v, want an error naming WithTasks", err)
+	}
+}
+
+func TestWithShellAndBackendExclusive(t *testing.T) {
+	for name, opt := range map[string]orchestrix.Option{
+		"backend": orchestrix.WithBackend(shellBackend(t)),
+		"factory": orchestrix.WithBackendFactory(func(string) backend.Backend { return shellBackend(t) }),
+	} {
+		_, err := orchestrix.New(llmtest.New(), orchestrix.WithShell(t.TempDir(), shell.Options{}), opt)
+		if err == nil || !strings.Contains(err.Error(), "WithShell") {
+			t.Errorf("%s: err = %v, want an error naming WithShell", name, err)
+		}
+	}
+}
+
+func shellBackend(t *testing.T) backend.Backend {
+	t.Helper()
+	b, err := shell.New(t.TempDir(), shell.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestInvalidSubagentSpecFailsNew(t *testing.T) {
+	_, err := orchestrix.New(llmtest.New(), orchestrix.WithSubagents(subagents.Subagent{Name: "bad name"}))
+	if err == nil || !strings.Contains(err.Error(), "bad name") {
+		t.Errorf("err = %v, want the invalid spec reported", err)
+	}
+}
+
+func TestSubagentSpecsAppendToConfig(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{Text: "ok"})
+	a, err := orchestrix.New(p,
+		orchestrix.WithSubagentConfig(subagents.Config{DisableFork: true}),
+		orchestrix.WithSubagents(subagents.Subagent{Name: "reviewer", Description: "reviews code", SystemPrompt: "Review."}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalOf(t, a, orchestrix.Text("hi"))
+	var desc string
+	for _, ts := range p.Requests[0].Tools {
+		if ts.Name == subagents.ToolTask {
+			desc = ts.Description
+		}
+	}
+	if !strings.Contains(desc, "reviewer") || strings.Contains(desc, "- "+subagents.Fork+":") {
+		t.Errorf("task description %q should list reviewer and not fork", desc)
+	}
+}
+
+func TestWithSummarizeReplacesDefault(t *testing.T) {
+	a, err := orchestrix.New(llmtest.New(), orchestrix.WithSummarize(summarize.Config{DisableOffload: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stackNames(a)[0]; got != "summarize" {
+		t.Errorf("first middleware = %q, want summarize", got)
+	}
+}

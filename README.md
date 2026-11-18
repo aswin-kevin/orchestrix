@@ -9,7 +9,7 @@
 
 You get a production-ready agent loop in a few lines of code, with no dependencies beyond the Go standard library.
 
-> Orchestrix is under active development. Milestone 1 (the core) is complete; the API may still change before 1.0.
+> Orchestrix is under active development. Milestones 1 (the core) and 2 (depth) are complete; the API may still change before 1.0.
 
 <p align="center">
   <img src="assets/architecture.png" alt="Orchestrix architecture: your application runs the agent loop, which is wrapped by a middleware stack, calls LLM providers, sends every tool call through a permission gate to tools and backends, and keeps its conversation in serializable state." width="900">
@@ -21,10 +21,16 @@ Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and 
 
 - **Three providers, one interface.** Anthropic Messages, OpenAI Chat Completions and OpenAI Responses, selected with a `format:model` string.
 - **Streaming events.** `Run` returns a Go iterator (`iter.Seq2`) of text, tool, usage and interrupt events; the last one always carries the outcome.
-- **Middleware.** Every optional behavior (file tools, planning, your own hooks) is a middleware wrapping the model call or tool calls.
+- **Middleware.** Every optional behavior (file tools, planning, subagents, summarization, your own hooks) is a middleware wrapping the model call or tool calls.
 - **Permissions.** Six modes plus allow, ask and deny rules, evaluated before any tool runs.
 - **Pluggable file backends.** In-memory per-thread workspaces or a real directory on disk.
-- **Human in the loop.** A tool call that needs approval pauses the run; resume it with your decision, even from a serialized state (files in the default in-memory workspace are not part of that state; see below).
+- **Subagents.** The model delegates work to isolated or forked subagents with the `task` tool.
+- **Context management.** Long conversations are summarized automatically, and the history stays complete in state.
+- **Prompt caching.** Stable prefixes and recent messages are marked for the provider's cache.
+- **Hooks.** Run your code before and after tool calls and at the start and end of runs.
+- **Human in the loop.** A tool call that needs approval pauses the run; resume it with your decision, even in another process.
+- **Checkpoints and threads.** Conversations, and the default workspace, are saved and continued later.
+- **Shell and background tasks.** An `execute` tool on a real directory, with long-running jobs the agent can follow.
 - **Budgets.** Limit model turns and wall-clock time, and cap output tokens per response; a total token target (`TokenBudget`) is available through `agent.Config` and `WithConfig`.
 - **Zero dependencies.** Standard library only.
 
@@ -79,7 +85,7 @@ func main() {
 }
 ```
 
-`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`) and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTokens`, `WithWorkingDir`. `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
+`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTokens`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
 
 ## Providers
 
@@ -103,7 +109,7 @@ Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. 
 
 A middleware is any value with a `Name() string` method plus whichever hook interfaces it needs: `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeStop`, `ModelWrapper`, `ToolWrapper` and `ToolProvider`. Wrappers nest like an onion: the first middleware in the stack is the outermost, and a wrapper may call `next` zero, one or several times.
 
-The default stack is `filesystem` (file tools) and `planning` (`write_todos`). Adding a middleware with a default's name replaces it; `WithoutMiddleware("planning")` removes it.
+The stack order is fixed, outermost first: `summarize`, `cache`, `hooks` (with `WithHooks`), `hitl` (with `WithInterruptOn`), `filesystem`, `planning`, `subagents`, `tasks` (with `WithTasks`). By default that is `summarize`, `cache`, `filesystem`, `planning` and `subagents`. Adding a middleware with a default's name replaces it; `WithoutMiddleware("subagents", "summarize")` removes them. `summarize` rebuilds each request from state, so it must stay first.
 
 A custom middleware that logs every tool call (imports omitted):
 
@@ -149,7 +155,7 @@ orchestrix.New(model,
 )
 ```
 
-`execute` exists only with a backend that can run commands (the shell backend arrives in milestone 2), so the `execute(rm:*)` rule above is illustrative for now.
+`execute` exists only with a backend that can run commands, such as the one `WithShell` provides (see below); without one the `execute(rm:*)` rule above has nothing to match.
 
 Rule grammar: `Tool` matches a tool by name, `Tool(pattern)` narrows it by the call's main string (such as a shell command; `git:*` matches `git` followed by arguments), and `read(glob)` / `write(glob)` match file paths. A malformed rule makes `New` return an error. Calls that need approval go to the `WithApprover` callback, or interrupt the run when there is none (see below).
 
@@ -161,6 +167,7 @@ A backend is the file system the file tools operate on.
 
 - **`backend/memory`**: in-memory and safe for concurrent use. This is the default, with one separate workspace per thread ID that lives as long as the agent.
 - **`backend/disk`**: a real directory. Paths the model sees are relative to the root, and access outside it is refused.
+- **`backend/shell`**: a disk backend that can also run commands; see "Shell and background tasks".
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -219,7 +226,162 @@ if final.Reason == agent.ReasonInterrupted {
 
 Pass the same thread ID to `Resume` so the run keeps using the same backend.
 
-`Final.State` can be serialized with `encoding/json` and resumed later, but it holds only the conversation and run state, not the workspace. The default in-memory workspace lives in the process: its files do not survive a restart, so a resumed run in a new process sees an empty workspace. Use the disk backend (or your own) when files must outlast the process; a workspace stored in the state arrives with checkpointing in milestone 2.
+`Final.State` can be serialized with `encoding/json` and resumed later. It holds the conversation and run state, not the workspace: to continue in a new process with the files intact, use a checkpointer (see "Checkpoints and threads").
+
+To pause for a human before specific tools regardless of the permission mode, use `WithInterruptOn`; `WithInterruptConfig` narrows the decisions allowed or which calls pause:
+
+```go
+// Imports omitted; model comes from surrounding code.
+a, err := orchestrix.New(model,
+	orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
+	orchestrix.WithInterruptOn("delete"), // pause for a human before every delete
+	orchestrix.WithInterruptConfig(map[string]hitl.InterruptConfig{
+		"write_file": {
+			Allowed: []agent.DecisionType{agent.Approve, agent.Reject},
+			When: func(_ context.Context, call *agent.ToolCall) bool {
+				return strings.Contains(string(call.Input), "/prod/")
+			},
+		},
+	}),
+)
+_, _ = a, err
+```
+
+## Subagents
+
+The default stack gives the model a `task` tool that starts a subagent: a separate run that shares the parent's workspace, streams its events into the parent's, and returns its final answer as the tool result. Two kinds exist.
+
+- **Isolated** subagents (the built-in `general-purpose` one and every spec you add) see only the task description, under their own system prompt. Anything left out of a `Subagent` is inherited from the parent.
+- A **fork** continues the parent's own conversation with the task handed over as the result of its `task` call. Its system prompt, tools and history prefix match the parent's, so the provider's prompt cache is reused. A fork cannot delegate further.
+
+A custom subagent that reviews changes read-only (imports omitted):
+
+```go
+a, err := orchestrix.New(model,
+	orchestrix.WithSubagents(subagents.Subagent{
+		Name:           "reviewer",
+		Description:    "Reviews a change for bugs and risky edits.",
+		SystemPrompt:   "You review code. Report concrete problems with file and line.",
+		PermissionMode: permission.ModePlan, // read-only
+		MaxTurns:       10,
+	}),
+)
+_, _ = a, err
+```
+
+`WithSubagentConfig` controls the rest: `DisableFork`, `DisableGeneralPurpose`, `MaxDepth` (default 2) and the prompts. A spec may also set its own `Tools`, `Middleware`, `Provider`, `Model`, `Rules` and an `OutputSchema` that its final answer must satisfy.
+
+Approvals: with a `WithApprover`, subagents inherit it and ask it directly. Without one, a subagent that needs a decision pauses the parent's `task` call with one request listing the subagent's pending actions; approving or rejecting it applies to all of them, and the subagent then continues. Per-action `edit` and `respond` decisions are not available for a subagent's requests. A subagent's token usage is reported in forwarded usage events and is not added to the parent's `Final.Usage`.
+
+## Context management
+
+The `summarize` middleware keeps long conversations inside the model's context window. The history in state always stays complete; only the request view changes.
+
+- **Automatic compaction.** When a request would pass 85% of the context window, older messages are replaced in the view by a summary, and about the last 25% of the window is kept verbatim. The cut never separates a tool call from its result. The model can also ask for it with the `compact_conversation` tool.
+- **Micro-compaction.** Every request clears large results of older tool calls (the newest six are kept) and shortens large old tool inputs.
+- **Offload.** Summarized messages are saved under `/conversation_history/<thread>` in the workspace so the model can read them back; this needs a thread ID. Separately, a tool result over 80,000 characters is saved under `/large_tool_results/` and replaced by a head and the path.
+
+```go
+// Imports omitted; model comes from surrounding code.
+a, err := orchestrix.New(model,
+	orchestrix.WithSummarize(summarize.Config{
+		TriggerFraction: 0.7,           // compact earlier than the default 0.85
+		Model:           "small-model", // summarize with a cheaper model
+		DisableOffload:  true,          // do not save old messages to the workspace
+	}),
+)
+_, _ = a, err
+```
+
+## Prompt caching
+
+The `cache` middleware asks providers that support prompt caching to cache the stable prefix (the system prompt segments you pass to `WithSystemPrompt`) and to mark the two most recent user messages as breakpoints. Other models are left untouched. Forked subagents share the parent's prefix and so hit the same cache. Remove it with `WithoutMiddleware("cache")`; `cache.Config.Recent` changes the breakpoint count when you add the middleware yourself.
+
+## Hooks
+
+Hooks run your code at fixed points: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop` and `SubagentStart`. A `PreToolUse` hook runs after the permission rules allowed a call and can block it, rewrite its input or add context to its result. Returning an error that wraps `agent.ErrStopRun` ends the run with reason `hook_stopped`.
+
+```go
+// Imports omitted; model comes from surrounding code.
+a, err := orchestrix.New(model,
+	orchestrix.WithHooks(hooks.Config{
+		PreToolUse: []hooks.PreToolUseHook{{
+			Matcher: hooks.Matcher{Tools: []string{"write_file", "edit_file"}},
+			Fn: func(ctx context.Context, in hooks.ToolInput) (hooks.PreToolUseOutput, error) {
+				if bytes.Contains(in.Input, []byte("/secrets/")) {
+					return hooks.PreToolUseOutput{Block: true, Reason: "secrets are off limits"}, nil
+				}
+				return hooks.PreToolUseOutput{}, nil
+			},
+		}},
+	}),
+)
+_, _ = a, err
+```
+
+Hooks for concurrency-safe tool calls of one turn may run concurrently, so synchronize any shared data.
+
+## Checkpoints and threads
+
+With `WithCheckpointer`, the agent saves a thread's state after every change (each reply, each batch of tool results, interrupts and the end of the run). The default in-memory workspace is saved with it, so files survive a restart too. `checkpoint/file` stores one append-only file per thread in a directory; `checkpoint/memory` keeps them in process. A failed save ends the run with reason `checkpoint_error`.
+
+`Agent.Thread` opens a conversation by ID, from its latest checkpoint if there is one. Each `Prompt` continues it, and a pending interrupt can be answered with `Resume`, in the same process or another one that opens the same directory:
+
+```go
+// Imports omitted; model comes from surrounding code.
+ctx := context.Background()
+cp, err := file.New("./checkpoints")
+if err != nil {
+	log.Fatal(err)
+}
+a, err := orchestrix.New(model, orchestrix.WithCheckpointer(cp))
+if err != nil {
+	log.Fatal(err)
+}
+
+// The same code, in this process or a later one, continues thread "ticket-42".
+th, err := a.Thread(ctx, "ticket-42")
+if err != nil {
+	log.Fatal(err)
+}
+if pending, ok := th.Pending(); ok {
+	fmt.Println("waiting for a decision on", len(pending.Requests), "action(s)")
+}
+for ev, err := range th.Prompt(ctx, "Continue where we left off.") {
+	if err != nil {
+		log.Fatal(err)
+	}
+	if ev.Kind == agent.KindText {
+		fmt.Print(ev.Text)
+	}
+}
+```
+
+Open one `Thread` handle per conversation: two handles on the same ID do not know about each other and overwrite each other's checkpoints. A checkpointed workspace is stored whole in the thread's state, so for large workspaces prefer a disk or shell backend (which `WithCheckpointer` leaves alone).
+
+## Shell and background tasks
+
+`WithShell(root, shell.Options{})` runs the agent on the real directory `root` and adds the `execute` tool. Commands run with a minimal environment, timeouts and output limits; `shell.Options` adjusts them. `WithShell` cannot be combined with `WithBackend` or `WithBackendFactory`, and the one backend is shared by all threads.
+
+`WithTasks` lets `execute` start a command in the background (`run_in_background`) and gives the model `task_output`, `task_stop`, `task_list`, `sleep` and `monitor` to follow it. Finished jobs are announced to the model on its next turn. The host owns the `tasks.Middleware` and must call `Shutdown` to stop jobs still running:
+
+```go
+// Imports omitted; model comes from surrounding code.
+tm := tasks.New(tasks.Config{})
+defer tm.Shutdown() // stops background jobs still running
+
+a, err := orchestrix.New(model,
+	orchestrix.WithShell("./workspace", shell.Options{}),
+	orchestrix.WithTasks(tm),
+	orchestrix.WithAllow("execute(git:*)"),
+	orchestrix.WithDeny("execute(rm:*)"),
+)
+_, _ = a, err
+```
+
+Command rules are matched on the parsed command line, not the raw text. An allow rule such as `execute(git:*)` must cover every command in a line, so `git status && rm -rf x` is not allowed by it, while a deny or ask rule applies if it matches any one command. A line the parser cannot vouch for (command substitution, piping into a shell, a leading `VAR=value`, a program run by path) is never allowed by a pattern rule, and when deny or ask rules exist it needs a human even in `bypassPermissions` mode. Rules still name programs, not behavior: an allowed program that runs others can reach anything.
+
+**The shell backend is not a sandbox.** Commands run as your process, with its privileges and, by default, a small allowlist of its environment variables. Run agents that execute untrusted instructions inside a container or VM.
 
 ## CLI
 
@@ -249,9 +411,8 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 
 ## Roadmap
 
-Milestone 1 (core) ships the three providers, the agent loop with middleware, events and budgets, permissions, memory and disk backends, file and planning tools, the preset and a minimal CLI. Next:
+Milestone 1 (core) shipped the three providers, the agent loop with middleware, events and budgets, permissions, memory and disk backends, file and planning tools, the preset and a minimal CLI. Milestone 2 (depth) added subagents (isolated and forked), summarization, prompt caching, hooks, checkpointed threads and resume, a human-approval middleware, the shell backend and background tasks. Next:
 
-- **Milestone 2, depth:** subagents (isolated and forked), summarization, prompt caching, hooks, checkpointed interrupts and resume, a human-approval middleware, shell backend and background tasks.
 - **Milestone 3, knowledge and reach:** memory, skills, MCP, plan mode, deferred tools, web tools, ask-user.
 - **Milestone 4, scale:** async runs, a coordinator, rubric evaluation, model profiles, key-value, composite and sandbox backends, context compression, examples and full docs.
 

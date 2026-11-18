@@ -10,21 +10,28 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
-	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
-	"github.com/aswin-kevin/orchestrix/middleware/planning"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
 // New builds an agent for model with a sensible default middleware stack:
-// filesystem tools and planning (write_todos). Options adjust the result.
+// context management (summarize), prompt caching, file tools, planning
+// (write_todos) and subagents (the task tool). Options adjust the result.
+//
+// The stack order is fixed, outermost first: summarize, cache, hooks (with
+// WithHooks), hitl (with WithInterruptOn or WithInterruptConfig), filesystem,
+// planning, subagents, tasks (with WithTasks). summarize must stay first: it
+// rebuilds the request from State. WithMiddleware replaces a middleware of
+// the same name in place and appends the others; WithoutMiddleware removes by
+// name.
 //
 // model is either a spec string such as "anthropic:claude-sonnet-4-5" or
 // "openai:gpt-4.1" (credentials and base URL come from the environment, see
 // llm.ParseModel), or a ready llm.Provider. When a spec string is given, its
 // model name also selects the model profile.
 //
-// Without WithBackend or WithBackendFactory, each thread gets its own
-// in-memory workspace that lives as long as the agent. New never panics on bad
+// Without WithBackend, WithBackendFactory or WithShell, each thread gets its
+// own in-memory workspace; it lives as long as the agent and, with
+// WithCheckpointer, is saved with the thread. New never panics on bad
 // options: every problem is returned, joined, as one error.
 func New(model any, opts ...Option) (*agent.Agent, error) {
 	s := &settings{}
@@ -35,12 +42,8 @@ func New(model any, opts ...Option) (*agent.Agent, error) {
 		s.errs = append(s.errs, err)
 	}
 	s.validate()
+	cfg := s.build()
 	if err := errors.Join(s.errs...); err != nil {
-		return nil, fmt.Errorf("orchestrix: %w", err)
-	}
-
-	cfg, err := s.build()
-	if err != nil {
 		return nil, fmt.Errorf("orchestrix: %w", err)
 	}
 	return agent.New(cfg)
@@ -80,30 +83,32 @@ func (s *settings) validate() {
 	if s.cfg.Backend != nil && s.cfg.BackendFactory != nil {
 		s.errs = append(s.errs, errors.New("WithBackend and WithBackendFactory are mutually exclusive"))
 	}
+	s.checkPresets()
 }
 
-// build assembles the final agent.Config from the collected settings.
-func (s *settings) build() (agent.Config, error) {
+// build assembles the final agent.Config from the collected settings,
+// recording problems in s.errs.
+func (s *settings) build() agent.Config {
 	cfg := s.cfg
 	cfg.CacheBoundary = len(cfg.System)
-	if cfg.Backend == nil && cfg.BackendFactory == nil {
+	switch {
+	case s.shell != nil:
+		s.useShell(&cfg)
+	case cfg.Backend == nil && cfg.BackendFactory == nil:
 		cfg.BackendFactory = newThreadMemoryFactory()
+		cfg.SyncWorkspace = true
 	}
 
-	base := []agent.Middleware{
-		filesystem.New(filesystem.Config{}),
-		planning.New(planning.Config{}),
-	}
-	stack, err := agent.Compose(base, cfg.Middleware, s.exclude)
+	stack, err := agent.Compose(s.baseStack(), cfg.Middleware, s.exclude)
 	if err != nil {
-		return agent.Config{}, err
+		s.errs = append(s.errs, err)
 	}
 	cfg.Middleware = stack
 
 	for _, patch := range s.patches {
 		patch(&cfg)
 	}
-	return cfg, nil
+	return cfg
 }
 
 // newThreadMemoryFactory returns a factory that gives every thread id its own

@@ -6,6 +6,11 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/middleware/hitl"
+	"github.com/aswin-kevin/orchestrix/middleware/hooks"
+	"github.com/aswin-kevin/orchestrix/middleware/subagents"
+	"github.com/aswin-kevin/orchestrix/middleware/summarize"
+	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -16,6 +21,15 @@ type settings struct {
 	exclude []string
 	patches []func(*agent.Config)
 	errs    []error
+
+	// Settings of the middleware the preset wires (see presets.go).
+	subagents      subagents.Config
+	extraSubagents []subagents.Subagent
+	summarize      summarize.Config
+	hooks          *hooks.Config
+	interruptOn    map[string]hitl.InterruptConfig
+	shell          *shellSpec
+	tasks          *tasks.Middleware
 }
 
 // Option customizes the agent built by New.
