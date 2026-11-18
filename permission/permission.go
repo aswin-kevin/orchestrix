@@ -1,0 +1,105 @@
+// Package permission decides whether a tool call may run. It parses permission
+// rules and evaluates them, together with the permission mode and the tool's
+// own verdict, in a fixed order that is the SDK's safety boundary.
+//
+// It is a leaf package: it knows nothing about tools, backends or models.
+package permission
+
+import (
+	"context"
+	"encoding/json"
+)
+
+// Behavior is the outcome of a permission check.
+type Behavior string
+
+// The possible behaviors.
+const (
+	Allow Behavior = "allow"
+	Deny  Behavior = "deny"
+	Ask   Behavior = "ask"
+)
+
+// Decision is a permission verdict. Message explains Deny and Ask. A tool's
+// own Allow may carry UpdatedInput, a rewritten input to run instead.
+type Decision struct {
+	Behavior     Behavior
+	Message      string
+	UpdatedInput json.RawMessage
+}
+
+// Allowed returns an Allow decision.
+func Allowed() Decision { return Decision{Behavior: Allow} }
+
+// Denied returns a Deny decision with the given reason.
+func Denied(msg string) Decision { return Decision{Behavior: Deny, Message: msg} }
+
+// AskUser returns an Ask decision with the given prompt.
+func AskUser(msg string) Decision { return Decision{Behavior: Ask, Message: msg} }
+
+// Mode is the session-wide permission posture.
+type Mode string
+
+// The permission modes.
+const (
+	// ModeDefault asks about anything not covered by a rule or read-only.
+	ModeDefault Mode = "default"
+	// ModeAcceptEdits additionally allows file-modifying tools.
+	ModeAcceptEdits Mode = "acceptEdits"
+	// ModeBypass allows everything except what a deny rule forbids.
+	ModeBypass Mode = "bypassPermissions"
+	// ModePlan denies everything that is not read-only.
+	ModePlan Mode = "plan"
+	// ModeDontAsk never prompts: whatever is not explicitly allowed is denied,
+	// and a tool's own allow verdict is not trusted.
+	ModeDontAsk Mode = "dontAsk"
+	// ModeAuto never prompts either, but honors a tool's own allow verdict.
+	ModeAuto Mode = "auto"
+)
+
+// Op is the kind of access made to a path.
+type Op string
+
+// The path operations.
+const (
+	OpRead  Op = "read"
+	OpWrite Op = "write"
+)
+
+// PathAccess is one filesystem access a tool call intends to make.
+type PathAccess struct {
+	Path string
+	Op   Op
+}
+
+// Request describes a tool call to be checked.
+type Request struct {
+	// Tool is the tool's name; tool rules match it exactly.
+	Tool  string
+	Input json.RawMessage
+	// ReadOnly marks a call that changes nothing.
+	ReadOnly bool
+	// Edit marks a file-modifying tool (relevant to ModeAcceptEdits).
+	Edit bool
+	// Subject is the primary string tool rule patterns match against, such as
+	// a shell command or a URL.
+	Subject string
+	// Paths lists the filesystem accesses, matched by path rules.
+	Paths []PathAccess
+	// SelfCheck is the tool's own CheckPermission verdict.
+	SelfCheck Decision
+}
+
+// Approver resolves an Ask decision, typically by prompting a human.
+type Approver func(ctx context.Context, req Request, reason string) Decision
+
+// Context carries the session's permission configuration.
+type Context struct {
+	Mode  Mode
+	Rules Rules
+}
+
+// Rules groups permission rules by the behavior they trigger.
+type Rules struct {
+	Allow, Ask, Deny []Rule
+}
