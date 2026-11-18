@@ -193,7 +193,14 @@ func (m *middleware) Tools() []tool.Tool { return []tool.Tool{compactTool()} }
 // BeforeAgent implements agent.BeforeAgent: a new run starts with the
 // circuit breaker closed.
 func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
-	failuresKey.Delete(s)
+	if _, open := failuresKey.Get(s); open {
+		failuresKey.Delete(s)
+		// The error described the breaker, which is closed now.
+		BoundaryKey.Update(s, func(b Boundary) Boundary {
+			b.LastError = ""
+			return b
+		})
+	}
 	return nil
 }
 
@@ -219,7 +226,9 @@ func (m *middleware) AfterModel(_ context.Context, s *state.State, resp *llm.Res
 //
 // A compaction that fails never fails the turn: State still holds the whole
 // conversation, so the request just goes out uncompacted and the error is
-// recorded in Boundary.LastError. After MaxFailures failures in a row
+// recorded in Boundary.LastError. A summarizer error counts towards the
+// breaker on every path, the model's own request included; a model request with
+// nothing to summarize does not. After MaxFailures failures in a row
 // automatic compaction stops; a successful compaction (one the model
 // requested, or a reactive one) or a new run resets the count.
 func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
@@ -250,7 +259,7 @@ func (m *middleware) shouldCompact(req *agent.ModelRequest) bool {
 	if failures, _ := failuresKey.Get(req.State); failures >= m.cfg.MaxFailures {
 		return false
 	}
-	return float64(Estimate(req.State, req.Request.Messages)) > m.cfg.TriggerFraction*float64(contextWindow(req.Profile))
+	return float64(Estimate(req.State, m.view(req.State, req.Request.Messages))) > m.cfg.TriggerFraction*float64(contextWindow(req.Profile))
 }
 
 // contextWindow is the profile's context window in tokens, or the default

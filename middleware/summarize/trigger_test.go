@@ -36,16 +36,17 @@ func toolTurn(id string, input int) llmtest.Turn {
 	return llmtest.Turn{ToolCalls: []llmtest.Call{noopCall(id)}, Usage: llm.Usage{Input: input}}
 }
 
-func runTrigger(main, summarizer llm.Provider, cfg Config) *agent.Final {
+func runTrigger(t *testing.T, main, summarizer llm.Provider, cfg Config) *agent.Final {
+	t.Helper()
 	cfg.Provider = summarizer
-	return runWindow(main, memory.New(), cfg, agent.Input{ThreadID: "t1", Messages: triggerHistory()}, triggerWindow)
+	return runWindow(t, main, memory.New(), cfg, agent.Input{ThreadID: "t1", Messages: triggerHistory()}, triggerWindow)
 }
 
 func TestAutoCompactAtThreshold(t *testing.T) {
 	main := llmtest.New(toolTurn("n1", 1800), llmtest.Turn{Text: "done"})
 	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})
 
-	final := runTrigger(main, summarizer, Config{})
+	final := runTrigger(t, main, summarizer, Config{})
 
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("final = %+v", final)
@@ -70,7 +71,7 @@ func TestNoCompactionBelowThreshold(t *testing.T) {
 	main := llmtest.New(toolTurn("n1", 1000), llmtest.Turn{Text: "done"})
 	summarizer := llmtest.New()
 
-	final := runTrigger(main, summarizer, Config{})
+	final := runTrigger(t, main, summarizer, Config{})
 
 	if summarizer.Calls() != 0 {
 		t.Fatalf("summarizer called %d times below the threshold, want 0", summarizer.Calls())
@@ -118,7 +119,7 @@ func TestReactiveCompactionRetriesOnce(t *testing.T) {
 	main := llmtest.New(llmtest.Turn{Err: overflow}, llmtest.Turn{Text: "done"})
 	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})
 
-	final := runTrigger(main, summarizer, Config{})
+	final := runTrigger(t, main, summarizer, Config{})
 
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("final = %+v, want completed after the retry", final)
@@ -138,7 +139,7 @@ func TestReactiveCompactionGivesUpAfterOneRetry(t *testing.T) {
 	main := llmtest.New(llmtest.Turn{Err: overflow}, llmtest.Turn{Err: overflow}, llmtest.Turn{Text: "never"})
 	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"}, llmtest.Turn{Text: "SUMMARY-2"})
 
-	final := runTrigger(main, summarizer, Config{})
+	final := runTrigger(t, main, summarizer, Config{})
 
 	if final.Reason != agent.ReasonPromptTooLong {
 		t.Fatalf("final = %+v, want prompt_too_long", final)
@@ -153,7 +154,7 @@ func TestReactiveCompactionFailureReturnsOriginalError(t *testing.T) {
 	main := llmtest.New(llmtest.Turn{Err: overflow})
 	summarizer := llmtest.New(llmtest.Turn{Err: errors.New("summarizer down")})
 
-	final := runTrigger(main, summarizer, Config{})
+	final := runTrigger(t, main, summarizer, Config{})
 
 	if final.Reason != agent.ReasonPromptTooLong || !errors.Is(final.Err, overflow) {
 		t.Fatalf("final = %+v, want prompt_too_long wrapping the original error", final)
@@ -168,7 +169,7 @@ func TestCircuitBreakerOpensAfterFailures(t *testing.T) {
 	down := llmtest.Turn{Err: errors.New("summarizer down")}
 	summarizer := llmtest.New(down, down, down, down, down)
 
-	final := runTrigger(main, summarizer, Config{})
+	final := runTrigger(t, main, summarizer, Config{})
 
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("final = %+v, want the run to complete without compaction", final)
@@ -186,7 +187,7 @@ func TestBreakerResetsOnSuccessfulCompaction(t *testing.T) {
 	main := llmtest.New(toolTurn("n1", 1800), toolTurn("n2", 1800), toolTurn("n3", 100), llmtest.Turn{Text: "done"})
 	summarizer := llmtest.New(llmtest.Turn{Err: errors.New("down")}, llmtest.Turn{Text: "SUMMARY-1"})
 
-	final := runTrigger(main, summarizer, Config{})
+	final := runTrigger(t, main, summarizer, Config{})
 
 	if failures, _ := failuresKey.Get(final.State); failures != 0 {
 		t.Fatalf("failures = %d after a successful compaction, want 0", failures)
@@ -203,7 +204,7 @@ func TestNoProgressCountsAsFailure(t *testing.T) {
 	summarizer := llmtest.New()
 	huge := []llm.Message{llm.UserText(strings.Repeat("x", 8000))}
 
-	final := runWindow(main, memory.New(), Config{Provider: summarizer, MaxFailures: 1}, agent.Input{Messages: huge}, triggerWindow)
+	final := runWindow(t, main, memory.New(), Config{Provider: summarizer, MaxFailures: 1}, agent.Input{Messages: huge}, triggerWindow)
 
 	if final.Reason != agent.ReasonCompleted || summarizer.Calls() != 0 {
 		t.Fatalf("final = %+v, summarizer calls %d, want completion without summarizing", final, summarizer.Calls())
@@ -219,11 +220,88 @@ func TestNoProgressCountsAsFailure(t *testing.T) {
 func TestNewRunClosesBreaker(t *testing.T) {
 	s := state.New()
 	failuresKey.Set(s, DefaultMaxFailures)
+	BoundaryKey.Set(s, Boundary{LastError: "automatic compaction stopped after 3 failures: down"})
 
 	if err := New(Config{}).(agent.BeforeAgent).BeforeAgent(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := failuresKey.Get(s); ok {
 		t.Fatal("failure count survived the start of a run")
+	}
+	if bd, _ := BoundaryKey.Get(s); bd.LastError != "" {
+		t.Fatalf("LastError = %q, want the stale breaker message cleared", bd.LastError)
+	}
+}
+
+// bigTurn is a tool turn with a 2000-character text and no usage report, as
+// a provider that does not report usage would answer.
+func bigTurn(id string) llmtest.Turn {
+	return llmtest.Turn{Text: strings.Repeat("y", 2000), ToolCalls: []llmtest.Call{noopCall(id)}}
+}
+
+func TestEstimateCountsTheCompactedView(t *testing.T) {
+	// The first response reports usage and triggers one compaction; the later
+	// ones report none. The full history is over the threshold, the
+	// compacted view is not, so nothing more may be summarized.
+	first := bigTurn("n1")
+	first.Usage = llm.Usage{Input: 1800}
+	main := llmtest.New(first, bigTurn("n2"), bigTurn("n3"), llmtest.Turn{Text: "done"})
+	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"}, llmtest.Turn{Text: "SUMMARY-2"})
+
+	final := runTrigger(t, main, summarizer, Config{})
+
+	if final.Reason != agent.ReasonCompleted || summarizer.Calls() != 1 {
+		t.Fatalf("final = %+v, summarizer calls %d, want completion after one compaction", final, summarizer.Calls())
+	}
+	if failures, _ := failuresKey.Get(final.State); failures != 0 {
+		t.Fatalf("failures = %d, want 0", failures)
+	}
+}
+
+func TestObservationDroppedWhenStale(t *testing.T) {
+	s := state.New()
+	s.AppendMessages(llm.UserText("hi"))
+	mw := New(Config{}).(agent.AfterModel)
+	observedKey.Set(s, observed{Input: 500, Messages: 1})
+
+	if err := mw.AfterModel(context.Background(), s, &llm.Response{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := observedKey.Get(s); ok {
+		t.Fatal("observation kept after a response without usage")
+	}
+}
+
+func TestObservationDroppedAfterCompaction(t *testing.T) {
+	s := state.New()
+	s.AppendMessages(triggerHistory()...)
+	s.AppendMessages(assistantText("A3"), llm.UserText("A4"))
+	observedKey.Set(s, observed{Input: 1800, Messages: 5})
+	m := New(Config{Provider: llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})}).(*middleware)
+
+	moved, err := m.compact(context.Background(), &agent.ModelRequest{State: s}, 1)
+
+	if !moved || err != nil {
+		t.Fatalf("compact = %v, %v, want a moved boundary", moved, err)
+	}
+	if _, ok := observedKey.Get(s); ok {
+		t.Fatal("observation kept after a compaction, which made it stale")
+	}
+}
+
+func TestReactiveCompactionIgnoresOpenBreaker(t *testing.T) {
+	overflow := &llm.APIError{Status: 400, Body: "prompt is too long"}
+	main := llmtest.New(toolTurn("n1", 1800), toolTurn("n2", 1800), toolTurn("n3", 1800), llmtest.Turn{Err: overflow}, llmtest.Turn{Text: "done"})
+	down := llmtest.Turn{Err: errors.New("summarizer down")}
+	// Three failures open the breaker before the overflowing call.
+	summarizer := llmtest.New(down, down, down, llmtest.Turn{Text: "SUMMARY-1"})
+
+	final := runTrigger(t, main, summarizer, Config{})
+
+	if final.Reason != agent.ReasonCompleted || summarizer.Calls() != 4 {
+		t.Fatalf("final = %+v, summarizer calls %d, want the reactive compaction to run as the fourth", final, summarizer.Calls())
+	}
+	if bd, ok := Current(final.State); !ok || bd.Summary != "SUMMARY-1" {
+		t.Fatalf("boundary = %+v, want the reactive summary", bd)
 	}
 }

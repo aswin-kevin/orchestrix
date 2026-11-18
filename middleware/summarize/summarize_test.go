@@ -58,7 +58,7 @@ func noopTool() tool.Tool {
 
 func runInput(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, in agent.Input) *agent.Final {
 	t.Helper()
-	final := runWindow(main, b, cfg, in, testWindow)
+	final := runWindow(t, main, b, cfg, in, testWindow)
 	if final == nil || final.Reason != agent.ReasonCompleted {
 		t.Fatalf("run did not complete: %+v", final)
 	}
@@ -67,7 +67,7 @@ func runInput(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, in
 
 // runWindow runs the test agent with the given context window and returns
 // its Final whatever the reason.
-func runWindow(main llm.Provider, b backend.Backend, cfg Config, in agent.Input, window int) *agent.Final {
+func runWindow(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, in agent.Input, window int) *agent.Final {
 	a, err := agent.New(agent.Config{
 		Provider:       main,
 		Profile:        &llm.Profile{ContextWindow: window, MaxOutput: 500},
@@ -77,7 +77,7 @@ func runWindow(main llm.Provider, b backend.Backend, cfg Config, in agent.Input,
 		PermissionMode: permission.ModeBypass,
 	})
 	if err != nil {
-		panic(err)
+		t.Fatalf("agent.New: %v", err)
 	}
 	var final *agent.Final
 	for ev := range a.Run(context.Background(), in) {
@@ -208,6 +208,9 @@ func TestCompactWithNothingToSummarize(t *testing.T) {
 	if _, ok := requestedKey.Get(final.State); ok {
 		t.Fatal("compaction request flag left set")
 	}
+	if _, ok := failuresKey.Get(final.State); ok {
+		t.Fatal("a requested compaction with nothing to summarize counted as a failure")
+	}
 }
 
 func TestDisableOffloadAndDefaultSummarizer(t *testing.T) {
@@ -261,6 +264,9 @@ func TestFailedCompactionRecordedAndRequestUncompacted(t *testing.T) {
 	}
 	if _, ok := Current(final.State); ok {
 		t.Fatal("a failed compaction must not set a boundary")
+	}
+	if failures, _ := failuresKey.Get(final.State); failures != 1 {
+		t.Fatalf("failures = %d, want the requested compaction's summarizer error counted", failures)
 	}
 	bd, _ := BoundaryKey.Get(final.State)
 	if !strings.Contains(bd.LastError, "summarizer down") {

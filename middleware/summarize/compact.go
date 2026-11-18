@@ -35,7 +35,10 @@ var failuresKey = state.NewKey[int]("summarize.failures", state.Private[int]())
 
 // Estimate returns the estimated size, in tokens, of the next request: the
 // input tokens the last response reported plus the messages added since; a
-// pure character estimate of view when nothing was observed.
+// pure character estimate of view when nothing was observed. view should be
+// the messages as they would be sent, after any compaction. The fallback
+// leaves out the system prompt and tool definitions, so it underestimates;
+// the reactive path catches what it misses.
 func Estimate(s *state.State, view []llm.Message) int {
 	msgs := s.Messages()
 	if o, ok := observedKey.Get(s); ok && o.Messages <= len(msgs) {
@@ -57,7 +60,8 @@ func charCount(msgs []llm.Message) int {
 // recent tail of about keepTokens, and moves the boundary past them. It
 // reports whether the boundary moved; false with a nil error means there was
 // nothing to summarize. A summarizer error is counted and recorded by
-// fail; success clears the error and the failure count. State messages are never changed.
+// fail; success clears the error and the failure count. State messages are
+// never changed.
 func (m *middleware) compact(ctx context.Context, req *agent.ModelRequest, keepTokens int) (bool, error) {
 	msgs := req.State.Messages()
 	prev, _ := Current(req.State)
