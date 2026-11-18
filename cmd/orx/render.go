@@ -133,11 +133,11 @@ func firstLine(s string) string {
 	return line
 }
 
-// truncate shortens s to at most max runes, marking the cut with an ellipsis.
-func truncate(s string, max int) string {
+// truncate shortens s to at most limit runes, marking the cut with an ellipsis.
+func truncate(s string, limit int) string {
 	runes := []rune(s)
-	if len(runes) <= max {
+	if len(runes) <= limit {
 		return s
 	}
-	return string(runes[:max-1]) + "…"
+	return string(runes[:limit-1]) + "…"
 }

@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -48,10 +47,14 @@ func main() {
 
 // options holds the parsed command line.
 type options struct {
-	model, prompt, systemFile, dir, mode, thinking, effort, baseURL string
-	yes                                                             bool
-	maxTurns                                                        int
-	modeGiven                                                       bool
+	// Model and provider.
+	model, baseURL, thinking, effort string
+	// What to run and where.
+	prompt, systemFile, dir string
+	maxTurns                int
+	// Permissions: mode is only meaningful when modeGiven is set.
+	yes, modeGiven bool
+	mode           string
 }
 
 // run is the testable core of the program. It returns the process exit code.
@@ -66,7 +69,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitUsage
 	}
 
-	in := bufio.NewReader(stdin)
+	in := newLineReader(stdin)
 	rend := newRenderer(stdout, stderr)
 	stderr = rend.stderr // the shared, locked writer
 	ag, code := buildAgent(opts, newApprover(in, stderr), newProvider, stderr)
@@ -172,13 +175,14 @@ func effectiveMode(o options, stderr io.Writer) permission.Mode {
 }
 
 // repl reads prompts line by line until end of input or /exit. One state is
-// carried through all prompts so the model sees the whole conversation.
-func repl(ctx context.Context, ag *agent.Agent, in *bufio.Reader, rend *renderer, stderr io.Writer) int {
+// carried through all prompts so the model sees the whole conversation. The
+// exit code is 1 if any prompt failed, even though the session carried on.
+func repl(ctx context.Context, ag *agent.Agent, in *lineReader, rend *renderer, stderr io.Writer) int {
 	st := state.New()
 	code := exitOK
 	for {
 		fmt.Fprint(stderr, replPrompt)
-		line, err := in.ReadString('\n')
+		line, err := in.next(ctx)
 		prompt := strings.TrimSpace(line)
 		if prompt == exitCommand {
 			return code

@@ -165,3 +165,49 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		})
 	}
 }
+
+func TestReplApprovalSharesInputWithPrompts(t *testing.T) {
+	dir := t.TempDir()
+
+	code, _, stderr := invoke(t, "write the file\ny\n/exit\n", writeTurns(), "-model", "openai:test", "-dir", dir)
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out.txt")); err != nil {
+		t.Errorf("approval did not consume the second line: %v (stderr %q)", err, stderr)
+	}
+}
+
+func TestModeFlagWinsOverYes(t *testing.T) {
+	// Mode plan denies writes even though -yes is given.
+	dir := t.TempDir()
+
+	code, _, stderr := invoke(t, "", writeTurns(), "-model", "openai:test", "-dir", dir, "-yes", "-mode", "plan", "-p", "write it")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stderr, "both -yes and -mode given; using -mode plan") {
+		t.Errorf("stderr = %q, want the override note", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out.txt")); err == nil {
+		t.Error("file written although -mode plan should win over -yes")
+	}
+}
+
+func TestModelFromEnvironment(t *testing.T) {
+	t.Setenv("ORX_MODEL", "openai:from-env")
+	var got llm.Config
+	newProvider := func(cfg llm.Config) (llm.Provider, error) {
+		got = cfg
+		return llmtest.New(llmtest.Turn{Text: "ok"}), nil
+	}
+
+	code := run(context.Background(), []string{"-dir", t.TempDir(), "-p", "hi"},
+		strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, newProvider)
+
+	if code != 0 || got.Model != "from-env" {
+		t.Errorf("code = %d, model = %q, want 0 and from-env", code, got.Model)
+	}
+}
