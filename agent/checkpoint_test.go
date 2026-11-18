@@ -19,11 +19,13 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-// recordingCheckpointer wraps an in-memory store and records the message
-// count of every Save. Save number failOn (1-based) fails with errSaveFailed.
+// recordingCheckpointer wraps a store and records the message count of every
+// Save. Save number failOn (1-based) fails with errSaveFailed, and so does
+// every save from number failFrom on, as if the process had died.
 type recordingCheckpointer struct {
 	checkpoint.Checkpointer
-	failOn int
+	failOn   int
+	failFrom int
 
 	mu     sync.Mutex
 	counts []int
@@ -40,7 +42,7 @@ func (c *recordingCheckpointer) Save(ctx context.Context, threadID string, s *st
 	c.counts = append(c.counts, len(s.Messages()))
 	n := len(c.counts)
 	c.mu.Unlock()
-	if n == c.failOn {
+	if n == c.failOn || (c.failFrom > 0 && n >= c.failFrom) {
 		return errSaveFailed
 	}
 	return c.Checkpointer.Save(ctx, threadID, s)

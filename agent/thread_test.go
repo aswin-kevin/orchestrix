@@ -11,8 +11,10 @@ import (
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/checkpoint/file"
 	cpmemory "github.com/aswin-kevin/orchestrix/checkpoint/memory"
+	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -252,4 +254,105 @@ func assertBusy(t *testing.T, seq iter.Seq2[Event, error]) {
 	if len(events) != 1 || final.Reason != ReasonBusy || !errors.Is(final.Err, ErrThreadBusy) || final.State != nil {
 		t.Fatalf("busy run: %d events, final = %+v; want a lone busy KindFinal without State", len(events), final)
 	}
+}
+
+func TestForkRefusesExistingThread(t *testing.T) {
+	ctx := context.Background()
+	cp := cpmemory.New()
+	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"}), Checkpointer: cp})
+	t1 := mustThread(t, a, "t1")
+	collect(t, t1.Prompt(ctx, "hi"))
+	if err := cp.Save(ctx, "t2", state.New()); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{"t1", "t2"} {
+		if _, err := t1.Fork(ctx, id); !errors.Is(err, ErrThreadExists) {
+			t.Fatalf("Fork(%q): err = %v, want ErrThreadExists", id, err)
+		}
+	}
+	if saved, err := cp.Load(ctx, "t2"); err != nil || len(saved.Messages()) != 0 {
+		t.Fatalf("t2 checkpoint overwritten: err = %v, %d messages", err, len(saved.Messages()))
+	}
+	if saved, err := cp.Load(ctx, "t1"); err != nil || len(saved.Messages()) != 2 {
+		t.Fatalf("t1 checkpoint changed: err = %v", err)
+	}
+}
+
+func TestForkOwnIDWithoutCheckpointer(t *testing.T) {
+	a := mustNew(t, Config{Provider: llmtest.New()})
+	if _, err := mustThread(t, a, "t1").Fork(context.Background(), "t1"); !errors.Is(err, ErrThreadExists) {
+		t.Fatalf("err = %v, want ErrThreadExists", err)
+	}
+}
+
+func TestThreadIgnoresChangesToFinalState(t *testing.T) {
+	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"})})
+	th := mustThread(t, a, "t1")
+	_, final := collect(t, th.Prompt(context.Background(), "hi"))
+	final.State.SetMessages(nil)
+	if n := len(th.Messages()); n != 2 {
+		t.Fatalf("thread holds %d messages, want 2: it must adopt a copy of Final.State", n)
+	}
+}
+
+func TestThreadMessagesIsACopy(t *testing.T) {
+	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"})})
+	th := mustThread(t, a, "t1")
+	collect(t, th.Prompt(context.Background(), "hi"))
+	msgs := th.Messages()
+	msgs[0].Content[0].Text = "changed"
+	if got := th.Messages()[0].Content[0].Text; got != "hi" {
+		t.Fatalf("first message = %q, want hi: Messages must deep-copy", got)
+	}
+}
+
+// TestCrashBetweenSaves simulates a process dying after the assistant reply
+// with a tool call was saved but before its results were: the stored thread
+// has a tool_use without a tool_result and no pending record.
+func TestCrashBetweenSaves(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	crashing := &recordingCheckpointer{Checkpointer: mustFileCheckpointer(t, dir), failFrom: 3}
+	a := mustNew(t, Config{
+		Provider:     llmtest.New(toolTurn("e1")),
+		Tools:        []tool.Tool{echoTool()},
+		Checkpointer: crashing,
+	})
+	if _, final := collect(t, mustThread(t, a, "t1").Prompt(ctx, "go")); final.Reason != ReasonCheckpointError {
+		t.Fatalf("first process: final = %+v, want checkpoint_error", final)
+	}
+
+	provider := llmtest.New(llmtest.Turn{Text: "recovered"})
+	b := mustNew(t, Config{Provider: provider, Tools: []tool.Tool{echoTool()}, Checkpointer: mustFileCheckpointer(t, dir)})
+	th := mustThread(t, b, "t1")
+	if n := len(th.Messages()); n != 2 {
+		t.Fatalf("reloaded %d messages, want user and assistant", n)
+	}
+	if _, ok := th.Pending(); ok {
+		t.Fatal("Pending() = true for a thread that never recorded an interrupt")
+	}
+	_, final := collect(t, th.Resume(ctx, nil))
+	if final.Reason != ReasonInvalidResume || !errors.Is(final.Err, ErrNoPendingInterrupt) {
+		t.Fatalf("Resume final = %+v, want invalid_resume with ErrNoPendingInterrupt", final)
+	}
+	_, final = collect(t, th.Prompt(ctx, "again"))
+	if final.Reason != ReasonCompleted || final.Text != "recovered" {
+		t.Fatalf("Prompt final = %+v, want completed", final)
+	}
+	if !answersToolUse(provider.Requests[0].Messages, "e1") {
+		t.Fatal("model request leaves tool_use e1 unanswered: history was not repaired")
+	}
+}
+
+// answersToolUse reports whether msgs hold a tool_result for the tool_use id.
+func answersToolUse(msgs []llm.Message, id string) bool {
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			if b.Type == llm.BlockToolResult && b.ToolUseID == id {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -12,9 +12,14 @@ import (
 	"github.com/aswin-kevin/orchestrix/state"
 )
 
-// ErrThreadBusy is the Final.Err of a Thread run rejected because another
-// run of the thread is in progress (ReasonBusy).
-var ErrThreadBusy = errors.New("agent: thread is already running")
+var (
+	// ErrThreadBusy is the Final.Err of a Thread run rejected because
+	// another run of the same Thread handle is in progress (ReasonBusy).
+	ErrThreadBusy = errors.New("agent: thread is already running")
+	// ErrThreadExists is returned by Thread.Fork when the new id is the
+	// thread's own or already has a checkpoint.
+	ErrThreadExists = errors.New("agent: thread already exists")
+)
 
 // Thread is a conversation with an agent that keeps its own State: each run
 // continues where the last one ended. With Config.Checkpointer set, every
@@ -22,9 +27,12 @@ var ErrThreadBusy = errors.New("agent: thread is already running")
 // conversation up again, in this process or another; without it the thread
 // lives in memory only.
 //
-// A Thread runs one run at a time and is safe for concurrent use. Between
-// runs, Messages, State and Pending describe the outcome of the last one;
-// while a run is in progress they describe the State it started from.
+// A Thread handle runs one run at a time and is safe for concurrent use.
+// The guarantee is per handle: two handles opened on the same id, in one
+// process or several, know nothing of each other and would overwrite each
+// other's checkpoints, so open one handle per conversation. Between runs,
+// Messages, State and Pending describe the outcome of the last one; while a
+// run is in progress they describe the State it started from.
 type Thread struct {
 	id    string
 	agent *Agent
@@ -104,11 +112,21 @@ func (t *Thread) Pending() (*Interrupt, bool) {
 	return Pending(t.state)
 }
 
-// Messages returns a copy of the thread's conversation.
+// Messages returns a deep copy of the thread's conversation: changing it
+// never touches the thread.
 func (t *Thread) Messages() []llm.Message {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.state.Clone().Messages()
+	msgs := t.state.Messages()
+	t.mu.Unlock()
+	return copyMessages(msgs)
+}
+
+// copyMessages deep-copies msgs through JSON, the representation a
+// checkpoint keeps, so no block content is shared with the original.
+func copyMessages(msgs []llm.Message) []llm.Message {
+	s := state.New()
+	s.SetMessages(msgs)
+	return s.Clone().Messages()
 }
 
 // State returns an independent copy of the thread's State.
@@ -120,22 +138,44 @@ func (t *Thread) State() *state.State {
 
 // Fork returns a new thread newID that starts with a copy of this thread's
 // State, workspace snapshot included, and continues independently. With
-// Config.Checkpointer set, the copy is saved under newID first.
+// Config.Checkpointer set, the copy is saved under newID first. Fork never
+// overwrites a conversation: it fails with ErrThreadExists when newID is
+// this thread's id or already has a checkpoint.
 func (t *Thread) Fork(ctx context.Context, newID string) (*Thread, error) {
 	if err := checkpoint.ValidThreadID(newID); err != nil {
 		return nil, fmt.Errorf("agent: fork: %w", err)
 	}
+	if newID == t.id {
+		return nil, fmt.Errorf("agent: fork %q: %w", newID, ErrThreadExists)
+	}
 	s := t.State()
 	if cp := t.agent.cfg.Checkpointer; cp != nil {
-		if err := cp.Save(ctx, newID, s); err != nil {
-			return nil, fmt.Errorf("agent: fork %q: save checkpoint: %w", newID, err)
+		if err := saveNew(ctx, cp, newID, s); err != nil {
+			return nil, fmt.Errorf("agent: fork %q: %w", newID, err)
 		}
 	}
 	return &Thread{id: newID, agent: t.agent, state: s}, nil
 }
 
-// stream runs start on a copy of the thread's State and adopts the State the
-// run ends with. The run works on a copy so that Messages and State keep
+// saveNew saves s as the first checkpoint of thread id, failing with
+// ErrThreadExists when the thread already has one. The check and the save
+// are not atomic; Checkpointer offers no create-only save.
+func saveNew(ctx context.Context, cp checkpoint.Checkpointer, id string, s *state.State) error {
+	_, err := cp.Load(ctx, id)
+	switch {
+	case err == nil:
+		return ErrThreadExists
+	case !errors.Is(err, checkpoint.ErrNotFound):
+		return fmt.Errorf("check for an existing checkpoint: %w", err)
+	}
+	if err := cp.Save(ctx, id, s); err != nil {
+		return fmt.Errorf("save checkpoint: %w", err)
+	}
+	return nil
+}
+
+// stream runs start on a copy of the thread's State and adopts a copy of
+// the State the run ends with. The run works on a copy so that Messages and State keep
 // describing a finished run while it is in progress.
 func (t *Thread) stream(start func(*state.State) iter.Seq2[Event, error]) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
@@ -150,7 +190,9 @@ func (t *Thread) stream(start func(*state.State) iter.Seq2[Event, error]) iter.S
 		defer func() { t.release(s) }()
 		for ev, err := range start(s) {
 			if ev.Kind == KindFinal && ev.Final.State != nil {
-				s = ev.Final.State
+				// A copy, so a consumer changing Final.State cannot rewrite
+				// the thread's history.
+				s = ev.Final.State.Clone()
 			}
 			if !yield(ev, err) {
 				return

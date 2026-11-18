@@ -18,10 +18,11 @@ var WorkspaceKey = state.NewKey[json.RawMessage]("agent.workspace", state.Privat
 
 // A persisted run saves at the points Config.Checkpointer lists. The first
 // save follows the BeforeAgent hooks, so the input is stored only once they
-// have accepted (or rewritten) it. The workspace is captured only on the
-// saves that follow tool calls (tool results, interrupt, end of run),
-// because only tools change files; this keeps the store from receiving the
-// whole workspace on every save.
+// have accepted (or rewritten) it. The workspace is captured (Snapshot) only
+// on the saves that follow tool calls (tool results, interrupt, end of run),
+// because only tools change files; this spares a full backend capture on
+// every save. Once WorkspaceKey is set, every save still writes its value,
+// the latest capture, along with the rest of State.
 //
 // Saves run under a context that is not cancelled with the run, so a
 // cancelled run still records how far it got and its reason stays the
