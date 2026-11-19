@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -42,5 +43,16 @@ func TestConfigDoRetriesFromOutsidePackage(t *testing.T) {
 	}
 	if got := hits.Load(); got != 2 {
 		t.Errorf("server hit %d times, want 2", got)
+	}
+}
+
+func TestConfigDoUnprepared(t *testing.T) {
+	var cfg llm.Config
+	resp, err := cfg.Do(context.Background(), func() (*http.Request, error) {
+		t.Error("build called on an unprepared Config")
+		return nil, errors.New("unreachable")
+	})
+	if resp != nil || err == nil || err.Error() != "llm: Config.Do called before Prepare" {
+		t.Errorf("got %v, %v", resp, err)
 	}
 }

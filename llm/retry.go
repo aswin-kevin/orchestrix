@@ -41,6 +41,9 @@ const (
 // caller gets the provider's error while ctx is still live, rather than a
 // deadline error once the wait has used up the time left.
 func (c *Config) Do(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
+	if c.client == nil {
+		return nil, errors.New("llm: Config.Do called before Prepare")
+	}
 	maxRetries := c.maxRetries()
 	for attempt := 0; ; attempt++ {
 		resp, err := c.attempt(ctx, build)
