@@ -63,8 +63,9 @@ var NonInteractiveEnv = []string{"PAGER=cat", "GIT_PAGER=cat", "MANPAGER=cat", "
 	"DEBIAN_FRONTEND=noninteractive", "NO_COLOR=1", "TERM=dumb"}
 
 // InheritedEnv names the host variables passed to commands by default: enough
-// for tools to find binaries, a home and a locale, and nothing secret.
-var InheritedEnv = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TMPDIR", "TZ"}
+// for tools to find binaries, a home and a locale, and nothing secret. MCP
+// stdio servers get the same list.
+var InheritedEnv = hostenv.DefaultNames
 
 // Options configures a Backend. The zero value is ready to use.
 type Options struct {

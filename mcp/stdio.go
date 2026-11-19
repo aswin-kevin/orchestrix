@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/internal/hostenv"
 	"github.com/aswin-kevin/orchestrix/internal/procgroup"
 )
@@ -35,8 +34,9 @@ type StdioConfig struct {
 	Dir string
 	// Env holds variables added last, overriding inherited ones; nil → none.
 	Env map[string]string
-	// InheritEnv passes the whole host environment instead of only the
-	// variables named by shell.InheritedEnv. It may expose secrets such as
+	// InheritEnv passes the whole host environment instead of only a small
+	// allowlist (PATH, HOME, USER, LOGNAME, SHELL, LANG, LC_ALL, TMPDIR and
+	// TZ, the shell backend's default list). It may expose secrets such as
 	// API keys to the server.
 	InheritEnv bool
 	// MaxMessageBytes caps one message (line) from the server; a longer one
@@ -142,7 +142,7 @@ func StartStdio(cfg StdioConfig) (Transport, error) {
 // environment, then cfg.Env in key order. exec.Cmd keeps the last value of a
 // repeated key, so cfg.Env overrides.
 func environ(cfg StdioConfig) []string {
-	env := hostenv.Inherited(shell.InheritedEnv, cfg.InheritEnv)
+	env := hostenv.Inherited(hostenv.DefaultNames, cfg.InheritEnv)
 	return append(env, hostenv.Pairs(cfg.Env)...)
 }
 

@@ -273,7 +273,7 @@ func TestConnectFailsFast(t *testing.T) {
 }
 
 func TestServerInstructionsInPrompt(t *testing.T) {
-	long := NewServer(Implementation{Name: "long", Version: "1"}, strings.Repeat("i", DefaultMaxInstructions+50))
+	long := NewServer(Implementation{Name: "long", Version: "1"}, strings.Repeat("i", MaxInstructionsBytes+50))
 	locked := inProcessServer("locked", newTestServer(nil))
 	locked.Gated = true
 	silent := NewServer(Implementation{Name: "silent", Version: "1"}, "")
@@ -282,7 +282,7 @@ func TestServerInstructionsInPrompt(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "done"})
 	runAgent(t, m, agent.Config{Provider: p, System: []string{"host"}}, nil)
 	system := p.Requests[0].System
-	want := framed("srv", "use the echo tool") + "\n" + framed("long", strings.Repeat("i", DefaultMaxInstructions))
+	want := framed("srv", "use the echo tool") + "\n" + framed("long", strings.Repeat("i", MaxInstructionsBytes))
 	if len(system) != 2 || system[0] != "host" || system[1] != want {
 		t.Fatalf("system = %q, want host then %q", system, want)
 	}

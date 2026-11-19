@@ -25,9 +25,9 @@ const (
 	// MaxServerNameLen is the longest server name, short enough that a
 	// shortened tool name always keeps the whole server prefix.
 	MaxServerNameLen = 32
-	// DefaultMaxInstructions caps, in bytes (cut on a rune boundary), the
+	// MaxInstructionsBytes caps, in bytes (cut on a rune boundary), the
 	// server instructions placed in the system prompt.
-	DefaultMaxInstructions = 2000
+	MaxInstructionsBytes = 2000
 	// MaxDescriptionBytes caps a tool's description (cut on a rune boundary).
 	MaxDescriptionBytes = 4096
 	// MaxSchemaBytes caps a tool's input schema, measured as JSON; a larger
@@ -134,7 +134,7 @@ type ServerStatus struct {
 //
 // What a server sends is untrusted. Its instructions go into the system
 // prompt framed as <mcp_server_instructions server="<name>">, capped at
-// DefaultMaxInstructions, with any tag of that name inside them neutralized
+// MaxInstructionsBytes, with any tag of that name inside them neutralized
 // so they cannot end the frame or pose as another server; they can still
 // steer the agent, so connect only servers you trust or set
 // ServerConfig.IgnoreInstructions. Its tools ask for approval by default
@@ -264,7 +264,7 @@ func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 			continue
 		}
 		if text := s.client.Instructions(); text != "" {
-			text, _ = promptsafe.CapBytes(text, DefaultMaxInstructions)
+			text, _ = promptsafe.CapBytes(text, MaxInstructionsBytes)
 			frames = append(frames, fmt.Sprintf("<%s server=%q>\n%s\n</%s>", instructionsTag, s.cfg.Name, neutralizeInstructions(text), instructionsTag))
 		}
 	}

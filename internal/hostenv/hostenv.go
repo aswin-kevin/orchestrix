@@ -9,6 +9,11 @@ import (
 	"slices"
 )
 
+// DefaultNames names the host variables a child process receives by
+// default: enough for tools to find binaries, a home and a locale, and
+// nothing secret.
+var DefaultNames = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TMPDIR", "TZ"}
+
 // Inherited returns the host variables a child receives: the whole host
 // environment when all is set, otherwise only the named variables that are
 // set, in the order named.
