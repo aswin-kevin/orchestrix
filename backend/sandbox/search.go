@@ -58,7 +58,8 @@ func (b *Backend) Glob(ctx context.Context, pattern, base string) ([]backend.Fil
 // Grep searches file contents under opts.Path (a directory or one file).
 // Files are listed in one command and read in batches of base64, then
 // searched in Go by backend.Grepper, so the semantics match every other
-// backend. Files over backend.MaxGrepFileBytes are skipped unread.
+// backend. Files over backend.MaxGrepFileBytes and files the sandbox user
+// cannot read are skipped.
 func (b *Backend) Grep(ctx context.Context, pattern string, opts backend.GrepOptions) ([]backend.GrepMatch, error) {
 	clean, err := cleanBase(opts.Path)
 	if err != nil {
@@ -124,7 +125,7 @@ func (b *Backend) grepBatch(ctx context.Context, base string, files []backend.Fi
 		script.WriteString(" " + quote(b.real(fi.Path)))
 		maxOutput += encodedBytes(fi.Size) + len(sectionEnd) + 2
 	}
-	script.WriteString(`; do if [ -f "$f" ]; then base64 < "$f" 2>/dev/null; fi; printf '\n` + sectionEnd + `\n'; done` + "\n")
+	script.WriteString(`; do if [ -f "$f" ] && [ -r "$f" ]; then base64 2>/dev/null < "$f"; fi; printf '\n` + sectionEnd + `\n'; done` + "\n")
 	out, err := b.run(ctx, "grep", base, script.String(), maxOutput)
 	if err != nil {
 		return false, err

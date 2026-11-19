@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,12 @@ const (
 	// failed write.
 	cleanupTimeout = 5 * time.Second
 )
+
+// tempName matches exactly the names write gives its temporary files.
+var tempName = regexp.MustCompile(`^` + regexp.QuoteMeta(tmpPrefix) + `[0-9a-f]{` + strconv.Itoa(2*tmpRandomBytes) + `}$`)
+
+// isTempName reports whether a base name is a write's temporary file.
+func isTempName(name string) bool { return tempName.MatchString(name) }
 
 // Read returns a page of the file at p.
 func (b *Backend) Read(ctx context.Context, p string, offset, limit int) (backend.ReadResult, error) {

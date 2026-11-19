@@ -12,8 +12,11 @@ const (
 	// stderrTailBytes is how much of a listing's captured stderr an error
 	// quotes when a tool fails mid-listing.
 	stderrTailBytes = 1 << 10
-	// recordFailed is the record kind a listing prints when wc or date fails
-	// on an entry that still exists.
+	// stderrKeepBytes is how much of a listing's stderr the shell keeps (the
+	// tail), so a noisy tool cannot inflate the output.
+	stderrKeepBytes = 2 << 10
+	// recordFailed is the record kind a listing prints when date fails on an
+	// entry that still exists.
 	recordFailed = "E"
 	// stderrMarker starts the final section of a listing's output, which
 	// holds everything the listing tools wrote to stderr.
@@ -25,23 +28,25 @@ const (
 var skippedDirs = []string{".git", "node_modules"}
 
 // listPreflight runs before an error-tolerant listing and fails loudly when
-// date -r or find's -H, -mindepth, -maxdepth and -exec {} + are unsupported,
-// so a missing tool is an error rather than an empty result.
-var listPreflight = `date -r "$p" +%s >/dev/null` + orFail +
+// wc, date -r or find's -H, -mindepth, -maxdepth and -exec {} + are
+// unsupported, so a missing tool is an error rather than an empty result.
+var listPreflight = `wc -c < /dev/null >/dev/null` + orFail +
+	`date -r "$p" +%s >/dev/null` + orFail +
 	`find -H "$p" -mindepth 0 -maxdepth 0 -exec true {} +` + orFail
 
 // recordScript prints one listing record per argument:
 // "<d|f>\t<size>\t<unix mtime>\t<path>\0". A symlink to a directory is a "d";
-// a dangling symlink is an "f" of size 0 and mtime 0. An entry that vanished
-// mid-listing is skipped; when wc or date fails on an entry that still
-// exists, it prints a recordFailed record and exits non-zero (the tool's own
-// message is on stderr). It is passed to find -exec as a fixed, quoted sh -c
-// program.
+// a dangling symlink is an "f" of size 0 and mtime 0; a file the sandbox user
+// cannot read is an "f" of size 0 with its real mtime (date -r needs no read
+// permission). An entry that vanished mid-listing is skipped; when date fails
+// on an entry that still exists, it prints a recordFailed record and exits
+// non-zero (the tool's own message is on stderr). It is passed to find -exec
+// as a fixed, quoted sh -c program.
 var recordScript = `fail() { printf '` + recordFailed + `\000'; exit 1; }
 for f do
 if [ -d "$f" ]; then k=d; s=0
 elif [ -e "$f" ]; then k=f; s=0
-  if [ -f "$f" ]; then s=$(wc -c < "$f") || { [ -e "$f" ] || continue; fail; }; fi
+  if [ -f "$f" ] && [ -r "$f" ]; then s=$(wc -c < "$f") || { [ -e "$f" ] || continue; s=0; }; fi
 elif [ -L "$f" ]; then printf 'f\t0\t0\t%s\000' "$f"; continue
 else continue
 fi
@@ -62,13 +67,13 @@ func pruneSkipped() string {
 	return `-mindepth 1 \( -type d \( ` + strings.Join(names, " -o ") + ` \) -prune \) -o -type f`
 }
 
-// captureStderr runs cmd with its stdout passed through and its stderr
-// collected, then appends the stderr as the final section after
-// stderrMarker. The listing tolerates find's own exit status (unreadable
+// captureStderr runs cmd with its stdout passed through and the last
+// stderrKeepBytes of its stderr collected, then appends that as the final
+// section after stderrMarker. The listing tolerates find's own exit status (unreadable
 // directories are skipped, as backend/disk does); failures that matter
 // surface as recordFailed records.
 func captureStderr(cmd string) string {
-	return "{ e=$( " + cmd + " 2>&1 >&3 ); } 3>&1\n" +
+	return "{ e=$( ( " + cmd + " 2>&1 >&3 ) | tail -c " + strconv.Itoa(stderrKeepBytes) + " ); } 3>&1\n" +
 		`printf '\000S\t%s' "$e"` + "\n"
 }
 
@@ -111,7 +116,7 @@ func parseRecords(out string) ([]record, error) {
 		if err != nil {
 			return nil, fmt.Errorf("listing mtime: %w", err)
 		}
-		if strings.HasPrefix(path.Base(fields[3]), tmpPrefix) {
+		if isTempName(path.Base(fields[3])) {
 			continue // a write in progress
 		}
 		recs = append(recs, record{dir: fields[0] == "d", size: size, modTime: time.Unix(mtime, 0), path: fields[3]})

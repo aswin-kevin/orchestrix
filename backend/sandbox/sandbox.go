@@ -23,8 +23,9 @@
 // rewritten file gets default permissions rather than keeping its old mode;
 // listings run wc and date per entry, so Glob and Grep over very large trees
 // are slow. Grep prunes .git and node_modules directories, like backend/disk.
-// Writes fill a temporary ".orx-tmp-<hex>" file next to the target, and
-// listings hide such names. A file that grows by more than a few KiB between
+// Writes fill a temporary ".orx-tmp-<16 hex digits>" file next to the
+// target, and listings hide names of exactly that form. A file the sandbox
+// user cannot read is listed with size 0 (and its real mtime); Grep skips it. A file that grows by more than a few KiB between
 // the size check and the transfer in Read or Grep fails safely: the output
 // exceeds the cap computed from the earlier size and the operation returns a
 // truncation error, never partial content.
