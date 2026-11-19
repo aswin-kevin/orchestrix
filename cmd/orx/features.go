@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
-	"os/signal"
 	"path"
 	"path/filepath"
 	"slices"
@@ -59,20 +59,33 @@ func checkFeatureFlags(o options, searchGiven bool) error {
 
 // memoryOption loads memory.DefaultFiles and then the -memory files, unless
 // -no-memory is given; -memory-store adds the structured store. A file that
-// is missing is skipped.
-func memoryOption(o options) (orchestrix.Option, bool) {
+// is missing is skipped: silently for the defaults, with a warning on stderr
+// for a file the user named.
+func memoryOption(o options, stderr io.Writer) (orchestrix.Option, bool) {
 	if o.noMemory {
 		return nil, false
 	}
 	files := slices.Clone(memory.DefaultFiles)
 	for _, p := range o.memoryPaths {
-		files = append(files, workspacePath(p))
+		wp := workspacePath(p)
+		if _, err := os.Stat(filepath.Join(o.dir, filepath.FromSlash(wp))); err != nil {
+			fmt.Fprintf(stderr, "orx: warning: memory file %s: %s\n", wp, statProblem(err))
+		}
+		files = append(files, wp)
 	}
 	cfg := memory.Config{Files: files}
 	if o.memoryStore {
 		cfg.Store = &memory.StoreConfig{Dir: memory.DefaultDir}
 	}
 	return orchestrix.WithMemory(cfg), true
+}
+
+// statProblem describes why a -memory file cannot be loaded.
+func statProblem(err error) string {
+	if errors.Is(err, fs.ErrNotExist) {
+		return "not found"
+	}
+	return err.Error()
 }
 
 // workspacePath maps a -memory path to the absolute path the workspace
@@ -104,17 +117,14 @@ func skillsOption(dirs []string, stderr io.Writer) (orchestrix.Option, error) {
 
 // connectMCP connects to the servers of the -mcp configuration file, within
 // mcp.DefaultConnectTimeout. A server marked optional that fails to connect
-// is reported as a warning on stderr. Ctrl-C while connecting stops it, so
-// Connect closes the servers it started instead of the default handler
-// killing orx under them. The caller must Close the result. The returned exit
-// code says what kind of failure an error is.
+// is reported as a warning on stderr. ctx should end on Ctrl-C, so that
+// Connect closes the servers it started. The caller must Close the result.
+// The returned exit code says what kind of failure an error is.
 func connectMCP(ctx context.Context, file string, stderr io.Writer) (*mcp.Middleware, int, error) {
 	servers, err := mcp.LoadConfig(file)
 	if err != nil {
 		return nil, exitUsage, err
 	}
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, mcp.DefaultConnectTimeout)
 	defer cancel()
 	m, err := mcp.Connect(ctx, servers)

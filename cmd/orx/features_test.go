@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -129,6 +128,22 @@ func TestMemoryLoadedByDefault(t *testing.T) {
 	}
 }
 
+func TestMissingMemoryFileWarnsOnlyWhenExplicit(t *testing.T) {
+	dir := t.TempDir() // holds no AGENTS.md
+
+	code, _, stderr := invoke(t, "", textTurn(), "-model", "openai:test", "-dir", dir, "-memory", "notes/missing.md", "-p", "hi")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if !strings.Contains(stderr, "warning") || !strings.Contains(stderr, "/notes/missing.md") {
+		t.Errorf("stderr = %q, want a warning naming the missing -memory file", stderr)
+	}
+	if strings.Contains(stderr, "AGENTS.md") {
+		t.Errorf("stderr = %q, want no warning for the missing default file", stderr)
+	}
+}
+
 func TestMemoryStoreFlagAddsTools(t *testing.T) {
 	provider := textTurn()
 
@@ -205,6 +220,19 @@ func TestAskUserPromptsTerminal(t *testing.T) {
 	text, isErr := toolResult(t, provider, "q1")
 	if isErr || !strings.Contains(text, "Beta") || strings.Contains(text, "Alpha") {
 		t.Errorf("ask_user result = %q (error %v), want the answer Beta", text, isErr)
+	}
+}
+
+func TestAskUserBlankAnswer(t *testing.T) {
+	provider := askTurns()
+
+	code, _, stderr := invoke(t, "\n", provider, "-model", "openai:test", "-dir", t.TempDir(), "-p", "choose")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if text, isErr := toolResult(t, provider, "q1"); isErr || !strings.Contains(text, "(no answer)") {
+		t.Errorf("ask_user result = %q (error %v), want (no answer)", text, isErr)
 	}
 }
 
@@ -347,24 +375,4 @@ func TestWebToolsAskForApproval(t *testing.T) {
 	if text, _ := toolResult(t, provider, "f1"); !strings.Contains(text, deniedByUser) {
 		t.Errorf("web_fetch result = %q, want it denied", text)
 	}
-}
-
-// mcpConfig writes an MCP configuration file whose server "test" is this
-// test binary in helper-process mode, writing its pid to pidFile.
-func mcpConfig(t *testing.T, pidFile string) string {
-	t.Helper()
-	exe, err := filepath.Abs(os.Args[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := json.Marshal(map[string]any{"mcpServers": map[string]any{"test": map[string]any{
-		"command": exe,
-		"env":     map[string]string{testMCPEnv: "1", testMCPPIDEnv: pidFile},
-	}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "mcp.json")
-	writeFile(t, path, string(raw))
-	return path
 }

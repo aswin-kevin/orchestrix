@@ -106,16 +106,29 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	ctx, abort := context.WithCancel(ctx)
 	defer abort()
 
+	// setupCtx ends at the first Ctrl-C during setup. Its handler stays
+	// registered until run returns, after the deferred shutdown, so Ctrl-C
+	// never kills the process by default and shutdown always runs (MCP
+	// servers are closed, background jobs stopped). Once setup is over it is
+	// not consulted: the turn and the idle prompt handle Ctrl-C themselves
+	// (see conversation.turn and readIdle), and a Ctrl-C between them is
+	// ignored.
+	setupCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt)
+	defer stopSignals()
+
 	in := newLineReader(stdin)
 	rend := newRenderer(stdout, stderr)
 	stderr = rend.stderr // the shared, locked writer
-	ag, shutdown, code := buildAgent(ctx, opts, newApprover(in, rend.prompts()), newProvider, stderr)
+	ag, shutdown, code := buildAgent(setupCtx, opts, newApprover(in, rend.prompts()), newProvider, stderr)
 	if ag == nil {
 		return code
 	}
 	defer shutdown()
 
-	conv, err := newConversation(ctx, ag, opts, abort)
+	conv, err := newConversation(setupCtx, ag, opts, abort)
+	if err == nil && setupCtx.Err() != nil {
+		err = errors.New("interrupted")
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, "orx:", err)
 		return exitError
@@ -242,7 +255,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		}
 		agentOpts = append(agentOpts, orchestrix.WithSystemPrompt(string(text)))
 	}
-	if opt, ok := memoryOption(o); ok {
+	if opt, ok := memoryOption(o, stderr); ok {
 		agentOpts = append(agentOpts, opt)
 	}
 	if len(o.skillDirs) > 0 {

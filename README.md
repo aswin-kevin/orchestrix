@@ -659,7 +659,7 @@ for ev, err := range a.Resume(ctx, "setup", final.State, decisions) {
 
 ## CLI
 
-`orx` is a small coding-agent CLI built on the SDK. It works in a directory on disk, can run shell commands there (also in the background) and asks before running tools that need approval. Subagent output is shown indented under `[name]`. It loads `AGENTS.md` from the workspace as standing instructions, and the model can enter plan mode and ask you multiple-choice questions: `exit_plan_mode` prints the whole plan and asks `Approve plan? [y/N]` (a "no" reads one more line of feedback for the model), and `ask_user` lists numbered options, answered with comma-separated numbers or your own words. Text written by the model is shown with control characters and escape sequences made visible.
+`orx` is a small coding-agent CLI built on the SDK. It works in a directory on disk, can run shell commands there (also in the background) and asks before running tools that need approval. Subagent output is shown indented under `[name]`. It loads `AGENTS.md` from the workspace as standing instructions, and the model can enter plan mode and ask you multiple-choice questions: `exit_plan_mode` prints the whole plan and asks `Approve plan? [y/N]` (a "no" reads one more line of feedback for the model), and `ask_user` lists numbered options, answered with an option number (comma-separated numbers for a multi-choice question) or your own words. Text from the model and from tools is shown with control characters, escape sequences and invisible format characters made visible.
 
 ```sh
 go install github.com/aswin-kevin/orchestrix/cmd/orx@latest
@@ -684,7 +684,7 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 | `-base-url` | Override the provider base URL. |
 | `-thinking`, `-effort` | Thinking and reasoning-effort settings passed to the provider. |
 | `-skills` | Directory of skills, one subdirectory with a `SKILL.md` per skill (repeatable). Skills that fail to load are skipped with a warning. |
-| `-memory` | Extra memory file, a workspace path relative to `-dir`, loaded after `AGENTS.md` (repeatable). Missing files are skipped. |
+| `-memory` | Extra memory file, a workspace path relative to `-dir`, loaded after `AGENTS.md` (repeatable). A missing file is skipped with a warning. |
 | `-no-memory` | Load no memory files. |
 | `-memory-store` | Give the model a long-term memory store (`recall_memory`, `record_memory`) under `.orchestrix/memories` in the workspace. |
 | `-mcp` | MCP server configuration file (`{"mcpServers": {...}}`). Servers are connected at start; an optional server that fails is reported as a warning. Their tools ask for approval unless `-yes` is given. |

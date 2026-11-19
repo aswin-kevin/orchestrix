@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
@@ -17,12 +18,18 @@ import (
 )
 
 // Environment of the helper process: with testMCPEnv set to "1" the test
-// binary serves testMCPServer over stdio instead of running tests, and
-// writes its pid to the file testMCPPIDEnv names, if any.
+// binary serves an MCP server over stdio instead of running tests, and
+// writes its pid to the file testMCPPIDEnv names, if any. With
+// testMCPHangEnv set to "true" it never answers.
 const (
-	testMCPEnv    = "ORX_TEST_MCP"
-	testMCPPIDEnv = "ORX_TEST_MCP_PID"
+	testMCPEnv     = "ORX_TEST_MCP"
+	testMCPPIDEnv  = "ORX_TEST_MCP_PID"
+	testMCPHangEnv = "ORX_TEST_MCP_HANG"
 )
+
+// testMCPHang is how long a hanging helper waits; the test closes it long
+// before.
+const testMCPHang = time.Hour
 
 func TestMain(m *testing.M) {
 	if os.Getenv(testMCPEnv) == "1" {
@@ -38,6 +45,10 @@ func serveTestMCP() int {
 		if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 			return 1
 		}
+	}
+	if os.Getenv(testMCPHangEnv) == "true" {
+		time.Sleep(testMCPHang)
+		return 1
 	}
 	s := mcp.NewServer(mcp.Implementation{Name: "orx-test", Version: "1"}, "")
 	s.AddTool(mcp.ToolInfo{

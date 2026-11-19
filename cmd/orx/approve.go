@@ -18,6 +18,9 @@ const deniedByUser = "denied by user"
 // deniedCancelled is the message when the turn is cancelled at a prompt.
 const deniedCancelled = "cancelled"
 
+// deniedPlanTooLong is the message when a plan reached the approver cut.
+const deniedPlanTooLong = "plan too long to review"
+
 // The prompts of the plan approval.
 const (
 	planPrompt     = "Approve plan? [y/N] "
@@ -101,10 +104,16 @@ func (a *approver) decide(ctx context.Context, req permission.Request, _ string)
 // remembered, whatever the request says, so every plan is read before it is
 // approved. Any answer but "y" rejects the plan and reads one more line, the
 // feedback the model gets to revise it; a blank one or end of input sends
-// deniedByUser instead.
+// deniedByUser instead. A plan that reached the approver cut (its Subject
+// ends with planmode.TruncationMarker) cannot be reviewed, so it is rejected
+// without asking.
 func (a *approver) decidePlan(ctx context.Context, req permission.Request) permission.Decision {
 	a.prompt.Lock()
 	defer a.prompt.Unlock()
+	if strings.HasSuffix(req.Subject, planmode.TruncationMarker) {
+		fmt.Fprintf(a.out, "%sorx: warning: the plan was cut before it could be shown, so it is rejected unseen\n", askerLabel(agent.Info(ctx)))
+		return permission.Denied(deniedPlanTooLong)
+	}
 	fmt.Fprintf(a.out, "%sPlan for approval:\n%s\n%s", askerLabel(agent.Info(ctx)), termSafe(req.Subject), planPrompt)
 	answer, err := a.in.next(ctx)
 	switch {

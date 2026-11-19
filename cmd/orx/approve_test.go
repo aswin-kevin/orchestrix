@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
@@ -54,6 +55,12 @@ func (l *promptLog) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.buf.Write(p)
+}
+
+func (l *promptLog) contains(s string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Contains(l.buf.String(), s)
 }
 
 func (l *promptLog) prompts() int {
@@ -179,6 +186,14 @@ func TestTermSafe(t *testing.T) {
 		{"bell and delete", "a\x07b\x7f", `a\x07b\x7f`},
 		{"C1 control", "a\u009b31m", `a\u009b31m`},
 		{"bidi override", "a\u202eb", `a\u202eb`},
+		{"invalid UTF-8", "a\x9b31mb", `a\x9b31mb`},
+		{"raw C1 byte", "\x85", `\x85`},
+		{"cut multi-byte sequence", "a\xe2\x80", `a\xe2\x80`},
+		{"arabic letter mark", "a\u061cb", `a\u061cb`},
+		{"zero-width space", "a\u200bb", `a\u200bb`},
+		{"zero-width joiner", "a\u200db", `a\u200db`},
+		{"word joiner", "a\u2060b", `a\u2060b`},
+		{"byte order mark", "\ufeffa", `\ufeffa`},
 		{"unicode text kept", "héllo ✓", "héllo ✓"},
 	}
 	for _, tc := range tests {
@@ -258,4 +273,61 @@ func TestPlanPromptRejectionReadsFeedback(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPlanPromptRefusesCutPlan(t *testing.T) {
+	out := &promptLog{}
+	ap := newApprover(newLineReader(strings.NewReader("y\n")), out)
+
+	d := ap.decide(context.Background(), planRequest("step one"+planmode.TruncationMarker), "")
+
+	if d.Behavior != permission.Deny || d.Message != deniedPlanTooLong {
+		t.Errorf("decision = %+v, want deny %q", d, deniedPlanTooLong)
+	}
+	if got := out.buf.String(); !strings.Contains(got, "warning") || strings.Contains(got, planPrompt) {
+		t.Errorf("output = %q, want a warning and no approval prompt", got)
+	}
+}
+
+func TestPlanPromptCancelled(t *testing.T) {
+	t.Run("at the approval", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		defer pw.Close()
+		ap := newApprover(newLineReader(pr), &promptLog{})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		if d := ap.decide(ctx, planRequest("step"), ""); d.Behavior != permission.Deny || d.Message != deniedCancelled {
+			t.Errorf("decision = %+v, want deny %q", d, deniedCancelled)
+		}
+	})
+	t.Run("at the feedback", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		defer pw.Close()
+		out := &promptLog{}
+		ap := newApprover(newLineReader(pr), out)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan permission.Decision, 1)
+		go func() { done <- ap.decide(ctx, planRequest("step"), "") }()
+
+		fmt.Fprintln(pw, "n")
+		deadline := time.Now().Add(2 * time.Second)
+		for !out.contains(feedbackPrompt) {
+			if time.Now().After(deadline) {
+				t.Fatal("no feedback prompt")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		cancel()
+
+		select {
+		case d := <-done:
+			if d.Behavior != permission.Deny || d.Message != deniedCancelled {
+				t.Errorf("decision = %+v, want deny %q", d, deniedCancelled)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("decide did not return after cancellation")
+		}
+	})
 }

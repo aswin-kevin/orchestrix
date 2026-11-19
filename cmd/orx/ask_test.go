@@ -50,7 +50,9 @@ func TestAskSelectsNumberedOptions(t *testing.T) {
 }
 
 func TestAskFreeText(t *testing.T) {
-	for _, line := range []string{"use sqlite instead", "7", "1, x"} {
+	// "1, 2" names two options of a single-choice question, so it is the
+	// user's own words too.
+	for _, line := range []string{"use sqlite instead", "7", "1, x", "1, 2"} {
 		t.Run(line, func(t *testing.T) {
 			ap := newApprover(newLineReader(strings.NewReader(line+"\n")), &promptLog{})
 
@@ -109,5 +111,26 @@ func TestAskEscapesModelText(t *testing.T) {
 		if !strings.Contains(shown, want) {
 			t.Errorf("output = %q, want it to contain %q", shown, want)
 		}
+	}
+}
+
+func TestAskPromptMatchesQuestionKind(t *testing.T) {
+	out := &promptLog{}
+	ap := newApprover(newLineReader(strings.NewReader("1\n1\n")), out)
+
+	if _, err := ap.ask(context.Background(), twoQuestions); err != nil {
+		t.Fatal(err)
+	}
+
+	shown := out.buf.String()
+	single, multi, ok := strings.Cut(shown, "Which targets?")
+	if !ok {
+		t.Fatalf("output = %q, want both questions", shown)
+	}
+	if !strings.Contains(single, singleAnswerPrompt) || strings.Contains(single, multiAnswerPrompt) {
+		t.Errorf("single-choice prompt = %q, want %q", single, singleAnswerPrompt)
+	}
+	if !strings.Contains(multi, multiAnswerPrompt) {
+		t.Errorf("multi-choice prompt = %q, want %q", multi, multiAnswerPrompt)
 	}
 }

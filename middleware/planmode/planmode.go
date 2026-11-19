@@ -45,11 +45,15 @@ const (
 	// maxPlanBytes is the largest plan exit_plan_mode accepts.
 	maxPlanBytes = 64 << 10
 	// maxSubjectBytes is how much of the plan the permission request's
-	// Subject (shown to a human Approver) carries before it is cut.
-	maxSubjectBytes = 4 << 10
-	// truncationMarker ends a Subject that was cut.
-	truncationMarker = "\n... [plan truncated]"
+	// Subject (shown to a human Approver) carries before it is cut. It
+	// equals maxPlanBytes, so every plan that is accepted reaches the
+	// Approver whole; the cut only guards inputs that bypass checkPlan.
+	maxSubjectBytes = maxPlanBytes
 )
+
+// TruncationMarker ends the Subject of an exit_plan_mode permission request
+// whose plan was cut, so an Approver can tell it has not seen the whole plan.
+const TruncationMarker = "\n... [plan truncated]"
 
 // previousKey holds the mode a run was in when it entered plan mode. It is
 // bookkeeping of the run that owns it, so forks do not inherit it: a forked
@@ -160,7 +164,7 @@ func planSubject(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &in) != nil || len(in.Plan) <= maxSubjectBytes {
 		return in.Plan
 	}
-	return strings.ToValidUTF8(in.Plan[:maxSubjectBytes], "") + truncationMarker
+	return strings.ToValidUTF8(in.Plan[:maxSubjectBytes], "") + TruncationMarker
 }
 
 func enter(ctx context.Context, _ EnterInput, c *tool.Call) (tool.Result, error) {

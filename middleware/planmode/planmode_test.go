@@ -2,6 +2,7 @@ package planmode
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"sync"
@@ -466,7 +467,8 @@ func (r *recordingApprover) approve(_ context.Context, req permission.Request, _
 }
 
 func TestApproverRequestShowsPlanAndForbidsRemembering(t *testing.T) {
-	long := strings.Repeat("x", 3*maxSubjectBytes)
+	// The largest plan exit_plan_mode accepts reaches the Approver whole.
+	long := strings.Repeat("x", maxPlanBytes)
 	rec := &recordingApprover{next: func(n int) permission.Decision {
 		if n == 1 {
 			return permission.Decision{Behavior: permission.Deny, Message: "revise"}
@@ -491,9 +493,19 @@ func TestApproverRequestShowsPlanAndForbidsRemembering(t *testing.T) {
 	if rec.reqs[0].Subject != "short plan" {
 		t.Errorf("subject = %q, want the plan", rec.reqs[0].Subject)
 	}
-	got := rec.reqs[1].Subject
-	if len(got) > maxSubjectBytes+len(truncationMarker) || !strings.HasSuffix(got, truncationMarker) {
-		t.Errorf("long subject len %d, suffix ok = %v", len(got), strings.HasSuffix(got, truncationMarker))
+	if got := rec.reqs[1].Subject; got != long {
+		t.Errorf("long subject len %d, want the whole plan of %d bytes", len(got), len(long))
+	}
+}
+
+func TestPlanSubjectMarksCutPlan(t *testing.T) {
+	raw, err := json.Marshal(ExitInput{Plan: strings.Repeat("x", maxSubjectBytes+1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := planSubject(raw)
+	if len(got) != maxSubjectBytes+len(TruncationMarker) || !strings.HasSuffix(got, TruncationMarker) {
+		t.Errorf("subject len %d, suffix ok = %v", len(got), strings.HasSuffix(got, TruncationMarker))
 	}
 }
 
