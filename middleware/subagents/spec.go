@@ -116,11 +116,27 @@ func validateSpec(s Subagent) error {
 		return fmt.Errorf("subagents: subagent %q: %w", s.Name, err)
 	}
 	// A subagent inheriting the parent's middleware is checked when it is
-	// built (see childConfig).
+	// built (see childConfig), or earlier by a host calling CheckSkills.
 	if s.Middleware != nil {
-		if err := checkSkills(s, s.Middleware); err != nil {
-			return fmt.Errorf("subagents: subagent %q: %w", s.Name, err)
-		}
+		return s.CheckSkills(nil)
+	}
+	return nil
+}
+
+// CheckSkills reports a name in s.Skills or s.PinnedSkills that the skills
+// middleware of the subagent's stack does not define, or the lack of a skills
+// middleware when either is set. That stack is s.Middleware when set, else
+// inherited: the Config.Middleware of the agent that delegates. New checks
+// the specs that set Middleware; the others are checked when the subagent is
+// first built, unless the host that assembles the delegating agent calls
+// CheckSkills with its stack first, as the orchestrix preset does.
+func (s Subagent) CheckSkills(inherited []agent.Middleware) error {
+	stack := inherited
+	if s.Middleware != nil {
+		stack = s.Middleware
+	}
+	if err := checkSkills(s, stack); err != nil {
+		return fmt.Errorf("subagents: subagent %q: %w", s.Name, err)
 	}
 	return nil
 }

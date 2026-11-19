@@ -18,11 +18,15 @@ import (
 // (write_todos) and subagents (the task tool). Options adjust the result.
 //
 // The stack order is fixed, outermost first: summarize, cache, hooks (with
-// WithHooks), hitl (with WithInterruptOn or WithInterruptConfig), filesystem,
-// planning, subagents, tasks (with WithTasks). summarize must stay first: it
-// rebuilds the request from State. WithMiddleware replaces a middleware of
-// the same name in place and appends the others; WithoutMiddleware removes by
-// name.
+// WithHooks), hitl (with WithInterruptOn or WithInterruptConfig), memory
+// (WithMemory), skills (WithSkills), planmode (WithPlanMode), filesystem,
+// planning, subagents, deferred, mcp (WithMCP), web (WithWeb), askuser
+// (WithAskUser), tasks (WithTasks). deferred is present with
+// WithDeferredTools, and otherwise added with a zero deferred.Config when
+// WithSkills has Tools or WithMCP has a deferred or gated server. summarize
+// must stay first: it rebuilds the request from State. WithMiddleware
+// replaces a middleware of the same name in place and appends the others;
+// WithoutMiddleware removes by name.
 //
 // model is either a spec string such as "anthropic:claude-sonnet-4-5" or
 // "openai:gpt-4.1" (credentials and base URL come from the environment, see
@@ -108,6 +112,7 @@ func (s *settings) build() agent.Config {
 	for _, patch := range s.patches {
 		patch(&cfg)
 	}
+	s.checkSubagentSkills(cfg.Middleware)
 	return cfg
 }
 

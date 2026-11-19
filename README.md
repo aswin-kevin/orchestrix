@@ -7,9 +7,9 @@
 
 **An AI agent framework for Go.** Orchestrix is an LLM agent harness SDK that turns Claude, GPT or any OpenAI-compatible model into an autonomous, tool-using agent, with streaming, middleware, permissions and human-in-the-loop approval built in.
 
-You get a production-ready agent loop in a few lines of code, with no dependencies beyond the Go standard library.
+You get a production-ready agent loop in a few lines of code, with two small dependencies beyond the Go standard library.
 
-> Orchestrix is under active development. Milestones 1 (the core) and 2 (depth) are complete; the API may still change before 1.0.
+> Orchestrix is under active development. Milestones 1 (the core), 2 (depth) and 3 (knowledge and reach) are complete; the API may still change before 1.0.
 
 <p align="center">
   <img src="assets/architecture.png" alt="Orchestrix architecture: your application runs the agent loop, which is wrapped by a middleware stack, calls LLM providers, sends every tool call through a permission gate to tools and backends, and keeps its conversation in serializable state." width="900">
@@ -31,8 +31,15 @@ Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and 
 - **Human in the loop.** A tool call that needs approval pauses the run; resume it with your decision, even in another process.
 - **Checkpoints and threads.** Conversations, and the default workspace, are saved and continued later.
 - **Shell and background tasks.** An `execute` tool on a real directory, with long-running jobs the agent can follow.
+- **Memory.** Standing instructions from files such as `AGENTS.md`, plus a long-term memory store the model can record to and recall from.
+- **Skills.** Directories of packaged instructions the model loads when a task matches, optionally unlocking tools.
+- **MCP.** Tools, resources and instructions of Model Context Protocol servers over stdio or HTTP.
+- **Plan mode.** The model investigates read-only and acts only after a human approves its plan.
+- **Deferred tools.** Large tool sets stay out of the request until the model searches for them.
+- **Web.** Fetch pages as markdown and search the web, with protection against requests to private networks.
+- **Asking the user.** The model puts structured multiple-choice questions to the human.
 - **Budgets.** Limit model turns and wall-clock time, and cap output tokens per response; a total token target (`TokenBudget`) is available through `agent.Config` and `WithConfig`.
-- **Zero dependencies.** Standard library only.
+- **Few dependencies.** The standard library, plus `gopkg.in/yaml.v3` (skill and memory frontmatter) and `golang.org/x/net/html` (web pages).
 
 ## Install
 
@@ -85,7 +92,7 @@ func main() {
 }
 ```
 
-`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTokens`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
+`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTokens`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
 
 ## Providers
 
@@ -109,7 +116,7 @@ Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. 
 
 A middleware is any value with a `Name() string` method plus whichever hook interfaces it needs: `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeStop`, `ModelWrapper`, `ToolWrapper` and `ToolProvider`. Wrappers nest like an onion: the first middleware in the stack is the outermost, and a wrapper may call `next` zero, one or several times.
 
-The stack order is fixed, outermost first: `summarize`, `cache`, `hooks` (with `WithHooks`), `hitl` (with `WithInterruptOn`), `filesystem`, `planning`, `subagents`, `tasks` (with `WithTasks`). By default that is `summarize`, `cache`, `filesystem`, `planning` and `subagents`. Adding a middleware with a default's name replaces it; `WithoutMiddleware("subagents", "summarize")` removes them. `summarize` rebuilds each request from state, so it must stay first.
+The stack order is fixed, outermost first: `summarize`, `cache`, `hooks` (with `WithHooks`), `hitl` (with `WithInterruptOn`), `memory` (with `WithMemory`), `skills` (with `WithSkills`), `planmode` (with `WithPlanMode`), `filesystem`, `planning`, `subagents`, `deferred` (see "Deferred tools"), `mcp` (with `WithMCP`), `web` (with `WithWeb`), `askuser` (with `WithAskUser`), `tasks` (with `WithTasks`). By default that is `summarize`, `cache`, `filesystem`, `planning` and `subagents`. Adding a middleware with a default's name replaces it; `WithoutMiddleware("subagents", "summarize")` removes them. `summarize` rebuilds each request from state, so it must stay first.
 
 A custom middleware that logs every tool call (imports omitted):
 
@@ -385,6 +392,254 @@ Command rules are matched on the parsed command line, not the raw text. An allow
 
 The agent writes transcripts and oversized outputs under `.orchestrix/` in the workspace (see "Offload" above). They may contain secrets that passed through the conversation; add `.orchestrix/` to `.gitignore`.
 
+## Memory
+
+`WithMemory` puts standing instructions into the system prompt: files you name, read from the run's workspace once per run. `memory.DefaultFiles` is `/AGENTS.md`. A zero `Files` loads nothing, every path must be absolute (a relative one makes `New` fail), and a file that cannot be read is skipped. The default prompt invites the model to keep durable notes in those files with `edit_file`; set `Prompt` to a pointer to `""` to drop that invitation.
+
+`Store` adds a structured long-term store. `record_memory` saves one Markdown file per entry, with a frontmatter header (name, description, type), and `recall_memory` finds entries by keyword. An index of the entries goes into the system prompt unless `DisableIndexInPrompt` is set.
+
+```go
+// Imports omitted; model comes from surrounding code.
+a, err := orchestrix.New(model,
+	orchestrix.WithMemory(memory.Config{
+		Files: memory.DefaultFiles,   // /AGENTS.md in the workspace
+		Store: &memory.StoreConfig{}, // recall_memory and record_memory
+	}),
+)
+_, _ = a, err
+```
+
+The store is kept in the workspace under `memory.DefaultDir` (`/.orchestrix/memories`), so it lasts as long as that workspace does: across the runs of a thread, and across restarts with a disk or shell backend or a checkpointer. To share memories between threads, set `StoreConfig.Dir` to a directory that every thread's backend can see. Milestone 4 adds composite backends, which will let a `/memories/` path go to a persistent store of its own while the rest of the workspace stays per thread.
+
+Whoever can write these files can steer the agent, and the model may record anything it has read, untrusted web pages included. The instruction files are read directly, not through permission path rules. List only files whose writers you trust, treat recorded entries as data, and deny `record_memory` where the agent must not remember.
+
+## Skills
+
+A skill is a directory holding a `SKILL.md` file: YAML frontmatter followed by Markdown instructions. Other files in the directory, such as references or templates, can be read through the `skill` tool.
+
+```text
+skills/
+  pdf/
+    SKILL.md
+    reference.md
+  house-style/
+    SKILL.md
+```
+
+```markdown
+---
+name: pdf
+description: Extract text and tables from PDF files. Use it when a task involves a PDF.
+allowed-tools: pdf_render
+---
+Convert the file with pdf_render first, then read reference.md for the table layout.
+```
+
+| Field | Meaning |
+| --- | --- |
+| `name` | Required. Lowercase letters, digits and single hyphens, at most 64 characters; it must match the directory name. |
+| `description` | Required. What the skill does and when to use it. |
+| `allowed-tools` | Tools the skill unlocks once loaded: a space-separated string or a list. |
+| `mcp-servers` | MCP servers whose tools the skill unlocks. |
+| `license`, `compatibility`, `metadata` | Optional free text, and a map of extra keys. |
+
+The system prompt lists each skill's name and description. When a task matches one, the model loads it with the `skill` tool, and its instructions stay in effect after the conversation is summarized. A pinned skill's instructions are in the system prompt for every run. `skills.Config.Tools` are tools that belong to skills: they are hidden and refused until a loaded skill's `allowed-tools` names them, and the preset adds the deferred middleware so their schemas stay out of the request until then.
+
+A subagent's `Skills` field limits the skills it is offered (never more than its parent's), and `PinnedSkills` pins skills for it. Both must name skills that `WithSkills` defines, or `New` fails.
+
+```go
+// Imports omitted; model comes from surrounding code.
+a, err := orchestrix.New(model,
+	orchestrix.WithSkills(skills.Config{
+		Sources: []skills.Source{skills.DirSource("./skills")},
+		Pinned:  []string{"house-style"}, // always in the system prompt
+	}),
+	orchestrix.WithSubagents(subagents.Subagent{
+		Name:         "pdf-worker",
+		Description:  "Extracts tables and text from PDF files.",
+		SystemPrompt: "You extract data from PDF files.",
+		Skills:       []string{"pdf"}, // the only skill it is offered
+	}),
+)
+_, _ = a, err
+```
+
+`New` fails when a source cannot be read, a programmatic skill (`skills.Config.Skills`) is invalid or a pinned name is unknown. An invalid skill found in a directory is skipped instead; `skills.New` with the same config reports why in `Warnings()`. Skill text goes into the system prompt, so load skills only from directories you trust.
+
+## MCP
+
+`mcp.Connect` starts or dials Model Context Protocol servers and returns a middleware for `WithMCP`. Each server tool becomes a tool named `mcp__<server>__<tool>`, the servers' instructions are added to the system prompt, and servers with resources add `list_mcp_resources` and `read_mcp_resource`. A server that announces a changed tool list is picked up from the next turn. You own the connections: call `Close` when you are done.
+
+```go
+// Imports omitted; model comes from surrounding code.
+ctx := context.Background()
+m, err := mcp.Connect(ctx, []mcp.ServerConfig{
+	{Name: "repo", Command: "./bin/repo-server", Args: []string{"--root", "."}},
+	{Name: "docs", URL: "https://mcp.example.com/mcp", BearerToken: os.Getenv("DOCS_TOKEN"), Defer: true},
+})
+if err != nil {
+	log.Fatal(err)
+}
+defer m.Close() // stops stdio servers and ends HTTP sessions
+
+a, err := orchestrix.New(model,
+	orchestrix.WithMCP(m),
+	orchestrix.WithAllow("mcp__repo__status"),
+)
+_, _ = a, err
+```
+
+A server sets exactly one of `Command` (a child process speaking stdio, which gets a small allowlist of your environment unless `InheritEnv` is set), `URL` (streamable HTTP) or `Transport` (for example `mcp.InProcess` for a server in the same program). `Defer` offers the server's tools by name only, to be found with `search_tools`; `Gated` hides and refuses them until a skill that lists the server in `mcp-servers` is loaded. Either one adds the deferred middleware. `Optional` records a failed connection in `Status()` instead of failing `Connect`.
+
+Server tools ask for approval by default, whatever their read-only hints say; set `TrustReadOnlyHints` to believe them, or write allow rules for the tool names. A server's instructions can steer the agent, so connect only servers you trust or set `IgnoreInstructions`.
+
+`mcp.LoadConfig` reads the same settings from a JSON file. Every `${VAR}` is replaced by an environment variable when the file is read, unknown fields are errors, and `disabled` skips a server:
+
+```json
+{
+  "mcpServers": {
+    "repo": {"command": "./bin/repo-server", "args": ["--root", "."]},
+    "docs": {"url": "https://mcp.example.com/mcp", "bearerToken": "${DOCS_TOKEN}", "defer": true}
+  }
+}
+```
+
+The client speaks protocol revision 2025-06-18 (and accepts servers on 2025-03-26 and 2024-11-05) and supports tools and resources (list and read). OAuth, sampling and elicitation are not supported; pass a token with `BearerToken` or `Headers`. The package also has a small `mcp.Server` you can serve over stdio, HTTP or in process.
+
+## Plan mode
+
+`WithPlanMode` gives the model `enter_plan_mode` and `exit_plan_mode`. Entering switches the run to the read-only `plan` permission mode, where nothing that changes files or runs commands is allowed. The model investigates, then calls `exit_plan_mode` with its plan, which needs a human's approval:
+
+- With `WithApprover`, the approver is asked. The request has `NoRemember` set, so an approver must not answer it from an "always allow" it remembered; `orx` asks with `[y/N]` every time.
+- Without one, the run pauses with an interrupt for `exit_plan_mode`. Resume it with `Approve`, `Edit` (a revised plan as the new input), `Reject` or `Respond` (see "Human in the loop").
+
+Approval restores the mode the run had before it entered plan mode (or `planmode.Config.ApproveMode`, when set), and the approved plan is kept in state under `planmode.PlanKey`. A rejection or a response keeps plan mode and hands the feedback to the model, so it can revise the plan. A run started in `plan` mode can use `exit_plan_mode` directly; set `DisableEnter` to offer only that tool. Subagents cannot enter or leave plan mode: a planning parent's subagents plan too.
+
+```go
+// Imports omitted; model comes from surrounding code.
+a, err := orchestrix.New(model,
+	orchestrix.WithPlanMode(planmode.Config{}),
+	orchestrix.WithApprover(func(ctx context.Context, req permission.Request, reason string) permission.Decision {
+		// For exit_plan_mode, req.Input holds the plan and req.NoRemember
+		// is set: never answer it from an "always allow" cache.
+		fmt.Printf("%s: %s\n%s\napprove? [y/N] ", req.Tool, reason, req.Input)
+		var answer string
+		_, _ = fmt.Scanln(&answer)
+		if answer == "y" {
+			return permission.Allowed()
+		}
+		return permission.Denied("not approved: keep planning")
+	}),
+)
+_, _ = a, err
+```
+
+## Deferred tools
+
+With many tools, their schemas crowd the request. A deferred tool is offered by name only: the system prompt lists it, `search_tools` finds it by keywords (or `select:name1,name2`) and returns its schema, and from the next turn on the model can call it directly. `call_tool` calls any tool by name with an input object. Mark tools with `deferred.Defer`, or name them with patterns in `deferred.Config.Tools`:
+
+```go
+// Imports omitted; model comes from surrounding code.
+type reportInput struct {
+	Quarter string `json:"quarter" desc:"Such as 2026-Q3."`
+}
+report := tool.New("quarterly_report", "Builds the quarterly sales report.",
+	func(ctx context.Context, in reportInput, c *tool.Call) (tool.Result, error) {
+		return tool.Text("report for " + in.Quarter), nil
+	})
+a, err := orchestrix.New(model,
+	orchestrix.WithTools(deferred.Defer(report)), // found with search_tools
+	orchestrix.WithDeferredTools(deferred.Config{
+		Tools: []string{"mcp__docs__*"}, // defer by name pattern too
+	}),
+)
+_, _ = a, err
+```
+
+Permissions still apply in full: a call through `call_tool` is checked against the target tool's own name with the same rules, mode, approvals, interrupts and hooks as a direct call, and a rule on `call_tool` itself applies as well. Gated tools (skill tools and gated MCP servers) are not searchable and stay refused until unlocked. Without `WithDeferredTools`, the preset adds this middleware with its defaults when skills have `Tools` or an MCP server is deferred or gated.
+
+## Web
+
+The web tools are opt-in. `WithWeb` adds `web_fetch`, which reads a page and returns it as markdown, in parts for long pages, and, with a `Search` backend, `web_search`.
+
+```go
+// Imports omitted; model comes from surrounding code.
+search, err := web.DuckDuckGo(web.DuckDuckGoConfig{})
+if err != nil {
+	log.Fatal(err)
+}
+a, err := orchestrix.New(model,
+	orchestrix.WithWeb(web.Config{Search: search}),
+	orchestrix.WithAllow("web_search", "web_fetch(https://go.dev/*)"),
+	orchestrix.WithDeny("web_fetch(https://internal.example.com/*)"),
+)
+_, _ = a, err
+```
+
+- **Network guard.** By default every connection to a loopback, private, link-local or otherwise non-public address is refused when it is made, for each redirect hop and each DNS answer, so a page cannot lead the agent into your internal network. `AllowPrivateNetworks` turns this off.
+- **Proxy and certificates.** `ProxyURL` sends every request through an http or https proxy (the proxy environment variables are ignored), and `CACertFiles` adds root certificates. A bad proxy URL or an unreadable CA file makes `New` fail.
+- **Permissions.** The tools need an allow rule or an approval, unless `ReadOnly` is set, which allows them without one. `web_fetch(pattern)` rules match the URL in a canonical form: lowercase scheme and host, no default port, `.` and `..` segments resolved, escaped unreserved characters decoded, no fragment. URLs with a user name or password are refused. Rules see only the URL the model asked for: redirects are followed without checking the rules again, though the network guard checks every hop.
+- **Search backends.** `web.DuckDuckGo` (no key), `web.Brave` and `web.Tavily` (API key required). Each constructor returns `(SearchBackend, error)` and takes an optional `Client`; pass one from `web.NewHTTPClient` to search through a proxy or with extra certificates. Search requests never follow redirects. Implement `web.SearchBackend` for any other service.
+
+Page content and search results are untrusted text written by third parties; the default prompt tells the model never to follow instructions found in them.
+
+## Asking the user
+
+`WithAskUser` gives the model `ask_user`, which asks one to four multiple-choice questions at once; the user may always answer in their own words. With `askuser.Config.Ask`, your callback answers synchronously. Without it, the run pauses with an interrupt: show the questions (`askuser.Questions` decodes them) and resume with `askuser.Respond`, or with a `Reject` decision to decline.
+
+```go
+// Imports omitted; model comes from surrounding code.
+ctx := context.Background()
+a, err := orchestrix.New(model, orchestrix.WithAskUser(askuser.Config{}))
+if err != nil {
+	log.Fatal(err)
+}
+in := orchestrix.Text("Set up a new service; ask me what you need to know.")
+in.ThreadID = "setup"
+
+var final *agent.Final
+var pending *agent.Interrupt
+for ev, err := range a.Run(ctx, in) {
+	if err != nil {
+		log.Fatal(err)
+	}
+	switch ev.Kind {
+	case agent.KindInterrupt:
+		pending = ev.Interrupt
+	case agent.KindFinal:
+		final = ev.Final
+	}
+}
+if final.Reason != agent.ReasonInterrupted {
+	return
+}
+var decisions []agent.Decision
+for _, req := range pending.Requests {
+	if req.Tool != askuser.ToolAskUser {
+		continue // approvals: answer as in "Human in the loop"
+	}
+	questions, err := askuser.Questions(req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var answers []askuser.Answer
+	for _, q := range questions {
+		fmt.Println(q.Question)
+		for i, o := range q.Options {
+			fmt.Printf("  %d. %s: %s\n", i+1, o.Label, o.Description)
+		}
+		// A real host reads the choice; this one takes the first option.
+		answers = append(answers, askuser.Answer{Question: q.Question, Selected: []string{q.Options[0].Label}})
+	}
+	decisions = append(decisions, askuser.Respond(req.ToolUseID, answers))
+}
+for ev, err := range a.Resume(ctx, "setup", final.State, decisions) {
+	_, _ = ev, err // the same event stream as Run
+}
+```
+
+`ask_user` is read-only, so it works in `plan` mode and in `dontAsk` mode, which governs permission prompts, not questions. A subagent cannot pause for a human: inside one, `ask_user` returns an error unless `Config.Ask` is set, so give the agent a callback if its subagents should be able to ask. Parallel subagents may call it at the same time, so the callback must be safe for concurrent use.
+
 ## CLI
 
 `orx` is a small coding-agent CLI built on the SDK. It works in a directory on disk, can run shell commands there (also in the background) and asks before running tools that need approval. Subagent output is shown indented under `[name]`.
@@ -416,10 +671,9 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 
 ## Roadmap
 
-Milestone 1 (core) shipped the three providers, the agent loop with middleware, events and budgets, permissions, memory and disk backends, file and planning tools, the preset and a minimal CLI. Milestone 2 (depth) added subagents (isolated and forked), summarization, prompt caching, hooks, checkpointed threads and resume, a human-approval middleware, the shell backend and background tasks. Next:
+Milestone 1 (core) shipped the three providers, the agent loop with middleware, events and budgets, permissions, memory and disk backends, file and planning tools, the preset and a minimal CLI. Milestone 2 (depth) added subagents (isolated and forked), summarization, prompt caching, hooks, checkpointed threads and resume, a human-approval middleware, the shell backend and background tasks. Milestone 3 (knowledge and reach) added memory files and a memory store, skills, MCP servers, plan mode, deferred tools, web fetch and search, and questions to the user. Next:
 
-- **Milestone 3, knowledge and reach:** memory, skills, MCP, plan mode, deferred tools, web tools, ask-user.
-- **Milestone 4, scale:** async runs, a coordinator, rubric evaluation, model profiles, key-value, composite and sandbox backends, context compression, examples and full docs.
+- **Milestone 4, scale:** async subagents, a coordinator, rubric evaluation, model profiles, key-value, composite and sandbox backends, model-directed context compression, and examples.
 
 ## Contributing
 

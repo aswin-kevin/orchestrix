@@ -4,19 +4,27 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/checkpoint"
+	"github.com/aswin-kevin/orchestrix/mcp"
+	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 	"github.com/aswin-kevin/orchestrix/middleware/cache"
+	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
 	"github.com/aswin-kevin/orchestrix/middleware/hitl"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
+	"github.com/aswin-kevin/orchestrix/middleware/memory"
+	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/planning"
+	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
 	"github.com/aswin-kevin/orchestrix/middleware/tasks"
+	"github.com/aswin-kevin/orchestrix/middleware/web"
 )
 
 // shellSpec is what WithShell asks for; the backend is built by New.
@@ -155,6 +163,15 @@ func (s *settings) baseStack() []agent.Middleware {
 	if len(s.interruptOn) > 0 {
 		stack = append(stack, hitl.New(hitl.Config{InterruptOn: maps.Clone(s.interruptOn)}))
 	}
+	if s.memory != nil {
+		stack = s.appendBuilt(stack, "WithMemory", func() (agent.Middleware, error) { return memory.New(*s.memory) })
+	}
+	if s.skills != nil {
+		stack = s.appendBuilt(stack, "WithSkills", func() (agent.Middleware, error) { return skills.New(*s.skills) })
+	}
+	if s.planMode != nil {
+		stack = append(stack, planmode.New(*s.planMode))
+	}
 	stack = append(stack,
 		// With a factory the backends are unknown when tools are collected, so
 		// tasks (which needs commands) is the promise that execute works.
@@ -164,21 +181,140 @@ func (s *settings) baseStack() []agent.Middleware {
 	if sub := s.subagentsMiddleware(); sub != nil {
 		stack = append(stack, sub)
 	}
+	if cfg, ok := s.deferredConfig(); ok {
+		stack = append(stack, deferred.New(cfg))
+	}
+	if s.mcp != nil {
+		stack = append(stack, s.mcp)
+	}
+	if s.web != nil {
+		stack = s.appendBuilt(stack, "WithWeb", func() (agent.Middleware, error) { return web.New(*s.web) })
+	}
+	if s.askUser != nil {
+		stack = append(stack, askuser.New(*s.askUser))
+	}
 	if s.tasks != nil {
 		stack = append(stack, s.tasks)
 	}
 	return stack
 }
 
+// appendBuilt appends the middleware build returns to stack, or records its
+// error, prefixed with the option that asked for it, and returns stack as is.
+func (s *settings) appendBuilt(stack []agent.Middleware, option string, build func() (agent.Middleware, error)) []agent.Middleware {
+	m, err := build()
+	if err != nil {
+		s.errs = append(s.errs, fmt.Errorf("%s: %w", option, err))
+		return stack
+	}
+	return append(stack, m)
+}
+
+// deferredConfig returns the deferred middleware's configuration and whether
+// the stack needs it: when WithDeferredTools asked for it, or when skill
+// tools or MCP servers would otherwise show schemas meant to stay hidden.
+func (s *settings) deferredConfig() (deferred.Config, bool) {
+	switch {
+	case s.deferred != nil:
+		return *s.deferred, true
+	case s.skills != nil && len(s.skills.Tools) > 0, s.mcp != nil && s.mcp.HasHiddenTools():
+		return deferred.Config{}, true
+	}
+	return deferred.Config{}, false
+}
+
+// checkSubagentSkills records the skills that subagents inheriting the
+// agent's middleware ask for but stack, the agent's final middleware, does
+// not define. subagents.New checks only the specs with their own Middleware;
+// without this, the rest would fail at their first task call.
+func (s *settings) checkSubagentSkills(stack []agent.Middleware) {
+	for _, spec := range s.subagentSpecs() {
+		if spec.Middleware != nil {
+			continue
+		}
+		if err := spec.CheckSkills(stack); err != nil {
+			s.errs = append(s.errs, err)
+		}
+	}
+}
+
+// subagentSpecs returns the subagents of WithSubagentConfig followed by those
+// of WithSubagents.
+func (s *settings) subagentSpecs() []subagents.Subagent {
+	return slices.Concat(s.subagents.Subagents, s.extraSubagents)
+}
+
 // subagentsMiddleware builds the subagents middleware, or returns nil after
 // recording why it could not.
 func (s *settings) subagentsMiddleware() agent.Middleware {
 	cfg := s.subagents
-	cfg.Subagents = append(append([]subagents.Subagent(nil), cfg.Subagents...), s.extraSubagents...)
+	cfg.Subagents = s.subagentSpecs()
 	m, err := subagents.New(cfg)
 	if err != nil {
 		s.errs = append(s.errs, err)
 		return nil
 	}
 	return m
+}
+
+// WithMemory loads standing instructions, such as memory.DefaultFiles, into
+// the system prompt, and with cfg.Store gives the model a long-term memory
+// store. A relative path makes New fail.
+func WithMemory(cfg memory.Config) Option {
+	return func(s *settings) { s.memory = &cfg }
+}
+
+// WithSkills offers the model the skills of cfg: a catalog in the system
+// prompt and the skill tool to load one. An unreadable source, an invalid
+// programmatic skill or an unknown pinned name makes New fail; invalid skills
+// found in a source are skipped and are not errors (build the middleware with
+// skills.New to read their Warnings). cfg.Tools also adds the deferred
+// middleware, so the gated tools stay hidden until a skill unlocks them.
+func WithSkills(cfg skills.Config) Option {
+	return func(s *settings) { s.skills = &cfg }
+}
+
+// WithMCP offers the tools, resources and instructions of the MCP servers m
+// is connected to. The host connects with mcp.Connect and calls m.Close when
+// done. A server configured with Defer or Gated also adds the deferred
+// middleware, so its tools are found with search_tools or unlocked first.
+func WithMCP(m *mcp.Middleware) Option {
+	return func(s *settings) {
+		if m == nil {
+			s.errs = append(s.errs, errors.New("WithMCP: the middleware must not be nil"))
+			return
+		}
+		s.mcp = m
+	}
+}
+
+// WithPlanMode adds enter_plan_mode and exit_plan_mode: the model can switch
+// the run to the read-only plan mode, and leaves it once a human approves its
+// plan.
+func WithPlanMode(cfg planmode.Config) Option {
+	return func(s *settings) { s.planMode = &cfg }
+}
+
+// WithDeferredTools adds search_tools and call_tool and withholds the schemas
+// of deferred tools (those matching cfg.Tools, and tools marked with
+// deferred.Defer) until the model searches for them. Without it, the preset
+// adds the middleware with a zero Config when WithSkills has Tools or WithMCP
+// has a deferred or gated server.
+func WithDeferredTools(cfg deferred.Config) Option {
+	return func(s *settings) { s.deferred = &cfg }
+}
+
+// WithWeb adds web_fetch and, with cfg.Search, web_search. Requests to
+// private and loopback addresses are refused unless cfg.AllowPrivateNetworks
+// is set. A bad proxy URL, an unreadable CA file or a search backend that
+// fails validation makes New fail.
+func WithWeb(cfg web.Config) Option {
+	return func(s *settings) { s.web = &cfg }
+}
+
+// WithAskUser adds ask_user, with which the model puts multiple-choice
+// questions to the human. Without cfg.Ask, a call pauses the run; answer it
+// with askuser.Respond when resuming.
+func WithAskUser(cfg askuser.Config) Option {
+	return func(s *settings) { s.askUser = &cfg }
 }

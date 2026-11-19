@@ -26,7 +26,9 @@
 // Further features are one option each: WithCheckpointer (threads that survive
 // restarts), WithSubagents, WithSummarize, WithHooks, WithInterruptOn (human
 // approval for chosen tools), WithShell and WithTasks (commands and background
-// jobs). The middleware stack order is fixed and documented on New.
+// jobs), WithMemory (standing instructions and a memory store), WithSkills,
+// WithMCP (tools of MCP servers), WithPlanMode, WithDeferredTools, WithWeb and
+// WithAskUser. The middleware stack order is fixed and documented on New.
 //
 // Everything New configures can be inspected and overridden: the options cover
 // the common cases and WithConfig exposes the full agent.Config. For custom

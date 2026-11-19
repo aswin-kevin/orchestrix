@@ -129,3 +129,30 @@ func TestUnknownSubagentSkillsFail(t *testing.T) {
 		t.Fatalf("task result = %q (error %v)", blockText(res), res.IsError)
 	}
 }
+
+func TestCheckSkillsUsesInheritedStack(t *testing.T) {
+	sk := skillsMiddleware(t)
+	inherited := []agent.Middleware{sk}
+	for _, c := range []struct {
+		spec    Subagent
+		wantErr string
+	}{
+		{Subagent{Name: "a", Skills: []string{"pdf"}, PinnedSkills: []string{"style"}}, ""},
+		{Subagent{Name: "a", Skills: []string{"ghost"}}, "ghost"},
+		{Subagent{Name: "a", PinnedSkills: []string{"ghost"}}, "ghost"},
+		// Its own stack wins over the inherited one.
+		{Subagent{Name: "a", Middleware: []agent.Middleware{}, Skills: []string{"pdf"}}, "skills middleware"},
+		{Subagent{Name: "a"}, ""},
+	} {
+		err := c.spec.CheckSkills(inherited)
+		switch {
+		case c.wantErr == "" && err != nil:
+			t.Errorf("CheckSkills(%+v) = %v, want nil", c.spec, err)
+		case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)):
+			t.Errorf("CheckSkills(%+v) = %v, want an error mentioning %q", c.spec, err, c.wantErr)
+		}
+	}
+	if err := (Subagent{Name: "a", Skills: []string{"pdf"}}).CheckSkills(nil); err == nil {
+		t.Error("CheckSkills without a skills middleware succeeded")
+	}
+}
