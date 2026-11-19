@@ -303,3 +303,49 @@ func TestClosedClientFailsCalls(t *testing.T) {
 		t.Fatalf("second Close: %v", err)
 	}
 }
+
+func TestReplyBeforeEndIsDelivered(t *testing.T) {
+	// The server answers and the transport ends at once: the answer must win
+	// over the connection error.
+	for i := range 50 {
+		f := newFakeTransport(func(msg map[string]any) []string {
+			if msg["method"] != "tools/list" {
+				return initializeReply(msg, ProtocolVersion)
+			}
+			id, _ := json.Marshal(msg["id"])
+			return []string{fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"t","inputSchema":{}}]}}`, id)}
+		})
+		f.endAfter = isMethod("tools/list")
+		c, err := NewClient(context.Background(), f, ClientOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tools, err := c.ListTools(context.Background())
+		_ = c.Close()
+		if err != nil || len(tools) != 1 {
+			t.Fatalf("iteration %d: ListTools = %v, %v; want the reply that arrived before the end", i, tools, err)
+		}
+	}
+}
+
+func TestCancelSentWhenSendTimesOut(t *testing.T) {
+	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
+	f.hold = isMethod("tools/call")
+	c, err := NewClient(context.Background(), f, ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := c.CallTool(ctx, "slow", nil); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("err = %v, want ErrTimeout", err)
+	}
+	call := f.waitSent(t, isMethod("tools/call"))
+	note := f.waitSent(t, isMethod("notifications/cancelled"))
+	params, _ := note["params"].(map[string]any)
+	if params["requestId"] != call["id"] {
+		t.Errorf("cancelled requestId = %v, want the call's id %v", params["requestId"], call["id"])
+	}
+}

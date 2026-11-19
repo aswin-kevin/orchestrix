@@ -8,15 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/internal/hostenv"
 	"github.com/aswin-kevin/orchestrix/internal/procgroup"
 )
 
@@ -42,7 +42,9 @@ type StdioConfig struct {
 	// MaxMessageBytes caps one message (line) from the server; a longer one
 	// ends the transport. 0 → DefaultMaxMessageBytes.
 	MaxMessageBytes int
-	// CloseGrace is how long each step of Close waits; 0 → DefaultCloseGrace.
+	// CloseGrace is how long each step of Close waits, how long leftovers of
+	// an exited server get after SIGTERM, and how long a crash report waits
+	// for the exit status; 0 → DefaultCloseGrace.
 	CloseGrace time.Duration
 }
 
@@ -60,7 +62,12 @@ type stdioTransport struct {
 	writes     chan writeRequest
 	exited     chan struct{} // closed once the server process has been waited for
 	waitErr    error         // written before exited is closed
+	reaped     chan struct{} // closed once the server's leftovers have been reaped
 	stderrDone chan struct{}
+	// groupGone is set once the process group has been seen empty after the
+	// server was waited for. From then on its id may belong to unrelated
+	// processes, so nothing signals it any more.
+	groupGone atomic.Bool
 
 	errMu sync.Mutex
 	err   error
@@ -79,8 +86,14 @@ type writeRequest struct {
 }
 
 // StartStdio starts the server process. On unix it leads its own process
-// group, so Close also stops everything it spawned; elsewhere only the
+// group, so Close also stops everything it spawned, and whatever the server
+// leaves running when it exits on its own is killed then; elsewhere only the
 // process itself is killed.
+//
+// When the server's stdout ends, Messages closes only once the server has
+// exited and its stderr is drained, or after CloseGrace, so Err carries the
+// exit status and stderr tail; pending requests therefore fail up to
+// CloseGrace after a crash.
 func StartStdio(cfg StdioConfig) (Transport, error) {
 	if cfg.Command == "" {
 		return nil, errors.New("mcp: stdio: missing command")
@@ -113,6 +126,7 @@ func StartStdio(cfg StdioConfig) (Transport, error) {
 		msgs:       make(chan json.RawMessage),
 		writes:     make(chan writeRequest),
 		exited:     make(chan struct{}),
+		reaped:     make(chan struct{}),
 		stderrDone: make(chan struct{}),
 		closing:    make(chan struct{}),
 	}
@@ -128,20 +142,8 @@ func StartStdio(cfg StdioConfig) (Transport, error) {
 // environment, then cfg.Env in key order. exec.Cmd keeps the last value of a
 // repeated key, so cfg.Env overrides.
 func environ(cfg StdioConfig) []string {
-	var env []string
-	if cfg.InheritEnv {
-		env = os.Environ()
-	} else {
-		for _, name := range shell.InheritedEnv {
-			if value, ok := os.LookupEnv(name); ok {
-				env = append(env, name+"="+value)
-			}
-		}
-	}
-	for _, key := range slices.Sorted(maps.Keys(cfg.Env)) {
-		env = append(env, key+"="+cfg.Env[key])
-	}
-	return env
+	env := hostenv.Inherited(shell.InheritedEnv, cfg.InheritEnv)
+	return append(env, hostenv.Pairs(cfg.Env)...)
 }
 
 // Send writes msg as one line to the server's stdin.
@@ -179,7 +181,8 @@ func (t *stdioTransport) Err() error {
 
 // Close stops the server: it closes stdin, then after CloseGrace sends
 // SIGTERM to the process group, then after another CloseGrace SIGKILL, and
-// waits for the process and the transport's goroutines. It is idempotent.
+// waits for the process, its leftovers (up to two more CloseGrace periods)
+// and the transport's goroutines. It is idempotent.
 func (t *stdioTransport) Close() error {
 	t.closeOnce.Do(func() {
 		close(t.closing)
@@ -193,51 +196,58 @@ func (t *stdioTransport) Close() error {
 	return t.closeErr
 }
 
-// stop escalates until the server and its group are gone. Each signal is sent
-// only while the group still has members: once it is empty its id may belong
-// to someone else.
+// stop escalates until the server has exited and its leftovers are reaped.
+// Nothing is signalled once groupGone is set: by then the server has been
+// waited for and its group seen empty, so the id may belong to someone else.
 func (t *stdioTransport) stop() error {
 	_ = t.stdin.Close()
-	if t.settled() {
+	if t.awaitReaped() || t.groupGone.Load() {
 		return nil
 	}
 	if err := procgroup.Terminate(t.cmd.Process); err != nil {
 		return fmt.Errorf("mcp: stdio: terminate: %w", err)
 	}
-	if t.settled() {
+	if t.awaitReaped() || t.groupGone.Load() {
 		return nil
 	}
 	err := procgroup.Kill(t.cmd.Process)
 	// The server may have left its group (setpgid); kill it directly too so
-	// Close can wait for it. Its pid is ours until it has been waited for.
+	// Close can wait for it. Its pid stays ours until it has been waited for,
+	// and Kill does nothing once it has.
 	if killErr := t.cmd.Process.Kill(); killErr != nil && !errors.Is(killErr, os.ErrProcessDone) && err == nil {
 		err = killErr
 	}
-	t.settled()
+	t.awaitReaped()
 	if err != nil {
 		return fmt.Errorf("mcp: stdio: kill: %w", err)
 	}
 	return nil
 }
 
-// settled waits up to CloseGrace for the server to exit and its process group
-// to empty, reporting whether both happened.
-func (t *stdioTransport) settled() bool {
+// awaitReaped waits up to CloseGrace for the server to exit and its
+// leftovers to be reaped, reporting whether that happened.
+func (t *stdioTransport) awaitReaped() bool {
 	timer := time.NewTimer(t.grace)
 	defer timer.Stop()
-	start := time.Now()
 	select {
-	case <-t.exited:
+	case <-t.reaped:
+		return true
 	case <-timer.C:
 		return false
 	}
-	return procgroup.WaitGone(t.cmd.Process, t.grace-time.Since(start))
 }
 
+// waitProcess waits for the server, then kills whatever it left running in
+// its group, whether the server exited on its own or was stopped, and latches
+// groupGone once the group is seen empty.
 func (t *stdioTransport) waitProcess() {
 	defer t.wg.Done()
 	t.waitErr = t.cmd.Wait()
 	close(t.exited)
+	if procgroup.Reap(t.cmd.Process, t.grace) {
+		t.groupGone.Store(true)
+	}
+	close(t.reaped)
 }
 
 func (t *stdioTransport) drainStderr() {

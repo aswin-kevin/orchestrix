@@ -21,16 +21,16 @@ func Setup(cmd *exec.Cmd) {
 // Terminate asks every process in proc's group to exit (SIGTERM). A group
 // that is already gone is not an error.
 func Terminate(proc *os.Process) error {
-	return signal(proc, syscall.SIGTERM)
+	return signalGroup(proc, syscall.SIGTERM)
 }
 
 // Kill kills every process in proc's group (SIGKILL). A group that is
 // already gone is not an error.
 func Kill(proc *os.Process) error {
-	return signal(proc, syscall.SIGKILL)
+	return signalGroup(proc, syscall.SIGKILL)
 }
 
-func signal(proc *os.Process, sig syscall.Signal) error {
+func signalGroup(proc *os.Process, sig syscall.Signal) error {
 	if err := syscall.Kill(-proc.Pid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return err
 	}

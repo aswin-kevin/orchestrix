@@ -30,14 +30,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"os/exec"
-	"slices"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/disk"
+	"github.com/aswin-kevin/orchestrix/internal/hostenv"
 )
 
 // Defaults for Options and for the kill sequence.
@@ -174,20 +173,9 @@ func (b *Backend) workDir(dir string) (string, error) {
 // environ builds a command's environment, lowest precedence first. exec.Cmd
 // keeps only the last value of a repeated key, so later entries override.
 func (b *Backend) environ(extra []string) []string {
-	var env []string
-	if b.opts.InheritEnv {
-		env = os.Environ()
-	} else {
-		for _, name := range InheritedEnv {
-			if value, ok := os.LookupEnv(name); ok {
-				env = append(env, name+"="+value)
-			}
-		}
-	}
+	env := hostenv.Inherited(InheritedEnv, b.opts.InheritEnv)
 	env = append(env, NonInteractiveEnv...)
-	for _, key := range slices.Sorted(maps.Keys(b.opts.Env)) {
-		env = append(env, key+"="+b.opts.Env[key])
-	}
+	env = append(env, hostenv.Pairs(b.opts.Env)...)
 	return append(env, extra...)
 }
 

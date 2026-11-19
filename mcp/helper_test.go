@@ -65,6 +65,13 @@ func resultText(t *testing.T, res *CallToolResult) string {
 // passed to reply, whose returned messages are delivered back.
 type fakeTransport struct {
 	reply func(msg map[string]any) []string
+	// hold, when set and true for a message, makes Send record it and then
+	// block until its ctx ends, like a transport stuck after queueing.
+	hold func(msg map[string]any) bool
+	// endAfter, when set and true for a message, ends the transport right
+	// after its replies are delivered, then gives the client's reader time to
+	// see both before Send returns.
+	endAfter func(msg map[string]any) bool
 
 	mu     sync.Mutex
 	sent   []map[string]any
@@ -77,21 +84,32 @@ func newFakeTransport(reply func(msg map[string]any) []string) *fakeTransport {
 	return &fakeTransport{reply: reply, msgs: make(chan json.RawMessage, 16), closed: make(chan struct{})}
 }
 
-func (f *fakeTransport) Send(_ context.Context, raw json.RawMessage) error {
+func (f *fakeTransport) Send(ctx context.Context, raw json.RawMessage) error {
 	var msg map[string]any
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		return err
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	select {
 	case <-f.closed:
+		f.mu.Unlock()
 		return ErrClosed
 	default:
 	}
 	f.sent = append(f.sent, msg)
+	if f.hold != nil && f.hold(msg) {
+		f.mu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	for _, out := range f.reply(msg) {
 		f.msgs <- json.RawMessage(out)
+	}
+	end := f.endAfter != nil && f.endAfter(msg)
+	f.mu.Unlock()
+	if end {
+		_ = f.Close()
+		time.Sleep(10 * time.Millisecond)
 	}
 	return nil
 }
@@ -147,4 +165,9 @@ func initializeReply(msg map[string]any, v string) []string {
 	}
 	id, _ := json.Marshal(msg["id"])
 	return []string{fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":%q,"capabilities":{},"serverInfo":{"name":"fake","version":"0"}}}`, id, v)}
+}
+
+// isMethod matches messages calling method.
+func isMethod(method string) func(map[string]any) bool {
+	return func(msg map[string]any) bool { return msg["method"] == method }
 }

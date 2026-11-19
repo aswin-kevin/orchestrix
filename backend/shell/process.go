@@ -157,25 +157,13 @@ func (p *process) wait(timer *time.Timer) {
 	close(p.done)
 }
 
-// reapGroup kills whatever the shell left running in its process group:
-// SIGTERM, then SIGKILL for members that survive DefaultKillGrace. It gives up
-// after a further grace period, since a killed member can linger as a zombie
-// under an init that does not reap. Once it sees the group gone it sets
-// groupGone, so a late stop cannot signal a reused group id.
+// reapGroup kills whatever the shell left running in its process group (see
+// procgroup.Reap). Once the group is gone it sets groupGone, so a late stop
+// cannot signal a reused group id.
 func (p *process) reapGroup() {
-	proc := p.cmd.Process
-	if !procgroup.Alive(proc) {
+	if procgroup.Reap(p.cmd.Process, DefaultKillGrace) {
 		p.groupGone.Store(true)
-		return
 	}
-	_ = procgroup.Terminate(proc)
-	if !procgroup.WaitGone(proc, DefaultKillGrace) {
-		_ = procgroup.Kill(proc)
-		if !procgroup.WaitGone(proc, DefaultKillGrace) {
-			return
-		}
-	}
-	p.groupGone.Store(true)
 }
 
 // drainOutput waits for the copier to read the pipe to EOF. A process that

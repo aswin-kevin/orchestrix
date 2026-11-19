@@ -235,26 +235,42 @@ func (c *Client) request(ctx context.Context, method string, params, result any)
 
 	rawID := json.RawMessage(strconv.FormatInt(id, 10))
 	if err := c.send(ctx, message{ID: rawID, Method: method, Params: rawParams}); err != nil {
+		if ctx.Err() != nil {
+			// The transport may have queued the request before giving up.
+			c.cancelRequest(rawID, ctx.Err())
+		}
 		return c.ctxError(ctx, err)
 	}
 	select {
 	case resp := <-reply:
-		if resp.Error != nil {
-			return resp.Error
-		}
-		if result == nil {
-			return nil
-		}
-		if err := json.Unmarshal(resp.Result, result); err != nil {
-			return fmt.Errorf("decode result: %w", err)
-		}
-		return nil
+		return decodeResponse(resp, result)
 	case <-c.done:
-		return c.err
+		// The reader delivers a response before it closes done; prefer it.
+		select {
+		case resp := <-reply:
+			return decodeResponse(resp, result)
+		default:
+			return c.err
+		}
 	case <-ctx.Done():
 		c.cancelRequest(rawID, ctx.Err())
 		return c.ctxError(ctx, ctx.Err())
 	}
+}
+
+// decodeResponse returns a response's error or decodes its result into
+// result (nil to discard it).
+func decodeResponse(resp *message, result any) error {
+	if resp.Error != nil {
+		return resp.Error
+	}
+	if result == nil {
+		return nil
+	}
+	if err := json.Unmarshal(resp.Result, result); err != nil {
+		return fmt.Errorf("decode result: %w", err)
+	}
+	return nil
 }
 
 // ctxError maps an error seen while ctx was ending to ErrTimeout (deadline)

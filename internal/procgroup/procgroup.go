@@ -28,3 +28,23 @@ func WaitGone(proc *os.Process, within time.Duration) bool {
 	}
 	return true
 }
+
+// Reap kills whatever is left in proc's group once the leader has exited:
+// SIGTERM, then SIGKILL for members that survive grace. It reports whether
+// the group is gone; it gives up after a further grace, since a killed member
+// can linger as a zombie under an init that does not reap. The leader must be
+// waited for concurrently or beforehand, or it counts as a member.
+//
+// Once Reap has returned true the group id may be handed out again: the
+// caller must latch that and never signal the group afterwards.
+func Reap(proc *os.Process, grace time.Duration) bool {
+	if !Alive(proc) {
+		return true
+	}
+	_ = Terminate(proc)
+	if WaitGone(proc, grace) {
+		return true
+	}
+	_ = Kill(proc)
+	return WaitGone(proc, grace)
+}

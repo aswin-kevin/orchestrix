@@ -7,11 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -36,12 +34,13 @@ func TestMain(m *testing.M) {
 //   - serve: plain server
 //   - noisy: prints a non-JSON line to stdout first
 //   - crash: tool "crash" writes "boom" to stderr and exits
-//   - stubborn: ignores SIGTERM and keeps running after stdin EOF
-//   - spawn: tool "spawn" starts a sleeping grandchild and returns its pid
+//   - spawn: tool "spawn" starts a sleeping grandchild and returns its pid;
+//     tool "quit" exits
 //   - sleep: only sleeps (the grandchild of spawn)
 //
-// Platform-specific modes are added to platformHelpers; they run before
-// serving and, like stubborn, keep running after stdin EOF.
+// Modes that need platform-specific calls (signals, process groups) live in
+// platformHelpers; they run before serving and keep the helper running after
+// stdin EOF.
 func runHelper(mode string) {
 	if mode == "sleep" {
 		time.Sleep(time.Hour)
@@ -58,6 +57,7 @@ func runHelper(mode string) {
 		}
 		return TextResult(os.Getenv(in.Name)), nil
 	})
+	platform := platformHelpers[mode]
 	switch mode {
 	case "noisy":
 		fmt.Println("server starting up, please wait")
@@ -67,12 +67,6 @@ func runHelper(mode string) {
 			os.Exit(3)
 			return nil, nil
 		})
-	case "stubborn":
-		signal.Ignore(syscall.SIGTERM)
-	default:
-		if setup := platformHelpers[mode]; setup != nil {
-			setup()
-		}
 	case "spawn":
 		s.AddTool(ToolInfo{Name: "spawn"}, func(context.Context, json.RawMessage) (*CallToolResult, error) {
 			cmd := exec.Command(os.Args[0], "-test.run=^$")
@@ -82,9 +76,17 @@ func runHelper(mode string) {
 			}
 			return TextResult(strconv.Itoa(cmd.Process.Pid)), nil
 		})
+		s.AddTool(ToolInfo{Name: "quit"}, func(context.Context, json.RawMessage) (*CallToolResult, error) {
+			os.Exit(0)
+			return nil, nil
+		})
+	default:
+		if platform != nil {
+			platform()
+		}
 	}
 	_ = s.ServeStdio(context.Background(), os.Stdin, os.Stdout)
-	if mode == "stubborn" || platformHelpers[mode] != nil {
+	if platform != nil {
 		time.Sleep(time.Hour)
 	}
 }
