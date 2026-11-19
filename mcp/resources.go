@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -21,7 +22,7 @@ type readResourceInput struct {
 }
 
 const (
-	listResourcesDescription = "List the resources the connected MCP servers offer, one per line: server | uri | name | mimeType | description."
+	listResourcesDescription = "List the resources the connected MCP servers offer, one per line: server | uri | name | mimeType | description. A server whose listing failed gets one line saying so."
 	readResourceDescription  = "Read a resource of an MCP server by its URI."
 )
 
@@ -39,8 +40,12 @@ func (m *Middleware) listResourcesTool() tool.Tool {
 					continue
 				}
 				resources, err := s.listResources(ctx)
-				if err != nil {
+				switch {
+				case err != nil && in.Server != "":
 					return s.failure(err), nil
+				case err != nil:
+					lines = append(lines, fmt.Sprintf("%s: failed to list resources: %s", s.cfg.Name, s.failure(err).Flatten()))
+					continue
 				}
 				for _, r := range resources {
 					lines = append(lines, resourceLine(s.cfg.Name, r))
@@ -70,7 +75,7 @@ func (m *Middleware) readResourceTool() tool.Tool {
 			}
 			var out tool.Result
 			for _, rc := range contents {
-				out.Content = append(out.Content, resourceBlock(rc))
+				out.Content = append(out.Content, resourceBlock(rc, callProfile(c)))
 			}
 			if len(out.Content) == 0 {
 				return tool.Text(fmt.Sprintf("Resource %s is empty.", in.URI)), nil
@@ -131,4 +136,12 @@ func callState(c *tool.Call) *state.State {
 		return nil
 	}
 	return c.State
+}
+
+// callProfile returns c's model profile, the zero profile without a Call.
+func callProfile(c *tool.Call) llm.Profile {
+	if c == nil {
+		return llm.Profile{}
+	}
+	return c.Profile
 }

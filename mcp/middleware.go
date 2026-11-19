@@ -84,11 +84,18 @@ type ServerConfig struct {
 	// Gated marks the server's tools deferred.Gater: hidden and refused
 	// until unlocked (deferred.Unlock with "mcp__<name>__*", as a skill
 	// listing the server in mcp-servers does). The server's resources and
-	// instructions are withheld while it is locked. false → not gated.
+	// instructions are withheld while it is locked; they unlock only when
+	// the unlock set matches the bare prefix "mcp__<name>__", as that
+	// pattern does; unlocking single tools of the server does not unlock
+	// them. false → not gated.
 	Gated bool
 	// Optional records a connect failure in Status instead of failing
 	// Connect; false → the failure fails Connect.
 	Optional bool
+	// IgnoreInstructions drops the server's instructions instead of
+	// placing them in the system prompt; false → they are placed (see
+	// Middleware).
+	IgnoreInstructions bool
 	// TrustReadOnlyHints makes a tool annotated readOnlyHint=true read-only
 	// and concurrency-safe, so it runs without approval in the default
 	// permission mode. false → every tool asks, whatever its hints say:
@@ -125,11 +132,14 @@ type ServerStatus struct {
 // the resource tools are static (ToolProvider); WrapModel appends the
 // servers' instructions to the system prompt.
 //
-// What a server sends is untrusted: its instructions go into the system
-// prompt as written (capped at DefaultMaxInstructions), so connect only
-// servers you trust to steer the agent. Its tools ask for approval by
-// default (see ServerConfig.TrustReadOnlyHints). It is safe for concurrent
-// use by many runs.
+// What a server sends is untrusted. Its instructions go into the system
+// prompt framed as <mcp_server_instructions server="<name>">, capped at
+// DefaultMaxInstructions, with any tag of that name inside them neutralized
+// so they cannot end the frame or pose as another server; they can still
+// steer the agent, so connect only servers you trust or set
+// ServerConfig.IgnoreInstructions. Its tools ask for approval by default
+// (see ServerConfig.TrustReadOnlyHints), and its images reach the model only
+// when the model takes images. It is safe for concurrent use by many runs.
 type Middleware struct {
 	servers   []*serverConn
 	resources []tool.Tool
@@ -139,8 +149,9 @@ type Middleware struct {
 }
 
 // Connect validates servers and connects to all of them in parallel. When a
-// server that is not Optional fails, it closes the others and returns the
-// joined errors.
+// server that is not Optional fails, it stops the connections still in
+// progress, closes every server and returns the error (joined with those of
+// other servers that failed on their own).
 func Connect(ctx context.Context, servers []ServerConfig) (*Middleware, error) {
 	if err := validateServers(servers); err != nil {
 		for _, cfg := range servers {
@@ -154,17 +165,24 @@ func Connect(ctx context.Context, servers []ServerConfig) (*Middleware, error) {
 	for _, cfg := range servers {
 		m.servers = append(m.servers, newServerConn(cfg))
 	}
+	// abort stops the other connections once a required server failed.
+	connectCtx, abort := context.WithCancel(ctx)
+	defer abort()
 	errs := make([]error, len(m.servers))
 	var wg sync.WaitGroup
 	for i, s := range m.servers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := s.connect(ctx); err != nil {
-				s.err = fmt.Errorf("mcp: server %s: %w", s.cfg.Name, err)
-				if !s.cfg.Optional {
-					errs[i] = s.err
-				}
+			err := s.connect(connectCtx)
+			if err == nil {
+				return
+			}
+			s.err = fmt.Errorf("mcp: server %s: %w", s.cfg.Name, err)
+			aborted := connectCtx.Err() != nil && ctx.Err() == nil && errors.Is(err, context.Canceled)
+			if !s.cfg.Optional && !aborted {
+				errs[i] = s.err
+				abort()
 			}
 		}()
 	}
@@ -183,11 +201,14 @@ func Connect(ctx context.Context, servers []ServerConfig) (*Middleware, error) {
 func (m *Middleware) Name() string { return "mcp" }
 
 // DynamicTools implements agent.DynamicToolProvider: the current tools of
-// the connected servers, in server order.
+// the servers whose connection is up, in server order. A server whose
+// connection ended offers none.
 func (m *Middleware) DynamicTools() []tool.Tool {
 	var tools []tool.Tool
 	for _, s := range m.servers {
-		tools = append(tools, s.currentTools()...)
+		if s.connected() {
+			tools = append(tools, s.currentTools()...)
+		}
 	}
 	return tools
 }
@@ -224,22 +245,31 @@ func (m *Middleware) Close() error {
 	return m.closeErr
 }
 
-// WrapModel implements agent.ModelWrapper: it appends one segment with a
-// line "MCP server <name>: <instructions>" per connected server that has
-// instructions and is not locked in the run, after the host's segments.
+// instructionsTag is the element that frames a server's instructions in
+// the system prompt.
+const instructionsTag = "mcp_server_instructions"
+
+// neutralizeInstructions escapes every tag of instructionsTag inside a
+// server's instructions.
+var neutralizeInstructions = promptsafe.NewTagNeutralizer(instructionsTag)
+
+// WrapModel implements agent.ModelWrapper: it appends one segment holding
+// the framed instructions of every connected server that has instructions,
+// does not ignore them and is not locked in the run, after the host's
+// segments. No segment when there are none.
 func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
-	var lines []string
+	var frames []string
 	for _, s := range m.servers {
-		if !s.connected() || s.locked(req.State) {
+		if s.cfg.IgnoreInstructions || !s.connected() || s.locked(req.State) {
 			continue
 		}
 		if text := s.client.Instructions(); text != "" {
 			text, _ = promptsafe.CapBytes(text, DefaultMaxInstructions)
-			lines = append(lines, fmt.Sprintf("MCP server %s: %s", s.cfg.Name, text))
+			frames = append(frames, fmt.Sprintf("<%s server=%q>\n%s\n</%s>", instructionsTag, s.cfg.Name, neutralizeInstructions(text), instructionsTag))
 		}
 	}
-	if len(lines) > 0 {
-		req.Request.System = append(slices.Clone(req.Request.System), strings.Join(lines, "\n"))
+	if len(frames) > 0 {
+		req.Request.System = append(slices.Clone(req.Request.System), strings.Join(frames, "\n"))
 	}
 	return next(ctx, req)
 }

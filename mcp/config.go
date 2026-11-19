@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
-	"strings"
 )
 
 // configFile is the JSON shape LoadConfig and ParseConfig read.
@@ -32,6 +32,7 @@ type configServer struct {
 	Gated              bool              `json:"gated"`
 	Optional           bool              `json:"optional"`
 	TrustReadOnlyHints bool              `json:"trustReadOnlyHints"`
+	IgnoreInstructions bool              `json:"ignoreInstructions"`
 	Disabled           bool              `json:"disabled"`
 }
 
@@ -56,10 +57,12 @@ func LoadConfig(path string) ([]ServerConfig, error) {
 //	{"mcpServers": {"<name>": {"command": "...", "args": [...], "env": {...},
 //	  "cwd": "...", "inheritEnv": false, "url": "...", "headers": {...},
 //	  "bearerToken": "...", "tools": [...], "defer": false, "gated": false,
-//	  "optional": false, "trustReadOnlyHints": false, "disabled": false}}}
+//	  "optional": false, "trustReadOnlyHints": false,
+//	  "ignoreInstructions": false, "disabled": false}}}
 //
 // Each server sets exactly one of command and url; unknown fields are
-// errors; disabled servers are skipped. The result is sorted by name.
+// errors; disabled servers are skipped. Servers are checked and returned in
+// name order, so the first error reported is always the same.
 //
 // Every ${VAR} in a string value is replaced by the host process's
 // environment variable VAR when the configuration is parsed, and a variable
@@ -78,7 +81,8 @@ func ParseConfig(data []byte) ([]ServerConfig, error) {
 		return nil, errors.New("mcp: config: unexpected data after the configuration object")
 	}
 	var servers []ServerConfig
-	for name, entry := range file.MCPServers {
+	for _, name := range slices.Sorted(maps.Keys(file.MCPServers)) {
+		entry := file.MCPServers[name]
 		if entry.Disabled {
 			continue
 		}
@@ -88,7 +92,6 @@ func ParseConfig(data []byte) ([]ServerConfig, error) {
 		}
 		servers = append(servers, cfg)
 	}
-	slices.SortFunc(servers, func(a, b ServerConfig) int { return strings.Compare(a.Name, b.Name) })
 	if err := validateServers(servers); err != nil {
 		return nil, err
 	}
@@ -117,6 +120,7 @@ func (e configServer) serverConfig(name string) (ServerConfig, error) {
 		Gated:              e.Gated,
 		Optional:           e.Optional,
 		TrustReadOnlyHints: e.TrustReadOnlyHints,
+		IgnoreInstructions: e.IgnoreInstructions,
 	}
 	if x.missing != "" {
 		return ServerConfig{}, fmt.Errorf("environment variable %s is not set", x.missing)

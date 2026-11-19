@@ -8,15 +8,20 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
+	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
+
+// imagesOK is the profile of a model that takes images.
+var imagesOK = llm.Profile{Images: true}
 
 func TestToolName(t *testing.T) {
 	if got := ToolName("srv", "get.file/v2"); got != "mcp__srv__get_file_v2" {
@@ -100,10 +105,57 @@ func TestContentMapping(t *testing.T) {
 			tool.Result{Content: []llm.Block{llm.TextBlock("a"), llm.TextBlock("b")}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := toolResult(&tc.in); !reflect.DeepEqual(got, tc.want) {
+			if got := toolResult(&tc.in, imagesOK); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("result = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestImageGating(t *testing.T) {
+	bigGroups := filesystem.MaxMediaBytes/3 + 1 // base64 groups of 3 bytes, just over the cap
+	big := strings.Repeat("A", bigGroups*4)
+	image := llm.Block{Type: llm.BlockImage, Source: &llm.Source{Type: "base64", MediaType: "image/webp", Data: "aW1n"}}
+	for _, tc := range []struct {
+		name    string
+		profile llm.Profile
+		content Content
+		want    llm.Block
+	}{
+		{"allowed", imagesOK, Content{Type: "image", MimeType: "image/webp", Data: "aW1n"}, image},
+		{"model without images", llm.Profile{}, Content{Type: "image", MimeType: "image/png", Data: "aW1n"},
+			llm.TextBlock("[image omitted: image/png, 3 bytes]")},
+		{"media type not allowed", imagesOK, Content{Type: "image", MimeType: "image/svg+xml", Data: "PHN2Zz4="},
+			llm.TextBlock("[image omitted: image/svg+xml, 5 bytes]")},
+		{"too large", imagesOK, Content{Type: "image", MimeType: "image/png", Data: big},
+			llm.TextBlock(fmt.Sprintf("[image omitted: image/png, %d bytes]", bigGroups*3))},
+		{"resource blob without images", llm.Profile{}, Content{Type: "resource", Resource: &ResourceContent{URI: "file:///i", MimeType: "image/png", Blob: "aW1n"}},
+			llm.TextBlock("[image omitted: image/png, 3 bytes]")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := toolResult(&CallToolResult{Content: []Content{tc.content}}, tc.profile)
+			if len(got.Content) != 1 || !reflect.DeepEqual(got.Content[0], tc.want) {
+				t.Fatalf("content = %+v, want %+v", got.Content, tc.want)
+			}
+		})
+	}
+}
+
+func TestImagesFollowCallProfile(t *testing.T) {
+	s := NewServer(Implementation{Name: "s", Version: "1"}, "")
+	s.AddTool(ToolInfo{Name: "pic"}, func(context.Context, json.RawMessage) (*CallToolResult, error) {
+		return &CallToolResult{Content: []Content{{Type: "image", MimeType: "image/png", Data: "aW1n"}}}, nil
+	})
+	m := connectMiddleware(t, inProcessServer("srv", s))
+	pic := findTool(t, m.DynamicTools(), "mcp__srv__pic")
+	for _, tc := range []struct {
+		profile llm.Profile
+		want    llm.BlockType
+	}{{imagesOK, llm.BlockImage}, {llm.Profile{}, llm.BlockText}} {
+		res, err := pic.Call(context.Background(), json.RawMessage(`{}`), &tool.Call{Profile: tc.profile})
+		if err != nil || len(res.Content) != 1 || res.Content[0].Type != tc.want {
+			t.Fatalf("profile %+v: result = %+v, %v; want one %s block", tc.profile, res, err, tc.want)
+		}
 	}
 }
 
@@ -285,6 +337,9 @@ func TestCallAfterServerDied(t *testing.T) {
 	})
 	tools := m.DynamicTools()
 	s := state.New()
+	if len(tools) == 0 {
+		t.Fatal("no tools before the crash")
+	}
 	if res := callTool(t, findTool(t, tools, "mcp__crashy__crash"), s, `{}`); !res.IsError {
 		t.Fatalf("crash call = %+v, want an error result", res)
 	}
@@ -292,7 +347,107 @@ func TestCallAfterServerDied(t *testing.T) {
 	if !res.IsError || !strings.HasPrefix(res.Flatten(), "MCP server crashy failed: ") {
 		t.Fatalf("call after crash = %+v, want the server failure", res)
 	}
-	if st := m.Status()[0]; st.Connected || st.Err == nil {
+	if st := m.Status()[0]; st.Connected || st.Err == nil || st.Tools != 0 {
 		t.Fatalf("status = %+v, want disconnected with an error", st)
 	}
+	if got := m.DynamicTools(); len(got) != 0 {
+		t.Fatalf("DynamicTools = %v, want none from a dead server", toolNames(got))
+	}
+}
+
+// listGate wraps a Transport: every tools/list request after the first
+// waits for release (or its ctx), so a test can hold a refresh in flight.
+type listGate struct {
+	Transport
+	release  chan struct{}
+	lists    atomic.Int32 // tools/list requests seen
+	returned atomic.Int32 // held requests that have returned
+}
+
+func newListGate(t Transport) *listGate { return &listGate{Transport: t, release: make(chan struct{})} }
+
+func (g *listGate) Send(ctx context.Context, msg json.RawMessage) error {
+	var m struct{ Method string }
+	if json.Unmarshal(msg, &m) == nil && m.Method == "tools/list" && g.lists.Add(1) > 1 {
+		defer g.returned.Add(1)
+		select {
+		case <-g.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return g.Transport.Send(ctx, msg)
+}
+
+func TestRefreshCoalescesNotices(t *testing.T) {
+	srv := newTestServer(nil)
+	gate := newListGate(InProcess(srv))
+	m := connectMiddleware(t, ServerConfig{Name: "srv", Transport: gate})
+	conn := m.servers[0]
+
+	srv.AddTool(ToolInfo{Name: "x"}, nil)
+	waitFor(t, "first refresh in flight", func() bool { return gate.lists.Load() == 2 })
+	srv.AddTool(ToolInfo{Name: "y"}, nil)
+	srv.AddTool(ToolInfo{Name: "z"}, nil)
+	waitFor(t, "notices marked dirty", func() bool {
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+		return conn.dirty
+	})
+	close(gate.release)
+	waitFor(t, "y and z listed", func() bool {
+		names := toolNames(m.DynamicTools())
+		return slices.Contains(names, "mcp__srv__y") && slices.Contains(names, "mcp__srv__z")
+	})
+	waitFor(t, "refresh loop done", func() bool {
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+		return !conn.refreshing
+	})
+	if n := gate.lists.Load(); n != 3 {
+		t.Fatalf("tools/list requests = %d, want 3 (connect, refresh, one more pass for both notices)", n)
+	}
+}
+
+func TestCloseWaitsForRefresh(t *testing.T) {
+	srv := newTestServer(nil)
+	gate := newListGate(InProcess(srv))
+	m, err := Connect(context.Background(), []ServerConfig{{Name: "srv", Transport: gate}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.AddTool(ToolInfo{Name: "x"}, nil)
+	waitFor(t, "refresh in flight", func() bool { return gate.lists.Load() == 2 })
+	_ = m.Close()
+	if gate.returned.Load() != 1 {
+		t.Fatal("Close returned before the in-flight refresh ended")
+	}
+}
+
+func TestListChangedIgnoredWithoutToolsCapability(t *testing.T) {
+	ft := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
+	m := connectMiddleware(t, ServerConfig{Name: "fake", Transport: ft})
+	ft.push(`{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}`)
+	ft.push(`{"jsonrpc":"2.0","method":"ping","id":"sync"}`) // answered after the notice was handled
+	ft.waitSent(t, func(msg map[string]any) bool { return msg["id"] == "sync" })
+	conn := m.servers[0]
+	conn.mu.Lock()
+	refreshing := conn.refreshing
+	conn.mu.Unlock()
+	if refreshing || sentCount(ft, "tools/list") != 0 {
+		t.Fatal("list_changed from a server without the tools capability started a refresh")
+	}
+}
+
+// sentCount counts the messages f was sent that call method.
+func sentCount(f *fakeTransport, method string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, msg := range f.sent {
+		if msg["method"] == method {
+			n++
+		}
+	}
+	return n
 }

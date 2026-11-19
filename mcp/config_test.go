@@ -13,7 +13,7 @@ func TestParseConfig(t *testing.T) {
 	t.Setenv("ORX_TEST_DIR", "/work")
 	data := []byte(`{"mcpServers": {
 		"web": {"url": "https://h/mcp", "headers": {"X-Key": "k-${ORX_TEST_TOKEN}"}, "bearerToken": "${ORX_TEST_TOKEN}",
-			"tools": ["read_*"], "gated": true, "optional": true},
+			"tools": ["read_*"], "gated": true, "optional": true, "ignoreInstructions": true},
 		"files": {"command": "srv", "args": ["--root", "${ORX_TEST_DIR}"], "env": {"TOKEN": "${ORX_TEST_TOKEN}"},
 			"cwd": "${ORX_TEST_DIR}", "inheritEnv": true, "defer": true, "trustReadOnlyHints": true},
 		"off": {"command": "nope", "disabled": true}
@@ -26,7 +26,7 @@ func TestParseConfig(t *testing.T) {
 		{Name: "files", Command: "srv", Args: []string{"--root", "/work"}, Env: map[string]string{"TOKEN": "s3cret"},
 			Dir: "/work", InheritEnv: true, Defer: true, TrustReadOnlyHints: true},
 		{Name: "web", URL: "https://h/mcp", Headers: map[string]string{"X-Key": "k-s3cret"}, BearerToken: "s3cret",
-			Tools: []string{"read_*"}, Gated: true, Optional: true},
+			Tools: []string{"read_*"}, Gated: true, Optional: true, IgnoreInstructions: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ParseConfig =\n%+v\nwant\n%+v", got, want)
@@ -43,6 +43,7 @@ func TestParseConfigErrors(t *testing.T) {
 		{"neither command nor url", `{"mcpServers": {"a": {"args": ["x"]}}}`, "a"},
 		{"missing variable", `{"mcpServers": {"a": {"command": "${ORX_TEST_MISSING_VAR}"}}}`, "ORX_TEST_MISSING_VAR"},
 		{"invalid name", `{"mcpServers": {"a__b": {"command": "x"}}}`, "a__b"},
+		{"first bad server by name", `{"mcpServers": {"b": {"command": "${ORX_TEST_MISSING_B}"}, "a": {"command": "${ORX_TEST_MISSING_A}"}}}`, "ORX_TEST_MISSING_A"},
 		{"not json", `{"mcpServers": `, "mcp"},
 		{"trailing data", `{"mcpServers": {}} {}`, "mcp"},
 	} {

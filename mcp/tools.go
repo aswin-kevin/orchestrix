@@ -15,6 +15,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/internal/glob"
 	"github.com/aswin-kevin/orchestrix/internal/names"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
+	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -55,9 +56,11 @@ type serverConn struct {
 	// ready is set once the first tool list is in place; refreshing while
 	// a refresh goroutine runs; dirty when a list_changed notice arrived
 	// that no refresh has started to handle yet.
-	ready, refreshing, dirty, closed bool
-	refreshErr                       error
-	refreshes                        sync.WaitGroup
+	// hasTools is set with ready when the server declared the tools
+	// capability; list_changed from a server without it is ignored.
+	ready, hasTools, refreshing, dirty, closed bool
+	refreshErr                                 error
+	refreshes                                  sync.WaitGroup
 }
 
 func newServerConn(cfg ServerConfig) *serverConn {
@@ -93,7 +96,8 @@ func (s *serverConn) connect(ctx context.Context) error {
 	s.client = client
 	s.mu.Lock()
 	s.ready = true
-	pending := s.dirty
+	s.hasTools = client.HasTools()
+	pending := s.dirty && s.hasTools
 	s.dirty = false
 	s.mu.Unlock()
 	if pending {
@@ -133,12 +137,13 @@ func (s *serverConn) notified(method string, _ json.RawMessage) {
 
 // toolsChanged schedules a refresh of the tool list: it starts the refresh
 // goroutine, or, while one runs (or the first list is not in yet), marks
-// the list dirty so it takes one more pass.
+// the list dirty so it takes one more pass. A server without the tools
+// capability has no list to refresh.
 func (s *serverConn) toolsChanged() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
-	case s.closed:
+	case s.closed, s.ready && !s.hasTools:
 	case s.refreshing || !s.ready:
 		s.dirty = true
 	default:
@@ -221,8 +226,12 @@ func (s *serverConn) adapter(client *Client, name string, info ToolInfo) tool.To
 		// The server validates its own input; its schema may use features
 		// the built-in validator lacks.
 		RawInput: true,
-		Run: func(ctx context.Context, in json.RawMessage, _ *tool.Call) (tool.Result, error) {
-			return s.call(ctx, client, info.Name, in), nil
+		Run: func(ctx context.Context, in json.RawMessage, c *tool.Call) (tool.Result, error) {
+			var profile llm.Profile
+			if c != nil {
+				profile = c.Profile
+			}
+			return s.call(ctx, client, info.Name, in, profile), nil
 		},
 	}
 	if s.cfg.TrustReadOnlyHints && info.Annotations != nil && info.Annotations.ReadOnlyHint != nil && *info.Annotations.ReadOnlyHint {
@@ -242,7 +251,7 @@ func (s *serverConn) adapter(client *Client, name string, info ToolInfo) tool.To
 func always(json.RawMessage) bool { return true }
 
 // call runs the server tool named name with the agent's input.
-func (s *serverConn) call(ctx context.Context, client *Client, name string, in json.RawMessage) tool.Result {
+func (s *serverConn) call(ctx context.Context, client *Client, name string, in json.RawMessage, profile llm.Profile) tool.Result {
 	ctx, cancel := context.WithTimeout(ctx, positiveOr(s.cfg.CallTimeout, DefaultCallTimeout))
 	defer cancel()
 	if string(in) == "null" {
@@ -252,7 +261,7 @@ func (s *serverConn) call(ctx context.Context, client *Client, name string, in j
 	if err != nil {
 		return s.failure(err)
 	}
-	return toolResult(res)
+	return toolResult(res, profile)
 }
 
 // failure is the error result of a failed request: the server's own message
@@ -288,9 +297,9 @@ func (s *serverConn) status() ServerStatus {
 	if s.client == nil {
 		return st
 	}
-	st.Tools = len(s.currentTools())
 	if st.Err = s.client.Err(); st.Err == nil {
 		st.Connected = true
+		st.Tools = len(s.currentTools())
 		s.mu.Lock()
 		st.Err = s.refreshErr
 		s.mu.Unlock()
