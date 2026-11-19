@@ -30,11 +30,11 @@ type tavily struct {
 	apiKey string
 }
 
-// Tavily returns a backend that uses the Tavily search API. It fails when
-// APIKey is empty.
+// Tavily returns a backend that uses the Tavily search API. It fails
+// with an error wrapping ErrNoAPIKey when APIKey is empty.
 func Tavily(cfg TavilyConfig) (SearchBackend, error) {
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("web: tavily: %w", errNoAPIKey)
+		return nil, fmt.Errorf("web: tavily: %w", ErrNoAPIKey)
 	}
 	sc, err := newSearchClient("tavily", cfg.Client, cfg.UserAgent, cfg.BaseURL, defaultTavilyURL)
 	if err != nil {

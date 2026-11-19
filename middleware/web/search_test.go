@@ -368,10 +368,10 @@ func TestSearchUsesProxy(t *testing.T) {
 }
 
 func TestMissingAPIKeyFailsNew(t *testing.T) {
-	if _, err := Brave(BraveConfig{}); !errors.Is(err, errNoAPIKey) {
+	if _, err := Brave(BraveConfig{}); !errors.Is(err, ErrNoAPIKey) {
 		t.Fatalf("Brave err = %v", err)
 	}
-	if _, err := Tavily(TavilyConfig{}); !errors.Is(err, errNoAPIKey) {
+	if _, err := Tavily(TavilyConfig{}); !errors.Is(err, ErrNoAPIKey) {
 		t.Fatalf("Tavily err = %v", err)
 	}
 }

@@ -31,11 +31,11 @@ type brave struct {
 	apiKey string
 }
 
-// Brave returns a backend that uses the Brave Search API. It fails when
-// APIKey is empty.
+// Brave returns a backend that uses the Brave Search API. It fails
+// with an error wrapping ErrNoAPIKey when APIKey is empty.
 func Brave(cfg BraveConfig) (SearchBackend, error) {
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("web: brave: %w", errNoAPIKey)
+		return nil, fmt.Errorf("web: brave: %w", ErrNoAPIKey)
 	}
 	sc, err := newSearchClient("brave", cfg.Client, cfg.UserAgent, cfg.BaseURL, defaultBraveURL)
 	if err != nil {

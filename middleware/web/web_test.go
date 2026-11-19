@@ -158,3 +158,40 @@ func TestNewErrors(t *testing.T) {
 		})
 	}
 }
+
+// systemOf returns the system segments mw adds to a request.
+func systemOf(t *testing.T, mw agent.Middleware) string {
+	t.Helper()
+	var system []string
+	req := &agent.ModelRequest{}
+	_, err := mw.(agent.ModelWrapper).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+		system = r.Request.System
+		return &llm.Response{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(system, "\n")
+}
+
+func TestPromptDescribesOfferedTools(t *testing.T) {
+	searchOnly, err := New(Config{DisableFetch: true, Search: stubSearch{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := systemOf(t, searchOnly)
+	if strings.Contains(got, "start_index") || strings.Contains(got, "read the web") || strings.Contains(got, "fetched page") {
+		t.Errorf("search-only prompt describes web_fetch:\n%s", got)
+	}
+	if !strings.Contains(got, ToolSearch) || !strings.Contains(got, "untrusted") {
+		t.Errorf("search-only prompt lacks web_search or the untrusted-data warning:\n%s", got)
+	}
+
+	both, err := New(Config{Search: stubSearch{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := systemOf(t, both); !strings.Contains(got, "start_index") || !strings.Contains(got, ToolSearch) {
+		t.Errorf("fetch and search prompt lacks one of them:\n%s", got)
+	}
+}

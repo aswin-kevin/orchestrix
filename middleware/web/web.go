@@ -111,10 +111,11 @@ type Config struct {
 	// approval.
 	ReadOnly bool
 	// Prompt is the system prompt segment added while web tools are
-	// offered. nil uses DefaultPrompt, plus a line about web_search when
-	// Search is set; any other value replaces all of that, so the host
-	// then describes web_search itself. A pointer to "" disables the
-	// segment.
+	// offered. nil describes the tools offered: DefaultPrompt (or, with
+	// DisableFetch, a variant that does not mention web_fetch), plus a line
+	// about web_search when Search is set. Any other value replaces all of
+	// that, so the host then describes the tools itself. A pointer to ""
+	// disables the segment.
 	Prompt *string
 }
 
@@ -156,6 +157,9 @@ func New(cfg Config) (agent.Middleware, error) {
 		return nil, err
 	}
 	m := &middleware{prompt: DefaultPrompt}
+	if cfg.DisableFetch {
+		m.prompt = searchOnlyPrompt
+	}
 	if cfg.Search != nil {
 		m.prompt += searchPrompt
 	}
