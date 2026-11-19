@@ -84,7 +84,9 @@ type Answer struct {
 	// Question is the text of the question answered. Empty means the
 	// question at the same position.
 	Question string `json:"question"`
-	// Selected holds the labels of the chosen options.
+	// Selected holds the labels of the chosen options. For a question that
+	// is not MultiSelect only the first label counts; the rest are reported
+	// as other text. Repeated labels count once.
 	Selected []string `json:"selected,omitempty"`
 	// Other is the answer in the human's own words.
 	Other string `json:"other,omitempty"`
@@ -219,12 +221,12 @@ func resumed(qs []Question, r *tool.ResumeValue) tool.Result {
 		if answers, ok := structuredAnswers(r.Message); ok {
 			return tool.Text(formatAnswers(qs, answers))
 		}
-		return tool.Text(answersTitle + "\n" + stripControl(truncateRunes(r.Message, MaxAnswerRunes)))
+		return tool.Text(answersTitle + "\n" + inline(r.Message, MaxAnswerRunes))
 	case tool.ResumeReject:
 		if r.Message == "" {
 			return tool.Text(declinedText)
 		}
-		return tool.Text(declinedText + " " + r.Message)
+		return tool.Text(declinedText + " " + inline(r.Message, MaxAnswerRunes))
 	default:
 		// Unreachable: the interrupt allows only respond and reject.
 		return tool.Errorf("unexpected decision %q for ask_user", r.Type)
@@ -261,8 +263,13 @@ func formatAnswers(qs []Question, answers []Answer) string {
 			text = inline(q.Question, MaxQuestionRunes)
 		}
 		var selected, other []string
+		seen := make(map[string]bool, len(a.Selected))
 		for _, label := range a.Selected {
 			label = inline(label, MaxLabelRunes)
+			if seen[label] {
+				continue
+			}
+			seen[label] = true
 			if hasOption(q, label) && (q.MultiSelect || len(selected) == 0) {
 				selected = append(selected, label)
 			} else if label != "" {
@@ -292,7 +299,7 @@ func inline(s string, n int) string {
 }
 
 func hasOption(q Question, label string) bool {
-	return slices.ContainsFunc(q.Options, func(o Option) bool { return o.Label == label })
+	return slices.ContainsFunc(q.Options, func(o Option) bool { return inline(o.Label, MaxLabelRunes) == label })
 }
 
 // clean returns a copy of qs with every text stripped of control characters
@@ -314,9 +321,13 @@ func clean(qs []Question) []Question {
 }
 
 // stripControl drops every control character except newline, which also
-// removes the escape character that starts terminal control sequences.
+// removes the escape character that starts terminal control sequences. The
+// Unicode line and paragraph separators count as newlines.
 func stripControl(s string) string {
 	return strings.Map(func(r rune) rune {
+		if r == '\u2028' || r == '\u2029' {
+			return '\n'
+		}
 		if r != '\n' && unicode.IsControl(r) {
 			return -1
 		}
