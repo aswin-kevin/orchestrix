@@ -17,34 +17,42 @@ You get a production-ready agent loop in a few lines of code, with two small dep
 
 Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and receives streamed events back. The agent loop builds each request, calls the model, schedules tool calls and appends their results. Middleware wraps the model and tool calls. Every tool call passes the permission gate before it touches a backend, and the whole conversation lives in typed, JSON-serializable state.
 
+## Why Orchestrix
+
+- **Go-native, small footprint.** A library you compile into your service or a single `orx` binary: no Python runtime, no sidecar, two dependencies beyond the standard library.
+- **Safe by default.** Every tool call, including shell commands, MCP tools and web requests, passes a permission gate (six modes plus allow, ask and deny rules) before it runs. Web fetches refuse private networks.
+- **Pause and resume anywhere.** A call that needs approval pauses the run; the decision can arrive minutes later, from another process, and the run continues from its checkpoint.
+- **Agents that scale out.** Subagents, background subagents the model follows while it keeps working, and a ready coordinator that fans work out to parallel workers.
+- **Swap the workspace.** The agent's files can live in memory, on disk, in a key/value store, inside a remote sandbox, or in any mix mounted by path.
+
+## How it compares
+
+| | Orchestrix | Deep Agents | OpenAI Agents SDK | Claude Agent SDK | Google ADK |
+| --- | --- | --- | --- | --- | --- |
+| Language | Go | Python, JS | Python, JS | Python, TS | Python, TS, Go, Java, Kotlin |
+| Model providers | Anthropic, OpenAI, any OpenAI-compatible API | Many | Many | Claude only | Many |
+| Permission gate on every tool | ✅ modes + allow/ask/deny | ⚠️ file tools | ⚠️ per-tool approval | ✅ modes + rules | ⚠️ tool confirmation |
+| Approve later, resume in another process | ✅ | ✅ with a checkpointer | ✅ | ⚠️ | ⚠️ experimental |
+| Background subagents | ✅ | ⚠️ via a separate server | — | ✅ | — |
+| Skills (`SKILL.md`) | ✅ | ✅ | — | ✅ | ✅ |
+| MCP client | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Pluggable workspace (memory, disk, store, sandbox) | ✅ plus mounts | ✅ | ⚠️ sandbox agents | ⚠️ local disk | — |
+| Plan mode, self-grading rubric | ✅ both | ⚠️ planning tool | — | ⚠️ plan mode | ⚠️ evaluation tooling |
+| CLI | ✅ `orx` | ✅ | — | separate product | ✅ |
+| Runtime | One Go binary | Python or Node | Python or Node | Python or Node + bundled binary | Language runtime |
+
+✅ built in · ⚠️ partial or limited · — not documented. Based on each project's public documentation as of November 2026; the others have larger ecosystems and more languages, and they evolve quickly. Corrections are welcome.
+
 ## Features
 
-- **Three providers, one interface.** Anthropic Messages, OpenAI Chat Completions and OpenAI Responses, selected with a `format:model` string.
-- **Streaming events.** `Run` returns a Go iterator (`iter.Seq2`) of text, tool, usage and interrupt events; the last one always carries the outcome.
-- **Middleware.** Every optional behavior (file tools, planning, subagents, summarization, your own hooks) is a middleware wrapping the model call or tool calls.
-- **Permissions.** Six modes plus allow, ask and deny rules, evaluated before any tool runs.
-- **Pluggable file backends.** In-memory per-thread workspaces, a real directory on disk, a key/value store, a remote sandbox reached only through shell commands, and composite backends that mount any of them at a path.
-- **Subagents.** The model delegates work to isolated or forked subagents with the `task` tool.
-- **Background subagents.** The model starts subagents that run while it keeps working, follows them, sends them new instructions and is told when they finish.
-- **Coordinator.** A ready coordinator agent that plans, delegates to worker subagents in parallel and combines their results, plus `RunParallel` for many runs at once.
-- **Context management.** Long conversations are summarized automatically, and the history stays complete in state.
-- **Context compression.** The model compresses older ranges of its own conversation into summaries and can restore the originals.
-- **Prompt caching.** Stable prefixes and recent messages are marked for the provider's cache.
-- **Hooks.** Run your code before and after tool calls and at the start and end of runs.
-- **Human in the loop.** A tool call that needs approval pauses the run; resume it with your decision, even in another process.
-- **Checkpoints and threads.** Conversations, and the default workspace, are saved and continued later.
-- **Shell and background tasks.** An `execute` tool on a real directory, with long-running jobs the agent can follow.
-- **Memory.** Standing instructions from files such as `AGENTS.md`, plus a long-term memory store the model can record to and recall from.
-- **Skills.** Directories of packaged instructions the model loads when a task matches, optionally unlocking tools.
-- **MCP.** Tools, resources and instructions of Model Context Protocol servers over stdio or HTTP.
-- **Plan mode.** The model investigates read-only and acts only after a human approves its plan.
-- **Deferred tools.** Large tool sets stay out of the request until the model searches for them.
-- **Web.** Fetch pages as markdown and search the web, with protection against requests to private networks.
-- **Asking the user.** The model puts structured multiple-choice questions to the human.
-- **Self-grading.** A rubric grades the answer before the run ends and sends the model back to revise it.
-- **Model profiles.** Per-model prompt suffixes, tool descriptions and tool or middleware exclusions.
-- **Budgets.** Limit model turns and wall-clock time, and cap output tokens per response; a total token target (`TokenBudget`) is available through `agent.Config` and `WithConfig`.
-- **Few dependencies.** The standard library, plus `gopkg.in/yaml.v3` (skill and memory frontmatter) and `golang.org/x/net/html` (web pages).
+- **Models and streaming.** Three wire formats behind one `format:model` string; `Run` returns a Go iterator of text, tool, usage and interrupt events, ending with the outcome.
+- **Control.** Six permission modes with allow/ask/deny rules, human approval with cross-process resume, plan mode, hooks around every call, and budgets for turns, time and tokens.
+- **Delegation.** Isolated and forked subagents, background subagents with start/check/update/cancel tools and completion notices, a coordinator agent, and `RunParallel`.
+- **Knowledge.** `AGENTS.md`-style memory files, a long-term memory store, skills that unlock tools, MCP servers over stdio or HTTP, and web fetch and search.
+- **Long conversations.** Automatic summarization, model-directed compression with restore, prompt caching, deferred tools for large tool sets, and checkpointed threads.
+- **Workspaces.** In-memory, disk, shell with background jobs, key/value, remote sandbox, and composite mounts (for example, memories that persist across threads).
+- **Quality.** A self-grading rubric that sends the model back to revise, structured questions to the user, and per-model profiles.
+- **Extensible.** Every behavior is a middleware; write your own or replace any built-in one.
 
 ## Install
 
