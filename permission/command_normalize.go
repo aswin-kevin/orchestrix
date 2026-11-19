@@ -28,9 +28,11 @@ var opaqueCommands = map[string]bool{
 	"strace": true, "ltrace": true, "busybox": true, "unbuffer": true,
 	"parallel": true, "script": true, "su": true, "runuser": true,
 	"nsenter": true, "unshare": true,
-	// Editors run commands from options (-c, +cmd), scripts and vimrc files.
+	// Editors run commands from options (-c, +cmd, --eval), scripts and
+	// startup files.
 	"vim": true, "vi": true, "nvim": true, "ex": true, "view": true,
 	"gvim": true, "gview": true, "vimdiff": true, "evim": true,
+	"emacs": true, "emacsclient": true, "xemacs": true, // --eval, -l, -f
 }
 
 // interpreters run a program written in their arguments or read from a file,

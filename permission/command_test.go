@@ -555,6 +555,38 @@ func TestSplitCommandHiddenCommandOptions(t *testing.T) {
 		{`git config --list`, true},
 		{`git config get user.name`, true},
 		{`git fetch origin`, true},
+
+		// The ssh family: local commands from options, settings and config files.
+		{`ssh -o ProxyCommand='rm x' host`, false},
+		{`ssh -oProxyCommand=x host`, false},
+		{`ssh -o 'proxycommand rm x' host`, false},
+		{`ssh -vo LocalCommand=x -o PermitLocalCommand=yes host`, false},
+		{`ssh -o KnownHostsCommand=x host`, false},
+		{`ssh -F evil.conf host`, false},
+		{`scp -S prog a host:b`, false},
+		{`scp -o ProxyCommand=x a host:b`, false},
+		{`sftp -D prog host`, false},
+		{`ssh -p 2222 -o StrictHostKeyChecking=no host uptime`, true},
+		{`scp -r dir host:dir`, true},
+
+		// rsync: the remote shell and the program started on the other side.
+		{`rsync -e 'rm x' a host:b`, false},
+		{`rsync -avze 'rm x' a host:b`, false},
+		{`rsync --rsh='rm x' a host:b`, false},
+		{`rsync --rsync-path='rm x' a b`, false},
+		{`rsync -av --delete src/ dst/`, true},
+
+		// man: the pager or browser it runs.
+		{`man -P 'rm x' ls`, false},
+		{`man --pager='rm x' ls`, false},
+		{`man -H ls`, false},
+		{`man -C evil.conf ls`, false},
+		{`man ls`, true},
+		{`man 5 crontab`, true},
+
+		// emacs runs Lisp from --eval, -l and -f.
+		{`emacs --batch --eval '(shell-command "rm x")'`, false},
+		{`emacsclient -e '(x)'`, false},
 	} {
 		t.Run(tt.cmd, func(t *testing.T) {
 			if _, ok := SplitCommand(tt.cmd); ok != tt.wantOK {

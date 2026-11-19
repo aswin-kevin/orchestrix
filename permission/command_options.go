@@ -11,6 +11,17 @@ var commandOptionChecks = map[string]func(args []word) bool{
 	"git": gitRunsCommand,
 	"sed": sedRunsCommand, "gsed": sedRunsCommand,
 	"tar": tarRunsCommand, "gtar": tarRunsCommand, "bsdtar": tarRunsCommand,
+	"ssh":   sshRunsCommand(sshProgramOptions),
+	"scp":   sshRunsCommand(scpProgramOptions),
+	"sftp":  sshRunsCommand(sftpProgramOptions),
+	"rsync": optionsRunCommand(rsyncCommandOptions),
+	"man":   optionsRunCommand(manCommandOptions),
+}
+
+// optionsRunCommand returns a check that reports whether any of options is
+// used.
+func optionsRunCommand(options []string) func(args []word) bool {
+	return func(args []word) bool { return hasAnyOption(args, options) }
 }
 
 // runsCommandThroughOptions reports whether the arguments of the command
@@ -170,3 +181,59 @@ func startsWithAny(s string, prefixes []string) bool {
 	}
 	return false
 }
+
+// The ssh family runs a program named in an option (scp and sftp -S, sftp
+// -D), in a configuration file (-F) or in -o settings (see sshCommandKeys).
+var (
+	sshProgramOptions  = []string{"-F"}
+	scpProgramOptions  = []string{"-F", "-S"}
+	sftpProgramOptions = []string{"-F", "-S", "-D"}
+)
+
+// sshCommandKeys are the ssh settings, lower-cased, that name a local
+// command, or pull in more settings that may (Include, Match exec).
+var sshCommandKeys = map[string]bool{
+	"proxycommand": true, "localcommand": true, "permitlocalcommand": true,
+	"knownhostscommand": true, "include": true, "match": true,
+}
+
+// sshRunsCommand returns a check for a command of the ssh family that
+// reports whether it runs a local command: through one of programOptions, or
+// through a -o setting in sshCommandKeys. The remote command ssh runs is the
+// remote host's business, not a local one.
+func sshRunsCommand(programOptions []string) func(args []word) bool {
+	return func(args []word) bool {
+		if hasAnyOption(args, programOptions) {
+			return true
+		}
+		for i, a := range args {
+			if a.text == endOfOptions {
+				return false
+			}
+			if !hasShortOption(a.text, 'o') {
+				continue
+			}
+			// -oKey=value, -o Key=value or -o "Key value"; in a cluster
+			// such as -vo, the value is the next word.
+			value := a.text[strings.IndexByte(a.text, 'o')+1:]
+			if value == "" && i+1 < len(args) {
+				value = args[i+1].text
+			}
+			key, _, _ := strings.Cut(strings.TrimSpace(value), "=")
+			key, _, _ = strings.Cut(key, " ")
+			if sshCommandKeys[strings.ToLower(key)] {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// rsyncCommandOptions name the remote shell rsync runs (-e, --rsh) or the
+// program it starts on the other side (--rsync-path), which is a local one
+// when both sides are local.
+var rsyncCommandOptions = []string{"--rsh", "--rsync-path", "-e"}
+
+// manCommandOptions name the pager or browser man runs, or a configuration
+// file that may name them.
+var manCommandOptions = []string{"--pager", "--html", "--config-file", "-P", "-H", "-C"}
