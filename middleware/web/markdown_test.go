@@ -40,6 +40,18 @@ func TestHTMLToMarkdown(t *testing.T) {
 		{"image",
 			`<p><img src="logo.png" alt="The  logo"></p>`,
 			"![The logo](https://site.test/dir/logo.png)"},
+		{"link text brackets escaped",
+			`<p><a href="/x">see [1] here</a></p>`,
+			"[see \\[1\\] here](https://site.test/x)"},
+		{"link URL with parens or spaces",
+			`<p><a href="https://w.test/Go_(lang)">wiki</a> <img src="https://i.test/a b.png" alt="sp"></p>`,
+			"[wiki](<https://w.test/Go_(lang)>) ![sp](https://i.test/a%20b.png)"},
+		{"data image keeps alt text only",
+			`<p>x <img src="data:image/png;base64,AAAA" alt="chart"> <img src=" DATA:image/gif;base64,R0" alt=""> y</p>`,
+			"x chart y"},
+		{"image alt brackets escaped",
+			`<img src="/i.png" alt="a]b">`,
+			"![a\\]b](https://site.test/i.png)"},
 		{"unordered list",
 			`<ul><li>one</li><li>two</li></ul>`,
 			"- one\n- two"},
@@ -117,6 +129,16 @@ func TestHTMLToMarkdownNilBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if md != "[r](/rel)" {
+		t.Fatalf("markdown = %q", md)
+	}
+}
+
+func TestHTMLToMarkdownRawURLWithSpace(t *testing.T) {
+	_, md, err := HTMLToMarkdown(strings.NewReader(`<a href="my page.html">x</a>`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if md != "[x](<my page.html>)" {
 		t.Fatalf("markdown = %q", md)
 	}
 }

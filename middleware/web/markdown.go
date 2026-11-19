@@ -140,17 +140,40 @@ func (c *converter) link(n *html.Node) {
 		return
 	}
 	c.open("[")
+	c.inLink++
 	c.children(n)
-	c.close("](" + c.resolve(href) + ")")
+	c.inLink--
+	c.close("](" + destination(c.resolve(href)) + ")")
 }
 
+// image writes an image. An inline data: image keeps only its alt text: its
+// bytes mean nothing to a reader of the markdown.
 func (c *converter) image(n *html.Node) {
 	src, ok := attr(n, "src")
 	if !ok || src == "" {
 		return
 	}
 	alt, _ := attr(n, "alt")
-	c.word("![" + collapse(alt) + "](" + c.resolve(src) + ")")
+	if hasScheme(src, "data") {
+		c.text(alt)
+		return
+	}
+	c.word("![" + escapeBrackets(collapse(alt)) + "](" + destination(c.resolve(src)) + ")")
+}
+
+// destination formats a URL as a markdown link destination, wrapping it in
+// angle brackets when spaces or parentheses would end it early.
+func destination(u string) string {
+	if !strings.ContainsAny(u, " ()<>") {
+		return u
+	}
+	u = strings.NewReplacer("<", "%3C", ">", "%3E").Replace(u)
+	return "<" + u + ">"
+}
+
+// escapeBrackets escapes the brackets that would end link or image text.
+func escapeBrackets(s string) string {
+	return strings.NewReplacer("[", `\[`, "]", `\]`).Replace(s)
 }
 
 func (c *converter) list(n *html.Node, ordered bool) {
@@ -320,8 +343,12 @@ func resolveBase(base *url.URL, href string) *url.URL {
 	return base.ResolveReference(u)
 }
 
-func isJavaScript(href string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(href)), "javascript:")
+func isJavaScript(href string) bool { return hasScheme(href, "javascript") }
+
+// hasScheme reports whether ref is a URL of scheme, ignoring case and
+// surrounding space.
+func hasScheme(ref, scheme string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(ref)), scheme+":")
 }
 
 // find returns the first element named name outside dropped content other

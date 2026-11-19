@@ -25,7 +25,8 @@ const (
 )
 
 const fetchDescription = "Fetch a web page and return its content: HTML is converted to markdown, plain text, JSON and XML are returned as they are. " +
-	"Long content is returned in parts; the result then ends with a note giving the start_index to continue from."
+	"Long content is returned in parts; the result then ends with a note giving the start_index to continue from. " +
+	"Permission rules apply to the URL given; redirects it leads to are followed."
 
 // FetchInput is the input of web_fetch.
 type FetchInput struct {
@@ -54,6 +55,10 @@ func newFetcher(client *http.Client, cfg Config) *fetcher {
 // tool returns web_fetch. Its permission subject is the canonical URL, so
 // rules such as web_fetch(https://go.dev/*) apply; it has no verdict of its
 // own, so a call no rule allows needs an approval unless readOnly is set.
+//
+// Rules match only the URL the model asked for. Redirects are followed
+// without consulting the rules again; the network guard still checks every
+// hop.
 func (f *fetcher) tool(readOnly bool) tool.Tool {
 	opts := []tool.Option{tool.WithConcurrent(), tool.WithSubject(fetchSubject)}
 	if readOnly {
@@ -62,29 +67,21 @@ func (f *fetcher) tool(readOnly bool) tool.Tool {
 	return tool.New(ToolFetch, fetchDescription, f.fetch, opts...)
 }
 
-// fetchSubject returns the canonical form of the input's URL, or the URL as
-// given when it is invalid (the call then fails without a request).
+// fetchSubject returns the canonical form of the input's URL (see
+// canonicalURL), which is also the URL requested. An invalid URL has the
+// empty subject, which only a bare "*" pattern matches, so a URL prefix
+// rule is never satisfied by text the request would not use; the call then
+// fails without a request.
 func fetchSubject(raw json.RawMessage) string {
 	var in FetchInput
 	if json.Unmarshal(raw, &in) != nil {
 		return ""
 	}
-	u, err := parseTarget(in.URL)
+	u, err := canonicalURL(in.URL)
 	if err != nil {
-		return in.URL
+		return ""
 	}
 	return u.String()
-}
-
-// parseTarget parses an http or https URL with a host, lowercasing the host
-// so permission rules match it whatever its case.
-func parseTarget(raw string) (*url.URL, error) {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || !webScheme(u.Scheme) || u.Host == "" {
-		return nil, fmt.Errorf("invalid URL %q: want an http or https URL with a host", raw)
-	}
-	u.Host = strings.ToLower(u.Host)
-	return u, nil
 }
 
 // response is what a fetch read.
@@ -97,7 +94,7 @@ type response struct {
 }
 
 func (f *fetcher) fetch(ctx context.Context, in FetchInput, _ *tool.Call) (tool.Result, error) {
-	u, err := parseTarget(in.URL)
+	u, err := canonicalURL(in.URL)
 	if err != nil {
 		return tool.Errorf("%v", err), nil
 	}
@@ -113,6 +110,9 @@ func (f *fetcher) fetch(ctx context.Context, in FetchInput, _ *tool.Call) (tool.
 
 	title, text, convErr := convert(resp)
 	if resp.status >= http.StatusBadRequest {
+		// The status is the error the model needs. The converted body, cut
+		// to errorBodyChars characters, is only context: an error page in
+		// an unsupported type, which convert refused, quotes nothing.
 		msg := fmt.Sprintf("HTTP %d for %s", resp.status, resp.url)
 		if quote := []rune(strings.TrimSpace(text)); len(quote) > 0 {
 			msg += "\n\n" + string(quote[:min(len(quote), errorBodyChars)])

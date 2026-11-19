@@ -26,6 +26,8 @@ type converter struct {
 	// lists holds the item count of each enclosing list; -1 marks an
 	// unordered list.
 	lists []int
+	// inLink counts the enclosing links, whose text escapes brackets.
+	inLink int
 
 	pending     int    // line breaks owed before the next content
 	breakPrefix string // prefix of the blank line a paragraph break writes
@@ -55,6 +57,9 @@ func (c *converter) text(s string) {
 	for i, w := range strings.Fields(s) {
 		if i > 0 {
 			c.space = true
+		}
+		if c.inLink > 0 {
+			w = escapeBrackets(w)
 		}
 		c.word(w)
 	}

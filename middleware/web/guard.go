@@ -16,15 +16,21 @@ type dialPolicy func(network, address string) error
 // blockedPrefixes are the non-public ranges the netip predicates do not
 // cover.
 var blockedPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),     // "this network"
-	netip.MustParsePrefix("100.64.0.0/10"), // carrier-grade NAT
-	netip.MustParsePrefix("192.0.0.0/24"),  // IETF protocol assignments
-	netip.MustParsePrefix("198.18.0.0/15"), // benchmarking
-	netip.MustParsePrefix("240.0.0.0/4"),   // reserved, includes broadcast
+	netip.MustParsePrefix("0.0.0.0/8"),      // "this network"
+	netip.MustParsePrefix("100.64.0.0/10"),  // carrier-grade NAT
+	netip.MustParsePrefix("192.0.0.0/24"),   // IETF protocol assignments
+	netip.MustParsePrefix("198.18.0.0/15"),  // benchmarking
+	netip.MustParsePrefix("240.0.0.0/4"),    // reserved, includes broadcast
+	netip.MustParsePrefix("64:ff9b:1::/48"), // local-use NAT64
+	netip.MustParsePrefix("fec0::/10"),      // deprecated site-local
+	netip.MustParsePrefix("2001::/32"),      // Teredo tunnels
 }
 
 // Ranges of IPv6 addresses that carry an IPv4 address.
 var (
+	// ipv4CompatPrefix holds the deprecated IPv4-compatible addresses,
+	// which carry the IPv4 address in their last 32 bits.
+	ipv4CompatPrefix = netip.MustParsePrefix("::/96")
 	// nat64Prefix carries the IPv4 address in its last 32 bits.
 	nat64Prefix = netip.MustParsePrefix("64:ff9b::/96")
 	// sixToFourPrefix carries the IPv4 address in bits 16 to 48.
@@ -33,7 +39,8 @@ var (
 
 // blockedIP reports whether ip is not a public unicast address: loopback,
 // private, link-local, multicast, unspecified, one of blockedPrefixes, or an
-// IPv4-mapped, NAT64 or 6to4 address whose IPv4 address is blocked. An
+// IPv4-mapped, IPv4-compatible, NAT64 or 6to4 address whose IPv4 address is
+// blocked. An
 // invalid address is blocked.
 func blockedIP(ip netip.Addr) bool {
 	ip = ip.Unmap()
@@ -58,7 +65,7 @@ func embeddedIPv4(ip netip.Addr) (netip.Addr, bool) {
 	switch {
 	case !ip.Is6():
 		return netip.Addr{}, false
-	case nat64Prefix.Contains(ip):
+	case nat64Prefix.Contains(ip), ipv4CompatPrefix.Contains(ip):
 		return netip.AddrFrom4([4]byte(b[12:16])), true
 	case sixToFourPrefix.Contains(ip):
 		return netip.AddrFrom4([4]byte(b[2:6])), true
@@ -117,6 +124,14 @@ func (g *guardTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Set("User-Agent", g.userAgent)
 	}
 	return g.next.RoundTrip(req)
+}
+
+// CloseIdleConnections closes the idle connections of the wrapped
+// transport, so http.Client.CloseIdleConnections reaches it.
+func (g *guardTransport) CloseIdleConnections() {
+	if c, ok := g.next.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 // check returns an error wrapping ErrBlockedAddress when host may not be

@@ -42,6 +42,14 @@ func TestBlockedAddresses(t *testing.T) {
 		{"2002:7f00:1::", true},
 		{"2002:a9fe:a9fe::", true},
 		{"2002:a00:1::1", true},
+		// Local-use NAT64, IPv4-compatible, site-local and Teredo.
+		{"64:ff9b:1::5db8:d822", true},
+		{"64:ff9b:1:ffff::1", true},
+		{"::7f00:1", true},
+		{"::a9fe:a9fe", true},
+		{"fec0::1", true},
+		{"2001::1", true},
+		{"2001:0:4136:e378:8000:63bf:3fff:fdd2", true},
 		// Public addresses.
 		{"93.184.216.34", false},
 		{"2606:4700::1111", false},
@@ -49,6 +57,9 @@ func TestBlockedAddresses(t *testing.T) {
 		{"2002:5db8:d822::1", false},
 		{"172.32.0.1", false},
 		{"100.128.0.1", false},
+		{"::5db8:d822", false},
+		{"2001:db9::1", false},
+		{"2001:1::1", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.ip, func(t *testing.T) {
@@ -168,5 +179,45 @@ func TestProxyTargetStillChecked(t *testing.T) {
 	}
 	if got := seen.Load(); got != nil {
 		t.Fatalf("proxy received %v", got)
+	}
+}
+
+func TestProxyRedirectToBlockedAddressRefused(t *testing.T) {
+	var hits atomic.Int32
+	target := httptest.NewServer(counting(&hits, "text/plain", "secret"))
+	defer target.Close()
+	var proxied atomic.Int32
+	px := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxied.Add(1)
+		http.Redirect(w, r, target.URL+"/", http.StatusFound)
+	}))
+	defer px.Close()
+
+	res := runFetch(t, fetchTool(t, Config{ProxyURL: px.URL}), FetchInput{URL: "http://93.184.216.34/"})
+	if !res.IsError || !strings.Contains(res.Flatten(), "blocked") {
+		t.Fatalf("result = %+v, want blocked error", res)
+	}
+	if n := proxied.Load(); n != 1 {
+		t.Fatalf("proxy received %d requests, want only the first hop", n)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("redirect target hit %d times", n)
+	}
+}
+
+// idleCloser records CloseIdleConnections calls.
+type idleCloser struct {
+	http.RoundTripper
+	closed bool
+}
+
+func (c *idleCloser) CloseIdleConnections() { c.closed = true }
+
+func TestGuardTransportClosesIdleConnections(t *testing.T) {
+	next := &idleCloser{}
+	client := &http.Client{Transport: &guardTransport{next: next}}
+	client.CloseIdleConnections()
+	if !next.closed {
+		t.Fatal("CloseIdleConnections not forwarded")
 	}
 }

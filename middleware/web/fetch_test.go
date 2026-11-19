@@ -114,7 +114,7 @@ func TestFetchPlainAndJSON(t *testing.T) {
 		t.Run(tt.ct, func(t *testing.T) {
 			srv := serve(t, tt.ct, tt.body)
 			res := runFetch(t, fetchTool(t, local), FetchInput{URL: srv.URL})
-			want := "URL: " + srv.URL + "\nTitle: \n\n" + tt.body
+			want := "URL: " + srv.URL + "/\nTitle: \n\n" + tt.body
 			if res.IsError || res.Flatten() != want {
 				t.Fatalf("result = %+v, want %q", res, want)
 			}
@@ -159,7 +159,7 @@ func TestFetchPaging(t *testing.T) {
 	body := strings.Repeat("é", 120) // multi-byte runes: paging is by character
 	srv := serve(t, "text/plain", body)
 	tl := fetchTool(t, local)
-	header := "URL: " + srv.URL + "\nTitle: \n\n"
+	header := "URL: " + srv.URL + "/\nTitle: \n\n"
 
 	first := runFetch(t, tl, FetchInput{URL: srv.URL, MaxChars: 50}).Flatten()
 	note := "\n\n[Content truncated: characters 0–50 of 120. Call web_fetch with start_index=50 to continue.]"
