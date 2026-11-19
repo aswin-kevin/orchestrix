@@ -121,3 +121,6 @@ func (c *composite) owns(prefix, p string) bool {
 	m, _, ok := c.resolve(p)
 	return (!ok && prefix == "") || (ok && m.prefix == prefix)
 }
+
+// isAncestor reports whether p is a proper ancestor of some mount.
+func (c *composite) isAncestor(p string) bool { return len(c.under(p)) > 0 }

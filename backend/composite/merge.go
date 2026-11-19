@@ -19,7 +19,7 @@ func (c *composite) mergeLs(ctx context.Context, p string) ([]backend.FileInfo, 
 	if err != nil {
 		// A mount ancestor is a directory even when the default backend has
 		// nothing there (or a file of that name).
-		if len(below) == 0 || !(errors.Is(err, backend.ErrNotFound) || errors.Is(err, backend.ErrNotDir)) {
+		if !missingDir(err, below) {
 			return nil, err
 		}
 		infos = nil
@@ -59,13 +59,13 @@ func (c *composite) Glob(ctx context.Context, pattern, base string) ([]backend.F
 	below := c.under(base)
 	src, rel := c.source(base)
 	infos, err := src.backend.Glob(ctx, srcPattern(pattern, src), rel)
-	if err != nil && (len(below) == 0 || !(errors.Is(err, backend.ErrNotFound) || errors.Is(err, backend.ErrNotDir))) {
+	if err != nil && !missingDir(err, below) {
 		return nil, err
 	}
 	var out []backend.FileInfo
 	for _, fi := range infos {
 		fi.Path = join(src.prefix, fi.Path)
-		if c.owns(src.prefix, fi.Path) && backend.MatchGlob(abs, fi.Path) {
+		if c.owns(src.prefix, fi.Path) && !c.isAncestor(fi.Path) && backend.MatchGlob(abs, fi.Path) {
 			out = append(out, fi)
 		}
 	}
@@ -91,6 +91,8 @@ func srcPattern(pattern string, src mount) string {
 // globMount appends the files of mount m below rel that it owns and that match
 // the absolute pattern.
 func (c *composite) globMount(ctx context.Context, m mount, rel, abs string, out []backend.FileInfo) ([]backend.FileInfo, error) {
+	// Enumerating the whole mount is O(files in the mount) per call; Backend
+	// offers no pattern translation across a prefix, so this is the exact way.
 	infos, err := m.backend.Glob(ctx, "**", rel)
 	if err != nil {
 		if errors.Is(err, backend.ErrNotFound) && rel == "/" {
@@ -119,18 +121,11 @@ func (c *composite) Grep(ctx context.Context, pattern string, opts backend.GrepO
 	if limit <= 0 {
 		limit = backend.DefaultMaxResults
 	}
-	absGlob := opts.Glob
-	switch {
-	case absGlob == "", strings.HasPrefix(absGlob, "/"):
-	case !strings.Contains(absGlob, "/"):
-		absGlob = "**/" + absGlob
-	default:
-		absGlob = path.Join(base, absGlob)
-	}
+	absGlob := backend.AnchorGlob(opts.Glob, base)
 	below := c.under(base)
 	src, rel := c.source(base)
 	out, err := c.grepMount(ctx, src, rel, pattern, opts, absGlob, limit)
-	if err != nil && (len(below) == 0 || !(errors.Is(err, backend.ErrNotFound) || errors.Is(err, backend.ErrNotDir))) {
+	if err != nil && !missingDir(err, below) {
 		return nil, err
 	}
 	for _, m := range below {
@@ -151,12 +146,11 @@ func (c *composite) Grep(ctx context.Context, pattern string, opts backend.GrepO
 // it asks again with a larger cap so they cannot starve the answer.
 func (c *composite) grepMount(ctx context.Context, src mount, rel, pattern string, opts backend.GrepOptions, absGlob string, limit int) ([]backend.GrepMatch, error) {
 	opts.Path = rel
-	if src.prefix != "" && absGlob != "" {
-		g, ok := mountGlob(absGlob, src.prefix)
-		if !ok {
-			return nil, nil
-		}
-		opts.Glob = g
+	if src.prefix != "" {
+		// The mount sees no filter: matching on composite paths is the only
+		// way every glob form (including "**" across the mount point) agrees
+		// with Glob. The refill loop below covers the filtered-out matches.
+		opts.Glob = ""
 	}
 	asked := limit
 	for {
@@ -171,7 +165,7 @@ func (c *composite) grepMount(ctx context.Context, src mount, rel, pattern strin
 		var kept []backend.GrepMatch
 		for _, gm := range got {
 			gm.Path = join(src.prefix, gm.Path)
-			if c.owns(src.prefix, gm.Path) {
+			if c.owns(src.prefix, gm.Path) && (src.prefix == "" || absGlob == "" || backend.MatchGlob(absGlob, gm.Path)) {
 				kept = append(kept, gm)
 			}
 		}
@@ -182,30 +176,6 @@ func (c *composite) grepMount(ctx context.Context, src mount, rel, pattern strin
 	}
 }
 
-// mountGlob rewrites an absolute glob of the composite namespace into the
-// namespace of a backend mounted at prefix. A glob with no "/" prefix match
-// (file-name globs start with "**") passes through unchanged; ok is false when
-// no file below the mount can match.
-func mountGlob(glob, prefix string) (string, bool) {
-	gs := strings.Split(strings.Trim(path.Clean(glob), "/"), "/")
-	ps := strings.Split(strings.Trim(prefix, "/"), "/")
-	for i, seg := range ps {
-		if i >= len(gs) {
-			return "", false
-		}
-		if gs[i] == "**" {
-			return "/" + strings.Join(gs[i:], "/"), true
-		}
-		if !backend.MatchGlob("/"+gs[i], "/"+seg) {
-			return "", false
-		}
-	}
-	if len(gs) == len(ps) {
-		return "", false
-	}
-	return "/" + strings.Join(gs[len(ps):], "/"), true
-}
-
 func sortMatches(ms []backend.GrepMatch) {
 	slices.SortStableFunc(ms, func(a, b backend.GrepMatch) int {
 		if c := backend.ComparePaths(a.Path, b.Path); c != 0 {
@@ -213,4 +183,11 @@ func sortMatches(ms []backend.GrepMatch) {
 		}
 		return a.Line - b.Line
 	})
+}
+
+// missingDir reports whether err only says the default backend has no
+// directory (or has a file) where mounts below make one: it is then not an
+// error.
+func missingDir(err error, below []mount) bool {
+	return len(below) > 0 && (errors.Is(err, backend.ErrNotFound) || errors.Is(err, backend.ErrNotDir))
 }

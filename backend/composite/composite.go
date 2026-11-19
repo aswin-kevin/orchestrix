@@ -64,11 +64,11 @@ func (c *composite) target(op, p string) (backend.Backend, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	if c.isAncestor(p) {
+		return nil, "", fmt.Errorf("composite: %s %s: %w", op, p, backend.ErrIsDir)
+	}
 	if m, rel, ok := c.resolve(p); ok {
 		return m.backend, rel, nil
-	}
-	if len(c.under(p)) > 0 {
-		return nil, "", fmt.Errorf("composite: %s %s: %w", op, p, backend.ErrIsDir)
 	}
 	return c.def, p, nil
 }
@@ -132,14 +132,14 @@ func (c *composite) Delete(ctx context.Context, p string) error {
 	if err != nil {
 		return err
 	}
+	if c.isAncestor(p) {
+		return fmt.Errorf("composite: delete %s: %w", p, ErrMountPoint)
+	}
 	if m, rel, ok := c.resolve(p); ok {
 		if rel == "/" {
 			return fmt.Errorf("composite: delete %s: %w", p, ErrMountPoint)
 		}
 		return m.backend.Delete(ctx, rel)
-	}
-	if len(c.under(p)) > 0 {
-		return fmt.Errorf("composite: delete %s: %w", p, ErrMountPoint)
 	}
 	return c.def.Delete(ctx, p)
 }
