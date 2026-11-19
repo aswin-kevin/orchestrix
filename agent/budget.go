@@ -205,7 +205,7 @@ func (r *run) afterNoToolTurn(resp *llm.Response) *Final {
 // turn and the run has continuations left. The output check comes first and
 // does not use those continuations.
 func (r *run) complete(resp *llm.Response) *Final {
-	if done, retry := r.checkOutput(resp); retry {
+	if done, handled := r.checkOutput(resp); handled {
 		return done
 	}
 	b := r.budget
@@ -220,7 +220,8 @@ func (r *run) complete(resp *llm.Response) *Final {
 		return r.finish(ReasonCompleted, nil)
 	}
 	b.stopContinuations++
-	// The revised answer is checked again.
+	// Defensive: checkOutput re-validates any later completion and sets
+	// r.output again, so this only keeps a stale answer from lingering.
 	r.output = nil
 	return r.continueWith(prompt)
 }

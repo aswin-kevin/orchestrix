@@ -284,21 +284,23 @@ func TestResolveSpecs(t *testing.T) {
 	}
 }
 
-func TestChildConfigUsesSpecOutputSchema(t *testing.T) {
-	parent := agent.Config{OutputSchema: map[string]any{"type": "object"}}
-	cfg, err := childConfig(parent, Subagent{Name: "plain", SystemPrompt: "p"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.OutputSchema != nil {
-		t.Errorf("child of a spec without a schema has OutputSchema %v", cfg.OutputSchema)
-	}
+func TestChildConfigNeverCarriesOutputSchema(t *testing.T) {
 	schema := map[string]any{"type": "object", "properties": map[string]any{"x": map[string]any{"type": "string"}}}
-	cfg, err = childConfig(parent, Subagent{Name: "typed", SystemPrompt: "p", OutputSchema: schema})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := cfg.OutputSchema["properties"]; !ok {
-		t.Errorf("child OutputSchema = %v, want the spec's", cfg.OutputSchema)
+	for _, tc := range []struct {
+		name   string
+		parent agent.Config
+		spec   Subagent
+	}{
+		{"parent schema", agent.Config{OutputSchema: map[string]any{"type": "object"}}, Subagent{Name: "plain", SystemPrompt: "p"}},
+		{"spec schema", agent.Config{}, Subagent{Name: "typed", SystemPrompt: "p", OutputSchema: schema}},
+		{"both", agent.Config{OutputSchema: map[string]any{"type": "object"}}, Subagent{Name: "typed", SystemPrompt: "p", OutputSchema: schema}},
+	} {
+		cfg, err := childConfig(tc.parent, tc.spec)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if cfg.OutputSchema != nil {
+			t.Errorf("%s: child OutputSchema = %v, want nil", tc.name, cfg.OutputSchema)
+		}
 	}
 }

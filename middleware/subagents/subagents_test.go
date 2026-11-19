@@ -397,6 +397,20 @@ func TestStructuredOutputRetriesThenSucceeds(t *testing.T) {
 	}
 }
 
+func TestStructuredOutputSchemaWithoutType(t *testing.T) {
+	child := llmtest.New(llmtest.Turn{Text: `{"n": 2}`})
+	spec := structuredSpec(child)
+	delete(spec.OutputSchema, "type")
+	parent := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{taskCall("t1", "counter", "count")}},
+		llmtest.Turn{Text: "done"},
+	)
+	collect(t, context.Background(), newParent(t, parent, newMiddleware(t, Config{Subagents: []Subagent{spec}})), userInput("go"))
+	if res := onlyResult(t, parent); res.IsError || blockText(res) != `{"n":2}` {
+		t.Fatalf("task result = %q (error=%v), want the compact JSON", blockText(res), res.IsError)
+	}
+}
+
 func TestCancelStopsParallelChildren(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 

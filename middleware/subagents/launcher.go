@@ -177,10 +177,11 @@ func childConfig(cfg agent.Config, spec Subagent) (agent.Config, error) {
 	cfg.Name = spec.Name
 	cfg.System = system
 	cfg.CacheBoundary = 1
-	// The child answers in the format of its own spec; childSystem already
-	// asks for it, and the core adds no second segment because the child
-	// runs nested.
-	cfg.OutputSchema = spec.OutputSchema
+	// The child never carries an OutputSchema: it always runs nested, where
+	// the core field is inactive, and agent.New would refuse a spec schema
+	// without "type": "object" that subagents accept. childSystem asks for
+	// the spec's format and the task tool validates the answer.
+	cfg.OutputSchema = nil
 	cfg.Checkpointer = nil
 	cfg.SyncWorkspace = false
 	if spec.Tools != nil {

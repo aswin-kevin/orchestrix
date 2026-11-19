@@ -46,11 +46,12 @@ func outputPrompt(schema map[string]any) (string, error) {
 
 // checkOutput validates the reply that would complete the run against
 // Config.OutputSchema. A valid answer is remembered for Final.Output and the
-// run goes on to its BeforeStop hooks (retry false). An invalid one is sent
+// run goes on to its BeforeStop hooks (handled false). An invalid one is sent
 // back for correction while OutputRetries last, and ends the run with
-// ReasonInvalidOutput after that (retry true; done is the Final, or nil when
-// the run continues). Runs without an active schema are not checked.
-func (r *run) checkOutput(resp *llm.Response) (done *Final, retry bool) {
+// ReasonInvalidOutput after that; either way handled is true and the caller
+// returns done, which is the Final or nil when the run continues. Runs
+// without an active schema are not checked (handled false).
+func (r *run) checkOutput(resp *llm.Response) (done *Final, handled bool) {
 	if !r.outputActive {
 		return nil, false
 	}
