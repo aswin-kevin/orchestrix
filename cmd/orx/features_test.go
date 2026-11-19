@@ -407,3 +407,29 @@ func TestSkillsLoadedOnce(t *testing.T) {
 		t.Errorf("the agent read the skills directory again: the skill is missing from %q", sys)
 	}
 }
+
+func TestAsyncFlag(t *testing.T) {
+	provider := textTurn()
+
+	code, _, stderr := invoke(t, "", provider, "-model", "openai:test", "-dir", t.TempDir(), "-async", "-p", "hi")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if names := toolNames(provider.Requests[0]); !slices.Contains(names, "start_task") {
+		t.Errorf("tools = %v, want start_task", names)
+	}
+}
+
+func TestCompressFlag(t *testing.T) {
+	provider := textTurn()
+
+	code, _, stderr := invoke(t, "", provider, "-model", "openai:test", "-dir", t.TempDir(), "-compress", "-p", "hi")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if names := toolNames(provider.Requests[0]); !slices.Contains(names, "compress_context") {
+		t.Errorf("tools = %v, want compress_context", names)
+	}
+}

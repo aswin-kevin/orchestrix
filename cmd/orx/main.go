@@ -88,6 +88,9 @@ type options struct {
 	// web adds the web tools, with the search backend named by search.
 	web    bool
 	search string
+	// async adds background subagents; compress adds model-directed
+	// context compression.
+	async, compress bool
 }
 
 // run is the testable core of the program. It returns the process exit code.
@@ -123,7 +126,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if ag == nil {
 		return code
 	}
-	defer shutdown()
+	defer shutdownOnExit(shutdown, stderr)
 
 	conv, err := newConversation(setupCtx, ag, opts, abort)
 	if err == nil && setupCtx.Err() != nil {
@@ -166,6 +169,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.mcpFile, "mcp", "", "MCP server configuration file")
 	fs.BoolVar(&o.web, "web", false, "add the web_fetch and web_search tools")
 	fs.StringVar(&o.search, "search", defaultSearch, "web search backend: "+strings.Join(searchBackends, ", "))
+	fs.BoolVar(&o.async, "async", false, "let the model run subagents in the background (start_task)")
+	fs.BoolVar(&o.compress, "compress", false, "let the model compress older parts of the conversation")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -285,6 +290,14 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		})
 		agentOpts = append(agentOpts, orchestrix.WithMCP(m))
 	}
+	// Last, so background subagents stop before the MCP servers and jobs
+	// they may use.
+	scale, stopScale, err := scaleOptions(o)
+	if err != nil {
+		return fail(exitError, "%v", err)
+	}
+	cleanups = append(cleanups, stopScale)
+	agentOpts = append(agentOpts, scale...)
 
 	ag, err = orchestrix.New(provider, agentOpts...)
 	if err != nil {

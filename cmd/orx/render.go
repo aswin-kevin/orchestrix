@@ -33,13 +33,17 @@ type renderer struct {
 	// other agent are subagent output.
 	topAgent string
 
-	// mu guards midLine and textAgent: the approval prompt arrives from a
-	// tool goroutine while the main one renders events.
+	// mu guards midLine, textAgent and pending: the approval prompt arrives
+	// from a tool goroutine while the main one renders events.
 	mu sync.Mutex
 	// midLine is true while streamed text has not yet been ended by a newline.
 	midLine bool
-	// textAgent is the agent whose text is streaming while midLine is set.
+	// textAgent is the agent whose text is streaming while midLine is set or
+	// pending is not empty.
 	textAgent string
+	// pending holds the leading bytes of a UTF-8 rune split across textAgent's
+	// deltas, until the rest arrives; see splitIncompleteRune.
+	pending string
 }
 
 func newRenderer(stdout, stderr io.Writer) *renderer {
@@ -106,9 +110,7 @@ func (r *renderer) render(ev agent.Event) {
 	pre := r.prefix(ev.Agent)
 	switch ev.Kind {
 	case agent.KindText:
-		// Each delta is escaped on its own: an escape sequence split across
-		// deltas still has its ESC in one of them.
-		r.text(ev.Agent, pre, termSafe(ev.Text))
+		r.streamText(ev.Agent, pre, ev.Text)
 	case agent.KindToolUse:
 		r.status(pre + fmt.Sprintf("⏺ %s(%s)", termSafe(ev.ToolName), compactJSON(ev.Input)))
 	case agent.KindToolResult:
@@ -118,6 +120,40 @@ func (r *renderer) render(ev agent.Event) {
 	case agent.KindFinal:
 		r.final(ev.Final)
 	}
+}
+
+// streamText prints one text delta of the named agent. Each delta is escaped
+// on its own (an escape sequence split across deltas still has its ESC in one
+// of them), except for an incomplete rune at its end: those bytes are held
+// back and joined to the agent's next delta, so a character split across
+// deltas is not shown as escaped invalid bytes. Text of another agent, a
+// status line, a prompt or the final event flush the held bytes, escaped.
+func (r *renderer) streamText(agentName, pre, delta string) {
+	if r.pending != "" && agentName != r.textAgent {
+		r.endText()
+	}
+	complete, pending := splitIncompleteRune(r.pending + delta)
+	r.pending = pending
+	if pending != "" {
+		r.textAgent = agentName
+	}
+	r.text(agentName, pre, termSafe(complete))
+}
+
+// splitIncompleteRune returns s without its trailing bytes that begin a UTF-8
+// sequence still missing bytes (at most utf8.UTFMax-1), and those bytes.
+// Bytes that cannot become a valid rune stay in complete.
+func splitIncompleteRune(s string) (complete, pending string) {
+	for i := len(s) - 1; i >= 0 && i >= len(s)-(utf8.UTFMax-1); i-- {
+		if !utf8.RuneStart(s[i]) {
+			continue
+		}
+		if !utf8.FullRuneInString(s[i:]) {
+			return s[:i], s[i:]
+		}
+		break
+	}
+	return s, ""
 }
 
 // text streams s to stdout. Every line of a subagent's text starts with
@@ -143,8 +179,14 @@ func (r *renderer) text(agentName, pre, s string) {
 }
 
 // endText finishes a streamed text line so later output starts on a new
-// one. The caller holds mu.
+// one, first printing any held bytes of an incomplete rune, escaped. The
+// caller holds mu.
 func (r *renderer) endText() {
+	if r.pending != "" {
+		held := r.pending
+		r.pending = ""
+		r.text(r.textAgent, r.prefix(r.textAgent), termSafe(held))
+	}
 	if r.midLine {
 		fmt.Fprintln(r.stdout)
 		r.midLine = false
