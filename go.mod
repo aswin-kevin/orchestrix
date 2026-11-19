@@ -1,8 +1,8 @@
 module github.com/aswin-kevin/orchestrix
 
-go 1.24.0
+go 1.26.0
 
 require (
-	golang.org/x/net v0.50.0
+	golang.org/x/net v0.63.0
 	gopkg.in/yaml.v3 v3.0.1
 )

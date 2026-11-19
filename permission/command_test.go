@@ -184,6 +184,17 @@ func TestSplitCommand(t *testing.T) {
 		{"readarray A", []string{"readarray A"}, false},
 		{"/usr/bin/doas rm x", []string{"doas rm x", "rm x"}, false},
 
+		// Script interpreters run programs that can start any command.
+		{`awk 'BEGIN{system("rm x")}'`, []string{`awk BEGIN{system("rm x")}`}, false},
+		{"awk '{print $1}' file", []string{"awk {print $1} file"}, false},
+		{"/usr/bin/gawk -f prog.awk", []string{"gawk -f prog.awk"}, false},
+		{"perl -e 'exec q(rm x)'", []string{"perl -e exec q(rm x)"}, false},
+		{"python3 -c 'import os'", []string{"python3 -c import os"}, false},
+		{"python3.12 script.py", []string{"python3.12 script.py"}, false},
+		{"node -e 'x'", []string{"node -e x"}, false},
+		{"ruby script.rb", []string{"ruby script.rb"}, false},
+		{"nohup lua5.4 x.lua", []string{"lua5.4 x.lua"}, false},
+
 		// Shell reserved words are dropped so that deny rules still see the
 		// command, but the line is never vouched for.
 		{"if true; then rm x; fi", []string{"true", "rm x"}, false},
@@ -245,6 +256,15 @@ func TestShellSmuggling(t *testing.T) {
 		t.Run("allow/"+tt.cmd, func(t *testing.T) {
 			if got := Evaluate(shell(tt.cmd), tt.pc); got.Behavior != Ask {
 				t.Fatalf("Evaluate(%q) = %+v, want Ask", tt.cmd, got)
+			}
+		})
+	}
+	// An allow rule for an interpreter cannot vouch for the program it runs.
+	allowAwk := Context{Rules: Rules{Allow: []Rule{mustRule(t, "execute(awk:*)")}}}
+	for _, cmd := range []string{`awk 'BEGIN{system("rm x")}'`, "awk '{print $1}' file"} {
+		t.Run("allow/"+cmd, func(t *testing.T) {
+			if got := Evaluate(shell(cmd), allowAwk); got.Behavior != Ask {
+				t.Fatalf("Evaluate(%q) = %+v, want Ask", cmd, got)
 			}
 		})
 	}

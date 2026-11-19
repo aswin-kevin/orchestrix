@@ -9,16 +9,20 @@
 // link). Do not point the backend at a directory an untrusted party can
 // pre-populate with hard links.
 //
-// Race note: the containment check and the file operation are separate system
-// calls, so a process that can rewrite symlinks inside the root concurrently
-// could still win a race. The backend defends against the agent, not against
-// other writers of the same directory.
+// Races: every path is checked up front, which yields ErrOutsideRoot, and
+// every file operation then goes through an os.Root opened on the root
+// directory, which refuses to leave it at the moment of the call. So a
+// concurrent writer, such as a background shell job, that swaps a directory
+// for a symlink after the check can make an operation fail but never redirect
+// it outside the root.
 package disk
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -36,16 +40,19 @@ const (
 	// creates; existing files keep their mode when rewritten.
 	newFileMode os.FileMode = 0o644
 	newDirMode  os.FileMode = 0o755
-	// tempPattern names the temporary files used for atomic writes.
-	tempPattern = ".orchestrix-write-*"
+	// tempPrefix starts the names of the temporary files used for atomic
+	// writes.
+	tempPrefix = ".orchestrix-write-"
 )
 
 // skippedDirs are never descended into by Grep.
 var skippedDirs = map[string]bool{".git": true, "node_modules": true}
 
-// Backend is a backend.Backend rooted at a directory.
+// Backend is a backend.Backend rooted at a directory. The directory stays open
+// for the Backend's lifetime.
 type Backend struct {
-	root    string
+	root    string   // symlink-free path of the root directory
+	fsRoot  *os.Root // every file operation goes through it
 	virtual bool
 	ripgrep bool
 	rgPath  string // empty when ripgrep is disabled or not installed
@@ -86,7 +93,11 @@ func New(root string, opts ...Option) (*Backend, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("disk: root %q: %w", root, backend.ErrNotDir)
 	}
-	b := &Backend{root: resolved, virtual: true, ripgrep: true}
+	fsRoot, err := os.OpenRoot(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("disk: root %q: %w", root, err)
+	}
+	b := &Backend{root: resolved, fsRoot: fsRoot, virtual: true, ripgrep: true}
 	for _, opt := range opts {
 		opt(b)
 	}
@@ -139,6 +150,20 @@ func (b *Backend) RealPath(p string) (string, error) {
 	return realPath, err
 }
 
+// resolveRel is resolve for file operations: it returns the resolved path
+// relative to the root, the form b.fsRoot takes.
+func (b *Backend) resolveRel(op, p string) (clean, rel string, err error) {
+	clean, realPath, err := b.resolve(op, p)
+	if err != nil {
+		return "", "", err
+	}
+	rel, err = filepath.Rel(b.root, realPath)
+	if err != nil {
+		return "", "", wrapFSError(op, clean, err)
+	}
+	return clean, rel, nil
+}
+
 func (b *Backend) inside(p string) bool {
 	rel, err := filepath.Rel(b.root, p)
 	if err != nil {
@@ -187,47 +212,47 @@ func wrapFSError(op, p string, err error) error {
 }
 
 // resolveBase resolves p (empty means the root) and stats the result.
-func (b *Backend) resolveBase(op, p string) (clean, realPath string, info fs.FileInfo, err error) {
+func (b *Backend) resolveBase(op, p string) (clean, rel string, info fs.FileInfo, err error) {
 	if p == "" {
 		p = b.rootPath()
 	}
-	clean, realPath, err = b.resolve(op, p)
+	clean, rel, err = b.resolveRel(op, p)
 	if err != nil {
 		return "", "", nil, err
 	}
-	info, err = os.Stat(realPath)
+	info, err = b.fsRoot.Stat(rel)
 	if err != nil {
 		return "", "", nil, wrapFSError(op, clean, err)
 	}
-	return clean, realPath, info, nil
+	return clean, rel, info, nil
 }
 
 // resolveDir is resolveBase for operations that need a directory.
-func (b *Backend) resolveDir(op, p string) (clean, realPath string, err error) {
-	clean, realPath, info, err := b.resolveBase(op, p)
+func (b *Backend) resolveDir(op, p string) (clean, rel string, err error) {
+	clean, rel, info, err := b.resolveBase(op, p)
 	if err != nil {
 		return "", "", err
 	}
 	if !info.IsDir() {
 		return "", "", fmt.Errorf("disk: %s %s: %w", op, clean, backend.ErrNotDir)
 	}
-	return clean, realPath, nil
+	return clean, rel, nil
 }
 
 // Ls lists the direct children of the directory at p. Symlinks that resolve
 // outside the root are omitted.
 func (b *Backend) Ls(_ context.Context, p string) ([]backend.FileInfo, error) {
-	clean, realPath, err := b.resolveDir("ls", p)
+	clean, rel, err := b.resolveDir("ls", p)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(realPath)
+	entries, err := fs.ReadDir(b.fsRoot.FS(), filepath.ToSlash(rel))
 	if err != nil {
 		return nil, wrapFSError("ls", clean, err)
 	}
 	out := make([]backend.FileInfo, 0, len(entries))
 	for _, entry := range entries {
-		info, ok := b.entryInfo(realPath, entry)
+		info, ok := b.entryInfo(rel, entry)
 		if !ok {
 			continue
 		}
@@ -236,18 +261,16 @@ func (b *Backend) Ls(_ context.Context, p string) ([]backend.FileInfo, error) {
 	return out, nil
 }
 
-// entryInfo returns the info for a directory entry, following symlinks that
-// stay inside the root. ok is false for entries that must not be exposed.
+// entryInfo returns the info for an entry of the directory dir (relative to
+// the root), following symlinks that stay inside the root. ok is false for
+// entries that must not be exposed.
 func (b *Backend) entryInfo(dir string, entry fs.DirEntry) (info fs.FileInfo, ok bool) {
 	if entry.Type()&fs.ModeSymlink == 0 {
 		info, err := entry.Info()
 		return info, err == nil
 	}
-	target, err := evalPath(filepath.Join(dir, entry.Name()))
-	if err != nil || !b.inside(target) {
-		return nil, false
-	}
-	info, err = os.Stat(target)
+	// The root follows a symlink only while it stays inside the root.
+	info, err := b.fsRoot.Stat(filepath.Join(dir, entry.Name()))
 	return info, err == nil
 }
 
@@ -266,51 +289,79 @@ func (b *Backend) Read(_ context.Context, p string, offset, limit int) (backend.
 
 // load resolves p and reads the whole regular file it names, refusing one
 // over backend.MaxReadFileBytes before reading it. It returns the cleaned
-// and real paths for operations that write the file back.
-func (b *Backend) load(op, p string) (clean, realPath string, content []byte, info fs.FileInfo, err error) {
-	clean, realPath, err = b.resolve(op, p)
+// and root-relative paths for operations that write the file back.
+func (b *Backend) load(op, p string) (clean, rel string, content []byte, info fs.FileInfo, err error) {
+	clean, rel, err = b.resolveRel(op, p)
 	if err != nil {
 		return "", "", nil, nil, err
 	}
-	info, err = os.Stat(realPath)
+	content, info, err = b.readRegular(rel, backend.MaxReadFileBytes)
 	if err != nil {
 		return "", "", nil, nil, wrapFSError(op, clean, err)
 	}
-	if err := requireRegular(op, clean, info); err != nil {
-		return "", "", nil, nil, err
-	}
-	if err := backend.CheckReadSize(info.Size()); err != nil {
-		return "", "", nil, nil, fmt.Errorf("disk: %s %s: %w", op, clean, err)
-	}
-	content, err = os.ReadFile(realPath)
+	return clean, rel, content, info, nil
+}
+
+// readRegular reads the regular file at rel (relative to the root), refusing
+// directories (ErrIsDir), other non-regular files and files over limit bytes
+// (a *backend.TooLargeError) before reading them. The file is checked before it is opened, because
+// opening a FIFO can block forever, and checked again once open, in case it
+// was replaced in between.
+func (b *Backend) readRegular(rel string, limit int64) ([]byte, fs.FileInfo, error) {
+	info, err := b.fsRoot.Stat(rel)
 	if err != nil {
-		return "", "", nil, nil, wrapFSError(op, clean, err)
+		return nil, nil, err
 	}
-	return clean, realPath, content, info, nil
+	if err := checkReadable(info, limit); err != nil {
+		return nil, nil, err
+	}
+	f, err := b.fsRoot.Open(rel)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	info, err = f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkReadable(info, limit); err != nil {
+		return nil, nil, err
+	}
+	// The limit also bounds a file that grows while it is read.
+	content, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, nil, err
+	}
+	if size := int64(len(content)); size > limit {
+		return nil, nil, &backend.TooLargeError{Size: size}
+	}
+	return content, info, nil
+}
+
+// checkReadable rejects what readRegular refuses to read.
+func checkReadable(info fs.FileInfo, limit int64) error {
+	switch {
+	case info.IsDir():
+		return backend.ErrIsDir
+	case !info.Mode().IsRegular():
+		return errNotRegular
+	case info.Size() > limit:
+		return &backend.TooLargeError{Size: info.Size()}
+	}
+	return nil
 }
 
 // errNotRegular reports a FIFO, device or socket, which the backend refuses to
 // open because reading one can block forever.
 var errNotRegular = errors.New("not a regular file")
 
-// requireRegular rejects directories (ErrIsDir) and other non-regular files.
-func requireRegular(op, clean string, info fs.FileInfo) error {
-	switch {
-	case info.IsDir():
-		return fmt.Errorf("disk: %s %s: %w", op, clean, backend.ErrIsDir)
-	case !info.Mode().IsRegular():
-		return fmt.Errorf("disk: %s %s: %w", op, clean, errNotRegular)
-	}
-	return nil
-}
-
 // Write replaces the file at p atomically, creating parent directories.
 func (b *Backend) Write(_ context.Context, p string, content []byte) error {
-	clean, realPath, err := b.resolve("write", p)
+	clean, rel, err := b.resolveRel("write", p)
 	if err != nil {
 		return err
 	}
-	if err := replaceFile(realPath, content); err != nil {
+	if err := b.replaceFile(rel, content); err != nil {
 		return wrapFSError("write", clean, err)
 	}
 	return nil
@@ -318,7 +369,7 @@ func (b *Backend) Write(_ context.Context, p string, content []byte) error {
 
 // Edit replaces old with replacement in the file at p.
 func (b *Backend) Edit(_ context.Context, p, old, replacement string, replaceAll bool) (backend.EditResult, error) {
-	clean, realPath, content, _, err := b.load("edit", p)
+	clean, rel, content, _, err := b.load("edit", p)
 	if err != nil {
 		return backend.EditResult{}, err
 	}
@@ -326,7 +377,7 @@ func (b *Backend) Edit(_ context.Context, p, old, replacement string, replaceAll
 	if err != nil {
 		return backend.EditResult{}, fmt.Errorf("disk: edit %s: %w", clean, err)
 	}
-	if err := replaceFile(realPath, updated); err != nil {
+	if err := b.replaceFile(rel, updated); err != nil {
 		return backend.EditResult{}, wrapFSError("edit", clean, err)
 	}
 	return backend.EditResult{Occurrences: count}, nil
@@ -335,7 +386,7 @@ func (b *Backend) Edit(_ context.Context, p, old, replacement string, replaceAll
 // MultiEdit applies edits to the file at p all or nothing: the edits run on
 // the file's bytes in memory and a single atomic replace writes the result.
 func (b *Backend) MultiEdit(_ context.Context, p string, edits []backend.EditOp) (backend.EditResult, error) {
-	clean, realPath, content, _, err := b.load("multi-edit", p)
+	clean, rel, content, _, err := b.load("multi-edit", p)
 	if err != nil {
 		return backend.EditResult{}, err
 	}
@@ -343,18 +394,18 @@ func (b *Backend) MultiEdit(_ context.Context, p string, edits []backend.EditOp)
 	if err != nil {
 		return backend.EditResult{}, fmt.Errorf("disk: multi-edit %s: %w", clean, err)
 	}
-	if err := replaceFile(realPath, updated); err != nil {
+	if err := b.replaceFile(rel, updated); err != nil {
 		return backend.EditResult{}, wrapFSError("multi-edit", clean, err)
 	}
 	return backend.EditResult{Occurrences: count}, nil
 }
 
-// replaceFile atomically replaces the file at real (a resolved path) with
+// replaceFile atomically replaces the file at rel (relative to the root) with
 // content: it writes a temporary file next to it and renames that over the
 // target, so readers never see a partial file. An existing file keeps its mode.
-func replaceFile(realPath string, content []byte) error {
+func (b *Backend) replaceFile(rel string, content []byte) error {
 	mode := newFileMode
-	info, err := os.Stat(realPath)
+	info, err := b.fsRoot.Stat(rel)
 	switch {
 	case err == nil && info.IsDir():
 		return backend.ErrIsDir
@@ -365,18 +416,19 @@ func replaceFile(realPath string, content []byte) error {
 	case !errors.Is(err, fs.ErrNotExist):
 		return err
 	}
-	dir := filepath.Dir(realPath)
-	if err := os.MkdirAll(dir, newDirMode); err != nil {
+	dir := filepath.Dir(rel)
+	if err := b.fsRoot.MkdirAll(dir, newDirMode); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, tempPattern)
+	tmpName := filepath.Join(dir, tempPrefix+rand.Text())
+	tmp, err := b.fsRoot.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, newFileMode)
 	if err != nil {
 		return err
 	}
 	committed := false
 	defer func() {
 		if !committed {
-			_ = os.Remove(tmp.Name())
+			_ = b.fsRoot.Remove(tmpName)
 		}
 	}()
 	if _, err := tmp.Write(content); err != nil {
@@ -390,7 +442,7 @@ func replaceFile(realPath string, content []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp.Name(), realPath); err != nil {
+	if err := b.fsRoot.Rename(tmpName, rel); err != nil {
 		return err
 	}
 	committed = true
@@ -405,18 +457,18 @@ func (b *Backend) Delete(_ context.Context, p string) error {
 		return err
 	}
 	// Resolve only the parent so that a final symlink is deleted, not followed.
-	_, parent, err := b.resolve("delete", path.Dir(clean))
+	_, parent, err := b.resolveRel("delete", path.Dir(clean))
 	if err != nil {
 		return err
 	}
 	target := filepath.Join(parent, path.Base(clean))
-	if target == b.root {
+	if target == "." {
 		return fmt.Errorf("disk: delete %s: %w: cannot delete the root", clean, backend.ErrInvalidPath)
 	}
-	if _, err := os.Lstat(target); err != nil {
+	if _, err := b.fsRoot.Lstat(target); err != nil {
 		return wrapFSError("delete", clean, err)
 	}
-	if err := os.RemoveAll(target); err != nil {
+	if err := b.fsRoot.RemoveAll(target); err != nil {
 		return wrapFSError("delete", clean, err)
 	}
 	return nil
@@ -426,7 +478,7 @@ func (b *Backend) Delete(_ context.Context, p string) error {
 // relative pattern is resolved against base; an empty base means the root.
 // Symlinks are not followed or listed.
 func (b *Backend) Glob(ctx context.Context, pattern, base string) ([]backend.FileInfo, error) {
-	clean, realPath, err := b.resolveDir("glob", base)
+	clean, rel, err := b.resolveDir("glob", base)
 	if err != nil {
 		return nil, err
 	}
@@ -434,8 +486,8 @@ func (b *Backend) Glob(ctx context.Context, pattern, base string) ([]backend.Fil
 		pattern = path.Join(clean, pattern)
 	}
 	var out []backend.FileInfo
-	err = walkFiles(ctx, realPath, nil, func(rel string, d fs.DirEntry) error {
-		virtualPath := path.Join(clean, rel)
+	err = b.walkFiles(ctx, rel, nil, func(fileRel string, d fs.DirEntry) error {
+		virtualPath := path.Join(clean, fileRel)
 		if !backend.MatchGlob(pattern, virtualPath) {
 			return nil
 		}
@@ -451,12 +503,13 @@ func (b *Backend) Glob(ctx context.Context, pattern, base string) ([]backend.Fil
 	return out, nil
 }
 
-// walkFiles calls fn for every regular file below dir, in directory-walk
-// order, passing the slash-separated path relative to dir. Symlinks and
-// directories named in skip are not entered; unreadable entries are ignored.
-// fn may return filepath.SkipAll to stop early.
-func walkFiles(ctx context.Context, dir string, skip map[string]bool, fn func(rel string, d fs.DirEntry) error) error {
-	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+// walkFiles calls fn for every regular file below dir (relative to the root),
+// in directory-walk order, passing the slash-separated path relative to dir.
+// Symlinks and directories named in skip are not entered; unreadable entries
+// are ignored. fn may return filepath.SkipAll to stop early.
+func (b *Backend) walkFiles(ctx context.Context, dir string, skip map[string]bool, fn func(rel string, d fs.DirEntry) error) error {
+	start := filepath.ToSlash(dir)
+	return fs.WalkDir(b.fsRoot.FS(), start, func(p string, d fs.DirEntry, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
@@ -467,7 +520,7 @@ func walkFiles(ctx context.Context, dir string, skip map[string]bool, fn func(re
 			return nil
 		}
 		if d.IsDir() {
-			if p != dir && skip[d.Name()] {
+			if p != start && skip[d.Name()] {
 				return fs.SkipDir
 			}
 			return nil
@@ -475,10 +528,15 @@ func walkFiles(ctx context.Context, dir string, skip map[string]bool, fn func(re
 		if !d.Type().IsRegular() {
 			return nil
 		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil {
-			return nil
-		}
-		return fn(filepath.ToSlash(rel), d)
+		return fn(relativeTo(start, p), d)
 	})
+}
+
+// relativeTo returns the slash-separated path p, which lies below dir, relative
+// to dir; both are paths as an fs.FS names them, where "." is the root.
+func relativeTo(dir, p string) string {
+	if dir == "." {
+		return p
+	}
+	return strings.TrimPrefix(p, dir+"/")
 }

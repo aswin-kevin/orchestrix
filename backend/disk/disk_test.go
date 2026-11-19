@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/backendtest"
@@ -302,5 +303,78 @@ func TestDiskRealPath(t *testing.T) {
 	}
 	if _, err := host.RealPath(filepath.Join(root, "..")); !errors.Is(err, backend.ErrOutsideRoot) {
 		t.Errorf("host RealPath(root/..) = %v, want ErrOutsideRoot", err)
+	}
+}
+
+// TestDiskSymlinkSwapRace swaps a directory for a symlink to outside the root
+// while the backend reads or writes through it: an operation may fail, but
+// must never reach the outside directory.
+func TestDiskSymlinkSwapRace(t *testing.T) {
+	ctx := context.Background()
+	t.Run("read", func(t *testing.T) {
+		b, root, _ := newSwapRace(t)
+		hammerDuringSwaps(t, root, func() bool {
+			res, err := b.Read(ctx, "/dir/f.txt", 0, 0)
+			return err == nil && len(res.Lines) > 0 && res.Lines[0] == "outside"
+		})
+	})
+	t.Run("write", func(t *testing.T) {
+		b, root, outside := newSwapRace(t)
+		hammerDuringSwaps(t, root, func() bool {
+			_ = b.Write(ctx, "/dir/new.txt", []byte("x"))
+			_, err := os.Lstat(filepath.Join(outside, "new.txt"))
+			return err == nil
+		})
+	})
+}
+
+// newSwapRace returns a backend whose root holds dir/f.txt ("inside") and
+// link, a symlink to the returned outside directory, which holds f.txt
+// ("outside").
+func newSwapRace(t *testing.T) (b *disk.Backend, root, outside string) {
+	t.Helper()
+	b, root = newDisk(t)
+	outside = t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "f.txt"), []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write(context.Background(), "/dir/f.txt", []byte("inside")); err != nil {
+		t.Fatal(err)
+	}
+	mustSymlink(t, outside, filepath.Join(root, "link"))
+	return b, root, outside
+}
+
+// hammerDuringSwaps calls escaped for a second while another goroutine keeps
+// swapping root/dir for the symlink root/link and back, and fails the test
+// if escaped ever reports that an operation reached outside the root. The
+// race is probabilistic, so it is exercised for a fixed time.
+func hammerDuringSwaps(t *testing.T, root string, escaped func() bool) {
+	t.Helper()
+	dir, parked, link := filepath.Join(root, "dir"), filepath.Join(root, "parked"), filepath.Join(root, "link")
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = os.Rename(dir, parked)
+			_ = os.Rename(link, dir)
+			_ = os.Rename(dir, link)
+			_ = os.Rename(parked, dir)
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-done
+	}()
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		if escaped() {
+			t.Fatal("operation reached outside the root")
+		}
 	}
 }
