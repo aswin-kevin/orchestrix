@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,8 +14,9 @@ import (
 const oaReplyJSON = `{"model":"decider-1","answers":[
  {"type":"predicate","name":"refund","probability":0.9},
  {"type":"choice","name":"team","choice":"payments","confidence":0.8,"probabilities":[{"value":"payments","probability":0.8},{"value":"mobile","probability":0.2}]},
- {"type":"score","name":"urgency","score":0.7,"confidence":0.6,"probabilities":[{"value":"0","label":"low","probability":0.3},{"value":"1","label":"high","probability":0.7}]}],
- "usage":{"input_tokens":120,"cache_write_tokens":15,"input_tokens_details":{"cached_tokens":40}}}`
+ {"type":"score","name":"urgency","score":0.7,"confidence":0.6,"probabilities":[{"value":0,"label":"low","probability":0.3},{"value":1,"label":"high","probability":0.7}]}],
+ "usage":{"input_tokens":120,"input_tokens_details":{"cached_tokens":40,"cache_write_tokens":15},
+  "output_tokens":4,"output_tokens_details":{"reasoning_tokens":1},"total_tokens":124}}`
 
 func newTestOpenAIDecisions(t *testing.T, baseURL string) Decider {
 	t.Helper()
@@ -94,7 +96,7 @@ func TestOpenAIDecisionsAnswers(t *testing.T) {
 		a.Probabilities["low"] != 0.3 || a.Probabilities["high"] != 0.7 || len(a.Probabilities) != 2 {
 		t.Errorf("urgency = %+v", a)
 	}
-	if resp.Model != "decider-1" || resp.Usage.Input != 120 || resp.Usage.CacheRead != 40 || resp.Usage.CacheWrite != 15 {
+	if resp.Model != "decider-1" || resp.Usage != (Usage{Input: 120, Output: 4, CacheRead: 40, CacheWrite: 15}) {
 		t.Errorf("model/usage = %q %+v", resp.Model, resp.Usage)
 	}
 }
@@ -148,5 +150,13 @@ func TestParseModelOpenAIDecisions(t *testing.T) {
 	}
 	if _, err := NewDecider(cfg); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOpenAIDecisionsChoiceValueKinds(t *testing.T) {
+	for raw, want := range map[string]string{`"yes"`: "yes", `true`: "true", `false`: "false"} {
+		if got := choiceValue(json.RawMessage(raw)); got != want {
+			t.Errorf("choiceValue(%s) = %q, want %q", raw, got, want)
+		}
 	}
 }

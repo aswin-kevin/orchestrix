@@ -83,9 +83,10 @@ type openAIDecisionsReply struct {
 	Answers []openAIDecisionAnswer `json:"answers"`
 	Usage   struct {
 		InputTokens        int `json:"input_tokens"`
-		CacheWriteTokens   int `json:"cache_write_tokens"`
+		OutputTokens       int `json:"output_tokens"`
 		InputTokensDetails struct {
-			CachedTokens int `json:"cached_tokens"`
+			CachedTokens     int `json:"cached_tokens"`
+			CacheWriteTokens int `json:"cache_write_tokens"`
 		} `json:"input_tokens_details"`
 	} `json:"usage"`
 }
@@ -98,9 +99,11 @@ type openAIDecisionAnswer struct {
 	Score         float64 `json:"score"`
 	Confidence    float64 `json:"confidence"`
 	Probabilities []struct {
-		Value       string  `json:"value"`
-		Label       string  `json:"label"`
-		Probability float64 `json:"probability"`
+		// Value is a string or boolean for a choice and a level index for
+		// a score.
+		Value       json.RawMessage `json:"value"`
+		Label       string          `json:"label"`
+		Probability float64         `json:"probability"`
 	} `json:"probabilities"`
 }
 
@@ -220,8 +223,9 @@ func (r openAIDecisionsReply) toResponse(qs []Question) *DecisionResponse {
 		Answers: make(map[string]Answer, len(qs)),
 		Usage: Usage{
 			Input:      r.Usage.InputTokens,
+			Output:     r.Usage.OutputTokens,
 			CacheRead:  r.Usage.InputTokensDetails.CachedTokens,
-			CacheWrite: r.Usage.CacheWriteTokens,
+			CacheWrite: r.Usage.InputTokensDetails.CacheWriteTokens,
 		},
 	}
 	byName := make(map[string]Question, len(qs))
@@ -248,18 +252,28 @@ func (r openAIDecisionsReply) toResponse(qs []Question) *DecisionResponse {
 }
 
 // probabilities maps the answer's probabilities by option value, or by label
-// for scores.
+// for scores (the request sends each level's Option.Value as its label).
 func (a openAIDecisionAnswer) probabilities(byLabel bool) map[string]float64 {
 	if a.Probabilities == nil {
 		return nil
 	}
 	m := make(map[string]float64, len(a.Probabilities))
 	for _, p := range a.Probabilities {
-		key := p.Value
-		if byLabel {
-			key = p.Label
+		key := p.Label
+		if !byLabel {
+			key = choiceValue(p.Value)
 		}
 		m[key] = p.Probability
 	}
 	return m
+}
+
+// choiceValue returns a choice value as text: a JSON string unquoted, any
+// other literal (a boolean) as written.
+func choiceValue(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return string(raw)
 }
