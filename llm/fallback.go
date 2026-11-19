@@ -242,7 +242,7 @@ func (f *fallback) Complete(ctx context.Context, req Request) (*Response, error)
 	order := f.order(f.now())
 	var last error
 	for k, i := range order {
-		resp, err := f.entries[i].Provider.Complete(ctx, f.prepare(i, req))
+		resp, err := f.entries[i].Provider.Complete(f.entryContext(ctx, order, k), f.prepare(i, req))
 		if err == nil {
 			f.markUp(i)
 			stamp(resp, f.entries[i].Name)
@@ -257,6 +257,19 @@ func (f *fallback) Complete(ctx context.Context, req Request) (*Response, error)
 		f.failed(ctx, order, k, err)
 	}
 	return nil, allFailed(last)
+}
+
+// entryContext is the context for the k-th entry of order. An entry that
+// another follows gets a hand-off hint (withHandoff): providers built by New
+// then return a fallback error at once instead of retrying it, so the switch
+// happens without waiting through that entry's retries and Retry-After. The
+// last entry keeps its normal retries, so a chain never gives up sooner than
+// a single provider would.
+func (f *fallback) entryContext(ctx context.Context, order []int, k int) context.Context {
+	if k == len(order)-1 {
+		return ctx
+	}
+	return withHandoff(ctx, f.should)
 }
 
 // stamp marks every block of resp as produced by the entry called name. Each

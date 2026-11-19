@@ -139,12 +139,69 @@ func TestDoCancelDuringRetryWait(t *testing.T) {
 
 	cfg := testConfig(t)
 	cfg.RetryInterval = time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
 
 	_, err := cfg.do(ctx, requestTo(srv.URL))
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// TestDoSkipsWaitPastDeadline checks that a retry wait that would end after
+// the context's deadline is not started: the provider's error comes back at
+// once, while the context is still live, instead of a deadline error later.
+func TestDoSkipsWaitPastDeadline(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Retry-After", "20")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := testConfig(t).do(ctx, requestTo(srv.URL))
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTooManyRequests {
+		t.Fatalf("err = %v, want the 429 APIError", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("returned after %v, want at once", elapsed)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("hits = %d, want 1", got)
+	}
+}
+
+// TestDoHandsOffToFallback checks that a call made for a fallback entry that
+// is not the last does not retry an error the fallback would switch on.
+func TestDoHandsOffToFallback(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	ctx := withHandoff(context.Background(), DefaultShouldFallback)
+	if _, err := testConfig(t).do(ctx, requestTo(srv.URL)); err == nil {
+		t.Fatal("want an error")
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("hits = %d, want 1 (no retries before handing off)", got)
+	}
+
+	// An error the fallback would not switch on is retried as usual.
+	hits.Store(0)
+	ctx = withHandoff(context.Background(), func(error) bool { return false })
+	if _, err := testConfig(t).do(ctx, requestTo(srv.URL)); err == nil {
+		t.Fatal("want an error")
+	}
+	if got, want := hits.Load(), int32(DefaultMaxRetries+1); got != want {
+		t.Errorf("hits = %d, want %d", got, want)
 	}
 }
 
@@ -172,6 +229,14 @@ func TestRetryDelay(t *testing.T) {
 	cfg.RetryInterval = 40 * time.Millisecond
 	if got := cfg.retryDelay(5, plain); got != 40*time.Millisecond {
 		t.Errorf("fixed interval delay = %v", got)
+	}
+
+	// A huge Retry-After is capped at maxRetryAfter, plus its jitter.
+	huge := &APIError{Status: 429, RetryAfter: time.Hour, hasRetryAfter: true}
+	for range 100 {
+		if got := cfg.retryDelay(0, huge); got < maxRetryAfter || got > maxRetryAfter+maxRetryAfter/retryAfterJitterDivisor {
+			t.Fatalf("capped Retry-After delay = %v, want within [%v, %v]", got, maxRetryAfter, maxRetryAfter+maxRetryAfter/retryAfterJitterDivisor)
+		}
 	}
 }
 

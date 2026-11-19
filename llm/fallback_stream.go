@@ -20,7 +20,7 @@ func (f *fallback) Stream(ctx context.Context, req Request) iter.Seq2[StreamEven
 		order := f.order(f.now())
 		var last error
 		for k, i := range order {
-			switched, err := f.streamEntry(ctx, i, req, yield)
+			switched, err := f.streamEntry(f.entryContext(ctx, order, k), i, req, yield)
 			if !switched {
 				return
 			}

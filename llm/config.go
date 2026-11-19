@@ -57,7 +57,12 @@ type Config struct {
 	Proxy string
 
 	// MaxRetries is the retry count after the first attempt: 0 selects
-	// DefaultMaxRetries and a negative value disables retries.
+	// DefaultMaxRetries and a negative value disables retries. A server's
+	// Retry-After is honoured, capped at one minute. No wait is started that
+	// would end after the call's context deadline: the provider's error is
+	// returned at once instead. Inside a fallback chain (NewFallback), an
+	// entry that another follows does not retry an error that would make
+	// the chain switch.
 	MaxRetries int
 	// RetryInterval is a fixed wait between retries; zero selects
 	// exponential backoff with jitter.

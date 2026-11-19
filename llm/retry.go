@@ -20,6 +20,10 @@ const (
 	// retryAfterJitterDivisor bounds the jitter added to a server's
 	// Retry-After: at most a tenth of the requested wait.
 	retryAfterJitterDivisor = 10
+
+	// maxRetryAfter caps the wait a server's Retry-After can ask for, so a
+	// misbehaving server or proxy cannot stall a call indefinitely.
+	maxRetryAfter = 60 * time.Second
 )
 
 // do sends the request produced by build, honouring the rate limit and
@@ -27,6 +31,12 @@ const (
 // closes its body. build runs once per attempt so every retry gets a fresh
 // request body. Retries cover only establishing the response, never reading
 // it. Context errors are returned as-is and never retried.
+//
+// A retryable error is returned at once, without waiting, when a fallback
+// provider will switch to another entry for it (see withHandoff), or when
+// the wait before the next attempt would end after ctx's deadline: the
+// caller gets the provider's error while ctx is still live, rather than a
+// deadline error once the wait has used up the time left.
 func (c *Config) do(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
 	maxRetries := c.maxRetries()
 	for attempt := 0; ; attempt++ {
@@ -34,10 +44,14 @@ func (c *Config) do(ctx context.Context, build func() (*http.Request, error)) (*
 		if err == nil {
 			return resp, nil
 		}
-		if attempt >= maxRetries || !IsRetryable(err) {
+		if attempt >= maxRetries || !IsRetryable(err) || handsOff(ctx, err) {
 			return nil, err
 		}
-		if err := sleepContext(ctx, c.retryDelay(attempt, err)); err != nil {
+		delay := c.retryDelay(attempt, err)
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= delay {
+			return nil, err
+		}
+		if err := sleepContext(ctx, delay); err != nil {
 			return nil, err
 		}
 	}
@@ -92,11 +106,13 @@ func (c *Config) maxRetries() int {
 // exponential backoff. The Retry-After and backoff delays are jittered so
 // that callers sharing a rate limit, such as parallel subagents, spread their
 // retries out instead of all retrying at the same moment. A Retry-After is
-// only ever lengthened, never shortened; a fixed interval is used as given.
+// only ever lengthened by the jitter, and is capped at maxRetryAfter first;
+// a fixed interval is used as given.
 func (c *Config) retryDelay(attempt int, err error) time.Duration {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) && apiErr.hasRetryAfter {
-		return apiErr.RetryAfter + randomUpTo(apiErr.RetryAfter/retryAfterJitterDivisor)
+		wait := min(apiErr.RetryAfter, maxRetryAfter)
+		return wait + randomUpTo(wait/retryAfterJitterDivisor)
 	}
 	if c.RetryInterval > 0 {
 		return c.RetryInterval
