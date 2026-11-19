@@ -12,7 +12,8 @@
 // call. Text longer than Config.MaxInputBytes is never sent to the decider,
 // nor checked by a prefix: every check of that target fails, as if the
 // decider had erred, so by default the input or call is blocked. Raise
-// MaxInputBytes for tools whose arguments are large.
+// MaxInputBytes for tools whose arguments are large. Non-text input blocks
+// (images, documents) are not checked, and input with no text is not checked.
 //
 // The guard is a safety control, so it fails closed: when the decider
 // returns an error, refuses a check or leaves one unanswered, the input or
