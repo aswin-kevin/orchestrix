@@ -381,6 +381,24 @@ func TestApproverUsedSynchronously(t *testing.T) {
 	}
 }
 
+func TestHitlApproverGetsPaths(t *testing.T) {
+	l := &log{}
+	var seen permission.Request
+	ac := withTools(bypass, writeFile(l))
+	ac.Approver = func(_ context.Context, req permission.Request, _ string) permission.Decision {
+		seen = req
+		return permission.Allowed()
+	}
+	a := newAgent(t, on("write_file"), ac, writeTurns("/a.txt")...)
+	_, final := run(t, a)
+
+	mustComplete(t, final)
+	want := []permission.PathAccess{{Path: "/a.txt", Op: permission.OpWrite}}
+	if seen.Tool != "write_file" || !slices.Equal(seen.Paths, want) || !seen.Edit {
+		t.Fatalf("approver request = %+v, want write_file with Paths %v and Edit", seen, want)
+	}
+}
+
 func TestApproverAllowRunsWithUpdatedInput(t *testing.T) {
 	l := &log{}
 	ac := withTools(bypass, writeFile(l))

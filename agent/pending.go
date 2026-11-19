@@ -57,9 +57,19 @@ type pendingTurn struct {
 // callRecord is one call of an interrupted turn. A call with a Result is
 // done and never runs again; a call with an Interrupt awaits a decision; a
 // call with neither was not started and is scheduled afresh on resume.
+//
+// A dispatched call that was started (done or awaiting a decision) records
+// its target as Name and Input, and the dispatcher as Via, so resume runs
+// the target directly; a target that has since left the tool set (a dynamic
+// tool) then fails as an unknown tool. A dispatched call that was not
+// started records the dispatcher's call instead, so resume dispatches it
+// afresh and evaluates the dispatcher's own permission.
 type callRecord struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// Via is the dispatching tool of a started dispatched call; empty
+	// otherwise.
+	Via string `json:"via,omitempty"`
 	// Input is kept as a string because a call that never started may carry
 	// input that is not valid JSON.
 	Input     string         `json:"input"`
@@ -124,13 +134,7 @@ func toolInterrupt(c *toolCall, intr *Interrupt) *callInterrupt {
 func (r *run) interrupt(calls []*toolCall) *Final {
 	turn := pendingTurn{Calls: make([]callRecord, len(calls))}
 	for i, c := range calls {
-		turn.Calls[i] = callRecord{
-			ID:        c.id,
-			Name:      c.name,
-			Input:     string(c.input),
-			Result:    c.result,
-			Interrupt: c.interrupt,
-		}
+		turn.Calls[i] = c.record()
 	}
 	pendingKey.Set(r.state, turn)
 	if err := r.checkpoint(true); err != nil {
@@ -138,6 +142,18 @@ func (r *run) interrupt(calls []*toolCall) *Final {
 	}
 	r.emit(Event{Kind: KindInterrupt, Interrupt: &Interrupt{Requests: turn.requests()}})
 	return r.finish(ReasonInterrupted, nil)
+}
+
+// record describes c for the pending record; see callRecord.
+func (c *toolCall) record() callRecord {
+	rec := callRecord{ID: c.id, Result: c.result, Interrupt: c.interrupt}
+	switch {
+	case c.dispatcher != nil && !c.done() && !c.pending():
+		rec.Name, rec.Input = c.via, string(c.dispatchInput)
+	default:
+		rec.Name, rec.Via, rec.Input = c.name, c.via, string(c.input)
+	}
+	return rec
 }
 
 // Pending returns the pending actions of the interrupted run recorded in s,
@@ -190,17 +206,18 @@ func (r *run) resumeTurn() *Final {
 }
 
 // restoreCalls rebuilds the calls of the interrupted turn. Recorded results
-// are kept as they are; every other call is prepared afresh, and a pending
-// one gets its decision applied, so that its KindToolUse event already shows
-// the input it runs with.
+// are kept as they are; every other call is prepared afresh against the
+// run's tool set, and a pending one gets its decision applied, so that its
+// KindToolUse event already shows the input it runs with.
 func (r *run) restoreCalls() []*toolCall {
 	calls := make([]*toolCall, len(r.resume.turn.Calls))
 	for i, rec := range r.resume.turn.Calls {
 		if rec.Result != nil {
-			calls[i] = &toolCall{id: rec.ID, name: rec.Name, result: rec.Result}
+			calls[i] = &toolCall{id: rec.ID, name: rec.Name, via: rec.Via, result: rec.Result}
 			continue
 		}
-		c := r.prepare(llm.Block{Type: llm.BlockToolUse, ID: rec.ID, Name: rec.Name, Input: json.RawMessage(rec.Input)})
+		use := llm.Block{Type: llm.BlockToolUse, ID: rec.ID, Name: rec.Name, Input: json.RawMessage(rec.Input)}
+		c := r.prepare(use, rec.Via)
 		if rec.Interrupt != nil && c.blocked == nil {
 			c.resumed = &resumedCall{
 				origin:           rec.Interrupt.Origin,

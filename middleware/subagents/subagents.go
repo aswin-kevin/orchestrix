@@ -31,10 +31,24 @@
 // decision, for instance when a new Run abandons the parent's interrupt. The
 // subagent's own KindInterrupt events are not forwarded.
 //
-// Permissions: the task tool allows itself, since every tool a subagent calls
-// is checked on its own. permission.ModeDontAsk ignores a tool's own allow,
-// so in that mode the task tool is denied unless an allow rule covers it
-// (for example "task").
+// Permissions: the task tool is read-only and allows itself, since starting
+// a subagent changes nothing by itself and every tool the subagent calls is
+// checked on its own. It is therefore allowed in plan and dontAsk modes too;
+// a deny rule on "task" still refuses it. An isolated subagent starts in
+// the stricter (permission.Stricter) of the parent's current mode (the one
+// its run set under agent.PermissionModeKey, else its Config.PermissionMode)
+// and its own configured mode (Subagent.PermissionMode, else the parent's
+// Config.PermissionMode), so delegating never widens what may run without
+// approval: a planning parent starts its subagents (and theirs) in plan
+// mode, and a dontAsk parent cannot hand work to a bypassPermissions
+// subagent. A fork continues the parent's State (State.Fork copies
+// agent.PermissionModeKey), so it runs in the parent's current mode.
+//
+// Skills: an isolated subagent is offered the skills its parent's run is
+// offered (skills.ScopeKey), narrowed to Subagent.Skills when set, with
+// Subagent.PinnedSkills injected into its prompt when set; its own subagents
+// inherit that scope in turn. A fork continues the parent's State, so it keeps
+// the parent's scope and loaded skills.
 //
 // Token usage: a subagent's model calls are reported as forwarded KindUsage
 // events (with ParentToolID set) and are not included in the parent's

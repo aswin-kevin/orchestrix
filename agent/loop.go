@@ -13,6 +13,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // errNoResponse reports a model handler chain that returned neither a
@@ -42,6 +43,10 @@ type run struct {
 	// completeModel); it is built per run because the innermost handler
 	// emits to this run.
 	model ModelHandler
+	// tools is the tool set of the current turn, the snapshot its schemas
+	// were built from and its calls resolve against (see tools.go). The
+	// loop goroutine stores it; RunInfo.Tools reads it from any goroutine.
+	tools atomic.Pointer[tool.Registry]
 	// budget tracks the run limits; see budget.go.
 	budget *budget
 	// resume, when set, is the interrupted turn this run finishes before
@@ -104,6 +109,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 		gone:      make(chan struct{}),
 		budget:    newBudget(ctx, a.cfg.MaxDuration),
 	}
+	info.run = r
 	innermost := r.streamModel
 	if a.cfg.NonStreaming {
 		innermost = r.completeModel
@@ -198,9 +204,13 @@ func (r *run) afterReply(resp *llm.Response) *Final {
 }
 
 // modelTurn performs one model call with its hooks and accounts for its
-// usage. It returns a Final when the run must end.
+// usage. The turn's tool set is taken after the BeforeModel hooks. It
+// returns a Final when the run must end.
 func (r *run) modelTurn() (*llm.Response, *Final) {
 	if err := r.beforeModel(); err != nil {
+		return nil, r.hookFailure(err)
+	}
+	if err := r.refreshTools(); err != nil {
 		return nil, r.hookFailure(err)
 	}
 	resp, err := r.callModel()

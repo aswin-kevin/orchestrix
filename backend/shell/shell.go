@@ -30,14 +30,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"os/exec"
-	"slices"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/disk"
+	"github.com/aswin-kevin/orchestrix/internal/hostenv"
 )
 
 // Defaults for Options and for the kill sequence.
@@ -64,8 +63,9 @@ var NonInteractiveEnv = []string{"PAGER=cat", "GIT_PAGER=cat", "MANPAGER=cat", "
 	"DEBIAN_FRONTEND=noninteractive", "NO_COLOR=1", "TERM=dumb"}
 
 // InheritedEnv names the host variables passed to commands by default: enough
-// for tools to find binaries, a home and a locale, and nothing secret.
-var InheritedEnv = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TMPDIR", "TZ"}
+// for tools to find binaries, a home and a locale, and nothing secret. MCP
+// stdio servers get the same list.
+var InheritedEnv = hostenv.DefaultNames
 
 // Options configures a Backend. The zero value is ready to use.
 type Options struct {
@@ -174,20 +174,9 @@ func (b *Backend) workDir(dir string) (string, error) {
 // environ builds a command's environment, lowest precedence first. exec.Cmd
 // keeps only the last value of a repeated key, so later entries override.
 func (b *Backend) environ(extra []string) []string {
-	var env []string
-	if b.opts.InheritEnv {
-		env = os.Environ()
-	} else {
-		for _, name := range InheritedEnv {
-			if value, ok := os.LookupEnv(name); ok {
-				env = append(env, name+"="+value)
-			}
-		}
-	}
+	env := hostenv.Inherited(InheritedEnv, b.opts.InheritEnv)
 	env = append(env, NonInteractiveEnv...)
-	for _, key := range slices.Sorted(maps.Keys(b.opts.Env)) {
-		env = append(env, key+"="+b.opts.Env[key])
-	}
+	env = append(env, hostenv.Pairs(b.opts.Env)...)
 	return append(env, extra...)
 }
 

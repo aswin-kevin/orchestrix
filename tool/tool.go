@@ -68,6 +68,31 @@ type RawInputer interface {
 	AcceptsRawInput() bool
 }
 
+// Dispatcher is implemented by a tool that stands for another tool, such as
+// one that calls a tool by name. The agent loop calls Dispatch after
+// validating the dispatcher's own input and runs the named tool with the
+// returned input instead: permission, ToolWrappers, events and interrupts
+// all see that target, so dispatching never bypasses what applies to the
+// target when the model calls it directly. The dispatcher's own permission
+// is still evaluated first, on its own input. A returned error becomes the
+// call's error result. A target that is itself a Dispatcher is refused, and
+// the dispatcher's Call is not reached for a valid dispatch.
+type Dispatcher interface {
+	Dispatch(in json.RawMessage) (name string, input json.RawMessage, err error)
+}
+
+// Availability is implemented by a tool that a run may call only under a
+// condition of the run's State, such as a tool locked until a skill unlocks
+// it. The agent loop asks it when it resolves a call, whether the model
+// names the tool directly or as a Dispatcher's target, before any
+// permission check or approval prompt: a non-nil error refuses the call,
+// and its text is the call's error result. A tool should check the same
+// condition in its own Call, so the lock also holds where nothing asks
+// Available first.
+type Availability interface {
+	Available(s *state.State) error
+}
+
 // Call carries the per-invocation environment handed to Tool.Call.
 type Call struct {
 	ToolUseID  string

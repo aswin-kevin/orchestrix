@@ -6,11 +6,18 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/mcp"
+	"github.com/aswin-kevin/orchestrix/middleware/askuser"
+	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/middleware/hitl"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
+	"github.com/aswin-kevin/orchestrix/middleware/memory"
+	"github.com/aswin-kevin/orchestrix/middleware/planmode"
+	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
 	"github.com/aswin-kevin/orchestrix/middleware/tasks"
+	"github.com/aswin-kevin/orchestrix/middleware/web"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -30,6 +37,17 @@ type settings struct {
 	interruptOn    map[string]hitl.InterruptConfig
 	shell          *shellSpec
 	tasks          *tasks.Middleware
+
+	// Optional middleware; nil leaves it out of the stack (see baseStack).
+	memory   *memory.Config
+	skills   *skills.Config
+	planMode *planmode.Config
+	deferred *deferred.Config
+	mcp      *mcp.Middleware
+	web      *web.Config
+	askUser  *askuser.Config
+	// skillsFailed records that WithSkills' middleware could not be built.
+	skillsFailed bool
 }
 
 // Option customizes the agent built by New.

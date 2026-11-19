@@ -3,15 +3,70 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/mcp"
 )
+
+// Environment of the helper process: with testMCPEnv set to "1" the test
+// binary serves an MCP server over stdio instead of running tests, and
+// writes its pid to the file testMCPPIDEnv names, if any. With
+// testMCPHangEnv set to "true" it never answers.
+const (
+	testMCPEnv     = "ORX_TEST_MCP"
+	testMCPPIDEnv  = "ORX_TEST_MCP_PID"
+	testMCPHangEnv = "ORX_TEST_MCP_HANG"
+)
+
+// testMCPHang is how long a hanging helper waits; the test closes it long
+// before.
+const testMCPHang = time.Hour
+
+func TestMain(m *testing.M) {
+	if os.Getenv(testMCPEnv) == "1" {
+		os.Exit(serveTestMCP())
+	}
+	os.Exit(m.Run())
+}
+
+// serveTestMCP serves an MCP server with one echo tool on stdin and stdout
+// until stdin ends. It returns the process exit code.
+func serveTestMCP() int {
+	if path := os.Getenv(testMCPPIDEnv); path != "" {
+		if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			return 1
+		}
+	}
+	if os.Getenv(testMCPHangEnv) == "true" {
+		time.Sleep(testMCPHang)
+		return 1
+	}
+	s := mcp.NewServer(mcp.Implementation{Name: "orx-test", Version: "1"}, "")
+	s.AddTool(mcp.ToolInfo{
+		Name:        "echo",
+		Description: "Echoes text.",
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}},
+	}, func(_ context.Context, args json.RawMessage) (*mcp.CallToolResult, error) {
+		var in struct{ Text string }
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return mcp.TextResult(in.Text), nil
+	})
+	if err := s.ServeStdio(context.Background(), os.Stdin, os.Stdout); err != nil {
+		return 1
+	}
+	return 0
+}
 
 // invoke runs the CLI with a scripted provider and returns its exit code and
 // captured output.
@@ -302,4 +357,23 @@ func TestThreadWithoutStoreIsUsageError(t *testing.T) {
 	if code != 2 {
 		t.Errorf("exit code = %d, want 2", code)
 	}
+}
+
+func TestErrorPathsAreTerminalSafe(t *testing.T) {
+	const evil = "\x1b]0;pwned\x07\x1b[2J"
+	t.Run("flag error", func(t *testing.T) {
+		_, _, stderr := invoke(t, "", llmtest.New(), "-model", "openai:test", "-mode", "plan"+evil, "-p", "hi")
+		if strings.ContainsAny(stderr, "\x1b\x07") || stderr == "" {
+			t.Errorf("stderr = %q, want the error with control characters escaped", stderr)
+		}
+	})
+	t.Run("setup error", func(t *testing.T) {
+		var errOut bytes.Buffer
+		newProvider := func(llm.Config) (llm.Provider, error) { return nil, errors.New("bad key" + evil) }
+		run(context.Background(), []string{"-model", "openai:test", "-dir", t.TempDir(), "-p", "hi"},
+			strings.NewReader(""), &bytes.Buffer{}, &errOut, newProvider)
+		if stderr := errOut.String(); strings.ContainsAny(stderr, "\x1b\x07") || !strings.Contains(stderr, "bad key") {
+			t.Errorf("stderr = %q, want the error with control characters escaped", stderr)
+		}
+	})
 }

@@ -83,8 +83,8 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 	case call.Approved:
 		return next(ctx, call) // the permission step already asked a human
 	}
-	if approver := approverOf(ctx); approver != nil {
-		return ask(ctx, approver, cfg, call, next)
+	if a, approver := approverOf(ctx); approver != nil {
+		return ask(ctx, a, approver, cfg, call, next)
 	}
 	askedKey.Update(call.State, func(ids []string) []string { return append(ids, call.ID) })
 	return tool.Result{}, interruptFor(cfg, call.Name)
@@ -122,17 +122,19 @@ func without(ids []string, id string) []string {
 	return slices.DeleteFunc(slices.Clone(ids), func(s string) bool { return s == id })
 }
 
-// ask puts the question to the run's Approver and waits for the answer. A
-// rewrite of the input is honored only where the host may edit, and is
-// checked against the permission rules like any edited call.
-func ask(ctx context.Context, approver permission.Approver, cfg InterruptConfig, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
-	req := permission.Request{Tool: call.Name, Input: call.Input}
-	decision := approver(ctx, req, reasonFor(cfg, call.Name))
+// ask puts the question to approver, the Approver of agent a running the
+// call, and waits for the answer. The question describes the call as the
+// permission step does (paths, subject, edit); building it runs the tool's
+// own CheckPermission once more, for SelfCheck. A rewrite of the input is
+// honored only where the host may edit, and is checked against the
+// permission rules like any edited call.
+func ask(ctx context.Context, a *agent.Agent, approver permission.Approver, cfg InterruptConfig, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
+	decision := approver(ctx, a.PermissionRequest(ctx, call), reasonFor(cfg, call.Name))
 	if decision.Behavior != permission.Allow {
 		return rejected(decision.Message), nil
 	}
 	if len(decision.UpdatedInput) > 0 && slices.Contains(allowedOf(cfg), agent.Edit) {
-		if res := applyRewrite(ctx, call, decision.UpdatedInput); res != nil {
+		if res := applyRewrite(ctx, a, call, decision.UpdatedInput); res != nil {
 			return *res, nil
 		}
 	}
@@ -142,19 +144,17 @@ func ask(ctx context.Context, approver permission.Approver, cfg InterruptConfig,
 // applyRewrite makes in the call's input after checking it against the
 // tool's schema and the permission rules. It returns an error result when the
 // rewrite is refused. The Approver's allow stands in for an Ask, but a deny
-// rule still wins.
-func applyRewrite(ctx context.Context, call *agent.ToolCall, in json.RawMessage) *tool.Result {
+// rule (or the mode) of agent a still wins.
+func applyRewrite(ctx context.Context, a *agent.Agent, call *agent.ToolCall, in json.RawMessage) *tool.Result {
 	if err := tool.CheckInput(call.Tool, in); err != nil {
 		res := tool.Errorf("invalid input for %s: %v", call.Name, err)
 		return &res
 	}
-	if info, ok := agent.Info(ctx); ok {
-		edited := *call
-		edited.Input = in
-		if d := info.Agent.CheckPermission(ctx, &edited); d.Behavior == permission.Deny {
-			res := tool.Errorf("Permission denied: %s", d.Message)
-			return &res
-		}
+	edited := *call
+	edited.Input = in
+	if d := a.CheckPermission(ctx, &edited); d.Behavior == permission.Deny {
+		res := tool.Errorf("Permission denied: %s", d.Message)
+		return &res
 	}
 	call.Input = in
 	return nil
@@ -168,13 +168,14 @@ func rejected(message string) tool.Result {
 	return tool.Errorf("Rejected: %s", message)
 }
 
-// approverOf returns the Approver of the agent running ctx, or nil.
-func approverOf(ctx context.Context) permission.Approver {
+// approverOf returns the agent running ctx and its Approver; the Approver
+// is nil when the agent has none or ctx is not inside a run.
+func approverOf(ctx context.Context) (*agent.Agent, permission.Approver) {
 	info, ok := agent.Info(ctx)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	return info.Agent.Config().Approver
+	return info.Agent, info.Agent.Config().Approver
 }
 
 // interruptFor builds the interrupt that asks the host about a call of name.

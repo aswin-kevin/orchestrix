@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/aswin-kevin/orchestrix/internal/procgroup"
 )
 
 // startGroupLeader starts command as the leader of its own process group,
@@ -15,7 +17,7 @@ import (
 func startGroupLeader(t *testing.T, command string) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command(Shell, "-c", command)
-	startInGroup(cmd)
+	procgroup.Setup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

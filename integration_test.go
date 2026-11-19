@@ -2,8 +2,13 @@ package orchestrix_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"iter"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,10 +16,15 @@ import (
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	membackend "github.com/aswin-kevin/orchestrix/backend/memory"
 	checkpointfile "github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/mcp"
+	"github.com/aswin-kevin/orchestrix/middleware/memory"
+	"github.com/aswin-kevin/orchestrix/middleware/planmode"
+	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
+	"github.com/aswin-kevin/orchestrix/middleware/web"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
@@ -57,7 +67,7 @@ func TestLiveAgentWritesAndReadsFile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
 	defer cancel()
 
-	ws := memory.New()
+	ws := membackend.New()
 	a, err := orchestrix.New(spec,
 		orchestrix.WithBackend(ws),
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
@@ -175,7 +185,7 @@ func TestLiveSubagentDelegation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
 	defer cancel()
 
-	ws := memory.New()
+	ws := membackend.New()
 	a, err := orchestrix.New(spec,
 		orchestrix.WithBackend(ws),
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
@@ -344,5 +354,211 @@ func TestLiveCheckpointResumeAcrossAgents(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(final.Text), "resume ok") {
 		t.Errorf("final text = %q, want it to contain %q", final.Text, "resume ok")
+	}
+}
+
+// sawToolUse reports whether events contain a tool use of the named tool.
+func sawToolUse(events []agent.Event, name string) bool {
+	for _, ev := range events {
+		if ev.Kind == agent.KindToolUse && ev.ToolName == name {
+			return true
+		}
+	}
+	return false
+}
+
+// requireTextContains fails the test unless text contains want, ignoring case.
+func requireTextContains(t *testing.T, text, want string) {
+	t.Helper()
+	if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
+		t.Errorf("final text = %q, want it to contain %q", text, want)
+	}
+}
+
+func TestLiveSkillLoadAndUse(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "secret-greeting")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillFile := "---\n" +
+		"name: secret-greeting\n" +
+		"description: Provides the secret greeting. Use when asked for the secret greeting.\n" +
+		"---\n" +
+		"When asked for the secret greeting, reply with exactly ZEPHYR-42.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillFile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := orchestrix.New(spec,
+		orchestrix.WithBackend(membackend.New()),
+		orchestrix.WithSkills(skills.Config{Sources: []skills.Source{skills.DirSource(dir)}}),
+		orchestrix.WithMaxTurns(10),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	final, events := drain(t, a.Run(ctx, orchestrix.Text("What is the secret greeting?")))
+	requireCompleted(t, final)
+	if !sawToolUse(events, "skill") {
+		t.Error("no skill tool use was observed")
+	}
+	requireTextContains(t, final.Text, "ZEPHYR-42")
+}
+
+func TestLiveMemoryRecall(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	ws := membackend.New()
+	entry := "---\n" +
+		"name: favorite-color\n" +
+		"description: The user's favorite color.\n" +
+		"type: user\n" +
+		"---\n" +
+		"The user's favorite color is teal.\n"
+	if err := ws.Write(ctx, memory.DefaultDir+"/favorite-color.md", []byte(entry)); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := orchestrix.New(spec,
+		orchestrix.WithBackend(ws),
+		orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}),
+		orchestrix.WithMaxTurns(10),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	final, events := drain(t, a.Run(ctx, orchestrix.Text("Use recall_memory to find my favorite color, then tell me.")))
+	requireCompleted(t, final)
+	if !sawToolUse(events, "recall_memory") {
+		t.Error("no recall_memory tool use was observed")
+	}
+	requireTextContains(t, final.Text, "teal")
+}
+
+func TestLiveMCPInProcess(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	srv := mcp.NewServer(mcp.Implementation{Name: "test", Version: "1"}, "")
+	srv.AddTool(mcp.ToolInfo{Name: "lookup_code", Description: "Returns the secret code."},
+		func(context.Context, json.RawMessage) (*mcp.CallToolResult, error) {
+			return mcp.TextResult("MCP-OK-7781"), nil
+		})
+	m, err := mcp.Connect(ctx, []mcp.ServerConfig{{Name: "test", Transport: mcp.InProcess(srv)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+
+	a, err := orchestrix.New(spec,
+		orchestrix.WithBackend(membackend.New()),
+		orchestrix.WithMCP(m),
+		orchestrix.WithPermissionMode(permission.ModeBypass),
+		orchestrix.WithMaxTurns(10),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	final, events := drain(t, a.Run(ctx, orchestrix.Text("Call the lookup_code tool and reply with the code it returns.")))
+	requireCompleted(t, final)
+	if !sawToolUse(events, "mcp__test__lookup_code") {
+		t.Error("no mcp__test__lookup_code tool use was observed")
+	}
+	requireTextContains(t, final.Text, "MCP-OK-7781")
+}
+
+func TestLiveWebFetch(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, "<html><head><title>Code</title></head><body><p>The code word is PELICAN.</p></body></html>")
+	}))
+	defer srv.Close()
+
+	a, err := orchestrix.New(spec,
+		orchestrix.WithBackend(membackend.New()),
+		orchestrix.WithWeb(web.Config{AllowPrivateNetworks: true, ReadOnly: true}),
+		orchestrix.WithMaxTurns(10),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	final, events := drain(t, a.Run(ctx, orchestrix.Text("Fetch "+srv.URL+" and tell me the code word.")))
+	requireCompleted(t, final)
+	if !sawToolUse(events, "web_fetch") {
+		t.Error("no web_fetch tool use was observed")
+	}
+	requireTextContains(t, final.Text, "PELICAN")
+}
+
+func TestLivePlanModeApproval(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	cp, err := checkpointfile.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := membackend.New()
+	a, err := orchestrix.New(spec,
+		orchestrix.WithBackend(ws),
+		orchestrix.WithCheckpointer(cp),
+		orchestrix.WithPermissionMode(permission.ModePlan),
+		orchestrix.WithPlanMode(planmode.Config{DisableEnter: true, ApproveMode: permission.ModeAcceptEdits}),
+		orchestrix.WithMaxTurns(10),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	th, err := a.Thread(ctx, "plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prompt := "Create /plan.txt containing `planned ok`. " +
+		"You are in plan mode: first call exit_plan_mode with a one-line plan."
+	final, _ := drain(t, th.Prompt(ctx, prompt))
+	if final == nil || final.Reason != agent.ReasonInterrupted {
+		t.Fatalf("final = %+v, want reason %q", final, agent.ReasonInterrupted)
+	}
+	intr, ok := th.Pending()
+	if !ok {
+		t.Fatal("the thread has no pending interrupt")
+	}
+	var decisions []agent.Decision
+	for _, req := range intr.Requests {
+		if req.Tool != "exit_plan_mode" {
+			t.Errorf("pending tool = %q, want exit_plan_mode", req.Tool)
+		}
+		decisions = append(decisions, agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Approve})
+	}
+	if len(decisions) == 0 {
+		t.Fatal("the interrupt lists no pending request")
+	}
+
+	final, _ = drain(t, th.Resume(ctx, decisions))
+	requireCompleted(t, final)
+	if got := readTrimmed(ctx, t, ws, "/plan.txt"); got != "planned ok" {
+		t.Errorf("file content = %q, want %q", got, "planned ok")
 	}
 }

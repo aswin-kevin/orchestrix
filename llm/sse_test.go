@@ -1,8 +1,11 @@
 package llm
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/aswin-kevin/orchestrix/internal/sse"
 )
 
 func TestReadSSEParsesEventsAndMultilineData(t *testing.T) {
@@ -31,5 +34,19 @@ func TestReadSSEParsesEventsAndMultilineData(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("event %d = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+func TestReadSSECapsEventSize(t *testing.T) {
+	input := "data: " + strings.Repeat("x", maxSSEEventBytes) + "\n\n"
+	var err error
+	for _, e := range readSSE(strings.NewReader(input)) {
+		if e != nil {
+			err = e
+			break
+		}
+	}
+	if !errors.Is(err, sse.ErrTooLarge) || !strings.HasPrefix(err.Error(), "llm: read event stream:") {
+		t.Fatalf("error = %v, want an llm read error wrapping sse.ErrTooLarge", err)
 	}
 }

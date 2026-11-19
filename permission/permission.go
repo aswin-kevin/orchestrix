@@ -91,6 +91,40 @@ func (m Mode) Valid() bool {
 	return slices.Contains(Modes(), m)
 }
 
+// strictness lists the modes from most to least strict: the order in which
+// they restrict what runs without a human's approval.
+var strictness = []Mode{ModePlan, ModeDontAsk, ModeAuto, ModeDefault, ModeAcceptEdits, ModeBypass}
+
+// Stricter returns the stricter of a and b, ranking from most to least
+// strict: plan, dontAsk, auto, default, acceptEdits, bypassPermissions. The
+// empty Mode stands for ModeDefault (and is returned as ModeDefault). Any
+// other mode Valid rejects ranks as the strictest, so Stricter fails closed
+// and returns ModePlan for it.
+func Stricter(a, b Mode) Mode {
+	if rank(a) <= rank(b) {
+		return normalize(a)
+	}
+	return normalize(b)
+}
+
+// rank is m's position in strictness; an unknown mode ranks as ModePlan.
+func rank(m Mode) int {
+	return slices.Index(strictness, normalize(m))
+}
+
+// normalize maps the empty Mode to ModeDefault and an unknown one to
+// ModePlan.
+func normalize(m Mode) Mode {
+	switch {
+	case m == "":
+		return ModeDefault
+	case !m.Valid():
+		return ModePlan
+	default:
+		return m
+	}
+}
+
 // Op is the kind of access made to a path.
 type Op string
 
@@ -131,6 +165,11 @@ type Request struct {
 	Paths []PathAccess
 	// SelfCheck is the tool's own CheckPermission verdict.
 	SelfCheck Decision
+	// NoRemember tells the Approver to ask every time: it must never cache
+	// an "always allow" answer for this request, nor apply one given
+	// earlier. A tool sets it on the request for a decision that must be a
+	// fresh human choice each time. False lets an Approver remember.
+	NoRemember bool
 }
 
 // Approver resolves an Ask decision, typically by prompting a human.

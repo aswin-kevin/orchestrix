@@ -110,6 +110,19 @@ type ToolProvider interface {
 	Tools() []tool.Tool
 }
 
+// DynamicToolProvider lets a middleware contribute tools whose set may change
+// while the agent lives, such as the tools of a remote server. DynamicTools
+// is called once per model turn (and by Agent.Tools and Agent.Tool); it must
+// be fast (no I/O) and safe for concurrent use. A dynamic tool that is nil,
+// whose name is invalid or whose name is already taken (by Config.Tools, a
+// ToolProvider, or an earlier dynamic tool in stack order) is skipped. A
+// call is resolved against the tools of the turn that made it; a call
+// resumed later is resolved against the set current then, so a tool that
+// left the set fails as an unknown tool.
+type DynamicToolProvider interface {
+	DynamicTools() []tool.Tool
+}
+
 // SubagentToolName is the name of the tool that starts a subagent. Middleware
 // that must recognize subagent launches (hooks, the subagents package) share
 // this one definition.
@@ -146,8 +159,13 @@ type ModelHandler func(ctx context.Context, req *ModelRequest) (*llm.Response, e
 // ToolCall describes one tool execution as seen by ToolWrappers. Changing
 // Input before calling next changes what the tool receives.
 type ToolCall struct {
-	ID    string
-	Name  string
+	ID string
+	// Name is the tool that runs: for a dispatched call, the target.
+	Name string
+	// Via is the name of the dispatching tool (tool.Dispatcher) when the
+	// model called Name through it; empty when the model called Name
+	// directly.
+	Via   string
 	Input json.RawMessage
 	Tool  tool.Tool
 	State *state.State

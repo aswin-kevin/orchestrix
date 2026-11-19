@@ -10,11 +10,8 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/procgroup"
 )
-
-// groupPollInterval is how often a dying process group is checked for
-// remaining members.
-const groupPollInterval = 10 * time.Millisecond
 
 // memoryNotice is appended to the output of a command killed by the memory
 // watchdog; the verb is the limit in bytes.
@@ -58,7 +55,7 @@ func startProcess(cmd *exec.Cmd, maxOutput int, timeout time.Duration, memLimit 
 		return nil, fmt.Errorf("shell: output pipe: %w", err)
 	}
 	cmd.Stdout, cmd.Stderr = outWrite, outWrite
-	startInGroup(cmd)
+	procgroup.Setup(cmd)
 	startErr := cmd.Start()
 	// The child holds its own copy; ours would keep the pipe from ever
 	// reaching EOF.
@@ -128,13 +125,13 @@ func (p *process) stop() error {
 		if p.groupGone.Load() {
 			return
 		}
-		p.stopErr = terminateGroup(p.cmd.Process)
+		p.stopErr = procgroup.Terminate(p.cmd.Process)
 		time.AfterFunc(DefaultKillGrace, func() {
 			select {
 			case <-p.done:
 			default:
 				if !p.groupGone.Load() {
-					_ = killGroup(p.cmd.Process)
+					_ = procgroup.Kill(p.cmd.Process)
 				}
 			}
 		})
@@ -160,38 +157,13 @@ func (p *process) wait(timer *time.Timer) {
 	close(p.done)
 }
 
-// reapGroup kills whatever the shell left running in its process group:
-// SIGTERM, then SIGKILL for members that survive DefaultKillGrace. It gives up
-// after a further grace period, since a killed member can linger as a zombie
-// under an init that does not reap. Once it sees the group gone it sets
-// groupGone, so a late stop cannot signal a reused group id.
+// reapGroup kills whatever the shell left running in its process group (see
+// procgroup.Reap). Once the group is gone it sets groupGone, so a late stop
+// cannot signal a reused group id.
 func (p *process) reapGroup() {
-	proc := p.cmd.Process
-	if !groupAlive(proc) {
+	if procgroup.Reap(p.cmd.Process, DefaultKillGrace) {
 		p.groupGone.Store(true)
-		return
 	}
-	_ = terminateGroup(proc)
-	if !waitGroupGone(proc, DefaultKillGrace) {
-		_ = killGroup(proc)
-		if !waitGroupGone(proc, DefaultKillGrace) {
-			return
-		}
-	}
-	p.groupGone.Store(true)
-}
-
-// waitGroupGone polls until proc's group has no members or within elapses,
-// reporting whether the group is gone.
-func waitGroupGone(proc *os.Process, within time.Duration) bool {
-	deadline := time.Now().Add(within)
-	for groupAlive(proc) {
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(groupPollInterval)
-	}
-	return true
 }
 
 // drainOutput waits for the copier to read the pipe to EOF. A process that
