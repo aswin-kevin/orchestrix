@@ -99,6 +99,35 @@ func main() {
 
 `orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTokens`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithProfiles`, `WithMount`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
 
+## Examples
+
+The [`examples`](examples) directory holds small, runnable programs, one per feature. Each runs offline on a scripted model, so it works with no API key and no network:
+
+| Example | Shows |
+| --- | --- |
+| [`quickstart`](examples/quickstart) | `orchestrix.New` with one typed tool (`tool.New`) that the model calls to answer. |
+| [`approval`](examples/approval) | `WithInterruptOn("write_file")` and a file checkpointer: the run pauses, the pending action is shown, and `Thread.Resume` approves it. |
+| [`persistent-memory`](examples/persistent-memory) | `WithMemory` and `WithMount` over a `kv.DirStore`: a preference recorded in one thread is recalled in another (`-store DIR` keeps it across runs). |
+| [`background-tasks`](examples/background-tasks) | `WithAsync`: the model starts a researcher subagent in the background, waits for it with `check_task` and answers with its result. |
+| [`coordinator`](examples/coordinator) | `coordinator.New` delegating to a researcher and a writer, then `coordinator.RunParallel` answering three questions at once. |
+| [`self-check`](examples/self-check) | `WithRubric`: the first answer fails the rubric, the revision passes, and the grades are printed. |
+
+```sh
+go run ./examples/quickstart
+go run ./examples/approval
+go run ./examples/persistent-memory
+go run ./examples/background-tasks
+go run ./examples/coordinator
+go run ./examples/self-check
+```
+
+Set `ORX_MODEL` (the variable `orx` reads) to run the same programs against a real model, with the API key from the provider's usual variable:
+
+```sh
+ANTHROPIC_API_KEY=... ORX_MODEL=anthropic:claude-sonnet-4-5 go run ./examples/quickstart
+OPENAI_API_KEY=... ORX_MODEL=openai:gpt-4o go run ./examples/coordinator
+```
+
 ## Providers
 
 The model is a `format:model` string. Only the first colon splits the format, so model names may contain colons.
