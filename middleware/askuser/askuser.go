@@ -7,6 +7,10 @@
 // shown to the human as data: control characters other than newline are
 // stripped and every part is length-capped before it is rendered or handed to
 // a callback.
+//
+// ask_user is read-only, so it is available in plan mode and, unlike a tool
+// that needs approval, in dontAsk mode too: dontAsk governs permission
+// prompts, not questions the model asks.
 package askuser
 
 import (
@@ -20,7 +24,6 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
-	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -97,6 +100,10 @@ type Config struct {
 	// above zero (inside a subagent) without Ask returns an error result and
 	// raises no interrupt: the agent that spawns subagents must supply Ask
 	// for them to be able to ask.
+	//
+	// Parallel subagents may call ask_user at the same time, so Ask must be
+	// safe for concurrent use and should serialise its prompts to the human
+	// itself.
 	Ask func(ctx context.Context, questions []Question) ([]Answer, error)
 	// Prompt is the system prompt segment describing the tool. nil uses
 	// DefaultPrompt; a pointer to "" disables the segment.
@@ -127,13 +134,11 @@ func (m *middleware) Tools() []tool.Tool {
 	return []tool.Tool{tool.New(ToolAskUser,
 		"Ask the user one to four multiple-choice questions when a decision is theirs to make. Each question needs 2-4 options; the user may also answer in their own words.",
 		m.ask,
-		// Asking changes nothing, so it works in plan mode and needs no
-		// approval. It is not concurrency-safe: two questions at once
-		// would confuse the human.
-		tool.WithReadOnly(),
-		tool.WithPermission(func(context.Context, json.RawMessage, permission.Context) permission.Decision {
-			return permission.Allowed()
-		}))}
+		// Asking changes nothing, so as a read-only tool it needs no
+		// approval and works in plan and dontAsk modes: dontAsk governs
+		// permission prompts, not questions the model asks. It is not
+		// concurrency-safe: two questions at once would confuse the human.
+		tool.WithReadOnly())}
 }
 
 // WrapModel implements agent.ModelWrapper. It appends the prompt after the
@@ -165,6 +170,10 @@ type answersMessage struct {
 
 // Respond builds the decision that answers the pending ask_user call
 // toolUseID with answers. Its Message is the JSON {"answers":[...]}.
+//
+// A Respond message is read as structured answers only when it is a JSON
+// object with a non-empty "answers" array. Any other message is the human's
+// free-text reply, shown to the model once; a blank one counts as declining.
 func Respond(toolUseID string, answers []Answer) agent.Decision {
 	msg, err := json.Marshal(answersMessage{Answers: answers})
 	if err != nil { // plain strings cannot fail to marshal
@@ -204,64 +213,82 @@ func (m *middleware) ask(ctx context.Context, in Input, c *tool.Call) (tool.Resu
 func resumed(qs []Question, r *tool.ResumeValue) tool.Result {
 	switch r.Type {
 	case tool.ResumeRespond:
-		return tool.Text(formatAnswers(qs, parseAnswers(qs, r.Message)))
+		if strings.TrimSpace(r.Message) == "" {
+			return tool.Text(declinedText)
+		}
+		if answers, ok := structuredAnswers(r.Message); ok {
+			return tool.Text(formatAnswers(qs, answers))
+		}
+		return tool.Text(answersTitle + "\n" + stripControl(truncateRunes(r.Message, MaxAnswerRunes)))
 	case tool.ResumeReject:
 		if r.Message == "" {
 			return tool.Text(declinedText)
 		}
 		return tool.Text(declinedText + " " + r.Message)
 	default:
+		// Unreachable: the interrupt allows only respond and reject.
 		return tool.Errorf("unexpected decision %q for ask_user", r.Type)
 	}
 }
 
-// parseAnswers reads a Respond message: {"answers":[...]} when it is that
-// JSON, otherwise free text that answers every question.
-func parseAnswers(qs []Question, msg string) []Answer {
+// structuredAnswers reads msg as {"answers":[...]} with at least one answer.
+func structuredAnswers(msg string) ([]Answer, bool) {
 	var parsed answersMessage
-	if err := json.Unmarshal([]byte(msg), &parsed); err == nil && parsed.Answers != nil {
-		return parsed.Answers
+	if err := json.Unmarshal([]byte(msg), &parsed); err != nil || len(parsed.Answers) == 0 {
+		return nil, false
 	}
-	text := truncateRunes(msg, MaxAnswerRunes)
-	answers := make([]Answer, len(qs))
-	for i, q := range qs {
-		answers[i] = Answer{Question: q.Question, Other: text}
-	}
-	return answers
+	return parsed.Answers, true
 }
 
-// formatAnswers renders answers for the model. An answer's Question falls
-// back to the question at its position, and a selected label that is not one
-// of that question's options is reported as other text.
+// noAnswer stands for a question that got no answer.
+const noAnswer = "(no answer)"
+
+// formatAnswers renders answers for the model, whoever produced them. One
+// answer belongs to each question by position and extras are dropped; a
+// question without an answer reads "(no answer)". All text is cleaned and
+// capped, and its newlines are indented so no answer can start a line that
+// looks like another bullet or the title.
 func formatAnswers(qs []Question, answers []Answer) string {
 	var sb strings.Builder
 	sb.WriteString(answersTitle)
-	for i, a := range answers {
-		var q Question
-		if i < len(qs) {
-			q = qs[i]
+	for i, q := range qs {
+		var a Answer
+		if i < len(answers) {
+			a = answers[i]
 		}
-		text := a.Question
+		text := inline(a.Question, MaxQuestionRunes)
 		if text == "" {
-			text = q.Question
+			text = inline(q.Question, MaxQuestionRunes)
 		}
 		var selected, other []string
 		for _, label := range a.Selected {
-			if hasOption(q, label) {
+			label = inline(label, MaxLabelRunes)
+			if hasOption(q, label) && (q.MultiSelect || len(selected) == 0) {
 				selected = append(selected, label)
-			} else {
+			} else if label != "" {
 				other = append(other, label)
 			}
 		}
-		if a.Other != "" {
-			other = append(other, a.Other)
+		if o := inline(a.Other, MaxAnswerRunes); o != "" {
+			other = append(other, o)
 		}
-		fmt.Fprintf(&sb, "\n- %s: %s", text, strings.Join(selected, ", "))
-		if len(other) > 0 {
-			fmt.Fprintf(&sb, "; other: %s", truncateRunes(strings.Join(other, ", "), MaxAnswerRunes))
+		fmt.Fprintf(&sb, "\n- %s: ", text)
+		switch {
+		case len(selected) == 0 && len(other) == 0:
+			sb.WriteString(noAnswer)
+		default:
+			sb.WriteString(strings.Join(selected, ", "))
+			if len(other) > 0 {
+				fmt.Fprintf(&sb, "; other: %s", truncateRunes(strings.Join(other, ", "), MaxAnswerRunes))
+			}
 		}
 	}
 	return sb.String()
+}
+
+// inline cleans s, caps it at n runes and indents its newlines.
+func inline(s string, n int) string {
+	return strings.ReplaceAll(truncateRunes(stripControl(s), n), "\n", "\n    ")
 }
 
 func hasOption(q Question, label string) bool {
