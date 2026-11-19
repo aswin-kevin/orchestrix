@@ -140,6 +140,7 @@ func (r *run) finalCheckpoint(final *Final) {
 	}
 	if final.Err == nil {
 		final.Reason = ReasonCheckpointError
+		final.Output = nil
 	}
 	final.Err = errors.Join(final.Err, err)
 }

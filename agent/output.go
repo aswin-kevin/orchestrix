@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // OutputRetries is how many times a run sends an answer that fails
@@ -39,4 +42,27 @@ func outputPrompt(schema map[string]any) (string, error) {
 		return "", fmt.Errorf("agent: encode Config.OutputSchema: %w", err)
 	}
 	return OutputFormatPrompt + string(b), nil
+}
+
+// checkOutput validates the reply that would complete the run against
+// Config.OutputSchema. A valid answer is remembered for Final.Output and the
+// run goes on to its BeforeStop hooks (retry false). An invalid one is sent
+// back for correction while OutputRetries last, and ends the run with
+// ReasonInvalidOutput after that (retry true; done is the Final, or nil when
+// the run continues). Runs without an active schema are not checked.
+func (r *run) checkOutput(resp *llm.Response) (done *Final, retry bool) {
+	if !r.outputActive {
+		return nil, false
+	}
+	out, err := tool.ParseObject(r.agent.cfg.OutputSchema, resp.Message.Text())
+	if err == nil {
+		r.output = out
+		return nil, false
+	}
+	r.output = nil
+	if b := r.budget; b.outputRetries < OutputRetries {
+		b.outputRetries++
+		return r.continueWith(fmt.Sprintf(InvalidOutputPrompt, err)), true
+	}
+	return r.finish(ReasonInvalidOutput, fmt.Errorf("%w: %v", ErrInvalidOutput, err)), true
 }

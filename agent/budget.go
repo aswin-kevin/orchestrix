@@ -72,6 +72,9 @@ type budget struct {
 	// stopContinuations counts the turns BeforeStop hooks added, capped at
 	// MaxStopContinuations.
 	stopContinuations int
+	// outputRetries counts the corrections sent for answers that failed
+	// Config.OutputSchema, capped at OutputRetries.
+	outputRetries int
 
 	// settleReason is the limit being settled; empty outside settlement.
 	settleReason TerminalReason
@@ -197,9 +200,14 @@ func (r *run) afterNoToolTurn(resp *llm.Response) *Final {
 	return r.complete(resp)
 }
 
-// complete ends the run as completed, unless a BeforeStop hook asks for
-// another turn and the run has continuations left.
+// complete ends the run as completed, unless the answer fails
+// Config.OutputSchema (see checkOutput) or a BeforeStop hook asks for another
+// turn and the run has continuations left. The output check comes first and
+// does not use those continuations.
 func (r *run) complete(resp *llm.Response) *Final {
+	if done, retry := r.checkOutput(resp); retry {
+		return done
+	}
 	b := r.budget
 	if b.stopContinuations >= MaxStopContinuations {
 		return r.finish(ReasonCompleted, nil)
@@ -212,6 +220,8 @@ func (r *run) complete(resp *llm.Response) *Final {
 		return r.finish(ReasonCompleted, nil)
 	}
 	b.stopContinuations++
+	// The revised answer is checked again.
+	r.output = nil
 	return r.continueWith(prompt)
 }
 

@@ -76,7 +76,10 @@ type AfterModel interface {
 // is about to complete. It is not consulted during settlement (the run ends
 // at its limit whatever the hook says), nor while a reply cut off at the
 // output limit is being resumed, nor after MaxStopContinuations
-// continuations in the run.
+// continuations in the run. With Config.OutputSchema, the final answer is
+// checked before these hooks run: an invalid one is sent back for correction
+// without consulting them and without using their continuations, and a
+// valid one that a hook continues is checked again on the next reply.
 //
 // A non-empty prompt is appended to State as a user message marked
 // InjectedMetaKey (ContinuationMetaValue) and the run takes another turn; an empty one lets the run complete. Hooks run in reverse

@@ -87,6 +87,10 @@ const (
 	// in progress (Final.Err is ErrThreadBusy). Nothing ran and Final.State
 	// is nil.
 	ReasonBusy TerminalReason = "busy"
+	// ReasonInvalidOutput: the final answer failed Config.OutputSchema after
+	// OutputRetries corrections (Final.Err wraps ErrInvalidOutput). Final.Text
+	// is the last reply.
+	ReasonInvalidOutput TerminalReason = "invalid_output"
 )
 
 // Event is one item of a run's output stream. Kind selects which of the other
@@ -128,4 +132,8 @@ type Final struct {
 	Err error
 	// State is the run's final state, from which a later run can continue.
 	State *state.State
+	// Output is the normalized compact JSON answer. It is non-nil exactly
+	// when Config.OutputSchema applied to the run and Reason is
+	// ReasonCompleted.
+	Output json.RawMessage
 }

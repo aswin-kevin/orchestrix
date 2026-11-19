@@ -3,11 +3,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/state"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // answerSchema is the schema of the structured-output tests.
@@ -94,5 +97,160 @@ func TestNoOutputSchemaNoSegment(t *testing.T) {
 	}
 	if req.CacheBoundary != 2 {
 		t.Errorf("CacheBoundary = %d, want 2", req.CacheBoundary)
+	}
+}
+
+// runOutput runs an agent with answerSchema whose model answers turns.
+func runOutput(t *testing.T, cfg Config, turns ...llmtest.Turn) (*llmtest.Scripted, *Final) {
+	t.Helper()
+	p := llmtest.New(turns...)
+	cfg.Provider, cfg.OutputSchema = p, answerSchema
+	_, final := collect(t, mustNew(t, cfg).Run(context.Background(), userInput("go")))
+	return p, final
+}
+
+// wantOutput fails unless final completed with output want.
+func wantOutput(t *testing.T, final *Final, want string) {
+	t.Helper()
+	if final.Reason != ReasonCompleted || final.Err != nil {
+		t.Fatalf("final = %+v, want completed", final)
+	}
+	if string(final.Output) != want {
+		t.Fatalf("Output = %q, want %q", final.Output, want)
+	}
+}
+
+func TestOutputValidFirstTry(t *testing.T) {
+	p, final := runOutput(t, Config{}, llmtest.Turn{Text: `{"n":1}`})
+	wantOutput(t, final, `{"n":1}`)
+	if n := p.Calls(); n != 1 {
+		t.Errorf("model calls = %d, want 1", n)
+	}
+}
+
+func TestOutputFencedAnswerAccepted(t *testing.T) {
+	reply := "```json\n{\"n\": 2}\n```"
+	_, final := runOutput(t, Config{}, llmtest.Turn{Text: reply})
+	wantOutput(t, final, `{"n":2}`)
+	if final.Text != reply {
+		t.Errorf("Text = %q, want the raw reply %q", final.Text, reply)
+	}
+}
+
+func TestOutputCorrected(t *testing.T) {
+	_, final := runOutput(t, Config{}, llmtest.Turn{Text: "sure!"}, llmtest.Turn{Text: `{"n":3}`})
+	wantOutput(t, final, `{"n":3}`)
+	conts := continuationsIn(final.State.Messages())
+	if len(conts) != 1 {
+		t.Fatalf("continuations = %+v, want one", conts)
+	}
+	if c := conts[0]; !strings.HasPrefix(c.Text(), "Your answer is not valid:") || c.Meta[InjectedMetaKey] != ContinuationMetaValue {
+		t.Errorf("continuation = %+v, want an injected correction", c)
+	}
+}
+
+func TestOutputRetriesSpent(t *testing.T) {
+	p, final := runOutput(t, Config{}, llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"}, llmtest.Turn{Text: "c"})
+	if final.Reason != ReasonInvalidOutput || !errors.Is(final.Err, ErrInvalidOutput) {
+		t.Fatalf("final = %+v, want invalid_output wrapping ErrInvalidOutput", final)
+	}
+	if final.Output != nil || final.Text != "c" {
+		t.Errorf("Output = %q, Text = %q; want nil and %q", final.Output, final.Text, "c")
+	}
+	if n := p.Calls(); n != OutputRetries+1 {
+		t.Errorf("model calls = %d, want %d", n, OutputRetries+1)
+	}
+}
+
+func TestOutputRevalidatedAfterStopHook(t *testing.T) {
+	var calls int
+	_, final := runOutput(t, Config{Middleware: []Middleware{stopHook{prompts: []string{"revise", ""}, calls: &calls}}},
+		llmtest.Turn{Text: `{"n":1}`}, llmtest.Turn{Text: `{"n":5}`})
+	wantOutput(t, final, `{"n":5}`)
+}
+
+func TestOutputCheckedWhenStopSlotsSpent(t *testing.T) {
+	var calls int
+	turns := []llmtest.Turn{{Text: `{"n":1}`}, {Text: `{"n":1}`}, {Text: `{"n":1}`}, {Text: "bad"}, {Text: `{"n":9}`}}
+	p, final := runOutput(t, Config{Middleware: []Middleware{stopHook{prompts: []string{"again", "again", "again"}, calls: &calls}}},
+		turns...)
+	wantOutput(t, final, `{"n":9}`)
+	if n := p.Calls(); n != 5 {
+		t.Errorf("model calls = %d, want 5", n)
+	}
+	if calls != MaxStopContinuations {
+		t.Errorf("hook calls = %d, want %d", calls, MaxStopContinuations)
+	}
+}
+
+func TestOutputSkippedForNestedRun(t *testing.T) {
+	var a *Agent
+	var nested *Final
+	nest := tool.New("nest", "Run the agent again.",
+		func(ctx context.Context, _ struct{}, _ *tool.Call) (tool.Result, error) {
+			for ev := range a.Run(ctx, userInput("inner")) {
+				if ev.Kind == KindFinal {
+					nested = ev.Final
+				}
+			}
+			return tool.Text(nested.Text), nil
+		},
+		tool.WithReadOnly())
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "n1", Name: "nest"}}},
+		llmtest.Turn{Text: "free text"},
+		llmtest.Turn{Text: `{"n":1}`},
+	)
+	a = mustNew(t, Config{Provider: p, OutputSchema: answerSchema, Tools: []tool.Tool{nest}})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if nested == nil || nested.Reason != ReasonCompleted || nested.Output != nil || nested.Text != "free text" {
+		t.Fatalf("nested final = %+v, want completed free text without Output", nested)
+	}
+	wantOutput(t, final, `{"n":1}`)
+}
+
+func TestOutputNilWhenNotCompleted(t *testing.T) {
+	_, final := runOutput(t, Config{MaxTurns: 1, Tools: []tool.Tool{echoTool()}}, toolTurn("e1"))
+	if final.Reason != ReasonMaxTurns || final.Output != nil {
+		t.Fatalf("final = %+v, want max_turns without Output", final)
+	}
+}
+
+func TestOutputRetriesResetOnResume(t *testing.T) {
+	log := newCallLog()
+	p := llmtest.New(
+		// One correction is spent before the run is interrupted.
+		llmtest.Turn{Text: "first"},
+		llmtest.Turn{ToolCalls: []llmtest.Call{writeCall("w")}},
+		llmtest.Turn{Text: "x"},
+		llmtest.Turn{Text: "y"},
+		llmtest.Turn{Text: `{"n":1}`},
+	)
+	a := mustNew(t, Config{Provider: p, OutputSchema: answerSchema, Tools: []tool.Tool{writeTool(log)}})
+	_, interrupted := collect(t, a.Run(context.Background(), userInput("go")))
+	if interrupted.Reason != ReasonInterrupted {
+		t.Fatalf("final = %+v, want interrupted", interrupted)
+	}
+
+	_, final := collect(t, a.Resume(context.Background(), "", interrupted.State, []Decision{{ToolUseID: "w", Type: Approve}}))
+
+	wantOutput(t, final, `{"n":1}`)
+}
+
+// failingAfterAgent turns a completed run into ReasonMiddlewareError.
+type failingAfterAgent struct{}
+
+func (failingAfterAgent) Name() string { return "failing_after_agent" }
+
+func (failingAfterAgent) AfterAgent(context.Context, *state.State) error {
+	return errors.New("after agent failed")
+}
+
+func TestOutputNilWhenAfterAgentFails(t *testing.T) {
+	_, final := runOutput(t, Config{Middleware: []Middleware{failingAfterAgent{}}}, llmtest.Turn{Text: `{"n":1}`})
+	if final.Reason != ReasonMiddlewareError || final.Output != nil {
+		t.Fatalf("final = %+v, want middleware_error without Output", final)
 	}
 }

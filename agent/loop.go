@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -55,6 +56,9 @@ type run struct {
 	// outputActive is set when the run's final answer must satisfy
 	// Config.OutputSchema: the agent has one and the run is top-level.
 	outputActive bool
+	// output is the last final answer that satisfied Config.OutputSchema,
+	// reported as Final.Output when the run completes.
+	output json.RawMessage
 
 	events chan Event
 	// gone is closed by the consumer when it stops reading events.
@@ -397,7 +401,7 @@ func (r *run) stopRequested() error {
 }
 
 func (r *run) finish(reason TerminalReason, err error) *Final {
-	return &Final{
+	f := &Final{
 		Reason: reason,
 		Text:   r.lastText,
 		Usage:  r.usage,
@@ -405,6 +409,10 @@ func (r *run) finish(reason TerminalReason, err error) *Final {
 		Err:    err,
 		State:  r.state,
 	}
+	if reason == ReasonCompleted {
+		f.Output = r.output
+	}
+	return f
 }
 
 // emit sends ev to the consumer and reports whether it was delivered. It is

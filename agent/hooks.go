@@ -115,6 +115,7 @@ func (r *run) runAfterAgent(final *Final) {
 	}
 	if final.Err == nil {
 		final.Reason = ReasonMiddlewareError
+		final.Output = nil
 	}
 	final.Err = errors.Join(final.Err, err)
 }
