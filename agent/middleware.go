@@ -7,10 +7,12 @@
 // any of the hook interfaces below. The loop discovers hooks by type
 // assertion, so a middleware implements only what it needs.
 //
-// Hooks run in this order: BeforeAgent once at the start of a run; per turn,
+// Hooks run in this order: WrapRun once as a run starts, giving the run its
+// context; BeforeAgent once at the start of a run; per turn,
 // BeforeModel, the model call (through every ModelWrapper), then AfterModel;
 // each tool call goes through every ToolWrapper; BeforeStop when a reply
-// without tool calls would complete the run; AfterAgent once at the end.
+// without tool calls would complete the run; AfterAgent once at the end;
+// then the end functions WrapRun returned, before the final event.
 // Before* hooks (BeforeAgent, BeforeModel) run in stack order; After* hooks
 // (AfterModel, AfterAgent) and BeforeStop run in reverse stack order,
 // mirroring how wrappers unwind.
@@ -43,6 +45,26 @@ import (
 // built-in replaces that built-in (see Compose).
 type Middleware interface {
 	Name() string
+}
+
+// RunWrapper wraps a whole run. WrapRun is called once per run (Run, Resume
+// and ResumeWith alike), in stack order, before any other hook of the run;
+// info is the run's RunInfo, with Depth and ParentToolID set. A Thread asked
+// to run while busy starts no run and calls no wrapper.
+//
+// The returned context becomes the run's context for everything that
+// follows: hooks, model and tool wrappers, tool calls and the runs nested in
+// them. It must be derived from ctx; a context that lacks the run's RunInfo
+// is a programming error, and the run panics naming the middleware.
+//
+// The end function, which may be nil, is called exactly once per run, in
+// reverse stack order, with the run's Final: after the AfterAgent hooks and
+// the end-of-run checkpoint, before KindFinal is delivered, and also when
+// the consumer stopped reading the run's events (when AfterAgent is
+// skipped). A panic in it is recovered and discarded, so it cannot break the
+// run. It must not emit events.
+type RunWrapper interface {
+	WrapRun(ctx context.Context, info RunInfo) (context.Context, func(final *Final))
 }
 
 // BeforeAgent runs once before the first turn. A returned error ends the run

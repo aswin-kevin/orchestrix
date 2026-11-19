@@ -50,6 +50,9 @@ type run struct {
 	tools atomic.Pointer[tool.Registry]
 	// budget tracks the run limits; see budget.go.
 	budget *budget
+	// ends holds the end functions the RunWrappers returned, in stack
+	// order; see endRun.
+	ends []func(*Final)
 	// resume, when set, is the interrupted turn this run finishes before
 	// its first model call; see Agent.Resume.
 	resume *resumption
@@ -100,6 +103,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 		info.Input = in.Messages
 	}
 	ctx = runContext(ctx, info)
+	ctx, ends := a.wrapRun(ctx, info)
 	be := a.backendFor(in)
 	r := &run{
 		agent:     a,
@@ -115,6 +119,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 		events:    make(chan Event),
 		gone:      make(chan struct{}),
 		budget:    newBudget(ctx, a.cfg.MaxDuration),
+		ends:      ends,
 	}
 	r.outputActive = a.outputPrompt != "" && info.Depth == 0
 	info.run = r
@@ -124,6 +129,40 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 	}
 	r.model = chainModel(a.stack, innermost)
 	return r
+}
+
+// wrapRun calls the RunWrappers of the stack in order, each with the context
+// the previous one returned, and returns the run's context and the end
+// functions they returned. It panics when a wrapper returns a context that
+// does not carry info.
+func (a *Agent) wrapRun(ctx context.Context, info *RunInfo) (context.Context, []func(*Final)) {
+	var ends []func(*Final)
+	for _, mw := range a.stack {
+		w, ok := mw.(RunWrapper)
+		if !ok {
+			continue
+		}
+		next, end := w.WrapRun(ctx, *info)
+		if next == nil || next.Value(runInfoKey{}) != info {
+			panic(fmt.Sprintf("agent: %s.WrapRun returned a context not derived from the run's", mw.Name()))
+		}
+		ctx = next
+		if end != nil {
+			ends = append(ends, end)
+		}
+	}
+	return ctx, ends
+}
+
+// endRun calls the RunWrappers' end functions in reverse stack order with
+// final. A panic in one is discarded and the others still run.
+func (r *run) endRun(final *Final) {
+	for _, end := range slices.Backward(r.ends) {
+		func() {
+			defer func() { _ = recover() }()
+			end(final)
+		}()
+	}
 }
 
 // backendFor returns the backend a run of in operates on: Input.Backend,
@@ -153,11 +192,14 @@ func (r *run) drive(input []llm.Message) {
 	r.state.AppendMessages(input...)
 	final := r.loop()
 	if r.abandoned() {
+		r.seal()
+		r.endRun(final)
 		return
 	}
 	r.runAfterAgent(final)
 	r.finalCheckpoint(final)
 	r.seal()
+	r.endRun(final)
 	r.send(Event{Kind: KindFinal, Final: final})
 }
 
