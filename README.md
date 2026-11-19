@@ -12,7 +12,7 @@ You get a production-ready agent loop in a few lines of code, with two small dep
 > Orchestrix is under active development. Milestones 1 (the core), 2 (depth), 3 (knowledge and reach) and 4 (scale) are complete; the API may still change before 1.0.
 
 <p align="center">
-  <img src="assets/architecture.png" alt="Orchestrix architecture: your application runs the agent loop, which is wrapped by a middleware stack, calls LLM providers, sends every tool call through a permission gate to tools and backends, and keeps its conversation in serializable state." width="900">
+  <img src="assets/architecture.png" alt="Orchestrix architecture: your app or the orx CLI runs the agent loop (build request, call model, run tools) inside a middleware stack (memory, skills, plan mode, subagents, background tasks, MCP, summarize, compress, rubric, profiles, hooks, web, ask user). A coordinator fans work out to parallel subagents. The loop calls Anthropic or OpenAI-compatible providers, and every tool call passes a permission gate before reaching files, shell, MCP servers, web and backends (memory, disk, key-value, sandbox, composite mounts). Everything is kept in typed, JSON-serializable state with threads and checkpoints." width="900">
 </p>
 
 Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and receives streamed events back. The agent loop builds each request, calls the model, schedules tool calls and appends their results. Middleware wraps the model and tool calls. Every tool call passes the permission gate before it touches a backend, and the whole conversation lives in typed, JSON-serializable state.
