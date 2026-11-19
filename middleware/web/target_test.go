@@ -33,6 +33,18 @@ func TestCanonicalURL(t *testing.T) {
 		{"http://[::1]:80/", "http://[::1]/"},
 		{"http://[FE80::1]:8080/", "http://[fe80::1]:8080/"},
 		{"  https://go.dev/x?q=1&r=2  ", "https://go.dev/x?q=1&r=2"},
+		// Ports are written in decimal without leading zeros.
+		{"https://evil.com:0443/a", "https://evil.com/a"},
+		{"http://evil.com:080/a", "http://evil.com/a"},
+		{"https://evil.com:00080/a", "https://evil.com:80/a"},
+		{"http://[::1]:0080/", "http://[::1]/"},
+		// Escaped unreserved characters are decoded; other escapes keep
+		// their meaning, with uppercase hex.
+		{"https://h/%61dmin/x", "https://h/admin/x"},
+		{"https://h/%41dmin/x", "https://h/Admin/x"},
+		{"https://h/%7e%2D%2e%5F%31", "https://h/~-._1"},
+		{"https://h/a%2fb/%3f", "https://h/a%2Fb/%3F"},
+		{"https://h/a/%2e%2e/%2E/b", "https://h/b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -57,6 +69,11 @@ func TestCanonicalURLErrors(t *testing.T) {
 		{"https://./a", "host"},
 		{"ftp://h/", "http or https"},
 		{"https:evil.com", "http or https"},
+		{"https://evil.com:65536/a", "port"},
+		{"https://evil.com:0/a", "port"},
+		{"https://evil.com:00/a", "port"},
+		{"https://evil.com:/a", "port"},
+		{"http://[::1]:/a", "port"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
@@ -96,6 +113,7 @@ func TestRulesMatchCanonicalSubject(t *testing.T) {
 	for _, u := range []string{
 		"https://evil.com", "https://evil.com?x", "https://evil.com:443/a",
 		"https://evil.com./a", "HTTPS://EVIL.COM/a", "https://evil.com/a#f",
+		"https://evil.com:0443/a", "https://evil.com:000443/a",
 	} {
 		if !matches(deny, u) {
 			t.Errorf("deny rule misses %q (subject %q)", u, subjectOf(t, tl, u))
@@ -112,6 +130,16 @@ func TestRulesMatchCanonicalSubject(t *testing.T) {
 	}
 	if got := seen.Load(); got != nil {
 		t.Errorf("request sent for a URL with credentials: %v", got)
+	}
+
+	admin := rule(t, "web_fetch(https://evil.com/admin/*)")
+	if !matches(admin, "https://evil.com/%61dmin/x") {
+		t.Errorf("deny rule misses /%%61dmin/x (subject %q)", subjectOf(t, tl, "https://evil.com/%61dmin/x"))
+	}
+	// %41 is "A": the server sees /Admin, a different path from /admin, so
+	// the rule rightly does not match it.
+	if got := subjectOf(t, tl, "https://evil.com/%41dmin/x"); got != "https://evil.com/Admin/x" || matches(admin, "https://evil.com/%41dmin/x") {
+		t.Errorf("/%%41dmin/x: subject %q, matched %v", got, matches(admin, "https://evil.com/%41dmin/x"))
 	}
 
 	if matches(rule(t, "web_fetch(https://go.dev*)"), "https://go.dev@evil.com/") {
