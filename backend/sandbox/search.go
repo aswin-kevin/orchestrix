@@ -21,16 +21,13 @@ const (
 	sectionEnd = "."
 )
 
-// skippedDirs are never descended into by Grep, as in backend/disk.
-var skippedDirs = map[string]bool{".git": true, "node_modules": true}
-
 // Ls lists the direct children of the directory at p, sorted by path.
 func (b *Backend) Ls(ctx context.Context, p string) ([]backend.FileInfo, error) {
 	clean, err := backend.Clean(p)
 	if err != nil {
 		return nil, err
 	}
-	infos, err := b.list(ctx, "ls", clean, requireDir+findRecords("-mindepth 1 -maxdepth 1"))
+	infos, err := b.list(ctx, "ls", clean, requireDir, `find -H "$p" -mindepth 1 -maxdepth 1 `+recordsExec)
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +46,7 @@ func (b *Backend) Glob(ctx context.Context, pattern, base string) ([]backend.Fil
 	if !strings.HasPrefix(pattern, "/") {
 		pattern = path.Join(clean, pattern)
 	}
-	infos, err := b.list(ctx, "glob", clean, requireDir+findRecords("-type f"))
+	infos, err := b.list(ctx, "glob", clean, requireDir, `find -H "$p" -type f `+recordsExec)
 	if err != nil {
 		return nil, err
 	}
@@ -71,9 +68,9 @@ func (b *Backend) Grep(ctx context.Context, pattern string, opts backend.GrepOpt
 	if err != nil {
 		return nil, err
 	}
-	listing := requireExists + `if [ -d "$p" ]; then ` + findRecords("-type f") +
-		"; else sh -c " + quote(recordScript) + ` sh "$p" 2>/dev/null; fi` + "\n"
-	infos, err := b.list(ctx, "grep", clean, listing)
+	listing := `if [ -d "$p" ]; then find -H "$p" ` + pruneSkipped() + " " + recordsExec +
+		"; else sh -c " + quote(recordScript) + ` sh "$p"; fi`
+	infos, err := b.list(ctx, "grep", clean, requireExists, listing)
 	if err != nil {
 		return nil, err
 	}
@@ -95,11 +92,12 @@ func (b *Backend) Grep(ctx context.Context, pattern string, opts backend.GrepOpt
 	return grepper.Results(), nil
 }
 
-// inSkippedDir reports whether p lies in a skipped directory below base.
+// inSkippedDir reports whether p lies in a skipped directory below base. It
+// backs up the prune in Grep's find command.
 func inSkippedDir(base, p string) bool {
 	rel := strings.TrimPrefix(strings.TrimPrefix(p, base), "/")
 	dirs := strings.Split(rel, "/")
-	return slices.ContainsFunc(dirs[:len(dirs)-1], func(d string) bool { return skippedDirs[d] })
+	return slices.ContainsFunc(dirs[:len(dirs)-1], func(d string) bool { return slices.Contains(skippedDirs, d) })
 }
 
 // batchLen returns how many of files (at least one) one read command takes.
@@ -147,10 +145,12 @@ func (b *Backend) grepBatch(ctx context.Context, base string, files []backend.Fi
 	return false, nil
 }
 
-// list runs a listing script (check plus find) for the directory or file at
-// the cleaned path p and converts its records to virtual FileInfos.
-func (b *Backend) list(ctx context.Context, op, clean, body string) ([]backend.FileInfo, error) {
-	out, err := b.run(ctx, op, clean, b.prelude(b.real(clean))+body+"\nexit 0\n", listOutputBytes)
+// list checks the cleaned path with check, runs listPreflight, then runs the
+// listing command with its stderr captured, and converts the records to
+// virtual FileInfos. In-progress write temporaries are left out.
+func (b *Backend) list(ctx context.Context, op, clean, check, listing string) ([]backend.FileInfo, error) {
+	script := b.prelude(b.real(clean)) + check + listPreflight + captureStderr(listing) + "exit 0\n"
+	out, err := b.run(ctx, op, clean, script, listOutputBytes)
 	if err != nil {
 		return nil, err
 	}

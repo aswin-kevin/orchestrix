@@ -39,6 +39,7 @@ func skipWithoutSh(t *testing.T) {
 // quoting bug can never write into the repository, and records every command.
 type localExec struct {
 	dir  string
+	env  []string // extra environment, e.g. a PATH with fake tools
 	mu   sync.Mutex
 	cmds []string
 }
@@ -58,7 +59,7 @@ func (e *localExec) Execute(ctx context.Context, cmd string, opts backend.ExecOp
 	}
 	c := exec.CommandContext(ctx, "/bin/sh", "-c", cmd)
 	c.Dir = e.dir
-	c.Env = append(os.Environ(), opts.Env...)
+	c.Env = append(append(os.Environ(), e.env...), opts.Env...)
 	out, err := c.CombinedOutput()
 	res := backend.ExecResult{Output: string(out)}
 	var exitErr *exec.ExitError
@@ -259,5 +260,23 @@ func TestSandboxDeleteRootRefused(t *testing.T) {
 		if err := b.Delete(ctx, p); !errors.Is(err, backend.ErrInvalidPath) {
 			t.Fatalf("Delete(%q) = %v, want ErrInvalidPath", p, err)
 		}
+	}
+}
+
+func TestSandboxWriteRootIsDir(t *testing.T) {
+	b := newSandbox(t, fakeExec{}, "/work")
+	if err := b.Write(ctx, "/", []byte("x")); !errors.Is(err, backend.ErrIsDir) {
+		t.Fatalf("Write(/) = %v, want ErrIsDir", err)
+	}
+}
+
+func TestSandboxWriteLongName(t *testing.T) {
+	b := newSandbox(t, newLocalExec(t), t.TempDir())
+	name := "/" + strings.Repeat("n", 240)
+	if err := b.Write(ctx, name, []byte("long")); err != nil {
+		t.Fatalf("Write(240-byte name): %v", err)
+	}
+	if got := string(readBytes(t, b, name)); got != "long" {
+		t.Fatalf("Read = %q", got)
 	}
 }

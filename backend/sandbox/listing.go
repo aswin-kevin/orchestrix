@@ -1,0 +1,120 @@
+package sandbox
+
+import (
+	"fmt"
+	"path"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	// stderrTailBytes is how much of a listing's captured stderr an error
+	// quotes when a tool fails mid-listing.
+	stderrTailBytes = 1 << 10
+	// recordFailed is the record kind a listing prints when wc or date fails
+	// on an entry that still exists.
+	recordFailed = "E"
+	// stderrMarker starts the final section of a listing's output, which
+	// holds everything the listing tools wrote to stderr.
+	stderrMarker = "\x00S\t"
+)
+
+// skippedDirs are never descended into by Grep, as in backend/disk. The find
+// prune expression and the Go backstop (inSkippedDir) are both built from it.
+var skippedDirs = []string{".git", "node_modules"}
+
+// listPreflight runs before an error-tolerant listing and fails loudly when
+// date -r or find's -H, -mindepth, -maxdepth and -exec {} + are unsupported,
+// so a missing tool is an error rather than an empty result.
+var listPreflight = `date -r "$p" +%s >/dev/null` + orFail +
+	`find -H "$p" -mindepth 0 -maxdepth 0 -exec true {} +` + orFail
+
+// recordScript prints one listing record per argument:
+// "<d|f>\t<size>\t<unix mtime>\t<path>\0". A symlink to a directory is a "d";
+// a dangling symlink is an "f" of size 0 and mtime 0. An entry that vanished
+// mid-listing is skipped; when wc or date fails on an entry that still
+// exists, it prints a recordFailed record and exits non-zero (the tool's own
+// message is on stderr). It is passed to find -exec as a fixed, quoted sh -c
+// program.
+var recordScript = `fail() { printf '` + recordFailed + `\000'; exit 1; }
+for f do
+if [ -d "$f" ]; then k=d; s=0
+elif [ -e "$f" ]; then k=f; s=0
+  if [ -f "$f" ]; then s=$(wc -c < "$f") || { [ -e "$f" ] || continue; fail; }; fi
+elif [ -L "$f" ]; then printf 'f\t0\t0\t%s\000' "$f"; continue
+else continue
+fi
+m=$(date -r "$f" +%s) || { [ -e "$f" ] || continue; fail; }
+printf '%s\t%s\t%s\t%s\000' "$k" "$s" "$m" "$f"
+done`
+
+// recordsExec is the find action that runs recordScript over the matches.
+var recordsExec = `-exec sh -c ` + quote(recordScript) + ` sh {} +`
+
+// pruneSkipped is a find expression (POSIX syntax) that prunes skippedDirs
+// below the start point and otherwise selects regular files.
+func pruneSkipped() string {
+	names := make([]string, len(skippedDirs))
+	for i, d := range skippedDirs {
+		names[i] = "-name " + quote(d)
+	}
+	return `-mindepth 1 \( -type d \( ` + strings.Join(names, " -o ") + ` \) -prune \) -o -type f`
+}
+
+// captureStderr runs cmd with its stdout passed through and its stderr
+// collected, then appends the stderr as the final section after
+// stderrMarker. The listing tolerates find's own exit status (unreadable
+// directories are skipped, as backend/disk does); failures that matter
+// surface as recordFailed records.
+func captureStderr(cmd string) string {
+	return "{ e=$( " + cmd + " 2>&1 >&3 ); } 3>&1\n" +
+		`printf '\000S\t%s' "$e"` + "\n"
+}
+
+// record is one parsed listing record.
+type record struct {
+	dir     bool
+	size    int64
+	modTime time.Time
+	path    string // path inside the sandbox
+}
+
+// parseRecords splits the output of a captureStderr listing. A recordFailed
+// record turns into an error quoting the captured stderr.
+func parseRecords(out string) ([]record, error) {
+	i := strings.LastIndex(out, stderrMarker)
+	if i < 0 {
+		return nil, fmt.Errorf("listing output incomplete: %q", tail(out))
+	}
+	stderr := out[i+len(stderrMarker):]
+	var recs []record
+	for _, line := range strings.Split(out[:i], "\x00") {
+		if line == "" {
+			continue
+		}
+		if line == recordFailed {
+			if len(stderr) > stderrTailBytes {
+				stderr = "…" + stderr[len(stderr)-stderrTailBytes:]
+			}
+			return nil, fmt.Errorf("listing tool failed: %q", stderr)
+		}
+		fields := strings.SplitN(line, "\t", 4)
+		if len(fields) != 4 || (fields[0] != "d" && fields[0] != "f") {
+			return nil, fmt.Errorf("malformed listing record %q", tail(line))
+		}
+		size, err := strconv.ParseInt(strings.TrimSpace(fields[1]), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("listing size: %w", err)
+		}
+		mtime, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("listing mtime: %w", err)
+		}
+		if strings.HasPrefix(path.Base(fields[3]), tmpPrefix) {
+			continue // a write in progress
+		}
+		recs = append(recs, record{dir: fields[0] == "d", size: size, modTime: time.Unix(mtime, 0), path: fields[3]})
+	}
+	return recs, nil
+}

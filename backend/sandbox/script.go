@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 )
@@ -74,54 +73,6 @@ var requireFile = requireExists +
 
 // requireDir follows requireExists for operations on a directory.
 var requireDir = requireExists + fmt.Sprintf(`if [ ! -d "$p" ]; then exit %d; fi`+"\n", exitNotDir)
-
-// recordScript prints one listing record per argument:
-// "<d|f>\t<size>\t<unix mtime>\t<path>\0". Entries that vanish mid-listing are
-// skipped. It is passed to find -exec as a fixed, quoted sh -c program.
-const recordScript = `for f do
-if [ -d "$f" ]; then k=d; s=0; else k=f; s=0; if [ -f "$f" ]; then s=$(wc -c < "$f") || continue; fi; fi
-m=$(date -r "$f" +%s) || continue
-printf '%s\t%s\t%s\t%s\000' "$k" "$s" "$m" "$f"
-done`
-
-// findRecords is a command printing recordScript records for the paths find
-// selects under $p with findArgs. Errors from unreadable entries are dropped,
-// as backend/disk ignores them.
-func findRecords(findArgs string) string {
-	return `find -H "$p" ` + findArgs + ` -exec sh -c ` + quote(recordScript) + ` sh {} + 2>/dev/null`
-}
-
-// record is one parsed listing record.
-type record struct {
-	dir     bool
-	size    int64
-	modTime time.Time
-	path    string // path inside the sandbox
-}
-
-// parseRecords splits recordScript output.
-func parseRecords(out string) ([]record, error) {
-	var recs []record
-	for _, line := range strings.Split(out, "\x00") {
-		if line == "" {
-			continue
-		}
-		fields := strings.SplitN(line, "\t", 4)
-		if len(fields) != 4 || (fields[0] != "d" && fields[0] != "f") {
-			return nil, fmt.Errorf("malformed listing record %q", tail(line))
-		}
-		size, err := strconv.ParseInt(strings.TrimSpace(fields[1]), 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("listing size: %w", err)
-		}
-		mtime, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("listing mtime: %w", err)
-		}
-		recs = append(recs, record{dir: fields[0] == "d", size: size, modTime: time.Unix(mtime, 0), path: fields[3]})
-	}
-	return recs, nil
-}
 
 // exitError maps a finished command's status onto an error, nil on success.
 func exitError(res backend.ExecResult) error {

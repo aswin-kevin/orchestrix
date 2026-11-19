@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	// tmpInfix joins a file's path and a random suffix to name the
-	// temporary file a write fills before renaming it into place.
-	tmpInfix = ".orx-tmp-"
+	// tmpPrefix starts the name of the temporary file, next to the target,
+	// that a write fills before renaming it into place. Listings hide such
+	// files.
+	tmpPrefix = ".orx-tmp-"
 	// tmpRandomBytes is how many random bytes (hex-encoded) end that name.
 	tmpRandomBytes = 8
 	// cleanupTimeout bounds removing a half-written temporary file after a
@@ -96,12 +97,16 @@ func (b *Backend) Write(ctx context.Context, p string, content []byte) error {
 
 // write implements Write for a cleaned path.
 func (b *Backend) write(ctx context.Context, op, clean string, content []byte) error {
+	if clean == "/" {
+		return fmt.Errorf("sandbox: %s %s: %w", op, clean, backend.ErrIsDir)
+	}
 	realPath := b.real(clean)
 	suffix := make([]byte, tmpRandomBytes)
 	if _, err := rand.Read(suffix); err != nil {
 		return fmt.Errorf("sandbox: %s %s: %w", op, clean, err)
 	}
-	tmp := realPath + tmpInfix + hex.EncodeToString(suffix)
+	// A short name, so a target near the file-name length limit still works.
+	tmp := path.Join(path.Dir(realPath), tmpPrefix+hex.EncodeToString(suffix))
 	head := b.prelude(realPath) + "t=" + quote(tmp) + "\n"
 	setup := head +
 		fmt.Sprintf(`if [ -d "$p" ]; then exit %d; fi`+"\n", exitIsDir) +

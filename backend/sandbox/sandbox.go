@@ -14,10 +14,22 @@
 // (quotes, $(...), backticks, ";", newlines, leading "-", globs, non-UTF-8
 // bytes) are therefore inert.
 //
+// Symlinks: commands follow them. Ls lists a symlink to a directory as a
+// directory and a dangling symlink as a file of size 0 with a zero (Unix
+// epoch) mtime, which Delete removes and Read reports as not found. Glob and
+// Grep list regular files only, so they skip symlinks.
+//
 // Limits: modification times are read with whole-second resolution; a
 // rewritten file gets default permissions rather than keeping its old mode;
 // listings run wc and date per entry, so Glob and Grep over very large trees
-// are slow. Grep skips .git and node_modules directories, like backend/disk.
+// are slow. Grep prunes .git and node_modules directories, like backend/disk.
+// Writes fill a temporary ".orx-tmp-<hex>" file next to the target, and
+// listings hide such names. A file that grows by more than a few KiB between
+// the size check and the transfer in Read or Grep fails safely: the output
+// exceeds the cap computed from the earlier size and the operation returns a
+// truncation error, never partial content.
+// A listing whose tools fail (an unsupported find flag, date -r erroring on
+// an existing entry) is an error, never a silently empty result.
 //
 // Local implementation: wrapping a backend/shell Backend gives a sandbox on
 // the host, useful for development and tests:
@@ -61,8 +73,10 @@ type Options struct {
 
 // Backend implements backend.Backend, backend.MultiEditor and
 // backend.Executor using only exec.Execute. The sandbox needs a POSIX sh with
-// cat, mkdir, mv, rm, find (-mindepth/-maxdepth/-type), wc, date -r, base64
-// (-d), as GNU coreutils, BSD and busybox provide.
+// mkdir, mv, rm, wc, base64 (with -d), find (with -H, -mindepth, -maxdepth
+// and -exec ... {} +) and date -r FILE. GNU coreutils and findutils, busybox,
+// macOS and FreeBSD provide them; OpenBSD and NetBSD, whose date -r takes
+// only seconds, are not supported.
 type Backend struct {
 	exec    backend.Executor
 	root    string
