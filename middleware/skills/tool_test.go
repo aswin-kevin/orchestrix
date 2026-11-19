@@ -560,6 +560,7 @@ func resultTextBlock(b llm.Block) string {
 	return sb.String()
 }
 
+// This guards the keep clause: it passes without it only if nothing relocks.
 func TestLoadedSkillKeepsUnlockWhenPinRemoved(t *testing.T) {
 	dir := t.TempDir()
 	pinRun(t, dir, []string{"pdf"},
@@ -584,5 +585,77 @@ func TestSearchUnlockKeptWhenPinRemoved(t *testing.T) {
 	}
 	if offers(p.Requests[0], "pdf_tool") {
 		t.Fatal("pdf_tool must be relocked: only the pin unlocked it")
+	}
+}
+
+// relockMiddleware has skills a (tools shared, only_a), b (tool shared) and
+// m (MCP server x).
+func relockMiddleware(t *testing.T) *Middleware {
+	t.Helper()
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"a/SKILL.md": "---\nname: a\ndescription: A.\nallowed-tools: [shared, only_a]\n---\nbody\n",
+		"b/SKILL.md": "---\nname: b\ndescription: B.\nallowed-tools: [shared]\n---\nbody\n",
+		"m/SKILL.md": "---\nname: m\ndescription: M.\nmcp-servers: [x]\n---\nbody\n",
+	})
+	m, err := New(Config{Sources: []Source{DirSource(root)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// beginRun runs BeforeAgent on s with the run's pins.
+func beginRun(t *testing.T, m *Middleware, s *state.State, pins ...string) {
+	t.Helper()
+	ScopeKey.Set(s, Scope{Pinned: pins})
+	if err := m.BeforeAgent(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The relock tests below are guards: they document edge cases of the relock
+// and passed on first run.
+
+func TestSharedPatternStaysWhileAnotherPinHoldsIt(t *testing.T) {
+	m, s := relockMiddleware(t), state.New()
+	beginRun(t, m, s, "a", "b")
+	beginRun(t, m, s, "b")
+	if !deferred.Unlocked(s, "shared") || deferred.Unlocked(s, "only_a") {
+		t.Fatal("shared must stay (pin b holds it) and only_a must be relocked")
+	}
+}
+
+func TestRemovedScopePinRelocks(t *testing.T) {
+	m, s := relockMiddleware(t), state.New()
+	beginRun(t, m, s, "a")
+	if !deferred.Unlocked(s, "only_a") {
+		t.Fatal("scope pin did not unlock")
+	}
+	beginRun(t, m, s)
+	if deferred.Unlocked(s, "only_a") || deferred.Unlocked(s, "shared") {
+		t.Fatal("a removed Scope.Pinned entry must relock its tools")
+	}
+}
+
+func TestSearchGrantUnderRemovedGlobPinStays(t *testing.T) {
+	m, s := relockMiddleware(t), state.New()
+	beginRun(t, m, s, "m")
+	deferred.Unlock(s, "mcp__x__y") // as search_tools does
+	beginRun(t, m, s)
+	if deferred.Unlocked(s, "mcp__x__z") {
+		t.Fatal("the pin's glob must be relocked")
+	}
+	if !deferred.Unlocked(s, "mcp__x__y") {
+		t.Fatal("a name search_tools granted must stay unlocked")
+	}
+}
+
+func TestLegacyStateRelocksNothing(t *testing.T) {
+	m, s := relockMiddleware(t), state.New()
+	deferred.Unlock(s, "only_a", "mcp__x__*") // saved before pinned_unlocks existed
+	beginRun(t, m, s)
+	if !deferred.Unlocked(s, "only_a") || !deferred.Unlocked(s, "mcp__x__q") {
+		t.Fatal("a State without the pinned_unlocks key must keep its unlocks")
 	}
 }

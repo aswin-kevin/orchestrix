@@ -18,8 +18,11 @@ var UnlockedKey = state.NewKey[[]string]("deferred.unlocked", state.Private[[]st
 // Lock) leave alone the ones the model found by searching.
 var searchedKey = state.NewKey[[]string]("deferred.searched", state.Private[[]string]())
 
-// Searched returns the tool names search_tools unlocked in this run, without
-// duplicates, in the order found. s must not be nil.
+// Searched returns the tool names search_tools unlocked, without duplicates,
+// in the order found. The set accumulates across every run of the thread
+// (the key is checkpointed with State) and holds exact names, not patterns.
+// A search grant is never relocked: Lock only removes patterns a middleware
+// names. s must not be nil.
 func Searched(s *state.State) []string {
 	names, _ := searchedKey.Get(s)
 	return slices.Clone(names)
@@ -56,7 +59,9 @@ func Unlock(s *state.State, patterns ...string) {
 
 // Lock removes each exact pattern from UnlockedKey (no glob matching between
 // patterns); patterns not present are ignored. It is how a middleware takes
-// back an unlock it granted. s must not be nil.
+// back an unlock it granted. It removes the pattern whoever granted it: a
+// pattern the host or another middleware also unlocked is removed too. s must
+// not be nil.
 func Lock(s *state.State, patterns ...string) {
 	UnlockedKey.Update(s, func(current []string) []string {
 		// current is the stored slice itself: never modify it in place.

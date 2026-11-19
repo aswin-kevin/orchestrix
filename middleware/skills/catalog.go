@@ -26,6 +26,11 @@ var neutralizeTags = promptsafe.NewTagNeutralizer("available_skills", "skill")
 // locked again, except those a current pin, a loaded skill or search_tools
 // also unlocked. A State saved before this bookkeeping existed has no record
 // of earlier pins, so nothing is locked again for it.
+//
+// Lock removes a pattern whoever granted it: a pattern the host unlocked
+// directly is locked again when a pin that also listed it is removed. A host
+// that needs it to persist should unlock it again in a BeforeAgent placed
+// after skills in the stack.
 func (m *Middleware) BeforeAgent(_ context.Context, s *state.State) error {
 	scope, _ := ScopeKey.Get(s)
 	var want []string

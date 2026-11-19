@@ -250,7 +250,7 @@ func (e *collisionError) Error() string {
 type unreadableError struct{ file string }
 
 func (e *unreadableError) Error() string {
-	return fmt.Sprintf("Not saved: %s exists but is not a readable memory. Pick a different name, or fix or delete that file first.", e.file)
+	return fmt.Sprintf("%s exists but is not a readable memory", e.file)
 }
 
 // sameName reports whether two entry names are the same up to case and
@@ -264,8 +264,8 @@ func sameName(a, b string) bool {
 // existing entry of another name that shares the slug is left alone and a
 // *collisionError returned. A file at the slug path that is not a readable
 // entry is left alone too, with an *unreadableError; only a missing file
-// means create. It returns the entry's path and whether it
-// replaced an existing entry.
+// means create. It returns the entry's path and whether it replaced an
+// existing entry.
 func (s *store) record(ctx context.Context, b backend.Backend, in RecordInput) (p string, updated bool, err error) {
 	slug, err := in.validate()
 	if err != nil {
