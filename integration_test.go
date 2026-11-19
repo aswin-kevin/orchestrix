@@ -16,13 +16,20 @@ import (
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/kv"
 	membackend "github.com/aswin-kevin/orchestrix/backend/memory"
 	checkpointfile "github.com/aswin-kevin/orchestrix/checkpoint/file"
+	"github.com/aswin-kevin/orchestrix/coordinator"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/mcp"
+	"github.com/aswin-kevin/orchestrix/middleware/async"
+	"github.com/aswin-kevin/orchestrix/middleware/compress"
 	"github.com/aswin-kevin/orchestrix/middleware/memory"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
+	"github.com/aswin-kevin/orchestrix/middleware/profiles"
+	"github.com/aswin-kevin/orchestrix/middleware/rubric"
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
+	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
 	"github.com/aswin-kevin/orchestrix/middleware/web"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -561,4 +568,209 @@ func TestLivePlanModeApproval(t *testing.T) {
 	if got := readTrimmed(ctx, t, ws, "/plan.txt"); got != "planned ok" {
 		t.Errorf("file content = %q, want %q", got, "planned ok")
 	}
+}
+
+func TestLiveAsyncBackgroundTask(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	m, err := async.New(async.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Shutdown)
+	a, err := orchestrix.New(spec,
+		orchestrix.WithAsync(m),
+		orchestrix.WithPermissionMode(permission.ModeBypass),
+		orchestrix.WithMaxTurns(12),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prompt := "Use start_task with the general-purpose subagent to compute 17*23 " +
+		"(it should reply with just the number), then call check_task with wait true and tell me the result."
+	in := orchestrix.Text(prompt)
+	in.ThreadID = "async"
+	final, events := drain(t, a.Run(ctx, in))
+	requireCompleted(t, final)
+	for _, name := range []string{"start_task", "check_task"} {
+		if !sawToolUse(events, name) {
+			t.Errorf("no %s tool use was observed", name)
+		}
+	}
+	requireTextContains(t, final.Text, "391")
+}
+
+func TestLiveCoordinatorFanOut(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	c, err := coordinator.New(spec, coordinator.Config{Workers: []subagents.Subagent{{
+		Name:         "capital",
+		Description:  "Finds the capital city of a country given its name.",
+		SystemPrompt: "Reply with the capital city only.",
+	}}},
+		orchestrix.WithPermissionMode(permission.ModeBypass),
+		orchestrix.WithMaxTurns(20),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Shutdown)
+
+	prompt := "Find the capitals of France and Japan using your capital worker, one task per country, in parallel."
+	in := orchestrix.Text(prompt)
+	in.ThreadID = "coordinator"
+	final, events := drain(t, c.Run(ctx, in))
+	requireCompleted(t, final)
+	starts := 0
+	for _, ev := range events {
+		if ev.Kind == agent.KindToolUse && ev.ToolName == "start_task" {
+			starts++
+		}
+	}
+	if starts < 2 {
+		t.Errorf("start_task used %d times, want at least 2", starts)
+	}
+	requireTextContains(t, final.Text, "Paris")
+	requireTextContains(t, final.Text, "Tokyo")
+}
+
+func TestLiveRubricRevision(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	a, err := orchestrix.New(spec,
+		orchestrix.WithRubric(rubric.Config{Criteria: []string{"The reply ends with the exact word DONE."}}),
+		orchestrix.WithPermissionMode(permission.ModeBypass),
+		orchestrix.WithMaxTurns(10),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	final, _ := drain(t, a.Run(ctx, orchestrix.Text("Say hello in one short sentence.")))
+	requireCompleted(t, final)
+	grades := rubric.Grades(final.State)
+	if len(grades) == 0 {
+		t.Fatal("no gradings were recorded")
+	}
+	if last := grades[len(grades)-1]; !last.Pass {
+		t.Errorf("last grading = %+v, want a pass", last)
+	}
+	if got := strings.TrimSpace(final.Text); !strings.HasSuffix(got, "DONE") {
+		t.Errorf("final text = %q, want it to end with DONE", got)
+	}
+}
+
+// compressFillerChars sizes each seeded turn of the compression test so the
+// conversation passes compress's trigger but not summarize's, in a window of
+// 6000 tokens.
+const compressFillerChars = 2000
+
+func TestLiveCompressContext(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	mc, err := llm.ParseModel(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := llm.LookupProfile(mc.Model)
+	profile.ContextWindow = 6000
+	a, err := orchestrix.New(spec,
+		orchestrix.WithCompress(compress.Config{}),
+		orchestrix.WithSummarize(summarize.Config{TriggerFraction: 0.99}),
+		orchestrix.WithConfig(func(c *agent.Config) { c.Profile = &profile }),
+		orchestrix.WithPermissionMode(permission.ModeBypass),
+		orchestrix.WithMaxTurns(10),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	in := orchestrix.Text("Continue.")
+	in.ThreadID = "compress"
+	const seededTurns = 8
+	for i := range seededTurns {
+		in.Messages = append(in.Messages,
+			llm.UserText(fmt.Sprintf("Note %d:\n%s", i+1, fillerText()[:compressFillerChars])),
+			llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{llm.TextBlock("Noted.")}})
+	}
+	final, events := drain(t, a.Run(ctx, in))
+	requireCompleted(t, final)
+	if !sawToolUse(events, "compress_context") {
+		t.Error("no compress_context tool use was observed")
+	}
+	if got, _ := agent.ElisionsKey.Get(final.State); len(got) == 0 {
+		t.Error("the final state records no elisions")
+	}
+}
+
+func TestLiveMountedMemoryAcrossThreads(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	store, err := kv.NewDirStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mounted, err := kv.New(store, "memories")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := orchestrix.New(spec,
+		orchestrix.WithMount(memory.DefaultDir, mounted),
+		orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}),
+		orchestrix.WithPermissionMode(permission.ModeBypass),
+		orchestrix.WithMaxTurns(10),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := orchestrix.Text("Remember with record_memory that my favorite color is teal.")
+	first.ThreadID = "a"
+	final, events := drain(t, a.Run(ctx, first))
+	requireCompleted(t, final)
+	if !sawToolUse(events, "record_memory") {
+		t.Error("no record_memory tool use was observed")
+	}
+
+	second := orchestrix.Text("Use recall_memory to find my favorite color, then tell me.")
+	second.ThreadID = "b"
+	final, events = drain(t, a.Run(ctx, second))
+	requireCompleted(t, final)
+	if !sawToolUse(events, "recall_memory") {
+		t.Error("no recall_memory tool use was observed")
+	}
+	requireTextContains(t, final.Text, "teal")
+}
+
+func TestLiveProfilesPromptSuffix(t *testing.T) {
+	spec := liveModel(t)
+	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	defer cancel()
+
+	a, err := orchestrix.New(spec,
+		orchestrix.WithProfiles(profiles.Config{Adjustments: []profiles.Adjustment{{
+			Models:       []string{"*"},
+			PromptSuffix: "Always end your reply with the word BANANA.",
+		}}}),
+		orchestrix.WithPermissionMode(permission.ModeBypass),
+		orchestrix.WithMaxTurns(10),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	final, _ := drain(t, a.Run(ctx, orchestrix.Text("Say hi.")))
+	requireCompleted(t, final)
+	requireTextContains(t, final.Text, "BANANA")
 }
