@@ -146,8 +146,12 @@ type Manager[H Handle] struct {
 	watchers sync.WaitGroup
 }
 
-// NewManager returns a Manager that numbers ids prefix+N per thread.
+// NewManager returns a Manager that numbers ids prefix+N per thread. It panics
+// when either limit is not positive, which is a programming error.
 func NewManager[H Handle](prefix string, l Limits) *Manager[H] {
+	if l.MaxRunning <= 0 || l.MaxFinished <= 0 {
+		panic(fmt.Sprintf("jobs: limits must be positive, got %+v", l))
+	}
 	return &Manager[H]{prefix: prefix, limits: l, threads: map[string]*thread[H]{}}
 }
 
@@ -175,7 +179,8 @@ func (m *Manager[H]) thread(threadID string) *thread[H] {
 // recordedIDs lists the ids the caller already recorded, so a thread resumed in
 // a new process never reuses one: numbering continues after the highest number
 // among them. start runs under the Manager's lock, so the running limit and
-// Shutdown cannot be raced; it must not call the Manager. Start returns
+// Shutdown cannot be raced; it must not call the Manager and must not block:
+// it only spawns the work, never waits for it. Start returns
 // ErrShutdown after Shutdown and a *LimitError when the thread runs MaxRunning
 // jobs; an error from start is returned as is and registers nothing.
 func (m *Manager[H]) Start(threadID string, recordedIDs []string, start func() (H, error)) (*Job[H], error) {

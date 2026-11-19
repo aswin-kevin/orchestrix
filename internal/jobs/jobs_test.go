@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -99,26 +100,37 @@ func TestRunningLimit(t *testing.T) {
 	}
 }
 
+// endAndWait ends f and waits until the Manager processed j's end.
+func endAndWait(t *testing.T, m *Manager[*fake], j *Job[*fake], f *fake) {
+	t.Helper()
+	ch, _ := m.Changed(j.ThreadID)
+	f.end()
+	waitFor(t, ch)
+}
+
 func TestEvictionPrefersNotified(t *testing.T) {
 	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 2})
 	var ids []string
 	for range 2 {
 		j, f := startFake(t, m, "t")
-		f.end()
+		endAndWait(t, m, j, f)
 		ids = append(ids, j.ID)
 	}
-	eventually(t, func() bool { return m.Get("t", ids[1]).Ended() })
 	m.MarkNotified("t", ids[1])
 	j3, f3 := startFake(t, m, "t")
-	f3.end()
-	eventually(t, func() bool { return m.Get("t", ids[1]) == nil })
+	endAndWait(t, m, j3, f3)
+	if m.Get("t", ids[1]) != nil {
+		t.Fatal("the announced job was kept")
+	}
 	if m.Get("t", ids[0]) == nil || m.Get("t", j3.ID) == nil {
 		t.Fatal("an unannounced job was evicted before the announced one")
 	}
 	// Without announced jobs the oldest goes.
 	j4, f4 := startFake(t, m, "t")
-	f4.end()
-	eventually(t, func() bool { return m.Get("t", ids[0]) == nil })
+	endAndWait(t, m, j4, f4)
+	if m.Get("t", ids[0]) != nil {
+		t.Fatal("the oldest job was kept")
+	}
 	if m.Get("t", j3.ID) == nil || m.Get("t", j4.ID) == nil {
 		t.Fatal("wrong job evicted")
 	}
@@ -216,14 +228,13 @@ func TestShutdownBoundedWithHungHandle(t *testing.T) {
 
 func TestRequestStopAndStop(t *testing.T) {
 	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
-	j, f := startFake(t, m, "t")
+	j, _ := startFake(t, m, "t")
 	if err := Stop(context.Background(), j, time.Second); err != nil || !j.Stopped() {
 		t.Fatalf("Stop = %v, stopped %v", err, j.Stopped())
 	}
 	if running, err := RequestStop(j); running || err != nil {
 		t.Fatalf("RequestStop on ended = %v, %v", running, err)
 	}
-	_ = f
 
 	h, hf := startFake(t, m, "t2")
 	hf.hang = true
@@ -239,4 +250,82 @@ func TestRequestStopAndStop(t *testing.T) {
 		t.Fatal("Stop accepted a nil job")
 	}
 	hf.end()
+}
+
+func TestShutdownWaitsForWatchers(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	for range 3 {
+		startFake(t, m, "t")
+	}
+	m.Shutdown(time.Second)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if got := len(m.threads["t"].finished); got != 3 {
+		t.Fatalf("watchers recorded %d of 3 ends when Shutdown returned", got)
+	}
+}
+
+func TestWatcherExitsAfterHungHandleEnds(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	j, f := startFake(t, m, "t")
+	f.hang = true
+	m.Shutdown(20 * time.Millisecond)
+	ch, last := m.Changed("t")
+	f.end()
+	waitFor(t, ch)
+	if last() != j.ID {
+		t.Fatalf("last = %q", last())
+	}
+	exited := make(chan struct{})
+	go func() { m.watchers.Wait(); close(exited) }()
+	waitFor(t, exited)
+}
+
+func TestConcurrentStartRespectsLimitAndShutdown(t *testing.T) {
+	const limit, workers = 3, 40
+	m := NewManager[*fake]("x_", Limits{MaxRunning: limit, MaxFinished: 5})
+	var ok, limited, refused atomic.Int32
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if i == workers/2 {
+				m.Shutdown(time.Second)
+				return
+			}
+			_, err := m.Start("t", nil, func() (*fake, error) { return newFake(), nil })
+			var le *LimitError
+			switch {
+			case err == nil:
+				ok.Add(1)
+			case errors.As(err, &le):
+				limited.Add(1)
+			case errors.Is(err, ErrShutdown):
+				refused.Add(1)
+			default:
+				t.Errorf("err = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if ok.Load() > limit {
+		t.Fatalf("%d starts succeeded with limit %d", ok.Load(), limit)
+	}
+	if ok.Load()+limited.Load()+refused.Load() != workers-1 {
+		t.Fatalf("outcomes %d/%d/%d", ok.Load(), limited.Load(), refused.Load())
+	}
+}
+
+func TestNewManagerRejectsBadLimits(t *testing.T) {
+	for _, l := range []Limits{{0, 1}, {1, 0}, {-1, 1}, {1, -1}} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("NewManager(%+v) did not panic", l)
+				}
+			}()
+			NewManager[*fake]("x_", l)
+		}()
+	}
 }
