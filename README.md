@@ -171,11 +171,11 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithFallback("openai:gpt-4o"))
 ```
 
-The agent keeps the primary's model name and profile. For control over the cool-down, the trigger and a switch callback, use `WithFallbackConfig`: the model given to `New` is the first entry (the primary) and `cfg.Entries` are the backups, at least one. `New` fails when a backup is invalid or missing, or when both options are used. `llm.NewFallback` builds the same provider for use outside `New`.
+The agent keeps the primary's model name and profile. The primary entry is named `primary`; a backup is named after its model, with `-<index>` appended when two backups share one. For control over the cool-down, the trigger and a switch callback, use `WithFallbackConfig`: the model given to `New` is the first entry (the primary) and `cfg.Entries` are the backups, at least one. `New` fails when a backup is invalid or missing, or when both options are used. `llm.NewFallback` builds the same provider for use outside `New`.
 
 ```go
 orchestrix.WithFallbackConfig(llm.FallbackConfig{
-	Entries:  []llm.FallbackEntry{{Provider: backup, Name: "backup"}},
+	Entries:  []llm.FallbackEntry{{Provider: backup, Model: "gpt-4o", Name: "backup"}},
 	Cooldown: time.Minute,
 	OnFallback: func(ctx context.Context, ev llm.FallbackEvent) {
 		log.Printf("model switched: %s -> %s: %v", ev.From, ev.To, ev.Err)
@@ -185,11 +185,11 @@ orchestrix.WithFallbackConfig(llm.FallbackConfig{
 
 Behaviour:
 
-- **Triggers.** A call moves to the next entry when the error is retryable (HTTP 408, 409, 429, 5xx or 529, or a network error) and not a context overflow. A cancelled context, a 400 and an authentication error never switch and come back unchanged. `ShouldFallback` replaces this rule. The error of the last entry is returned when every entry fails.
+- **Triggers.** A call moves to the next entry when the error is retryable (HTTP 408, 409, 429, 5xx or 529, or a network error), or when a stream that started fine reports an overload, rate-limit or server error inside it (`overloaded_error`, `rate_limit_error`, `api_error`, `server_error` or `rate_limit_exceeded`), and the error is not a context overflow. A cancelled context, a 400 and an authentication error never switch and come back unchanged; once the call's context is done, no switch, `OnFallback` or cool-down happens. `ShouldFallback` replaces this rule. When every entry fails, the last entry's error is returned wrapped (`errors.As` and `errors.Is` still work).
 - **Cool-down.** An entry that failed with a fallback error is skipped for `Cooldown` (default 30 seconds; a negative value turns it off), so traffic stays on the backup for that long after an outage even if the primary has recovered. When every entry is cooling down, they are all tried again.
-- **Model and `MaxTokens`.** A backup answers with the model it was built with, not the primary's. `MaxTokens` is lowered to the backup's output limit when `FallbackEntry.Model` (set automatically for spec strings) matches a registered profile; otherwise it is left as is.
-- **Provenance.** Reply blocks are stamped with the name of the entry that answered, and a provider never receives another entry's signatures, thinking or provider data, so a conversation can move from one model to another and back.
-- **Streaming.** A stream switches only before the failing attempt has produced content. After the first content event an error is returned as it is, so text is never duplicated or mixed; `OnFallback` is not called, but the entry still starts its cool-down.
+- **Model and `MaxTokens`.** A backup answers with the model it was built with, not the primary's. `MaxTokens` is lowered to the backup's output limit when `FallbackEntry.Model` matches a registered profile; otherwise it is left as is. `Model` is filled in for spec strings and for providers built by `llm.New`. A custom `llm.Provider` without `Model` is not clamped and may be sent the primary's larger limit: set `Model`, or set `WithMaxTokens` to a limit every backup accepts.
+- **Provenance.** Reply blocks are stamped with the name of the entry that answered, and a provider never receives another entry's signatures, thinking or provider data, so a conversation can move from one model to another and back. Stamps are keyed by entry name, so keep names stable across runs that share a conversation; `New`'s primary is always `primary`, so upgrading the primary model does not orphan its stamps.
+- **Streaming.** A stream switches only before the failing attempt has produced content. After the first content event an error is returned as it is, so text is never duplicated or mixed; `OnFallback` is not called, and the entry starts its cool-down only when the error is one that would have triggered a switch.
 - **Concurrency.** The provider is safe for concurrent use. Calls already in flight when the primary starts failing may each reach it once before the failure is recorded; later calls skip it for the cool-down.
 - **Visibility.** Usage is reported per call as usual, but which model answered shows only in `OnFallback` and in the stamp on the reply blocks.
 

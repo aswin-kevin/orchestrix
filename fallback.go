@@ -16,6 +16,13 @@ import (
 // switching rules, and WithFallbackConfig for control over the cool-down,
 // the trigger and a switch callback.
 //
+// The primary entry is named "primary"; a backup is named after its model
+// (with "-<index>" appended when two backups share a model). MaxTokens is
+// lowered to a backup's output limit when its model has a registered
+// profile. That works for spec strings and for providers built by llm.New;
+// a custom llm.Provider is not clamped, so use WithFallbackConfig and set
+// FallbackEntry.Model, or set WithMaxTokens to a limit every backup accepts.
+//
 // New fails when a backup is invalid, when none is given, or when
 // WithFallbackConfig is also used.
 func WithFallback(models ...any) Option {
@@ -26,14 +33,19 @@ func WithFallback(models ...any) Option {
 }
 
 // WithFallbackConfig is WithFallback with full control. The model given to
-// New is always the first entry (the primary) and cfg.Entries are the
-// backups, at least one. Every other field of cfg is used as given.
+// New is always the first entry (the primary, named "primary") and
+// cfg.Entries are the backups, at least one, so no backup may be named
+// "primary". Every other field of cfg is used as given.
 func WithFallbackConfig(cfg llm.FallbackConfig) Option {
 	return func(s *settings) {
 		c := cfg
 		s.fallbackCfg = &c
 	}
 }
+
+// primaryEntryName names the primary entry, so provenance stamps and
+// FallbackEvent.From stay the same when the host upgrades the primary model.
+const primaryEntryName = "primary"
 
 // applyFallback wraps the resolved provider with the configured backups.
 // model is the value passed to New, used to name the primary entry.
@@ -61,7 +73,7 @@ func (s *settings) applyFallback(model any) error {
 		return errors.New("fallback needs at least one backup model")
 	}
 
-	primary := llm.FallbackEntry{Provider: s.cfg.Provider}
+	primary := llm.FallbackEntry{Provider: s.cfg.Provider, Name: primaryEntryName}
 	if _, ok := model.(string); ok {
 		primary.Model = s.cfg.Model
 	}

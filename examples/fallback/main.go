@@ -1,7 +1,8 @@
 // Command fallback keeps an agent answering when its model is down.
-// WithFallback names a backup; when the primary fails with an overload, a rate
-// limit or a network error, the call moves to the backup and the callback
-// reports the switch.
+// WithFallbackConfig names a backup and a switch callback; when the primary
+// fails with an overload, a rate limit or a network error, the call moves to
+// the backup and the callback reports the switch (the primary entry is named
+// "primary").
 //
 //	go run ./examples/fallback                                   # offline, scripted
 //	ORX_MODEL=anthropic:claude-sonnet-4-5 ORX_FALLBACK_MODEL=openai:gpt-4o go run ./examples/fallback
@@ -46,7 +47,7 @@ func main() {
 func run(ctx context.Context, w io.Writer) error {
 	// The primary is overloaded; the backup answers.
 	primary := exmodel.Model(llmtest.Turn{Err: &llm.APIError{Status: 529, Body: "overloaded"}})
-	var backup llm.Provider = llmtest.New(llmtest.Turn{Text: "Paris is the capital of France."})
+	backup := llm.FallbackEntry{Provider: llmtest.New(llmtest.Turn{Text: "Paris is the capital of France."}), Name: "backup"}
 	if exmodel.Live() {
 		var err error
 		if backup, err = liveBackup(); err != nil {
@@ -56,7 +57,7 @@ func run(ctx context.Context, w io.Writer) error {
 
 	a, err := orchestrix.New(primary,
 		orchestrix.WithFallbackConfig(llm.FallbackConfig{
-			Entries: []llm.FallbackEntry{{Provider: backup, Name: "backup"}},
+			Entries: []llm.FallbackEntry{backup},
 			OnFallback: func(_ context.Context, ev llm.FallbackEvent) {
 				fmt.Fprintf(w, "switched: %s -> %s\n", exmodel.Safe(ev.From), exmodel.Safe(ev.To))
 			},
@@ -87,15 +88,20 @@ func run(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
-// liveBackup builds the backup provider from ORX_FALLBACK_MODEL.
-func liveBackup() (llm.Provider, error) {
+// liveBackup builds the backup entry from ORX_FALLBACK_MODEL. Model is set
+// so MaxTokens is lowered to the backup's output limit.
+func liveBackup() (llm.FallbackEntry, error) {
 	spec := os.Getenv(fallbackEnv)
 	if spec == "" {
-		return nil, fmt.Errorf("set %s to the backup model, for example openai:gpt-4o", fallbackEnv)
+		return llm.FallbackEntry{}, fmt.Errorf("set %s to the backup model, for example openai:gpt-4o", fallbackEnv)
 	}
 	cfg, err := llm.ParseModel(spec)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", fallbackEnv, err)
+		return llm.FallbackEntry{}, fmt.Errorf("%s: %w", fallbackEnv, err)
 	}
-	return llm.New(cfg)
+	p, err := llm.New(cfg)
+	if err != nil {
+		return llm.FallbackEntry{}, err
+	}
+	return llm.FallbackEntry{Provider: p, Model: cfg.Model, Name: "backup"}, nil
 }

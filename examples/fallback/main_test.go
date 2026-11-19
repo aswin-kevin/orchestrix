@@ -18,7 +18,7 @@ func TestExampleFallback(t *testing.T) {
 		t.Fatalf("run: %v\noutput:\n%s", err, buf.String())
 	}
 	for _, want := range []string{
-		"switched: fallback-0 -> backup",
+		"switched: primary -> backup",
 		"answer: Paris is the capital of France.",
 	} {
 		if !strings.Contains(buf.String(), want) {

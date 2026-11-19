@@ -59,6 +59,11 @@ func TestWithFallbackSpecs(t *testing.T) {
 	if cfg.Model != "x" {
 		t.Errorf("Model = %q, want x", cfg.Model)
 	}
+	// Two backups of the same model get distinct default names.
+	if _, err := orchestrix.New("anthropic:x",
+		orchestrix.WithFallback("openai:gpt-4o", "openai-responses:gpt-4o")); err != nil {
+		t.Errorf("two backups of one model: %v", err)
+	}
 }
 
 func TestWithFallbackProviders(t *testing.T) {
@@ -104,8 +109,8 @@ func TestWithFallbackConfigPrependsPrimary(t *testing.T) {
 	if got != "from b" {
 		t.Errorf("answer = %q, want from b", got)
 	}
-	if len(events) != 1 || events[0].From != "fallback-0" || events[0].To != "b" {
-		t.Errorf("events = %+v, want one fallback-0 -> b", events)
+	if len(events) != 1 || events[0].From != "primary" || events[0].To != "b" {
+		t.Errorf("events = %+v, want one primary -> b", events)
 	}
 
 	_, err := orchestrix.New(llmtest.New(), orchestrix.WithFallbackConfig(llm.FallbackConfig{}))
