@@ -18,13 +18,13 @@ func TestNewDeciderFromSpec(t *testing.T) {
 			t.Errorf("got %s with %q", r.URL.Path, r.Header.Get("Authorization"))
 		}
 		io.Copy(io.Discard, r.Body)
-		io.WriteString(w, `{"model":"clef:27b","answers":{"refund":{"type":"noul","noul":0.9}},"usage":{"input_tokens":3}}`)
+		io.WriteString(w, `{"model":"decide:1","answers":{"refund":{"type":"noul","noul":0.9}},"usage":{"input_tokens":3}}`)
 	}))
 	defer srv.Close()
 	t.Setenv("SYSTEMONE_API_KEY", "key-1")
 	t.Setenv("SYSTEMONE_BASE_URL", srv.URL)
 
-	d, err := orchestrix.NewDecider("systemone:clef:27b")
+	d, err := orchestrix.NewDecider("systemone:decide:1")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const soReplyJSON = `{"model":"clef:27b","answers":{
+const soReplyJSON = `{"model":"decide:1","answers":{
  "refund":{"type":"noul","noul":0.9923},
  "team":{"type":"choice","choice":"payments","confidence":0.9892,"probabilities":{"payments":0.9964,"mobile":0.0018}},
  "urgency":{"type":"score","score":0.9926,"confidence":0.97,"legend":{"0":{"label":"low"},"1":{"label":"high"}},"probabilities":{"0":0.0074,"1":0.9926}}},
@@ -35,7 +35,7 @@ func soRequest() DecisionRequest {
 
 func newTestSystemOne(t *testing.T, baseURL string) Decider {
 	t.Helper()
-	d, err := NewDecider(Config{Format: FormatSystemOne, BaseURL: baseURL, APIKey: "key-1", Model: "clef:27b",
+	d, err := NewDecider(Config{Format: FormatSystemOne, BaseURL: baseURL, APIKey: "key-1", Model: "decide:1",
 		MaxRetries: -1, RetryInterval: time.Millisecond, Headers: map[string]string{"X-Extra": "yes"}})
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +64,7 @@ func TestSystemOneRequestAndAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"model":"clef:27b","state":"first\n\nsecond","questions":{
+	want := `{"model":"decide:1","state":"first\n\nsecond","questions":{
 	 "refund":{"type":"noul","instructions":"Is the customer asking for a refund?"},
 	 "team":{"type":"choice","instructions":"Which team?","criteria":{"payments":"billing, refunds","mobile":"app bugs"}},
 	 "urgency":{"type":"score","instructions":"How urgent?","criteria":[{"label":"low","description":"cosmetic"},{"label":"high","description":"outage"}]}}}`
@@ -80,7 +80,7 @@ func TestSystemOneRequestAndAnswers(t *testing.T) {
 	if u.Score != 0.9926 || u.Confidence != 0.97 || u.Probabilities["high"] != 0.9926 || u.Probabilities["low"] != 0.0074 {
 		t.Errorf("urgency = %+v", u)
 	}
-	if resp.Model != "clef:27b" || resp.Usage.Input != 142 || resp.Usage.Output != 0 {
+	if resp.Model != "decide:1" || resp.Usage.Input != 142 || resp.Usage.Output != 0 {
 		t.Errorf("model/usage = %q %+v", resp.Model, resp.Usage)
 	}
 }
@@ -195,11 +195,11 @@ func TestSystemOneRetriesThenAPIError(t *testing.T) {
 func TestParseModelSystemOne(t *testing.T) {
 	t.Setenv("SYSTEMONE_API_KEY", "k")
 	t.Setenv("SYSTEMONE_BASE_URL", "http://h")
-	cfg, err := ParseModel("systemone:clef:27b")
+	cfg, err := ParseModel("systemone:decide:1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.APIKey != "k" || cfg.BaseURL != "http://h" || cfg.Model != "clef:27b" {
+	if cfg.APIKey != "k" || cfg.BaseURL != "http://h" || cfg.Model != "decide:1" {
 		t.Errorf("cfg = %+v", cfg)
 	}
 	if _, err := NewDecider(cfg); err != nil {
