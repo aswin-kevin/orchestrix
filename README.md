@@ -396,7 +396,7 @@ The agent writes transcripts and oversized outputs under `.orchestrix/` in the w
 
 `WithMemory` puts standing instructions into the system prompt: files you name, read from the run's workspace once per run. `memory.DefaultFiles` is `/AGENTS.md`. A zero `Files` loads nothing, every path must be absolute (a relative one makes `New` fail), and a file that cannot be read is skipped. The default prompt invites the model to keep durable notes in those files with `edit_file`; set `Prompt` to a pointer to `""` to drop that invitation.
 
-`Store` adds a structured long-term store. `record_memory` saves one Markdown file per entry, with a frontmatter header (name, description, type), and `recall_memory` finds entries by keyword. An index of the entries goes into the system prompt unless `DisableIndexInPrompt` is set.
+`Store` adds a structured long-term store. `record_memory` saves one Markdown file per entry, with a frontmatter header (name, description, type), and `recall_memory` finds entries by keyword. An index of the entries goes into the system prompt unless `DisableIndexInPrompt` is set. An entry's file name is derived from its name: lowercased, with punctuation and spaces collapsed to `-`. A name is at most `memory.MaxNameChars` (64) characters, the same as the file-name cap. Recording a name that exists, ignoring case and spacing, updates that entry. Two different names can map to the same file, such as "C++ tips" and "C tips"; the second is then not saved, and `record_memory` tells the model which memory holds the file so it can update it or pick another name. A query made only of punctuation or one-letter words matches nothing.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -504,7 +504,11 @@ Server tools ask for approval by default, whatever their read-only hints say; se
 }
 ```
 
-The client speaks protocol revision 2025-06-18 (and accepts servers on 2025-03-26 and 2024-11-05) and supports tools and resources (list and read). OAuth, sampling and elicitation are not supported; pass a token with `BearerToken` or `Headers`. The package also has a small `mcp.Server` you can serve over stdio, HTTP or in process.
+The client speaks protocol revision 2025-06-18 (and accepts servers on 2025-03-26 and 2024-11-05) and supports tools and resources (list and read). OAuth, sampling and elicitation are not supported; pass a token with `BearerToken` or `Headers`. The HTTP client never follows a redirect, so those headers and the request body never reach another URL; a server that answers with a 3xx fails the request.
+
+Images from tool results and resources are checked before the model sees them: the data must be valid base64, at most `filesystem.MaxMediaBytes` once decoded, and a PNG, JPEG, GIF or WebP image by its content. The type found in the content wins over the declared one. An image that fails a check, or any image for a model that does not take images, becomes an `[image omitted: …]` note, so one bad block cannot break the thread.
+
+The package also has a small `mcp.Server` you can serve over stdio, HTTP or in process. Its HTTP handler refuses (403) a request whose `Host` is not in `HandlerOptions.AllowedHosts`, which defaults to `localhost`, `127.0.0.1` and `[::1]` on any port; this stops DNS rebinding. List the names the server is really reached by, such as a LAN address or a public name behind a proxy. It also refuses a request whose `Origin` names another host, which stops cross-origin browser requests. Any other authentication is up to your program.
 
 ## Plan mode
 
