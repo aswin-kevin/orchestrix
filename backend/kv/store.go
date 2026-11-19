@@ -28,7 +28,9 @@ const (
 var ErrKeyTooLong = errors.New("kv: key too long")
 
 // Store is a namespaced key/value store; keys are cleaned absolute backend
-// paths. Implementations are safe for concurrent use.
+// paths. Implementations are safe for concurrent use. Backend learns whether
+// a file exists, and its size, with Get for a Store outside this package, so
+// reading a file through Backend costs such a Store two Gets.
 type Store interface {
 	// Get fails with an error wrapping backend.ErrNotFound for a missing key.
 	Get(ctx context.Context, namespace, key string) (Item, error)
@@ -84,14 +86,20 @@ type stater interface {
 func checkNamespace(namespace string) error {
 	switch {
 	case namespace == "":
-		return errors.New("kv: empty namespace")
+		return ownError{errors.New("kv: empty namespace")}
 	case len(namespace) > MaxNamespaceBytes:
-		return fmt.Errorf("kv: namespace longer than %d bytes", MaxNamespaceBytes)
+		return ownError{fmt.Errorf("kv: namespace longer than %d bytes", MaxNamespaceBytes)}
 	case strings.ContainsRune(namespace, 0):
-		return errors.New("kv: namespace contains NUL byte")
+		return ownError{errors.New("kv: namespace contains NUL byte")}
 	}
 	return nil
 }
+
+// ownError marks an error of this package's stores whose message already
+// names the package, so Backend does not name it twice.
+type ownError struct{ error }
+
+func (e ownError) Unwrap() error { return e.error }
 
 type entry struct {
 	value   []byte

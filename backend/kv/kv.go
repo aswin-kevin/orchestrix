@@ -47,9 +47,11 @@ func fail(op, p string, sentinel error) error {
 }
 
 // wrap adds the operation and path to a store error, naming the package only
-// when the error does not already.
+// when the error does not already (ErrKeyTooLong and the stores' own
+// argument errors do).
 func wrap(op, p string, err error) error {
-	if strings.HasPrefix(err.Error(), "kv:") {
+	var own ownError
+	if errors.Is(err, ErrKeyTooLong) || errors.As(err, &own) {
 		return fmt.Errorf("%s %s: %w", op, p, err)
 	}
 	return fmt.Errorf("kv: %s %s: %w", op, p, err)
@@ -77,7 +79,9 @@ func (b *Backend) lookup(ctx context.Context, p string) (item Item, ok bool, err
 }
 
 // stat returns the metadata of the file at p without reading its value; ok is
-// false when there is none.
+// false when there is none. A corrupt file (an unreadable DirStore header)
+// exists, with size 0, so it can be overwritten and deleted; reading it
+// reports the corruption.
 func (b *Backend) stat(ctx context.Context, p string) (info ItemInfo, ok bool, err error) {
 	if s, fast := b.store.(stater); fast {
 		info, err = s.stat(ctx, b.namespace, p)
@@ -89,6 +93,9 @@ func (b *Backend) stat(ctx context.Context, p string) (info ItemInfo, ok bool, e
 	}
 	if errors.Is(err, backend.ErrNotFound) {
 		return ItemInfo{}, false, nil
+	}
+	if errors.Is(err, errCorrupt) {
+		return ItemInfo{Key: p}, true, nil
 	}
 	return info, err == nil, err
 }

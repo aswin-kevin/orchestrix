@@ -74,9 +74,10 @@ func NewDirStore(dir string, opts ...StoreOption) (*DirStore, error) {
 }
 
 // removeStaleTemps deletes old temp files; failures are ignored because the
-// files are harmless.
+// files are harmless. The cutoff uses the real clock, not the store's: a test
+// or skewed clock must not make another writer's in-flight temp look stale.
 func (d *DirStore) removeStaleTemps() {
-	cutoff := d.now().Add(-staleTempAge)
+	cutoff := time.Now().Add(-staleTempAge)
 	namespaces, _ := os.ReadDir(d.dir)
 	for _, ns := range namespaces {
 		if !ns.IsDir() {
@@ -110,7 +111,7 @@ func fileName(key string) string {
 // checkKey enforces the length limit; hashing makes every other key safe.
 func checkKey(key string) error {
 	if key == "" {
-		return errors.New("kv: empty key")
+		return ownError{errors.New("kv: empty key")}
 	}
 	if len(key) > MaxKeyBytes {
 		return fmt.Errorf("%w: %d bytes, limit %d", ErrKeyTooLong, len(key), MaxKeyBytes)
@@ -163,6 +164,9 @@ func (d *DirStore) Get(ctx context.Context, namespace, key string) (Item, error)
 	if err != nil {
 		return Item{}, err
 	}
+	if err := checkRegular(info); err != nil {
+		return Item{}, err
+	}
 	raw, err := io.ReadAll(f)
 	if err != nil {
 		return Item{}, err
@@ -201,14 +205,29 @@ func (d *DirStore) stat(ctx context.Context, namespace, key string) (ItemInfo, e
 	if err != nil {
 		return ItemInfo{}, err
 	}
+	if err := checkRegular(info); err != nil {
+		return ItemInfo{}, err
+	}
 	stored, n, err := readHeader(f)
+	if errors.Is(err, errCorrupt) {
+		return ItemInfo{}, fmt.Errorf("%w: unreadable key header", err)
+	}
 	if err != nil {
-		return ItemInfo{}, fmt.Errorf("%w: unreadable key header", errCorrupt)
+		return ItemInfo{}, fmt.Errorf("read key header: %w", err)
 	}
 	if stored != key {
 		return ItemInfo{}, backend.ErrNotFound
 	}
 	return ItemInfo{Key: key, Size: info.Size() - int64(n), ModTime: info.ModTime()}, nil
+}
+
+// checkRegular fails for a key file that is not a regular file (a directory
+// put there by hand, say), which is not a corrupt value.
+func checkRegular(info fs.FileInfo) error {
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("key file %s is not a regular file", info.Name())
+	}
+	return nil
 }
 
 // Put atomically replaces the value under key: it writes a temp file in the
