@@ -26,24 +26,28 @@ const (
 // options, anything else is the user's own answer. It shares the approver's input and prompt lock, so its
 // questions never interleave with approval prompts. End of input or
 // cancellation fails the call, which the model sees as a tool error, and so
-// does a question asked while no turn runs (see approver).
+// does a question asked while no turn runs or still open when it ends (see
+// approver).
 //
 // askuser already strips control characters from the questions; the text is
 // still passed through termSafe, since it is written by the model.
 func (a *approver) ask(ctx context.Context, questions []askuser.Question) ([]askuser.Answer, error) {
-	if !a.turnActive() {
-		return nil, errors.New(deniedNoTerminal)
+	tctx, release, err := a.takeTerminal(ctx)
+	if errors.Is(err, errTurnEnded) {
+		return nil, err
 	}
-	a.prompt.Lock()
-	defer a.prompt.Unlock()
-	if !a.turnActive() {
-		return nil, errors.New(deniedNoTerminal)
+	if err != nil {
+		return nil, fmt.Errorf("no answer from the user: %w", err)
 	}
+	defer release()
 	label := askerLabel(agent.Info(ctx))
 	answers := make([]askuser.Answer, 0, len(questions))
 	for _, q := range questions {
 		fmt.Fprint(a.out, formatQuestion(label, q))
-		line, err := a.in.next(ctx)
+		line, err := a.readAnswer(ctx, tctx)
+		if errors.Is(err, errTurnEnded) {
+			return nil, err
+		}
 		if err != nil {
 			return nil, fmt.Errorf("no answer from the user: %w", err)
 		}

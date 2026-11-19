@@ -139,3 +139,36 @@ func TestSIGTERMDuringShutdownForcesExit(t *testing.T) {
 		t.Errorf("stderr = %q, want the hint without \"again\"", got)
 	}
 }
+
+func TestCtrlCAtIdleAfterPendingQuestionEndsRun(t *testing.T) {
+	for _, tc := range pendingCases {
+		t.Run(tc.name, func(t *testing.T) {
+			exited := make(chan int, 1)
+			osExit = func(code int) { exited <- code }
+			t.Cleanup(func() { osExit = os.Exit })
+			stderr := newSyncBuffer()
+			childResult := make(chan string, 1)
+			provider := pendingAtTurnEnd(stderr, tc.call, tc.shown, childResult)
+			s := startREPLWith(t, context.Background(), stderr, provider, "-model", "openai:test", "-dir", t.TempDir(), "-async")
+
+			s.send("start it")
+			// readIdle watches for Ctrl-C before it prints the prompt.
+			waitFor(t, "the idle prompt after the turn", func() bool { return s.count(replPrompt) >= 2 })
+			if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+				t.Fatal(err)
+			}
+
+			select {
+			case <-s.done:
+				s.done <- 0 // for the cleanup
+			case <-time.After(5 * time.Second):
+				t.Fatalf("run did not return after Ctrl-C at the idle prompt (stderr %q)", stderr.String())
+			}
+			select {
+			case code := <-exited:
+				t.Errorf("forced exit %d on the first Ctrl-C", code)
+			default:
+			}
+		})
+	}
+}

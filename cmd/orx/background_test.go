@@ -15,6 +15,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 )
 
@@ -105,10 +106,16 @@ type replSession struct {
 
 func startREPL(t *testing.T, provider llm.Provider, args ...string) *replSession {
 	t.Helper()
+	return startREPLWith(t, context.Background(), newSyncBuffer(), provider, args...)
+}
+
+// startREPLWith is startREPL with run's context and stderr given.
+func startREPLWith(t *testing.T, ctx context.Context, stderr *syncBuffer, provider llm.Provider, args ...string) *replSession {
+	t.Helper()
 	pr, pw := io.Pipe()
-	s := &replSession{stdin: pw, stderr: newSyncBuffer(), done: make(chan int, 1)}
+	s := &replSession{stdin: pw, stderr: stderr, done: make(chan int, 1)}
 	newProvider := func(llm.Config) (llm.Provider, error) { return provider, nil }
-	go func() { s.done <- run(context.Background(), args, pr, io.Discard, s.stderr, newProvider) }()
+	go func() { s.done <- run(ctx, args, pr, io.Discard, s.stderr, newProvider) }()
 	t.Cleanup(func() {
 		pw.Close()
 		select {
@@ -310,5 +317,87 @@ func TestAsyncTasksStoppedOnExit(t *testing.T) {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
 		t.Error("the background task still runs after run returned")
+	}
+}
+
+// pendingAtTurnEnd scripts a background question left open by its turn: the
+// child asks with childCall during the turn, and the parent ends its turn
+// once the question, marked by shown, is on stderr. The text of the child's
+// result for the question is sent to childResult.
+func pendingAtTurnEnd(stderr *syncBuffer, childCall llmtest.Turn, shown string, childResult chan<- string) *funcProvider {
+	return &funcProvider{reply: func(ctx context.Context, req llm.Request) llmtest.Turn {
+		_, text, hasResult := lastToolResult(req)
+		if isChild(req) {
+			if hasResult {
+				childResult <- text
+				return llmtest.Turn{Text: "child done"}
+			}
+			return childCall
+		}
+		if len(req.Messages) == 1 {
+			return startTaskTurn()
+		}
+		for !strings.Contains(stderr.String(), shown) {
+			select {
+			case <-ctx.Done():
+				return llmtest.Turn{Err: ctx.Err()}
+			case <-time.After(5 * time.Millisecond):
+			}
+		}
+		return llmtest.Turn{Text: "ok"}
+	}}
+}
+
+// askTurn calls ask_user with one two-option question.
+func askTurn() llmtest.Turn {
+	return llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "q1", Name: askuser.ToolAskUser, Input: map[string]any{
+		"questions": []map[string]any{{"question": "Which one?", "options": []map[string]string{{"label": "a"}, {"label": "b"}}}},
+	}}}}
+}
+
+// pendingCases are the questions left open at the end of a turn: an
+// approval and an ask_user question.
+var pendingCases = []struct {
+	name  string
+	call  llmtest.Turn
+	shown string
+}{
+	{"approval", writeTurn("w1", "/bg.txt"), "Allow write_file"},
+	{"ask_user", askTurn(), singleAnswerPrompt},
+}
+
+func TestQuestionPendingAtTurnEndIsDenied(t *testing.T) {
+	for _, tc := range pendingCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			stderr := newSyncBuffer()
+			childResult := make(chan string, 1)
+			provider := pendingAtTurnEnd(stderr, tc.call, tc.shown, childResult)
+			s := startREPLWith(t, ctx, stderr, provider, "-model", "openai:test", "-dir", t.TempDir(), "-async")
+
+			s.send("start it")
+
+			select {
+			case text := <-childResult:
+				if !strings.Contains(text, deniedNoTerminal) {
+					t.Errorf("child's result = %q, want the denial %q", text, deniedNoTerminal)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("the open question was not ended with the turn (stderr %q)", stderr.String())
+			}
+			waitFor(t, "the idle prompt after the turn", func() bool { return s.count(replPrompt) >= 2 })
+			if !strings.Contains(stderr.String(), noAnswerTurnEnded) {
+				t.Errorf("stderr = %q, want the open question closed with %q", stderr.String(), noAnswerTurnEnded)
+			}
+
+			cancel() // as SIGTERM does
+			select {
+			case <-s.done:
+				s.done <- 0 // for the cleanup
+			case <-time.After(5 * time.Second):
+				t.Fatal("run did not return after its context was cancelled at the idle prompt")
+			}
+		})
 	}
 }

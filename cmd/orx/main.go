@@ -329,7 +329,7 @@ func effectiveMode(o options, stderr io.Writer) permission.Mode {
 func repl(ctx context.Context, conv *conversation, in *lineReader, rend *renderer, stderr io.Writer) int {
 	code := exitOK
 	for {
-		line, err := readIdle(ctx, in, &conv.ap.prompt, stderr)
+		line, err := readIdle(ctx, in, conv.ap, stderr)
 		prompt := strings.TrimSpace(line)
 		if prompt == exitCommand {
 			return code
@@ -391,7 +391,8 @@ func (c *conversation) turn(ctx context.Context, prompt string, rend *renderer, 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer c.cancelOnInterrupt(cancel)()
-	defer c.ap.beginTurn()()
+	_, endTurn := c.ap.beginTurn()
+	defer endTurn()
 	defer rend.flush()
 
 	ok := true
