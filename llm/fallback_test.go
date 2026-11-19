@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -105,6 +106,41 @@ func TestFallbackClampsMaxTokens(t *testing.T) {
 	}
 }
 
+func TestFallbackKeepsMaxTokensForUnknownModel(t *testing.T) {
+	backup := llmtest.New(llmtest.Turn{Text: "ok"})
+	p := newFallback(t, llm.FallbackConfig{Entries: []llm.FallbackEntry{
+		{Provider: llmtest.New(overloaded())},
+		{Provider: backup, Model: "zz-no-such-model-family"},
+	}})
+	if _, err := p.Complete(context.Background(), llm.Request{MaxTokens: 16000}); err != nil {
+		t.Fatal(err)
+	}
+	if got := backup.Requests[0].MaxTokens; got != 16000 {
+		t.Errorf("backup MaxTokens = %d, want 16000 (no profile matched)", got)
+	}
+}
+
+func TestDefaultShouldFallback(t *testing.T) {
+	// No case covers a retryable status whose body marks a context overflow:
+	// IsContextOverflow only accepts statuses 0, 400 and 413, none of which
+	// is retryable, so that combination cannot occur.
+	cases := map[string]struct {
+		err  error
+		want bool
+	}{
+		"overloaded":  {&llm.APIError{Status: 529}, true},
+		"bad request": {&llm.APIError{Status: 400}, false},
+		"overflow":    {&llm.APIError{Status: 400, Body: "prompt is too long"}, false},
+		"canceled":    {fmt.Errorf("send: %w", context.Canceled), false},
+		"network":     {&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, true},
+	}
+	for name, c := range cases {
+		if got := llm.DefaultShouldFallback(c.err); got != c.want {
+			t.Errorf("%s: DefaultShouldFallback = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
 func TestFallbackCooldown(t *testing.T) {
 	primary := llmtest.New(overloaded(), llmtest.Turn{Text: "primary"})
 	backup := llmtest.New(llmtest.Turn{Text: "b1"}, llmtest.Turn{Text: "b2"})
@@ -163,10 +199,11 @@ func TestFallbackNoSwitchOnNonRetryable(t *testing.T) {
 		"overflow":    &llm.APIError{Status: 400, Body: "prompt is too long"},
 	}
 	for name, want := range cases {
+		primary := llmtest.New(llmtest.Turn{Err: want}, llmtest.Turn{Text: "primary"})
 		backup := llmtest.New(llmtest.Turn{Text: "ok"})
 		called := false
 		p := newFallback(t, llm.FallbackConfig{
-			Entries:    []llm.FallbackEntry{{Provider: llmtest.New(llmtest.Turn{Err: want})}, {Provider: backup}},
+			Entries:    []llm.FallbackEntry{{Provider: primary}, {Provider: backup}},
 			OnFallback: func(context.Context, llm.FallbackEvent) { called = true },
 		})
 		_, err := p.Complete(context.Background(), llm.Request{})
@@ -175,6 +212,10 @@ func TestFallbackNoSwitchOnNonRetryable(t *testing.T) {
 		}
 		if backup.Calls() != 0 || called {
 			t.Errorf("%s: switched to the backup", name)
+		}
+		// No cool-down started: the next call goes to the primary again.
+		if _, err := p.Complete(context.Background(), llm.Request{}); err != nil || primary.Calls() != 2 {
+			t.Errorf("%s: second call err %v, primary calls %d; want nil and 2", name, err, primary.Calls())
 		}
 	}
 	// A cancelled context reaches the caller as context.Canceled.

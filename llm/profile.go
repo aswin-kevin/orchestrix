@@ -59,6 +59,16 @@ func RegisterProfile(modelPrefix string, p Profile) {
 // LookupProfile returns the profile registered under the longest prefix of
 // model, or DefaultProfile when none matches. Matching is case-sensitive.
 func LookupProfile(model string) Profile {
+	p, ok := lookupProfile(model)
+	if !ok {
+		return DefaultProfile
+	}
+	return p
+}
+
+// lookupProfile returns the profile registered under the longest prefix of
+// model and reports whether any prefix matched.
+func lookupProfile(model string) (Profile, bool) {
 	profilesMu.RLock()
 	defer profilesMu.RUnlock()
 
@@ -73,8 +83,5 @@ func LookupProfile(model string) Profile {
 			best, bestPrefix, matched = p, prefix, true
 		}
 	}
-	if !matched {
-		return DefaultProfile
-	}
-	return best
+	return best, matched
 }

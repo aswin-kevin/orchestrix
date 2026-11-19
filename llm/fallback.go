@@ -15,8 +15,9 @@ const DefaultFallbackCooldown = 30 * time.Second
 // FallbackEntry is one provider in a fallback chain.
 type FallbackEntry struct {
 	Provider Provider
-	// Model is the model this provider answers with: used to clamp
-	// MaxTokens to its profile and to report switches. Optional.
+	// Model is the model this provider answers with. When it matches a
+	// registered profile, MaxTokens is lowered to that profile's MaxOutput;
+	// a model matching no profile leaves MaxTokens unchanged. Optional.
 	Model string
 	// Name identifies the entry in events; it must be unique within the
 	// chain. Default: Model, else "fallback-<index>".
@@ -151,14 +152,15 @@ func (f *fallback) markUp(i int) {
 
 // prepare returns the request sent to entry i. The primary keeps req.Model;
 // other entries get it cleared so they use their own model. MaxTokens is
-// lowered to the entry model's MaxOutput. req itself is never modified.
+// lowered to the MaxOutput of the profile the entry's Model matches, if any.
+// req itself is never modified.
 func (f *fallback) prepare(i int, req Request) Request {
 	if i > 0 {
 		req.Model = ""
 	}
 	if m := f.entries[i].Model; m != "" && req.MaxTokens > 0 {
-		if limit := LookupProfile(m).MaxOutput; limit > 0 && limit < req.MaxTokens {
-			req.MaxTokens = limit
+		if p, ok := lookupProfile(m); ok && p.MaxOutput > 0 && p.MaxOutput < req.MaxTokens {
+			req.MaxTokens = p.MaxOutput
 		}
 	}
 	return req
