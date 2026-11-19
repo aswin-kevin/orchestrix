@@ -17,6 +17,14 @@ const (
 
 	// minThinkingBudget is the smallest thinking budget the API accepts.
 	minThinkingBudget = 1024
+
+	// anthropicRedactedThinking is the wire type of a thinking block whose
+	// reasoning the API returns encrypted.
+	anthropicRedactedThinking BlockType = "redacted_thinking"
+	// anthropicRedactedKey marks, in Block.ProviderData, a BlockThinking that
+	// arrived as redacted thinking. Its encrypted data is kept in Signature,
+	// the field that already holds a thinking block's opaque replay token.
+	anthropicRedactedKey = "anthropic.redacted"
 )
 
 // anthropicProvider speaks the Anthropic Messages API.
@@ -69,6 +77,7 @@ type anthropicBlock struct {
 	Text      string           `json:"text,omitempty"`
 	Thinking  string           `json:"thinking,omitempty"`
 	Signature string           `json:"signature,omitempty"`
+	Data      string           `json:"data,omitempty"` // redacted thinking
 	ID        string           `json:"id,omitempty"`
 	Name      string           `json:"name,omitempty"`
 	Input     json.RawMessage  `json:"input,omitempty"`
@@ -129,6 +138,7 @@ type anthropicEvent struct {
 		Type string `json:"type"`
 		ID   string `json:"id"`
 		Name string `json:"name"`
+		Data string `json:"data"`
 	} `json:"content_block"`
 	Delta *struct {
 		Type        string `json:"type"`
@@ -171,13 +181,15 @@ func (r anthropicResponse) toResponse() *Response {
 }
 
 // fromAnthropicBlock converts a reply block; kinds the model layer has no use
-// for (such as redacted thinking) are skipped.
+// for are skipped.
 func fromAnthropicBlock(b anthropicBlock) (Block, bool) {
 	switch b.Type {
 	case BlockText:
 		return Block{Type: BlockText, Text: b.Text}, true
 	case BlockThinking:
 		return Block{Type: BlockThinking, Thinking: b.Thinking, Signature: b.Signature}, true
+	case anthropicRedactedThinking:
+		return redactedThinkingBlock(b.Data), true
 	case BlockToolUse:
 		return Block{Type: BlockToolUse, ID: b.ID, Name: b.Name, Input: toolInput(b.Input)}, true
 	}
@@ -265,14 +277,24 @@ func messageStartEvents(ev anthropicEvent) []StreamEvent {
 }
 
 func blockStartEvents(ev anthropicEvent) []StreamEvent {
-	if ev.ContentBlock == nil || BlockType(ev.ContentBlock.Type) != BlockToolUse {
-		// Text and thinking blocks are created by their first delta.
+	if ev.ContentBlock == nil {
 		return nil
 	}
-	return []StreamEvent{{
-		Type: EvToolStart, Index: ev.Index,
-		ToolID: ev.ContentBlock.ID, ToolName: ev.ContentBlock.Name,
-	}}
+	switch BlockType(ev.ContentBlock.Type) {
+	case BlockToolUse:
+		return []StreamEvent{{
+			Type: EvToolStart, Index: ev.Index,
+			ToolID: ev.ContentBlock.ID, ToolName: ev.ContentBlock.Name,
+		}}
+	case anthropicRedactedThinking:
+		// Redacted thinking arrives whole here and gets no deltas.
+		return []StreamEvent{
+			{Type: EvSignature, Index: ev.Index, Value: ev.ContentBlock.Data},
+			{Type: EvProviderData, Index: ev.Index, Key: anthropicRedactedKey, Value: "true"},
+		}
+	}
+	// Text and thinking blocks are created by their first delta.
+	return nil
 }
 
 func blockDeltaEvents(ev anthropicEvent) []StreamEvent {
@@ -461,6 +483,10 @@ func toAnthropicBlocks(blocks []Block, keepThinking bool) []anthropicBlock {
 }
 
 func toAnthropicBlock(b Block, keepThinking bool) anthropicBlock {
+	if isRedactedThinking(b) {
+		// The API requires redacted thinking back exactly as it sent it.
+		return anthropicBlock{Type: anthropicRedactedThinking, Data: b.Signature}
+	}
 	wire := anthropicBlock{
 		Type: b.Type, Text: b.Text, Thinking: b.Thinking, Signature: b.Signature,
 		ID: b.ID, Name: b.Name, Input: b.Input,
@@ -473,4 +499,18 @@ func toAnthropicBlock(b Block, keepThinking bool) anthropicBlock {
 		wire.Content = toAnthropicBlocks(b.Content, keepThinking)
 	}
 	return wire
+}
+
+// redactedThinkingBlock represents a redacted_thinking reply block: a thinking
+// block with no readable text whose encrypted data is replayed verbatim.
+func redactedThinkingBlock(data string) Block {
+	return Block{
+		Type:         BlockThinking,
+		Signature:    data,
+		ProviderData: map[string]string{anthropicRedactedKey: "true"},
+	}
+}
+
+func isRedactedThinking(b Block) bool {
+	return b.Type == BlockThinking && b.ProviderData[anthropicRedactedKey] != ""
 }

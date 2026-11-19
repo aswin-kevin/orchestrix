@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -244,6 +245,74 @@ func TestAnthropicStreamTextToolThinking(t *testing.T) {
 	}
 	if want := (Usage{Input: 12, Output: 30, CacheRead: 4}); resp.Usage != want {
 		t.Errorf("usage = %+v, want %+v", resp.Usage, want)
+	}
+}
+
+const redactedStream = `event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":3}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"ENCRYPTED"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu_1","name":"ls","input":{}}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":5}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+// TestAnthropicRedactedThinkingRoundTrip checks that redacted thinking, which
+// the API requires back unchanged alongside tool use, survives a streamed
+// reply and is replayed with its encrypted data intact.
+func TestAnthropicRedactedThinkingRoundTrip(t *testing.T) {
+	srv := newSSEServer(t, 200, "text/event-stream", redactedStream)
+	p := newTestAnthropic(t, srv.URL)
+
+	resp, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := resp.Message.Content
+	if len(blocks) != 2 || !isRedactedThinking(blocks[0]) || blocks[0].Signature != "ENCRYPTED" {
+		t.Fatalf("blocks = %+v", blocks)
+	}
+
+	history := []Message{
+		UserText("x"), resp.Message,
+		{Role: RoleUser, Content: []Block{ToolResultText("tu_1", "ok", false)}},
+	}
+	if _, err := Collect(context.Background(), p, Request{Messages: history, Thinking: "enabled"}); err != nil {
+		t.Fatal(err)
+	}
+	replayed := srv.body["messages"].([]any)[1].(map[string]any)["content"].([]any)[0]
+	want := map[string]any{"type": "redacted_thinking", "data": "ENCRYPTED"}
+	if !reflect.DeepEqual(replayed, want) {
+		t.Errorf("replayed block = %v, want %v", replayed, want)
+	}
+}
+
+func TestAnthropicCompleteRedactedThinking(t *testing.T) {
+	reply := `{"content":[
+		{"type":"redacted_thinking","data":"ENCRYPTED"},
+		{"type":"text","text":"done"}],
+		"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
+	srv := newSSEServer(t, 200, "application/json", reply)
+	p := newTestAnthropic(t, srv.URL)
+
+	resp, err := p.Complete(context.Background(), Request{Messages: []Message{UserText("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := resp.Message.Content
+	if len(blocks) != 2 || !isRedactedThinking(blocks[0]) || blocks[0].Signature != "ENCRYPTED" {
+		t.Errorf("blocks = %+v", blocks)
 	}
 }
 
