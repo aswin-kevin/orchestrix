@@ -373,7 +373,9 @@ func Example_coordinator() {
 	}
 	defer c.Shutdown() // stops background workers still running
 
-	for ev, err := range c.Run(ctx, orchestrix.Text("Write a one-page brief on home battery storage.")) {
+	in := orchestrix.Text("Write a one-page brief on home battery storage.")
+	in.ThreadID = "battery-brief" // start_task needs a thread
+	for ev, err := range c.Run(ctx, in) {
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -392,7 +394,9 @@ func Example_runParallel() {
 	files := []string{"a.go", "b.go", "c.go"}
 	jobs := make([]coordinator.Job, len(files))
 	for i, f := range files {
-		jobs[i] = coordinator.Job{Agent: a, Input: orchestrix.Text("Summarize " + f + ".")}
+		in := orchestrix.Text("Summarize " + f + ".")
+		in.ThreadID = "summary-" + f // each job its own thread and workspace
+		jobs[i] = coordinator.Job{Agent: a, Input: in}
 	}
 	for i, r := range coordinator.RunParallel(ctx, jobs, coordinator.ParallelOptions{MaxConcurrency: 2}) {
 		if r.Err != nil {

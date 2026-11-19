@@ -18,8 +18,10 @@
 // parent may have moved on by the time it ends); files are shared through
 // the backend.
 //
-// Tasks belong to a thread, not to a run: a top-level run may end while its
-// tasks keep running, and a later run on the thread is told when they end.
+// Tasks belong to a thread, not to a run: start_task needs the run's
+// agent.Input.ThreadID and fails in a run without one. A top-level run may
+// end while its tasks keep running, and a later run on the thread is told
+// when they end.
 // A run about to end while its tasks run is reminded of them once
 // (Config.DisableStopReminder). The reminder is a BeforeStop continuation:
 // it uses one of the run's agent.MaxStopContinuations slots, shared with

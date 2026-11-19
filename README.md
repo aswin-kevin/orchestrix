@@ -351,6 +351,7 @@ a, err := orchestrix.New(model, orchestrix.WithAsync(tasks))
 _, _ = a, err
 ```
 
+- **Threads.** `start_task` needs a thread: run the agent with `Input.ThreadID` set (or through `agent.Thread`). In a run without one it fails with "background tasks need a thread id".
 - **Ownership.** Tasks belong to a thread, not to a run: a top-level run may end while its tasks keep running, and a later run on the thread is told when they finish. A nested run's tasks are stopped when it ends, so a subagent's own tasks never outlive it.
 - **Approvals.** A background run has nobody to ask in-band. With a `WithApprover`, the subagent inherits it; without one, a subagent that needs a decision ends as `blocked`, naming the tools it wanted to call.
 - **Runner.** By default tasks run as subagents in this process, with `TaskTimeout` (30 minutes) each and up to `MaxRunning` (4) at once per thread. Implement `async.Runner` to run them elsewhere.
@@ -361,7 +362,7 @@ A background subagent's state is not merged into the parent's; files are shared 
 
 ## Coordinator
 
-`coordinator.New` builds a coordinator agent: it breaks a request into subtasks, delegates them to the workers you define and combines their results. Its system prompt describes that role, its `task` tool offers only the workers (for results it needs before planning further), and `start_task` runs them in parallel, at most `MaxConcurrency` (default 4) at once. A worker that leaves `Middleware` nil inherits the coordinator's stack. Further `orchestrix` options are passed after `Config`.
+`coordinator.New` builds a coordinator agent: it breaks a request into subtasks, delegates them to the workers you define and combines their results. Its system prompt describes that role, its `task` tool offers only the workers (for results it needs before planning further), and `start_task` runs them in parallel, at most `MaxConcurrency` (default 4) at once per thread. Run it with a thread ID: `start_task` cannot start workers in a run without one. A worker that leaves `Middleware` nil inherits the coordinator's stack. Further `orchestrix` options are passed after `Config`.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -380,7 +381,9 @@ if err != nil {
 }
 defer c.Shutdown() // stops background workers still running
 
-for ev, err := range c.Run(ctx, orchestrix.Text("Write a one-page brief on home battery storage.")) {
+in := orchestrix.Text("Write a one-page brief on home battery storage.")
+in.ThreadID = "battery-brief" // start_task needs a thread
+for ev, err := range c.Run(ctx, in) {
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -392,7 +395,7 @@ for ev, err := range c.Run(ctx, orchestrix.Text("Write a one-page brief on home 
 
 `New` fails when the options replace or remove the coordinator's async middleware, since its workers and `Shutdown` depend on it. That check reads the configured stack, so it cannot see a model profile whose `ExcludeMiddleware` names `async`: for the matching models such a profile removes `start_task`, leaving the coordinator only the `task` tool.
 
-`coordinator.RunParallel` runs many agent runs at once, with bounded concurrency, and returns one result per job in input order. Jobs may share an agent; give each its own thread ID, or none. One failing job does not stop the others, and cancelling the context stops the running jobs and fails those not started. `ParallelOptions.OnEvent` sees every event of every job, one call at a time; if it panics, every job is cancelled and `RunParallel` re-panics on the caller's goroutine once they have ended.
+`coordinator.RunParallel` runs many agent runs at once, with bounded concurrency, and returns one result per job in input order. Jobs may share an agent; give each its own thread ID. Jobs without one share the agent's thread-less workspace (with the default per-thread backend, one in-memory workspace, so their files mix), and they cannot start background tasks. One failing job does not stop the others, and cancelling the context stops the running jobs and fails those not started. `ParallelOptions.OnEvent` sees every event of every job, one call at a time; if it panics, every job is cancelled and `RunParallel` re-panics on the caller's goroutine once they have ended.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -404,7 +407,9 @@ if err != nil {
 files := []string{"a.go", "b.go", "c.go"}
 jobs := make([]coordinator.Job, len(files))
 for i, f := range files {
-	jobs[i] = coordinator.Job{Agent: a, Input: orchestrix.Text("Summarize " + f + ".")}
+	in := orchestrix.Text("Summarize " + f + ".")
+	in.ThreadID = "summary-" + f // each job its own thread and workspace
+	jobs[i] = coordinator.Job{Agent: a, Input: in}
 }
 for i, r := range coordinator.RunParallel(ctx, jobs, coordinator.ParallelOptions{MaxConcurrency: 2}) {
 	if r.Err != nil {

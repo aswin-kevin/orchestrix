@@ -116,8 +116,9 @@ var questions = []struct{ question, offline string }{
 // parallel answers every question at once with RunParallel and prints the
 // results in question order.
 func parallel(ctx context.Context, w io.Writer) error {
-	// Live, one plain agent answers every question: jobs may share an agent,
-	// since each run without a ThreadID keeps its own state. Offline, each
+	// Live, one plain agent answers every question: jobs may share an agent
+	// when each has its own ThreadID, so their threads and workspaces stay
+	// apart. Offline, each
 	// job gets an agent with its own script, so every answer is paired with
 	// its question whichever job reaches the model first.
 	var shared *agent.Agent
@@ -137,7 +138,9 @@ func parallel(ctx context.Context, w io.Writer) error {
 				return err
 			}
 		}
-		jobs[i] = coordinator.Job{Agent: a, Input: orchestrix.Text(q.question)}
+		in := orchestrix.Text(q.question)
+		in.ThreadID = fmt.Sprintf("question-%d", i+1)
+		jobs[i] = coordinator.Job{Agent: a, Input: in}
 	}
 
 	results := coordinator.RunParallel(ctx, jobs, coordinator.ParallelOptions{MaxConcurrency: 3})

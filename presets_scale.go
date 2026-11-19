@@ -17,6 +17,7 @@ import (
 
 // WithAsync adds background subagents (start_task and friends). The host
 // keeps m and calls m.Shutdown when done. A nil m makes New fail.
+// start_task needs a thread: run the agent with Input.ThreadID set.
 func WithAsync(m *async.Middleware) Option {
 	return func(s *settings) {
 		if m == nil {

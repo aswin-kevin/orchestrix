@@ -34,7 +34,8 @@ type Config struct {
 
 // Coordinator is an agent that plans, delegates to its workers (task for
 // work needed now, start_task for parallel work) and synthesizes their
-// results. Call Shutdown when done.
+// results. Run it with an Input.ThreadID: start_task refuses to start
+// workers in a run without one. Call Shutdown when done.
 type Coordinator struct {
 	*agent.Agent
 	// tasks runs the background workers; the Coordinator owns it.
