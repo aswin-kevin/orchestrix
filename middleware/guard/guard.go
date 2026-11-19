@@ -9,7 +9,10 @@
 // ToolCall checks see the tool's name and JSON arguments of every call, at
 // any depth; a blocked call is not run and gets an error result naming the
 // check, so the model can adapt. All checks for one target go in one Decide
-// call. The text sent to the decider is capped at DefaultMaxInputBytes.
+// call. Text longer than Config.MaxInputBytes is never sent to the decider,
+// nor checked by a prefix: every check of that target fails, as if the
+// decider had erred, so by default the input or call is blocked. Raise
+// MaxInputBytes for tools whose arguments are large.
 //
 // The guard is a safety control, so it fails closed: when the decider
 // returns an error, refuses a check or leaves one unanswered, the input or
@@ -36,7 +39,6 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -48,8 +50,8 @@ const (
 	// DefaultThreshold is the probability of yes that blocks when
 	// Check.Threshold is zero.
 	DefaultThreshold = 0.5
-	// DefaultMaxInputBytes caps the input text, or a tool call's arguments,
-	// sent to the decider.
+	// DefaultMaxInputBytes is the size limit on the text a target's checks
+	// see when Config.MaxInputBytes is zero.
 	DefaultMaxInputBytes = 20_000
 )
 
@@ -90,6 +92,11 @@ type Config struct {
 	FailOpen bool
 	// Timeout bounds each Decide call; 0 means DefaultTimeout.
 	Timeout time.Duration
+	// MaxInputBytes is the per-check input limit in bytes: the run's input
+	// text, or a tool call's "Tool: <name>\nArguments:\n<json>" text. Text
+	// over it is not checked, and the checks fail (see FailOpen). 0 means
+	// DefaultMaxInputBytes; negative is an error.
+	MaxInputBytes int
 }
 
 var checkName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -101,11 +108,13 @@ type middleware struct {
 	tool     []Check
 	failOpen bool
 	timeout  time.Duration
+	maxInput int
 }
 
 // New returns the guard middleware. It fails on a missing Decider, on no
 // checks, and on a check with an invalid or duplicate name, an empty
-// question, no or an unknown target, or a threshold outside [0, 1].
+// question, no or an unknown target, or a threshold outside [0, 1], and on a
+// negative MaxInputBytes.
 func New(cfg Config) (agent.Middleware, error) {
 	if cfg.Decider == nil {
 		return nil, errors.New("guard: Decider is required")
@@ -113,9 +122,15 @@ func New(cfg Config) (agent.Middleware, error) {
 	if len(cfg.Checks) == 0 {
 		return nil, errors.New("guard: at least one check is required")
 	}
-	m := &middleware{decider: cfg.Decider, model: cfg.Model, failOpen: cfg.FailOpen, timeout: cfg.Timeout}
+	if cfg.MaxInputBytes < 0 {
+		return nil, errors.New("guard: MaxInputBytes must not be negative")
+	}
+	m := &middleware{decider: cfg.Decider, model: cfg.Model, failOpen: cfg.FailOpen, timeout: cfg.Timeout, maxInput: cfg.MaxInputBytes}
 	if m.timeout <= 0 {
 		m.timeout = DefaultTimeout
+	}
+	if m.maxInput == 0 {
+		m.maxInput = DefaultMaxInputBytes
 	}
 	seen := map[string]bool{}
 	for i, c := range cfg.Checks {
@@ -155,10 +170,11 @@ func (m *middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 		return nil
 	}
 	info, ok := agent.Info(ctx)
+	// Without run info (a hook called outside a run) there is no input to check.
 	if !ok || info.Depth != 0 {
 		return nil
 	}
-	text, _ := promptsafe.CapBytes(userText(info.Input), DefaultMaxInputBytes)
+	text := userText(info.Input)
 	if text == "" {
 		return nil
 	}
@@ -177,8 +193,7 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 	if len(m.tool) == 0 {
 		return next(ctx, call)
 	}
-	args, _ := promptsafe.CapBytes(string(call.Input), DefaultMaxInputBytes)
-	text := "Tool: " + call.Name + "\nArguments:\n" + args
+	text := "Tool: " + call.Name + "\nArguments:\n" + string(call.Input)
 	blockedBy, failed := m.evaluate(ctx, call.State, "tool:"+call.Name, text, m.tool)
 	switch {
 	case blockedBy != "":
@@ -193,7 +208,13 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 // per check in s. It returns the first check whose answer blocks, and
 // whether some check could not be completed while the guard fails closed.
 func (m *middleware) evaluate(ctx context.Context, s *state.State, target, text string, checks []Check) (blockedBy string, failed bool) {
-	resp, err := m.decide(ctx, text, checks)
+	var resp *llm.DecisionResponse
+	var err error
+	if len(text) > m.maxInput {
+		err = fmt.Errorf("guard: input is %d bytes, over the %d-byte limit", len(text), m.maxInput)
+	} else {
+		resp, err = m.decide(ctx, text, checks)
+	}
 	verdicts := make([]Verdict, len(checks))
 	for i, c := range checks {
 		v := Verdict{Target: target, Check: c.Name}
@@ -209,6 +230,8 @@ func (m *middleware) evaluate(ctx context.Context, s *state.State, target, text 
 			v.Error = fmt.Sprintf("guard: decider gave no answer for check %q", c.Name)
 		case a.Refused:
 			v.Refused = true
+		case a.Type != llm.YesNo || !(a.Yes >= 0 && a.Yes <= 1):
+			v.Error = fmt.Sprintf("guard: decider gave no valid yes/no answer for check %q", c.Name)
 		default:
 			v.Yes = a.Yes
 			v.Blocked = a.Yes >= c.Threshold

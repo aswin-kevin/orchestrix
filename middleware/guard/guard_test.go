@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -138,6 +139,7 @@ func TestNewValidates(t *testing.T) {
 		"unknown target":  {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q", On: 4}}}, "On"},
 		"threshold above": {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q", On: Input, Threshold: 1.5}}}, "Threshold"},
 		"threshold below": {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q", On: Input, Threshold: -0.1}}}, "Threshold"},
+		"negative limit":  {Config{Decider: d, Checks: []Check{ok}, MaxInputBytes: -1}, "MaxInputBytes"},
 	}
 	for name, tc := range tests {
 		_, err := New(tc.cfg)
@@ -422,29 +424,93 @@ func (f deciderFunc) Decide(ctx context.Context, req llm.DecisionRequest) (*llm.
 	return f(ctx, req)
 }
 
-func TestGuardCapsToolInput(t *testing.T) {
+// runOversized runs one echo call whose arguments put "rm -rf /" after
+// pad bytes of padding, and returns the final, the decider and the tool's
+// call count.
+func runOversized(t *testing.T, pad int, cfg Config) (*agent.Final, *fakeDecider, int32) {
+	t.Helper()
 	var echoed atomic.Int32
-	big := strings.Repeat("é", 25_000) // 50 KB of two-byte runes
 	p := llmtest.New(
-		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e1", Name: "echo", Input: textInput{big}}}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e1", Name: "echo", Input: textInput{strings.Repeat(" ", pad) + "rm -rf /"}}}},
 		llmtest.Turn{Text: "done"},
 	)
 	d := &fakeDecider{yes: map[string]float64{"danger": 1}}
-	mw := mustNew(t, Config{Decider: d, Checks: []Check{{Name: "danger", Question: "q", On: ToolCall}}})
-	a := newAgent(t, agent.Config{Provider: p, Tools: []tool.Tool{echoTool(&echoed)}, Middleware: []agent.Middleware{mw}})
-	final := finalOf(a.Run(context.Background(), input("go")))
+	cfg.Decider = d
+	cfg.Checks = []Check{{Name: "danger", Question: "q", On: ToolCall}}
+	a := newAgent(t, agent.Config{Provider: p, Tools: []tool.Tool{echoTool(&echoed)}, Middleware: []agent.Middleware{mustNew(t, cfg)}})
+	return finalOf(a.Run(context.Background(), input("go"))), d, echoed.Load()
+}
 
+func TestGuardBlocksOversizedToolInput(t *testing.T) {
+	final, d, ran := runOversized(t, DefaultMaxInputBytes, Config{})
+	if n := len(d.requests()); n != 0 || ran != 0 {
+		t.Fatalf("decider called %d times, tool ran %d times", n, ran)
+	}
+	r := toolResults(final.State)
+	if len(r) != 1 || resultText(r[0]) != "blocked by guard: check could not be completed" {
+		t.Fatalf("results = %+v", r)
+	}
+	v := Verdicts(final.State)
+	if len(v) != 1 || !v[0].Blocked || !strings.HasPrefix(v[0].Error, "guard: input is ") ||
+		!strings.HasSuffix(v[0].Error, "bytes, over the 20000-byte limit") {
+		t.Fatalf("verdicts = %+v", v)
+	}
+}
+
+func TestGuardFailOpenAllowsOversizedToolInput(t *testing.T) {
+	final, d, ran := runOversized(t, DefaultMaxInputBytes, Config{FailOpen: true})
+	v := Verdicts(final.State)
+	if len(d.requests()) != 0 || ran != 1 || len(v) != 1 || v[0].Blocked || v[0].Error == "" {
+		t.Fatalf("requests %d, ran %d, verdicts %+v", len(d.requests()), ran, v)
+	}
+}
+
+func TestGuardRaisedMaxInputBytesDecides(t *testing.T) {
+	final, d, ran := runOversized(t, DefaultMaxInputBytes, Config{MaxInputBytes: 50_000})
 	reqs := d.requests()
-	if len(reqs) != 1 {
-		t.Fatalf("requests = %d", len(reqs))
+	if len(reqs) != 1 || !strings.HasSuffix(reqs[0].Input[0].Text, `rm -rf /"}`) || ran != 0 {
+		t.Fatalf("requests %d, ran %d", len(reqs), ran)
 	}
-	header := "Tool: echo\nArguments:\n"
-	text := reqs[0].Input[0].Text
-	if !strings.HasPrefix(text, header) || len(text) > len(header)+DefaultMaxInputBytes || !utf8.ValidString(text) {
-		t.Fatalf("decider input: %d bytes, prefix %q", len(text), text[:min(len(text), 40)])
+	if r := toolResults(final.State); len(r) != 1 || resultText(r[0]) != `blocked by guard check "danger"` {
+		t.Fatalf("results = %+v", r)
 	}
-	if echoed.Load() != 0 || len(Verdicts(final.State)) != 1 || !Verdicts(final.State)[0].Blocked {
-		t.Fatalf("ran %d, verdicts %+v", echoed.Load(), Verdicts(final.State))
+}
+
+func TestGuardBlocksOversizedInput(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{Text: "hi"})
+	d := &fakeDecider{}
+	a := newAgent(t, agent.Config{Provider: p, Middleware: []agent.Middleware{
+		mustNew(t, Config{Decider: d, Checks: []Check{{Name: "in", Question: "q", On: Input}}, MaxInputBytes: 10}),
+	}})
+	final := finalOf(a.Run(context.Background(), input("eleven byte")))
+	if final.Reason != agent.ReasonHookStopped || len(d.requests()) != 0 ||
+		!strings.Contains(final.Err.Error(), "guard: check could not be completed") {
+		t.Fatalf("reason %s, err %v, requests %d", final.Reason, final.Err, len(d.requests()))
+	}
+	if v := Verdicts(final.State); len(v) != 1 || v[0].Error != "guard: input is 11 bytes, over the 10-byte limit" {
+		t.Fatalf("verdicts = %+v", v)
+	}
+}
+
+func TestGuardInvalidAnswerIsAFailure(t *testing.T) {
+	answers := map[string]llm.Answer{
+		"choice": {Type: llm.Choice, Choice: "no"},
+		"range":  {Type: llm.YesNo, Yes: 1.5},
+		"nan":    {Type: llm.YesNo, Yes: math.NaN()},
+	}
+	for name, ans := range answers {
+		d := deciderFunc(func(context.Context, llm.DecisionRequest) (*llm.DecisionResponse, error) {
+			return &llm.DecisionResponse{Answers: map[string]llm.Answer{"in": ans}}, nil
+		})
+		p := llmtest.New(llmtest.Turn{Text: "hi"})
+		a := newAgent(t, agent.Config{Provider: p, Middleware: []agent.Middleware{
+			mustNew(t, Config{Decider: d, Checks: []Check{{Name: "in", Question: "q", On: Input}}}),
+		}})
+		final := finalOf(a.Run(context.Background(), input("hello")))
+		v := Verdicts(final.State)
+		if final.Reason != agent.ReasonHookStopped || len(v) != 1 || !v[0].Blocked || v[0].Error == "" {
+			t.Errorf("%s: reason %s, verdicts %+v", name, final.Reason, v)
+		}
 	}
 }
 
@@ -489,7 +555,7 @@ func TestGuardParallelToolCallsRecordAllVerdicts(t *testing.T) {
 	var echoed atomic.Int32
 	var calls []llmtest.Call
 	for i := range n {
-		calls = append(calls, llmtest.Call{ID: "e" + string(rune('0'+i)), Name: "echo", Input: textInput{"x"}})
+		calls = append(calls, llmtest.Call{ID: "e" + strconv.Itoa(i), Name: "echo", Input: textInput{"x"}})
 	}
 	p := llmtest.New(llmtest.Turn{ToolCalls: calls}, llmtest.Turn{Text: "done"})
 	d := &fakeDecider{}
