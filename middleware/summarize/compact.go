@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -23,6 +24,10 @@ type observed struct {
 	Input int `json:"input"`
 	// Messages is how many State messages the request was built from.
 	Messages int `json:"messages"`
+	// Elisions identifies the elisions in agent.ElisionsKey then (see
+	// elisionsMark); empty when there were none. Input no longer describes
+	// the view once they change.
+	Elisions string `json:"elisions,omitempty"`
 }
 
 // observedKey holds the last observed; absent until a response reported usage,
@@ -35,16 +40,29 @@ var failuresKey = state.NewKey[int]("summarize.failures", state.Private[int]())
 
 // Estimate returns the estimated size, in tokens, of the next request: the
 // input tokens the last response reported plus the messages added since; a
-// pure character estimate of view when nothing was observed. view should be
+// pure character estimate of view when nothing was observed, or when the
+// elisions (agent.ElisionsKey) changed since the observation. view should be
 // the messages as they would be sent, after any compaction. The fallback
 // leaves out the system prompt and tool definitions, so it underestimates;
 // the reactive path catches what it misses.
 func Estimate(s *state.State, view []llm.Message) int {
 	msgs := s.Messages()
-	if o, ok := observedKey.Get(s); ok && o.Messages <= len(msgs) {
+	if o, ok := observedKey.Get(s); ok && o.Messages <= len(msgs) && o.Elisions == elisionsMark(s) {
 		return o.Input + charCount(msgs[o.Messages:])/CharsPerToken
 	}
 	return charCount(view) / CharsPerToken
+}
+
+// elisionsMark returns the IDs of the elisions recorded in s, quoted and
+// comma-separated in key order, so that any change to them changes the mark;
+// empty when there are none.
+func elisionsMark(s *state.State) string {
+	elisions, _ := agent.ElisionsKey.Get(s)
+	ids := make([]string, len(elisions))
+	for i, e := range elisions {
+		ids[i] = strconv.Quote(e.ID)
+	}
+	return strings.Join(ids, ",")
 }
 
 // charCount is the size of msgs in characters, as rendered for a summary.
@@ -79,7 +97,7 @@ func (m *middleware) compact(ctx context.Context, req *agent.ModelRequest, keepT
 		return false, err
 	}
 	next := Boundary{Index: k, Summary: summary, Compactions: prev.Compactions + 1}
-	next.Path = m.offload(ctx, req, next.Compactions, render(older, noBlockCap))
+	next.Path = m.offload(ctx, req, next.Compactions, Transcript(older))
 	BoundaryKey.Set(req.State, next)
 	failuresKey.Delete(req.State)
 	observedKey.Delete(req.State) // describes the view before this compaction

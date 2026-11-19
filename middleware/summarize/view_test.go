@@ -111,7 +111,7 @@ func wrapOnce(t *testing.T, cfg Config, s *state.State) []llm.Message {
 	t.Helper()
 	req := &agent.ModelRequest{
 		State:   s,
-		Request: llm.Request{Messages: agent.View(s.Messages())},
+		Request: llm.Request{Messages: agent.ElidedView(s, 0)},
 		Profile: llm.Profile{ContextWindow: 100_000},
 	}
 	var got []llm.Message

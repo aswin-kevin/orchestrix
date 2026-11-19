@@ -9,6 +9,11 @@
 // compaction under HistoryDir/<thread>, so the model can read them back; runs
 // without a ThreadID skip this.
 //
+// Elisions (agent.ElisionsKey) apply to the messages after the boundary as
+// they do in the loop's view (agent.ElidedView), and the size estimate that
+// triggers compaction measures that elided view. Cuts and summaries stay in
+// State space: a summary always covers the original messages, elided or not.
+//
 // Every request is micro-compacted as well: old, large tool results are
 // replaced by a short notice and old, large tool inputs are shortened. The
 // current turn is never touched: results the model has not seen yet are
@@ -216,7 +221,7 @@ func (m *middleware) AfterModel(_ context.Context, s *state.State, resp *llm.Res
 		observedKey.Delete(s)
 		return nil
 	}
-	observedKey.Set(s, observed{Input: input, Messages: len(s.Messages())})
+	observedKey.Set(s, observed{Input: input, Messages: len(s.Messages()), Elisions: elisionsMark(s)})
 	return nil
 }
 

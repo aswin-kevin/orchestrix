@@ -64,3 +64,10 @@ func renderResult(b llm.Block) string {
 	}
 	return strings.Join(parts, "\n")
 }
+
+// Transcript renders msgs as the plain-text transcript summarize offloads: a
+// "## user" or "## assistant" heading per message, then one line per text,
+// tool call, tool result or attachment, none truncated. Thinking is left out.
+func Transcript(msgs []llm.Message) string {
+	return render(msgs, noBlockCap)
+}

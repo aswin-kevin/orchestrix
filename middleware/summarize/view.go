@@ -13,24 +13,40 @@ import (
 // keptInputChars is how many characters of a shortened tool input remain.
 const keptInputChars = 500
 
-// view returns the messages to send: the summary and the messages after the
-// boundary when one is set, else current (the loop's view of all of State),
-// then micro-compacted. current is a fresh copy owned by the request, so it
-// may be edited in place; State is never touched.
+// view returns the messages to send: the summary and the elided view of the
+// messages after the boundary when one is set, else current (the loop's
+// elided view of all of State), then micro-compacted. current is a fresh copy
+// owned by the request, so it may be edited in place; State is never touched.
 func (m *middleware) view(s *state.State, current []llm.Message) []llm.Message {
 	msgs := current
 	history := s.Messages()
+	from := 0
 	// A boundary beyond the history (State replaced by the host) is ignored
 	// rather than trusted.
 	if b, ok := Current(s); ok && b.Index <= len(history) {
-		history = history[b.Index:]
-		msgs = append([]llm.Message{llm.UserText(summaryMessage(b))}, agent.View(history)...)
+		from = b.Index
+		msgs = append([]llm.Message{llm.UserText(summaryMessage(b))}, agent.ElidedView(s, from)...)
 	}
 	m.clearOldResults(msgs)
-	// Turns are found in history, not in msgs: the view has lost the Meta
-	// that marks injected messages. Both hold the same assistant messages.
-	m.shortenOldInputs(msgs, assistantsBefore(history, lastIndex(history, isUserTurn)))
+	m.shortenOldInputs(msgs, settledAssistants(history, from, agent.AppliedElisions(s, from)))
 	return msgs
+}
+
+// settledAssistants counts the assistant messages of the view built from
+// history[from:] and the applied elisions that come before the last user turn:
+// those whose tool inputs may be shortened. Turns are found in history, not
+// in the view: the view has lost the Meta that marks injected messages.
+// Assistant messages inside an elision are not in the view, so they are not
+// counted; the view holds the others in the same order.
+func settledAssistants(history []llm.Message, from int, applied []agent.Elision) int {
+	end := lastIndex(history[from:], isUserTurn) + from
+	n := 0
+	for i := from; i < end; i++ {
+		if isAssistant(history[i]) && !slices.ContainsFunc(applied, func(e agent.Elision) bool { return e.From <= i && i < e.To }) {
+			n++
+		}
+	}
+	return n
 }
 
 // summaryMessage is the text of the user message that stands for the
@@ -110,17 +126,6 @@ func (m *middleware) shortenOldInputs(msgs []llm.Message, settled int) {
 			}
 		}
 	}
-}
-
-// assistantsBefore counts the assistant messages of msgs before index end.
-func assistantsBefore(msgs []llm.Message, end int) int {
-	n := 0
-	for _, msg := range msgs[:max(end, 0)] {
-		if isAssistant(msg) {
-			n++
-		}
-	}
-	return n
 }
 
 // lastIndex returns the index of the last message matching f, or -1.
