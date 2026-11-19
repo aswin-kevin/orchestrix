@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
@@ -17,6 +18,15 @@ const (
 	// DefaultMaxAnswerBytes caps, in bytes, the answer text sent to a model
 	// grader.
 	DefaultMaxAnswerBytes = 20_000
+	// DefaultMaxTaskBytes caps, in bytes, the task text sent to a model
+	// grader.
+	DefaultMaxTaskBytes = 20_000
+	// DefaultMaxFeedbackBytes caps, in bytes, the grader feedback sent back
+	// to the model, whatever Grader produced it.
+	DefaultMaxFeedbackBytes = 4_000
+	// DefaultGradeTimeout bounds one ModelGrader call when its Timeout is
+	// zero.
+	DefaultGradeTimeout = 2 * time.Minute
 	// DefaultGradeMaxTokens is the output limit of a model grader call.
 	DefaultGradeMaxTokens = 1_024
 )
@@ -67,6 +77,9 @@ type ModelGrader struct {
 	Model string
 	// Prompt is the system prompt; "" means DefaultGraderPrompt.
 	Prompt string
+	// Timeout bounds each grading call; 0 means DefaultGradeTimeout. A call
+	// that runs out fails, and the run completes (grading fails open).
+	Timeout time.Duration
 }
 
 // neutralize escapes the frame tags of the grading request in untrusted text.
@@ -90,6 +103,12 @@ func (g ModelGrader) Grade(ctx context.Context, req GradeRequest) (Grade, error)
 	if system == "" {
 		system = DefaultGraderPrompt
 	}
+	timeout := g.Timeout
+	if timeout <= 0 {
+		timeout = DefaultGradeTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	resp, err := provider.Complete(ctx, llm.Request{
 		Model:     model,
 		System:    []string{system},
@@ -105,8 +124,9 @@ func (g ModelGrader) Grade(ctx context.Context, req GradeRequest) (Grade, error)
 // gradingMessage frames the task, criteria and answer for the grader.
 func gradingMessage(req GradeRequest) string {
 	answer, _ := promptsafe.CapBytes(req.Answer, DefaultMaxAnswerBytes)
+	task, _ := promptsafe.CapBytes(req.Task, DefaultMaxTaskBytes)
 	var sb strings.Builder
-	sb.WriteString("<task>\n" + neutralize(req.Task) + "\n</task>\n<criteria>\n")
+	sb.WriteString("<task>\n" + neutralize(task) + "\n</task>\n<criteria>\n")
 	for i, c := range req.Criteria {
 		fmt.Fprintf(&sb, "%d. %s\n", i+1, neutralize(c))
 	}

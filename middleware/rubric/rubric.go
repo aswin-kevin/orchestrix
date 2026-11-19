@@ -10,6 +10,20 @@
 // and neutralized (internal/promptsafe) before a ModelGrader sees it, and the
 // grader's feedback is framed as <rubric_feedback> when sent back.
 //
+// What is graded: the text of the reply that would end the run
+// (resp.Message), not earlier assistant messages; an answer split across
+// turns (after a reminder or a max-token resume, say "see above") is graded
+// by its last part only. The task is the run's input text, capped at
+// DefaultMaxTaskBytes, and the feedback sent back is capped at
+// DefaultMaxFeedbackBytes. MaxIterations counts per run: a run resumed
+// after an interrupt (agent.Agent.ResumeWith) starts with no gradings, so
+// it may revise MaxIterations times again.
+//
+// Cost and observability: a grader's calls are its own. A ModelGrader's
+// tokens are not in the run's Final.Usage and do not count towards
+// Config.TokenBudget, and each call is bounded by ModelGrader.Timeout. A
+// grader error is not an event: it shows only as Record.Error in Grades.
+//
 // Feedback is a BeforeStop continuation, so it shares the run's
 // agent.MaxStopContinuations slots with every other BeforeStop middleware;
 // BeforeStop middleware later in the stack (the async reminder) are
@@ -142,7 +156,8 @@ func (m *middleware) BeforeStop(ctx context.Context, s *state.State, resp *llm.R
 	if err != nil || grade.Pass || iter >= m.maxIter {
 		return "", nil
 	}
-	return "<rubric_feedback>\n" + neutralizeFeedback(grade.Feedback) + "\n</rubric_feedback>\n" + feedbackSuffix, nil
+	feedback, _ := promptsafe.CapBytes(grade.Feedback, DefaultMaxFeedbackBytes)
+	return "<rubric_feedback>\n" + neutralizeFeedback(feedback) + "\n</rubric_feedback>\n" + feedbackSuffix, nil
 }
 
 // neutralizeFeedback escapes the frame tag of the feedback in grader text.
