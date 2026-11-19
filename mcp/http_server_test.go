@@ -299,7 +299,7 @@ func TestHTTPDuplicateInFlightRequestID(t *testing.T) {
 }
 
 func TestHTTPOriginHostIsCaseInsensitive(t *testing.T) {
-	_, ts := serveHandler(t, newTestServer(nil), HandlerOptions{DisableGET: true})
+	_, ts := serveHandler(t, newTestServer(nil), HandlerOptions{DisableGET: true, AllowedHosts: []string{"mcp.example.test"}})
 	for _, tt := range []struct {
 		origin string
 		want   int
@@ -319,5 +319,72 @@ func TestHTTPOriginHostIsCaseInsensitive(t *testing.T) {
 		if resp.StatusCode != tt.want {
 			t.Errorf("Origin %s = %d, want %d", tt.origin, resp.StatusCode, tt.want)
 		}
+	}
+}
+
+// hostStatus POSTs initialize to url with the given Host and Origin headers
+// (empty → none) and returns the status.
+func hostStatus(t *testing.T, url, host, origin string) int {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(initializeBody))
+	req.Host = host
+	req.Header.Set("Content-Type", "application/json")
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+func TestHTTPDefaultAllowedHostsAreLoopback(t *testing.T) {
+	_, ts := serveHandler(t, newTestServer(nil), HandlerOptions{DisableGET: true})
+	for _, tt := range []struct {
+		host, origin string
+		want         int
+	}{
+		// A DNS-rebinding page: its origin and the Host it sends agree.
+		{"evil.example:8080", "http://evil.example:8080", http.StatusForbidden},
+		{"evil.example", "", http.StatusForbidden},
+		{"localhost.evil.example", "", http.StatusForbidden},
+		{"127.0.0.1:9", "", http.StatusOK},
+		{"LocalHost:1234", "http://localhost:1234", http.StatusOK},
+		{"localhost", "", http.StatusOK},
+		{"[::1]:8080", "", http.StatusOK},
+		{"127.0.0.1:9", "http://evil.example", http.StatusForbidden}, // the Origin check still applies
+	} {
+		if got := hostStatus(t, ts.URL, tt.host, tt.origin); got != tt.want {
+			t.Errorf("Host %q, Origin %q = %d, want %d", tt.host, tt.origin, got, tt.want)
+		}
+	}
+}
+
+func TestHTTPAllowedHosts(t *testing.T) {
+	_, ts := serveHandler(t, newTestServer(nil), HandlerOptions{
+		DisableGET:   true,
+		AllowedHosts: []string{"mcp.example.test", "pinned.example.test:8443"},
+	})
+	for _, tt := range []struct {
+		host string
+		want int
+	}{
+		{"mcp.example.test", http.StatusOK},
+		{"MCP.example.test:9000", http.StatusOK},
+		{"pinned.example.test:8443", http.StatusOK},
+		{"pinned.example.test:8444", http.StatusForbidden},
+		{"localhost:8080", http.StatusForbidden}, // a list replaces the loopback default
+		{"evil.example", http.StatusForbidden},
+	} {
+		if got := hostStatus(t, ts.URL, tt.host, ""); got != tt.want {
+			t.Errorf("Host %q = %d, want %d", tt.host, got, tt.want)
+		}
+	}
+
+	_, any := serveHandler(t, newTestServer(nil), HandlerOptions{DisableGET: true, AllowedHosts: []string{"*"}})
+	if got := hostStatus(t, any.URL, "anything.example", ""); got != http.StatusOK {
+		t.Errorf(`with AllowedHosts ["*"], Host anything.example = %d, want 200`, got)
 	}
 }

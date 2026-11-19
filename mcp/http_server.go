@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -53,7 +54,19 @@ type HandlerOptions struct {
 	// stream for this long; later requests for it get 404. 0 →
 	// DefaultSessionIdleTimeout.
 	SessionIdleTimeout time.Duration
+	// AllowedHosts lists the Host header values the handler serves; any
+	// other gets 403. An entry is a host name or IP literal ("localhost",
+	// "127.0.0.1", "[::1]"), which matches with any port, or host:port,
+	// which matches that port only; names compare case-insensitively, and
+	// "*" allows every host. nil or empty → the loopback names localhost,
+	// 127.0.0.1 and [::1] with any port, so a handler reachable under any
+	// other name (a LAN address, a public name behind a proxy) must list it.
+	AllowedHosts []string
 }
+
+// defaultAllowedHosts are the hosts a handler serves when
+// HandlerOptions.AllowedHosts is empty.
+var defaultAllowedHosts = []string{"localhost", "127.0.0.1", "[::1]"}
 
 // Handler serves s over the streamable HTTP transport, at whatever path it
 // is mounted on. A POSTed initialize request creates a session whose random
@@ -71,13 +84,24 @@ type HandlerOptions struct {
 // At most MaxSessions sessions are live; an initialize over the cap gets
 // 503.
 //
-// Requests whose Origin header names a host other than the one the request
-// was sent to are refused (403), against DNS rebinding. Behind a reverse
-// proxy that rewrites Host, browser requests therefore fail the check. Any
-// other authentication is up to the embedding program.
+// Two checks run before anything else, each refusing with 403:
+//   - The Host header must be in AllowedHosts (by default the loopback
+//     names). This stops DNS rebinding: a page whose name is rebound to
+//     127.0.0.1 still sends its own name as Host.
+//   - A request with an Origin header must name the host it was sent to.
+//     This stops a page on another origin from calling the server with a
+//     cross-origin browser request. On its own it does not stop DNS
+//     rebinding, where the page's origin and Host agree.
+//
+// Behind a reverse proxy, list the public name in AllowedHosts; if the
+// proxy rewrites Host, browser requests fail the Origin check. Any other
+// authentication is up to the embedding program.
 func (s *Server) Handler(opts HandlerOptions) http.Handler {
 	opts.MaxSessions = positiveOr(opts.MaxSessions, DefaultMaxSessions)
 	opts.SessionIdleTimeout = positiveOr(opts.SessionIdleTimeout, DefaultSessionIdleTimeout)
+	if len(opts.AllowedHosts) == 0 {
+		opts.AllowedHosts = defaultAllowedHosts
+	}
 	return &httpHandler{srv: s, opts: opts, sessions: map[string]*httpSession{}}
 }
 
@@ -91,6 +115,10 @@ type httpHandler struct {
 }
 
 func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !hostAllowed(r.Host, h.opts.AllowedHosts) {
+		http.Error(w, "host not allowed", http.StatusForbidden)
+		return
+	}
 	if !sameOrigin(r) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
@@ -110,6 +138,29 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, POST, DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// hostAllowed reports whether host, a Host header, matches an entry of
+// allowed (see HandlerOptions.AllowedHosts).
+func hostAllowed(host string, allowed []string) bool {
+	name := hostName(host)
+	for _, a := range allowed {
+		if a == "*" || strings.EqualFold(a, host) {
+			return true
+		}
+		if _, _, err := net.SplitHostPort(a); err != nil && strings.EqualFold(hostName(a), name) {
+			return true // an entry without a port matches any port
+		}
+	}
+	return false
+}
+
+// hostName returns hostport without its port and IPv6 brackets.
+func hostName(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(hostport, "["), "]")
 }
 
 // sameOrigin reports whether r has no Origin header or one naming the host
