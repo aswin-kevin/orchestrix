@@ -23,9 +23,10 @@ type RecordInput struct {
 
 // RecallInput is the input of recall_memory.
 type RecallInput struct {
-	// Query holds keywords; empty lists the newest memories. Words shorter
-	// than two characters are ignored, so a query of only such words
-	// matches nothing.
+	// Query holds keywords, split at every character that is not a letter
+	// or digit; empty (or only spaces) lists the newest memories. Words
+	// shorter than two characters are ignored, so a query made only of
+	// punctuation or of one-letter words matches nothing.
 	Query string `json:"query,omitempty" desc:"Keywords; empty lists the most recent memories."`
 	Limit int    `json:"limit,omitempty" desc:"Maximum memories to return."`
 }

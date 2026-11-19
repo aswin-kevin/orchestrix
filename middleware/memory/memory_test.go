@@ -343,3 +343,18 @@ func TestTagVariantsNeutralized(t *testing.T) {
 		}
 	}
 }
+
+func TestFileCappedToNothingIsSkipped(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{Text: "ok"})
+	// One 4-byte rune does not fit a 3-byte cap, so nothing of the file is left.
+	b := backendWith(t, map[string]string{"/AGENTS.md": "😀 tail"})
+	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles, MaxFileBytes: 3}), user("hi"))
+	if files := Files(s); len(files) != 0 {
+		t.Fatalf("files = %+v, want a file capped to nothing skipped", files)
+	}
+	for _, seg := range p.Requests[0].System {
+		if strings.Contains(seg, "<memory") {
+			t.Fatalf("an empty <memory> element was appended:\n%s", seg)
+		}
+	}
+}

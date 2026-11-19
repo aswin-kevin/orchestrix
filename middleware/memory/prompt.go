@@ -27,13 +27,12 @@ func (m *middleware) segment(files []File, index string) string {
 	if index != "" {
 		parts = append(parts, "<memory_index>\n"+index+"\n</memory_index>")
 	}
-	if m.prompt != "" {
-		if len(files) > 0 {
-			parts = append(parts, m.prompt)
-		}
-		if m.store != nil {
-			parts = append(parts, storePrompt)
-		}
+	if m.prompt != "" && len(files) > 0 {
+		parts = append(parts, m.prompt)
+	}
+	if m.store != nil {
+		// Always present: it carries the warning that memories are data.
+		parts = append(parts, storePrompt)
 	}
 	return strings.Join(parts, "\n\n")
 }

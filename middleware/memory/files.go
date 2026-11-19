@@ -18,7 +18,7 @@ const (
 var neutralizeTags = promptsafe.NewTagNeutralizer("memory_index", "memory")
 
 // loadIndex reads the store index for the system prompt, neutralizing a
-// literal frame tag and capping it at DefaultMaxIndexBytes. A missing or
+// literal frame tag and capping it at MaxIndexBytes. A missing or
 // unreadable index is empty.
 func loadIndex(ctx context.Context, b backend.Backend, p string) string {
 	if b == nil {
@@ -30,13 +30,13 @@ func loadIndex(ctx context.Context, b backend.Backend, p string) string {
 	}
 	index := strings.TrimSpace(strings.Join(res.Lines, "\n"))
 	index = neutralizeTags(index)
-	index, _ = promptsafe.CapBytes(index, DefaultMaxIndexBytes)
+	index, _ = promptsafe.CapBytes(index, MaxIndexBytes)
 	return strings.TrimSpace(index)
 }
 
 // loadFiles reads each path from b and returns the files that have content.
 // Instruction files are optional: one that cannot be read for any reason, is
-// binary, or is empty once cleaned is skipped.
+// binary, or is empty once cleaned or capped is skipped.
 func loadFiles(ctx context.Context, b backend.Backend, paths []string, maxBytes int) []File {
 	if b == nil {
 		return nil
@@ -54,6 +54,9 @@ func loadFiles(ctx context.Context, b backend.Backend, paths []string, maxBytes 
 		content = neutralizeTags(content)
 		content, truncated := promptsafe.CapBytes(content, maxBytes)
 		content = strings.TrimSpace(content)
+		if content == "" {
+			continue
+		}
 		files = append(files, File{Path: p, Content: content, Truncated: truncated})
 	}
 	return files

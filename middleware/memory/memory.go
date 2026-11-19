@@ -13,7 +13,9 @@
 // subject to permission path rules; only list files whose writers you trust,
 // and use Config.Prompt to drop the invitation if the agent should not edit
 // them. The only transformation that protects the framing is that a literal
-// closing tag inside a file is neutralized so it cannot end its element.
+// opening or closing tag of the prompt's own elements (<memory>,
+// <memory_index>) inside a file is neutralized, so it can neither end its
+// element nor open a fake one.
 //
 // The structured store (Config.Store) raises the same concern: record_memory
 // persists whatever the model passes it, so content the model read from an
@@ -63,7 +65,8 @@ type Config struct {
 	// DefaultPrompt, which tells the model to record durable notes in the
 	// files (see Trust in the package documentation); a pointer to ""
 	// appends the files alone. With a Store, a short note on recall_memory
-	// and record_memory follows unless Prompt is a pointer to "".
+	// and record_memory, which also warns that memories are data and not
+	// instructions, follows whatever Prompt is.
 	Prompt *string
 	// Store enables the structured long-term store: the recall_memory and
 	// record_memory tools, and the MEMORY.md index in the system prompt. nil

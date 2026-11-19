@@ -33,8 +33,8 @@ const (
 	DefaultRecallLimit = 5
 	// MaxRecallLimit caps the limit a call may request.
 	MaxRecallLimit = 20
-	// DefaultMaxIndexBytes caps the index text placed in the system prompt.
-	DefaultMaxIndexBytes = 16 << 10
+	// MaxIndexBytes caps the index text placed in the system prompt.
+	MaxIndexBytes = 16 << 10
 	// MaxEntryBytes caps the content of one entry.
 	MaxEntryBytes = 16 << 10
 	// MaxDescriptionChars caps an entry's description, in runes.
