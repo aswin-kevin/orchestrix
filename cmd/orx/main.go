@@ -98,7 +98,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case errors.Is(err, flag.ErrHelp):
 		return exitOK
 	case err != nil:
-		fmt.Fprintln(stderr, "orx:", err)
+		fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
 		return exitUsage
 	}
 
@@ -130,7 +130,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		err = errors.New("interrupted")
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "orx:", err)
+		fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
 		return exitError
 	}
 	if opts.prompt != "" {
@@ -201,7 +201,8 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 	}
 	fail := func(code int, format string, args ...any) (*agent.Agent, func(), int) {
 		shutdown()
-		fmt.Fprintf(stderr, "orx: "+format+"\n", args...)
+		// Errors can quote file names and server text: escape them.
+		fmt.Fprintln(stderr, "orx:", termSafe(fmt.Sprintf(format, args...)))
 		return nil, nil, code
 	}
 	cfg, err := llm.ParseModel(o.model)
@@ -275,7 +276,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 	if o.mcpFile != "" {
 		m, code, err := connectMCP(ctx, o.mcpFile, stderr)
 		if err != nil {
-			return fail(code, "mcp: %v", termSafe(err.Error()))
+			return fail(code, "mcp: %v", err)
 		}
 		cleanups = append(cleanups, func() {
 			if err := m.Close(); err != nil {
@@ -386,7 +387,7 @@ func (c *conversation) turn(ctx context.Context, prompt string, rend *renderer, 
 	ok := true
 	for ev, err := range c.run(ctx, prompt) {
 		if err != nil {
-			fmt.Fprintln(stderr, "orx:", err)
+			fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
 			return false
 		}
 		rend.render(ev)

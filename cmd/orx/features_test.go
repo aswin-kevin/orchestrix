@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 )
@@ -374,5 +377,33 @@ func TestWebToolsAskForApproval(t *testing.T) {
 	}
 	if text, _ := toolResult(t, provider, "f1"); !strings.Contains(text, deniedByUser) {
 		t.Errorf("web_fetch result = %q, want it denied", text)
+	}
+}
+
+func TestSkillsLoadedOnce(t *testing.T) {
+	skillsDir := t.TempDir()
+	writeFile(t, filepath.Join(skillsDir, "release-notes", "SKILL.md"),
+		"---\nname: release-notes\ndescription: Writes release notes from the git log.\n---\nSteps.\n")
+	opt, err := skillsOption([]string{skillsDir}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What orx warned about must be what the agent gets: a change on disk
+	// after the warnings were printed must not reach the agent.
+	if err := os.RemoveAll(filepath.Join(skillsDir, "release-notes")); err != nil {
+		t.Fatal(err)
+	}
+	provider := textTurn()
+	a, err := orchestrix.New(provider, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("hi")}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sys := systemText(provider.Requests[0]); !strings.Contains(sys, "release-notes") {
+		t.Errorf("the agent read the skills directory again: the skill is missing from %q", sys)
 	}
 }

@@ -103,16 +103,17 @@ func skillsOption(dirs []string, stderr io.Writer) (orchestrix.Option, error) {
 	for _, dir := range dirs {
 		sources = append(sources, skills.DirSource(dir))
 	}
-	// The preset loads the sources again; reading them here first is what
-	// surfaces the warnings, which it does not report.
-	_, warnings, err := skills.Load(sources...)
+	// Load once, here, to print the warnings the preset does not report, and
+	// hand the preset the loaded skills, so the agent gets exactly the
+	// skills that were checked (their files are still read from disk).
+	loaded, warnings, err := skills.Load(sources...)
 	if err != nil {
 		return nil, err
 	}
 	for _, w := range warnings {
 		fmt.Fprintln(stderr, "orx: warning: skipped skill:", termSafe(w.Error()))
 	}
-	return orchestrix.WithSkills(skills.Config{Sources: sources}), nil
+	return orchestrix.WithSkills(skills.Config{Skills: loaded}), nil
 }
 
 // connectMCP connects to the servers of the -mcp configuration file, within

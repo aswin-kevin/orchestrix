@@ -358,3 +358,22 @@ func TestThreadWithoutStoreIsUsageError(t *testing.T) {
 		t.Errorf("exit code = %d, want 2", code)
 	}
 }
+
+func TestErrorPathsAreTerminalSafe(t *testing.T) {
+	const evil = "\x1b]0;pwned\x07\x1b[2J"
+	t.Run("flag error", func(t *testing.T) {
+		_, _, stderr := invoke(t, "", llmtest.New(), "-model", "openai:test", "-mode", "plan"+evil, "-p", "hi")
+		if strings.ContainsAny(stderr, "\x1b\x07") || stderr == "" {
+			t.Errorf("stderr = %q, want the error with control characters escaped", stderr)
+		}
+	})
+	t.Run("setup error", func(t *testing.T) {
+		var errOut bytes.Buffer
+		newProvider := func(llm.Config) (llm.Provider, error) { return nil, errors.New("bad key" + evil) }
+		run(context.Background(), []string{"-model", "openai:test", "-dir", t.TempDir(), "-p", "hi"},
+			strings.NewReader(""), &bytes.Buffer{}, &errOut, newProvider)
+		if stderr := errOut.String(); strings.ContainsAny(stderr, "\x1b\x07") || !strings.Contains(stderr, "bad key") {
+			t.Errorf("stderr = %q, want the error with control characters escaped", stderr)
+		}
+	})
+}
