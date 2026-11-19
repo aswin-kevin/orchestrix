@@ -48,15 +48,17 @@ func (t *httpTransport) startListener() {
 
 // listen keeps a GET stream open, reopening it after t.retry, until the
 // transport ends, the server refuses the stream, or DefaultMaxSSERetries
-// attempts in a row fail.
+// attempts in a row fail. A stream that delivered an event or stayed open
+// for at least t.retry was healthy, so its end (a server or proxy dropping
+// an idle stream, say) is not a failure.
 func (t *httpTransport) listen() {
 	failures := 0
 	for {
-		received, stop := t.listenOnce()
+		healthy, stop := t.listenOnce()
 		if stop || t.ctx.Err() != nil {
 			return
 		}
-		if received {
+		if healthy {
 			failures = 0
 		} else if failures++; failures >= DefaultMaxSSERetries {
 			return
@@ -72,9 +74,10 @@ func (t *httpTransport) listen() {
 }
 
 // listenOnce runs one GET stream to its end. It reports whether the stream
-// delivered any event and whether listening should stop for good (405, an
-// expired session, an oversized event).
-func (t *httpTransport) listenOnce() (received, stop bool) {
+// was healthy (delivered an event or stayed open for at least t.retry) and
+// whether listening should stop for good (405, an expired session, an
+// oversized event).
+func (t *httpTransport) listenOnce() (healthy, stop bool) {
 	req, sid, err := t.newRequest(t.ctx, http.MethodGet, nil)
 	if err != nil {
 		return false, true
@@ -94,10 +97,11 @@ func (t *httpTransport) listenOnce() (received, stop bool) {
 	case resp.StatusCode != http.StatusOK || !hasMediaType(resp, mediaTypeEventStream):
 		return false, false
 	}
-	received, err = t.relay(resp.Body)
+	opened := time.Now()
+	received, err := t.relay(resp.Body)
 	if errors.Is(err, sse.ErrTooLarge) {
 		t.end(fmt.Errorf("mcp: http: %w", err))
 		return received, true
 	}
-	return received, false
+	return received || time.Since(opened) >= t.retry, false
 }

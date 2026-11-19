@@ -1,9 +1,6 @@
 package mcp
 
 import (
-	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Header and media type names of the streamable HTTP transport.
@@ -23,9 +21,19 @@ const (
 	mediaTypeEventStream  = "text/event-stream"
 )
 
-// sessionIDBytes is how many random bytes a session id holds; it is sent
-// hex-encoded.
-const sessionIDBytes = 16
+// Defaults of Server.Handler.
+const (
+	// DefaultMaxSessions caps the live sessions of one handler.
+	DefaultMaxSessions = 1024
+	// DefaultSessionIdleTimeout is how long a session may go without a
+	// request or an open stream before it ends.
+	DefaultSessionIdleTimeout = 30 * time.Minute
+)
+
+// eventWriteTimeout bounds writing one SSE event (or a stream's headers): a
+// client that stops reading for this long loses the stream, which releases
+// the goroutines waiting to send on it.
+const eventWriteTimeout = 10 * time.Second
 
 // HandlerOptions configure Server.Handler.
 type HandlerOptions struct {
@@ -38,6 +46,13 @@ type HandlerOptions struct {
 	// stream and notifications such as tools/list_changed are dropped.
 	// false lets each session keep one GET stream open.
 	DisableGET bool
+	// MaxSessions caps the live sessions; an initialize over the cap gets
+	// 503. 0 → DefaultMaxSessions.
+	MaxSessions int
+	// SessionIdleTimeout ends a session that has had no request and no open
+	// stream for this long; later requests for it get 404. 0 →
+	// DefaultSessionIdleTimeout.
+	SessionIdleTimeout time.Duration
 }
 
 // Handler serves s over the streamable HTTP transport, at whatever path it
@@ -45,14 +60,24 @@ type HandlerOptions struct {
 // id is returned in the Mcp-Session-Id header; every other request must
 // carry a known id (missing → 400, unknown → 404). POSTed notifications and
 // responses get 202; requests are answered as JSON or, with
-// StreamResponses, as an SSE stream. GET opens the session's notification
-// stream, DELETE ends the session.
+// StreamResponses, as an SSE stream, and a request reusing the id of one
+// still in flight gets 400. GET opens the session's notification stream,
+// DELETE ends the session.
 //
-// Sessions live until DELETE: a client that never sends one, or whose
-// initialize failed, leaves its session registered. Requests whose Origin header names another host are
-// refused (403) against DNS rebinding; any other authentication is up to
-// the embedding program.
+// A session ends on DELETE, when its initialize fails, or after
+// SessionIdleTimeout without requests or open streams. Expiry is lazy: an
+// idle session is removed when it is next used or when a new session is
+// created, so the handler runs no background goroutine and needs no Close.
+// At most MaxSessions sessions are live; an initialize over the cap gets
+// 503.
+//
+// Requests whose Origin header names a host other than the one the request
+// was sent to are refused (403), against DNS rebinding. Behind a reverse
+// proxy that rewrites Host, browser requests therefore fail the check. Any
+// other authentication is up to the embedding program.
 func (s *Server) Handler(opts HandlerOptions) http.Handler {
+	opts.MaxSessions = positiveOr(opts.MaxSessions, DefaultMaxSessions)
+	opts.SessionIdleTimeout = positiveOr(opts.SessionIdleTimeout, DefaultSessionIdleTimeout)
 	return &httpHandler{srv: s, opts: opts, sessions: map[string]*httpSession{}}
 }
 
@@ -63,46 +88,6 @@ type httpHandler struct {
 
 	mu       sync.Mutex
 	sessions map[string]*httpSession // by session id
-}
-
-// httpSession is one client's session and the open responses its messages
-// can go out on.
-type httpSession struct {
-	sess            *session
-	streamResponses bool
-
-	mu    sync.Mutex
-	posts map[string]*outStream // open POST exchanges by raw request id
-	get   *outStream            // the open GET stream; nil when none
-}
-
-// outMsg is a message on its way to the client; a response ends its POST
-// exchange.
-type outMsg struct {
-	raw      json.RawMessage
-	response bool
-}
-
-// outStream carries messages to one open HTTP response.
-type outStream struct {
-	msgs chan outMsg
-	gone chan struct{} // closed when the response is finished
-}
-
-func newOutStream() *outStream {
-	return &outStream{msgs: make(chan outMsg), gone: make(chan struct{})}
-}
-
-// deliver hands m to the response, dropping it if the response is finished.
-func (st *outStream) deliver(ctx context.Context, m outMsg) error {
-	select {
-	case st.msgs <- m:
-		return nil
-	case <-st.gone:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -128,14 +113,14 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // sameOrigin reports whether r has no Origin header or one naming the host
-// it was sent to.
+// it was sent to (hosts compare case-insensitively).
 func sameOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true
 	}
 	u, err := url.Parse(origin)
-	return err == nil && u.Host == r.Host
+	return err == nil && strings.EqualFold(u.Host, r.Host)
 }
 
 func (h *httpHandler) post(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +128,8 @@ func (h *httpHandler) post(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			http.Error(w, fmt.Sprintf("message over %d bytes", DefaultMaxMessageBytes), http.StatusRequestEntityTooLarge)
+			msg := fmt.Sprintf("message over %d bytes", DefaultMaxMessageBytes)
+			http.Error(w, msg, http.StatusRequestEntityTooLarge)
 			return
 		}
 		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
@@ -151,16 +137,21 @@ func (h *httpHandler) post(w http.ResponseWriter, r *http.Request) {
 	}
 	var m message
 	if err := json.Unmarshal(body, &m); err != nil { // a batch (array) fails here too
+		parseErr := &RPCError{Code: codeParseError, Message: "parse error"}
 		w.Header().Set("Content-Type", mediaTypeJSON)
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write(encode(message{ID: json.RawMessage("null"), Error: &RPCError{Code: codeParseError, Message: "parse error"}}))
+		_, _ = w.Write(encode(message{ID: json.RawMessage("null"), Error: parseErr}))
 		return
 	}
 
+	initialize := m.isRequest() && m.Method == methodInitialize
 	var hs *httpSession
-	if m.isRequest() && m.Method == methodInitialize {
+	if initialize {
 		hs = h.newSession(w)
-	} else if hs = h.lookup(w, r, false); hs == nil {
+	} else {
+		hs = h.lookup(w, r, false)
+	}
+	if hs == nil {
 		return
 	}
 	if !m.isRequest() {
@@ -171,36 +162,53 @@ func (h *httpHandler) post(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		return
 	}
-	h.answer(w, r, hs, string(m.ID), body)
+	if ok := h.answer(w, r, hs, string(m.ID), body); initialize && !ok {
+		h.drop(hs)
+	}
 }
 
 // answer passes a request to the session and writes what it sends back for
-// it: the response as JSON, or its notifications and response as SSE.
-func (h *httpHandler) answer(w http.ResponseWriter, r *http.Request, hs *httpSession, id string, body []byte) {
+// it: the response as JSON, or its notifications and response as SSE. It
+// reports whether a successful response was written.
+func (h *httpHandler) answer(w http.ResponseWriter, r *http.Request, hs *httpSession, id string, body []byte) bool {
 	st := hs.openPost(id)
+	if st == nil {
+		http.Error(w, "request id already in flight in this session", http.StatusBadRequest)
+		return false
+	}
 	defer hs.closePost(id, st)
 	if err := hs.sess.handle(body); err != nil {
 		http.NotFound(w, r)
-		return
+		return false
 	}
-	if h.opts.StreamResponses {
-		startEventStream(w)
+	streaming := h.opts.StreamResponses
+	if streaming && startEventStream(w) != nil {
+		return false
 	}
 	for {
 		select {
 		case m := <-st.msgs:
-			if !h.opts.StreamResponses {
+			if !streaming {
+				if m.failed {
+					w.Header().Del(headerSessionID) // a failed initialize names no session
+				}
 				w.Header().Set("Content-Type", mediaTypeJSON)
-				_, _ = w.Write(m.raw)
-				return
+				_, err := w.Write(m.raw)
+				return err == nil && !m.failed
 			}
-			if writeEvent(w, m.raw) != nil || m.response {
-				return
+			if err := writeEvent(w, m.raw); err != nil {
+				return false
+			}
+			if m.response {
+				return !m.failed
 			}
 		case <-r.Context().Done():
-			return
-		case <-hs.sess.ctx.Done():
-			return
+			return false
+		case <-hs.sess.ctx.Done(): // ended by DELETE or expiry
+			if !streaming {
+				http.Error(w, "session ended", http.StatusNotFound)
+			}
+			return false
 		}
 	}
 }
@@ -221,7 +229,9 @@ func (h *httpHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer hs.closeGet(st)
-	startEventStream(w)
+	if startEventStream(w) != nil {
+		return
+	}
 	for {
 		select {
 		case m := <-st.msgs:
@@ -245,116 +255,18 @@ func (h *httpHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// newSession registers a session and names it in w's headers.
-func (h *httpHandler) newSession(w http.ResponseWriter) *httpSession {
-	buf := make([]byte, sessionIDBytes)
-	_, _ = rand.Read(buf) // never fails
-	id := hex.EncodeToString(buf)
-	hs := &httpSession{streamResponses: h.opts.StreamResponses, posts: map[string]*outStream{}}
-	hs.sess = h.srv.newSession(context.Background(), hs.write)
-	h.mu.Lock()
-	h.sessions[id] = hs
-	h.mu.Unlock()
-	w.Header().Set(headerSessionID, id)
-	return hs
-}
-
-// lookup returns the session r names, removing it when remove is set, or
-// writes 400 (no id) or 404 (unknown id) and returns nil.
-func (h *httpHandler) lookup(w http.ResponseWriter, r *http.Request, remove bool) *httpSession {
-	id := r.Header.Get(headerSessionID)
-	if id == "" {
-		http.Error(w, "missing "+headerSessionID+" header", http.StatusBadRequest)
-		return nil
-	}
-	h.mu.Lock()
-	hs := h.sessions[id]
-	if remove {
-		delete(h.sessions, id)
-	}
-	h.mu.Unlock()
-	if hs == nil {
-		http.Error(w, "unknown session", http.StatusNotFound)
-	}
-	return hs
-}
-
-// write routes a message from the session: a response to its request's
-// POST exchange, a handler notification to its request's stream when
-// responses are streamed, anything else to the GET stream. A message nobody
-// is listening for is dropped.
-func (hs *httpSession) write(ctx context.Context, raw json.RawMessage) error {
-	var m message
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return err
-	}
-	out := outMsg{raw: raw, response: m.Method == ""}
-	hs.mu.Lock()
-	var st *outStream
-	switch {
-	case out.response:
-		st = hs.posts[string(m.ID)]
-	case hs.streamResponses:
-		if id, ok := requestID(ctx); ok {
-			st = hs.posts[id]
-		}
-	}
-	if st == nil && !out.response {
-		st = hs.get
-	}
-	hs.mu.Unlock()
-	if st == nil {
-		return nil
-	}
-	return st.deliver(ctx, out)
-}
-
-func (hs *httpSession) openPost(id string) *outStream {
-	st := newOutStream()
-	hs.mu.Lock()
-	hs.posts[id] = st
-	hs.mu.Unlock()
-	return st
-}
-
-// closePost finishes a POST exchange unless a newer one took over its id.
-func (hs *httpSession) closePost(id string, st *outStream) {
-	close(st.gone)
-	hs.mu.Lock()
-	if hs.posts[id] == st {
-		delete(hs.posts, id)
-	}
-	hs.mu.Unlock()
-}
-
-// openGet registers the session's GET stream, or returns nil when one is
-// already open.
-func (hs *httpSession) openGet() *outStream {
-	hs.mu.Lock()
-	defer hs.mu.Unlock()
-	if hs.get != nil {
-		return nil
-	}
-	hs.get = newOutStream()
-	return hs.get
-}
-
-func (hs *httpSession) closeGet(st *outStream) {
-	close(st.gone)
-	hs.mu.Lock()
-	hs.get = nil
-	hs.mu.Unlock()
-}
-
 // startEventStream sends the headers of an SSE response.
-func startEventStream(w http.ResponseWriter) {
+func startEventStream(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", mediaTypeEventStream)
 	w.Header().Set("Cache-Control", "no-cache")
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(eventWriteTimeout)) // unsupported writers: no deadline
 	w.WriteHeader(http.StatusOK)
-	_ = http.NewResponseController(w).Flush()
+	return rc.Flush()
 }
 
-// writeEvent sends one message as an SSE "message" event and flushes it.
+// writeEvent sends one message as an SSE "message" event and flushes it,
+// within eventWriteTimeout.
 func writeEvent(w http.ResponseWriter, raw json.RawMessage) error {
 	var b strings.Builder
 	b.WriteString("event: message\n")
@@ -364,8 +276,10 @@ func writeEvent(w http.ResponseWriter, raw json.RawMessage) error {
 		b.WriteByte('\n')
 	}
 	b.WriteByte('\n')
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(eventWriteTimeout))
 	if _, err := io.WriteString(w, b.String()); err != nil {
 		return err
 	}
-	return http.NewResponseController(w).Flush()
+	return rc.Flush()
 }

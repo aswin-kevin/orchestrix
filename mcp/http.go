@@ -22,8 +22,8 @@ const (
 	// stream after it ended or failed.
 	DefaultSSERetry = time.Second
 	// DefaultMaxSSERetries is how many GET attempts in a row may fail (fail
-	// to connect, or end without delivering an event) before the client
-	// stops reopening the stream.
+	// to connect, or end within DefaultSSERetry without delivering an
+	// event) before the client stops reopening the stream.
 	DefaultMaxSSERetries = 5
 )
 

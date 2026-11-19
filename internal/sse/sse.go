@@ -34,12 +34,19 @@ var ErrTooLarge = errors.New("sse: event too large")
 // unknown fields and events without data lines are skipped, and an event
 // still pending at EOF is emitted even without a terminating blank line.
 //
-// max (positive) caps the bytes of one event's field lines, and of any single
-// line: going over it ends the sequence with an error wrapping ErrTooLarge,
-// before the oversized line is held in memory whole. A read failure ends the
-// sequence with the read error.
+// max caps the bytes of one event: its field lines ("event", "data", "id")
+// together, plus the line being read. A comment or unknown-field line is not
+// kept, so it does not use up the budget, but it must fit in what is left of
+// it. Going over ends the sequence with an error wrapping ErrTooLarge, before
+// the oversized line is held in memory whole. A max of zero or less ends the
+// sequence with an error at once. A read failure ends the sequence with the
+// read error.
 func Events(r io.Reader, max int) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
+		if max <= 0 {
+			yield(Event{}, fmt.Errorf("sse: max event size %d must be positive", max))
+			return
+		}
 		br := bufio.NewReader(r)
 		var (
 			eventType, lastID string

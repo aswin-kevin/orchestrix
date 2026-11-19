@@ -185,6 +185,13 @@ func (sess *session) dispatch(ctx context.Context, m message) (result any, rpcEr
 	return result, rpcErr
 }
 
+// running reports whether a request with raw id is in flight.
+func (sess *session) running(id string) bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.inflight[id] != nil
+}
+
 func (sess *session) cancelRequest(id string) {
 	sess.mu.Lock()
 	req := sess.inflight[id]

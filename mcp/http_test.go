@@ -66,7 +66,10 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		rw.onHeader = func(status int) {
 			if status == http.StatusOK {
-				rec.getOpen <- struct{}{}
+				select {
+				case rec.getOpen <- struct{}{}:
+				default: // nobody is counting this many streams
+				}
 			}
 		}
 	}
@@ -342,7 +345,12 @@ func TestHTTPWithoutGET(t *testing.T) {
 	if got := callText(t, c, "echo", `{"text":"x"}`); got != "x" {
 		t.Fatalf("echo = %q", got)
 	}
-	// A retry loop would issue a GET every testRetry.
+	// The GET starts after initialized; wait for it, then give a retry loop
+	// (one GET every testRetry) time to show.
+	deadline := time.Now().Add(2 * time.Second)
+	for rec.count(http.MethodGet) == 0 && time.Now().Before(deadline) {
+		time.Sleep(testRetry)
+	}
 	time.Sleep(20 * testRetry)
 	if got := rec.count(http.MethodGet); got != 1 {
 		t.Errorf("GET requests = %d, want exactly 1 (answered 405, never retried)", got)
@@ -378,6 +386,32 @@ func TestHTTPGETGivesUp(t *testing.T) {
 	}
 	if got := callText(t, c, "echo", `{"text":"still up"}`); got != "still up" {
 		t.Errorf("echo after giving up = %q", got)
+	}
+}
+
+func TestHTTPGETKeepsReconnectingAfterIdleStreams(t *testing.T) {
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{})
+	rec.setIntercept(func(w http.ResponseWriter, r *http.Request, _ string) bool {
+		if r.Method != http.MethodGet {
+			return false
+		}
+		// A healthy stream that idles past the retry delay, then is closed
+		// by the server (as proxies do) without having carried an event.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_ = http.NewResponseController(w).Flush()
+		time.Sleep(3 * testRetry)
+		return true
+	})
+	connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientOptions{})
+
+	want := DefaultMaxSSERetries + 2
+	deadline := time.Now().Add(3 * time.Second)
+	for rec.count(http.MethodGet) < want && time.Now().Before(deadline) {
+		time.Sleep(testRetry)
+	}
+	if got := rec.count(http.MethodGet); got < want {
+		t.Errorf("GET attempts = %d, want at least %d: idle disconnects are not failures", got, want)
 	}
 }
 
@@ -585,5 +619,28 @@ func TestDialHTTPValidatesURL(t *testing.T) {
 		if err := tr.Close(); err != nil {
 			t.Errorf("Close without a session: %v", err)
 		}
+	}
+}
+
+func TestHTTPIdleSessionExpires(t *testing.T) {
+	_, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{DisableGET: true, SessionIdleTimeout: 5 * testRetry})
+	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientOptions{})
+	time.Sleep(15 * testRetry)
+	if _, err := c.CallTool(context.Background(), "echo", json.RawMessage(`{"text":"x"}`)); !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("CallTool after idling = %v, want ErrSessionExpired", err)
+	}
+}
+
+func TestHTTPSessionWithOpenStreamDoesNotExpire(t *testing.T) {
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{SessionIdleTimeout: 5 * testRetry})
+	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientOptions{})
+	rec.waitGETOpen(t)
+	time.Sleep(15 * testRetry)
+	// A new session sweeps expired ones; the busy session must survive it.
+	if status, _ := rawInitialize(t, ts.URL, initializeBody); status != http.StatusOK {
+		t.Fatalf("second initialize = %d", status)
+	}
+	if got := callText(t, c, "echo", `{"text":"alive"}`); got != "alive" {
+		t.Errorf("echo = %q", got)
 	}
 }

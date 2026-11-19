@@ -154,3 +154,16 @@ func TestEventsStopsWhenConsumerStops(t *testing.T) {
 		t.Fatalf("consumed %d events, want 1", n)
 	}
 }
+
+func TestEventsRejectsNonPositiveMax(t *testing.T) {
+	for _, max := range []int{0, -1} {
+		var err error
+		for _, e := range Events(strings.NewReader("data: x\n\n"), max) {
+			err = e
+			break
+		}
+		if err == nil || !strings.Contains(err.Error(), "positive") {
+			t.Errorf("Events(max %d) error = %v, want one saying max must be positive", max, err)
+		}
+	}
+}
