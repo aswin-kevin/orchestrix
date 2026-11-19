@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -35,6 +36,10 @@ type duckDuckGo struct{ *searchClient }
 
 // DuckDuckGo returns a backend that searches the HTML endpoint of
 // DuckDuckGo. It fails when the default client cannot be built.
+//
+// DuckDuckGo answers automated clients it distrusts with a bot-challenge
+// page. A challenge answered with status 202 is an error; one answered with
+// 200 has no results, so it comes back as no results.
 func DuckDuckGo(cfg DuckDuckGoConfig) (SearchBackend, error) {
 	sc, err := newSearchClient("duckduckgo", cfg.Client, cfg.UserAgent, cfg.BaseURL, defaultDuckDuckGoURL)
 	if err != nil {
@@ -45,15 +50,21 @@ func DuckDuckGo(cfg DuckDuckGoConfig) (SearchBackend, error) {
 
 // Search implements SearchBackend.
 func (d duckDuckGo) Search(ctx context.Context, query string, n int) ([]SearchResult, error) {
+	if n <= 0 {
+		return nil, nil
+	}
 	form := url.Values{"q": {query}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.baseURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	body, err := d.do(req)
+	body, status, err := d.do(req)
 	if err != nil {
 		return nil, err
+	}
+	if status == http.StatusAccepted {
+		return nil, errors.New("duckduckgo: HTTP 202 (challenge)")
 	}
 	doc, err := html.Parse(bytes.NewReader(body))
 	if err != nil {
@@ -106,8 +117,9 @@ func ddgTarget(href string) string {
 		return ""
 	}
 	u = ddgBase.ResolveReference(u)
-	if target := u.Query().Get("uddg"); target != "" && u.Hostname() == ddgBase.Host && u.Path == ddgBase.Path {
-		return target
+	if u.Hostname() == ddgBase.Host && u.Path == ddgBase.Path {
+		// A redirect link: its target, or nothing when it names none.
+		return u.Query().Get("uddg")
 	}
 	return u.String()
 }

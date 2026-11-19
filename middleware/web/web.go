@@ -106,7 +106,10 @@ type Config struct {
 	// approval.
 	ReadOnly bool
 	// Prompt is the system prompt segment added while web tools are
-	// offered. nil uses DefaultPrompt; a pointer to "" disables it.
+	// offered. nil uses DefaultPrompt, plus a line about web_search when
+	// Search is set; any other value replaces all of that, so the host
+	// then describes web_search itself. A pointer to "" disables the
+	// segment.
 	Prompt *string
 }
 

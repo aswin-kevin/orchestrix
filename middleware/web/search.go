@@ -117,24 +117,31 @@ func newSearchClient(name string, client *http.Client, userAgent, baseURL, defau
 	}, nil
 }
 
-// do sends req and returns the body, read up to maxSearchBody bytes. A
-// status outside 2xx is an error quoting the start of the body.
-func (s *searchClient) do(req *http.Request) ([]byte, error) {
+// do sends req and returns the body and the status. Redirects are not
+// followed, so request headers such as API keys never leave the endpoint: a
+// 3xx is an error like any status outside 2xx, quoting the start of the
+// body. A body over maxSearchBody is an error, not partial data.
+func (s *searchClient) do(req *http.Request) (body []byte, status int, err error) {
 	req.Header.Set("User-Agent", s.userAgent)
-	resp, err := s.client.Do(req)
+	noRedirect := *s.client
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := noRedirect.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %s", s.name, describe(err))
+		return nil, 0, fmt.Errorf("%s: %s", s.name, describe(err))
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSearchBody))
+	body, err = io.ReadAll(io.LimitReader(resp.Body, maxSearchBody+1))
 	if err != nil {
-		return nil, fmt.Errorf("%s: reading response: %s", s.name, describe(err))
+		return nil, 0, fmt.Errorf("%s: reading response: %s", s.name, describe(err))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		quote := body[:min(len(body), errorBodyBytes)]
-		return nil, fmt.Errorf("%s: HTTP %d: %s", s.name, resp.StatusCode, strings.ToValidUTF8(string(quote), "�"))
+		return nil, 0, fmt.Errorf("%s: HTTP %d: %s", s.name, resp.StatusCode, strings.ToValidUTF8(string(quote), "�"))
 	}
-	return body, nil
+	if len(body) > maxSearchBody {
+		return nil, 0, fmt.Errorf("%s: response exceeds %d MiB", s.name, maxSearchBody>>20)
+	}
+	return body, resp.StatusCode, nil
 }
 
 // errNoAPIKey reports a backend config without its API key.
@@ -143,6 +150,9 @@ var errNoAPIKey = errors.New("APIKey is empty")
 // clean trims the fields of results and drops those whose URL is not an absolute http or
 // https URL, at most n of them.
 func clean(results []SearchResult, n int) []SearchResult {
+	if n <= 0 {
+		return nil
+	}
 	out := make([]SearchResult, 0, min(len(results), n))
 	for _, r := range results {
 		r.Title, r.URL, r.Snippet = strings.TrimSpace(r.Title), strings.TrimSpace(r.URL), strings.TrimSpace(r.Snippet)

@@ -45,6 +45,9 @@ func Tavily(cfg TavilyConfig) (SearchBackend, error) {
 
 // Search implements SearchBackend.
 func (t tavily) Search(ctx context.Context, query string, n int) ([]SearchResult, error) {
+	if n <= 0 {
+		return nil, nil
+	}
 	payload, err := json.Marshal(map[string]any{"query": query, "max_results": n})
 	if err != nil {
 		return nil, err
@@ -56,7 +59,7 @@ func (t tavily) Search(ctx context.Context, query string, n int) ([]SearchResult
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	body, err := t.do(req)
+	body, _, err := t.do(req)
 	if err != nil {
 		return nil, err
 	}

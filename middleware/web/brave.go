@@ -46,14 +46,24 @@ func Brave(cfg BraveConfig) (SearchBackend, error) {
 
 // Search implements SearchBackend.
 func (b brave) Search(ctx context.Context, query string, n int) ([]SearchResult, error) {
-	q := url.Values{"q": {query}, "count": {strconv.Itoa(n)}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.baseURL+"?"+q.Encode(), nil)
+	if n <= 0 {
+		return nil, nil
+	}
+	u, err := url.Parse(b.baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("brave: BaseURL: %w", err)
+	}
+	q := u.Query()
+	q.Set("q", query)
+	q.Set("count", strconv.Itoa(n))
+	u.RawQuery = q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("X-Subscription-Token", b.apiKey)
 	req.Header.Set("Accept", "application/json")
-	body, err := b.do(req)
+	body, _, err := b.do(req)
 	if err != nil {
 		return nil, err
 	}

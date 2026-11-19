@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -79,7 +81,7 @@ func TestDuckDuckGoParses(t *testing.T) {
 		{"Plain protocol-relative", "https://example.org/plain", "Second snippet"},
 		{"Direct", "https://example.net/direct", ""},
 	}
-	if fmt.Sprint(res) != fmt.Sprint(want) {
+	if !reflect.DeepEqual(res, want) {
 		t.Fatalf("results = %v\nwant %v", res, want)
 	}
 	if got.method != http.MethodPost || got.header.Get("Content-Type") != "application/x-www-form-urlencoded" {
@@ -112,7 +114,7 @@ func TestBraveRequestAndParse(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []SearchResult{{"One", "https://one.example/", "first"}, {"Two", "https://two.example/", "second"}}
-	if fmt.Sprint(res) != fmt.Sprint(want) {
+	if !reflect.DeepEqual(res, want) {
 		t.Fatalf("results = %v, want %v", res, want)
 	}
 	if got.method != http.MethodGet || got.query.Get("q") != "go lang" || got.query.Get("count") != "3" {
@@ -135,7 +137,7 @@ func TestTavilyRequestAndParse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []SearchResult{{"A", "https://a.example/", "about a"}}; fmt.Sprint(res) != fmt.Sprint(want) {
+	if want := []SearchResult{{"A", "https://a.example/", "about a"}}; !reflect.DeepEqual(res, want) {
 		t.Fatalf("results = %v, want %v", res, want)
 	}
 	if got.method != http.MethodPost || got.header.Get("Authorization") != "Bearer secret" {
@@ -150,14 +152,16 @@ func TestTavilyRequestAndParse(t *testing.T) {
 	}
 }
 
+// backends builds each backend against a test endpoint.
+var backends = map[string]func(url string) (SearchBackend, error){
+	"duckduckgo": func(u string) (SearchBackend, error) { return DuckDuckGo(DuckDuckGoConfig{BaseURL: u}) },
+	"brave":      func(u string) (SearchBackend, error) { return Brave(BraveConfig{APIKey: "k", BaseURL: u}) },
+	"tavily":     func(u string) (SearchBackend, error) { return Tavily(TavilyConfig{APIKey: "k", BaseURL: u}) },
+}
+
 func TestSearchHTTPErrorStatus(t *testing.T) {
 	long := strings.Repeat("x", 1000)
-	build := map[string]func(url string) (SearchBackend, error){
-		"duckduckgo": func(u string) (SearchBackend, error) { return DuckDuckGo(DuckDuckGoConfig{BaseURL: u}) },
-		"brave":      func(u string) (SearchBackend, error) { return Brave(BraveConfig{APIKey: "k", BaseURL: u}) },
-		"tavily":     func(u string) (SearchBackend, error) { return Tavily(TavilyConfig{APIKey: "k", BaseURL: u}) },
-	}
-	for name, mk := range build {
+	for name, mk := range backends {
 		t.Run(name, func(t *testing.T) {
 			srv, _ := backendServer(t, 429, "text/plain", long)
 			b, err := mk(srv.URL)
@@ -176,10 +180,162 @@ func TestSearchHTTPErrorStatus(t *testing.T) {
 }
 
 func TestSearchBodyIsCapped(t *testing.T) {
-	srv, _ := backendServer(t, 200, "application/json", `{"results":[{"title":"A","url":"https://a.example/","content":"`+strings.Repeat("y", maxSearchBody)+`"}]}`)
-	_, err := must(Tavily(TavilyConfig{APIKey: "k", BaseURL: srv.URL})).Search(context.Background(), "q", 5)
+	pad := strings.Repeat("y", maxSearchBody)
+	bodies := map[string]string{
+		"duckduckgo": `<div class="result"><a class="result__a" href="https://a.example/">A</a></div><!--` + pad + `-->`,
+		"brave":      `{"web":{"results":[{"title":"A","url":"https://a.example/","description":"` + pad + `"}]}}`,
+		"tavily":     `{"results":[{"title":"A","url":"https://a.example/","content":"` + pad + `"}]}`,
+	}
+	for name, mk := range backends {
+		t.Run(name, func(t *testing.T) {
+			srv, _ := backendServer(t, 200, "text/plain", bodies[name])
+			b, err := mk(srv.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = b.Search(context.Background(), "q", 5)
+			if err == nil || err.Error() != name+": response exceeds 2 MiB" {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+}
+
+func TestSearchDoesNotFollowRedirects(t *testing.T) {
+	second, hit := backendServer(t, 200, "application/json", `{}`)
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, second.URL, http.StatusFound)
+	}))
+	defer first.Close()
+	_, err := must(Brave(BraveConfig{APIKey: "k", BaseURL: first.URL})).Search(context.Background(), "q", 3)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 302") {
+		t.Fatalf("err = %v", err)
+	}
+	if hit.method != "" {
+		t.Fatalf("redirect target was requested (%s)", hit.method)
+	}
+}
+
+func TestDuckDuckGoDropsEmptyLinks(t *testing.T) {
+	srv, _ := backendServer(t, 200, "text/html", `
+<div class="result"><a class="result__a" href="">Empty</a></div>
+<div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=">Empty uddg</a></div>
+<div class="result"><a class="result__a" href="//duckduckgo.com/l/">Bare</a></div>
+<div class="result"><a class="result__a">No href</a></div>`)
+	res, err := must(DuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 5)
+	if err != nil || len(res) != 0 {
+		t.Fatalf("results = %v, err = %v", res, err)
+	}
+}
+
+func TestDuckDuckGoChallengeIsAnError(t *testing.T) {
+	srv, _ := backendServer(t, 202, "text/html", "<html>verify you are human</html>")
+	_, err := must(DuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 5)
+	if err == nil || err.Error() != "duckduckgo: HTTP 202 (challenge)" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSearchNonPositiveN(t *testing.T) {
+	srv, _ := backendServer(t, 200, "application/json", `{"results":[{"title":"A","url":"https://a.example/"}]}`)
+	for _, n := range []int{0, -1} {
+		res, err := must(Tavily(TavilyConfig{APIKey: "k", BaseURL: srv.URL})).Search(context.Background(), "q", n)
+		if err != nil || res != nil {
+			t.Fatalf("n = %d: results = %v, err = %v", n, res, err)
+		}
+	}
+	if clean([]SearchResult{{"A", "https://a.example/", ""}}, 0) != nil {
+		t.Fatal("clean with n = 0 returned results")
+	}
+}
+
+func TestBraveBaseURLWithQuery(t *testing.T) {
+	srv, got := backendServer(t, 200, "application/json", `{"web":{"results":[]}}`)
+	b := must(Brave(BraveConfig{APIKey: "k", BaseURL: srv.URL + "/search?country=us"}))
+	if _, err := b.Search(context.Background(), "go", 2); err != nil {
+		t.Fatal(err)
+	}
+	if got.query.Get("country") != "us" || got.query.Get("q") != "go" || got.query.Get("count") != "2" {
+		t.Fatalf("query = %v", got.query)
+	}
+}
+
+func TestBraveInvalidJSON(t *testing.T) {
+	srv, _ := backendServer(t, 200, "text/html", "<html>not json</html>")
+	_, err := must(Brave(BraveConfig{APIKey: "k", BaseURL: srv.URL})).Search(context.Background(), "q", 3)
 	if err == nil || !strings.Contains(err.Error(), "invalid response") {
-		t.Fatalf("err = %v, want truncated body to fail to decode", err)
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSearchCancelledContext(t *testing.T) {
+	srv, _ := backendServer(t, 200, "application/json", `{}`)
+	mw, err := New(Config{DisableFetch: true, Search: must(Brave(BraveConfig{APIKey: "k", BaseURL: srv.URL}))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, err := mw.(agent.ToolProvider).Tools()[0].Call(ctx, json.RawMessage(`{"query":"q"}`), &tool.Call{})
+	if err != nil || !res.IsError {
+		t.Fatalf("result = %q (error %v), err = %v", res.Flatten(), res.IsError, err)
+	}
+}
+
+func TestSearchToolAbsentWithoutBackend(t *testing.T) {
+	mw, err := New(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range mw.(agent.ToolProvider).Tools() {
+		if tl.Name() == ToolSearch {
+			t.Fatal("web_search offered without a backend")
+		}
+	}
+}
+
+func TestSearchPermission(t *testing.T) {
+	run := func(cfg Config) (agent.TerminalReason, string) {
+		t.Helper()
+		cfg.DisableFetch, cfg.Search = true, &fakeBackend{results: []SearchResult{{"Hit", "https://hit.example/", "s"}}}
+		mw, err := New(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := llmtest.New(
+			llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "s", Name: ToolSearch, Input: map[string]any{"query": "q"}}}},
+			llmtest.Turn{Text: "done"},
+		)
+		a, err := agent.New(agent.Config{Provider: p, Middleware: []agent.Middleware{mw}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var final *agent.Final
+		for ev, err := range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ev.Kind == agent.KindFinal {
+				final = ev.Final
+			}
+		}
+		var out strings.Builder
+		for _, req := range p.Requests {
+			for _, m := range req.Messages {
+				for _, b := range m.Content {
+					if b.Type == llm.BlockToolResult && len(b.Content) > 0 {
+						out.WriteString(b.Content[0].Text)
+					}
+				}
+			}
+		}
+		return final.Reason, out.String()
+	}
+	if reason, out := run(Config{}); reason != agent.ReasonInterrupted || strings.Contains(out, "hit.example") {
+		t.Fatalf("no rule: reason = %s, output = %q", reason, out)
+	}
+	if reason, out := run(Config{ReadOnly: true}); reason != agent.ReasonCompleted || !strings.Contains(out, "hit.example") {
+		t.Fatalf("read-only: reason = %s, output = %q", reason, out)
 	}
 }
 
