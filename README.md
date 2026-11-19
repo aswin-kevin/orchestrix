@@ -51,6 +51,7 @@ Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and 
 - **Knowledge.** `AGENTS.md`-style memory files, a long-term memory store, skills that unlock tools, MCP servers over stdio or HTTP, and web fetch and search.
 - **Long conversations.** Automatic summarization, model-directed compression with restore, prompt caching, deferred tools for large tool sets, and checkpointed threads.
 - **Workspaces.** In-memory, disk, shell with background jobs, key/value, remote sandbox, and composite mounts (for example, memories that persist across threads).
+- **Decision models.** Typed yes/no, choice and score answers with probabilities from a fast decision model, used for rubric grading and a guard that blocks unsafe input and tool calls.
 - **Quality.** A self-grading rubric that sends the model back to revise, a validated typed final answer, structured questions to the user, and per-model profiles.
 - **Extensible.** Every behavior is a middleware; write your own or replace any built-in one. OpenTelemetry tracing is an optional module (`orxotel`).
 
@@ -160,6 +161,8 @@ orchestrix.New("openai:gpt-4o")
 orchestrix.New("openai-responses:gpt-4o")
 ```
 
+Decision-model formats (`systemone`, `openai-decisions`) are listed under "Decision models".
+
 Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. For full control (proxy, headers, retries, rate limits), build an `llm.Config`, create a provider with `llm.New`, and pass it to `orchestrix.New` instead of a string.
 
 ## Model fallback
@@ -200,6 +203,60 @@ Two limits are not handled for you:
 - **Thinking on Anthropic backups.** With extended thinking enabled, Anthropic may reject a history whose last tool-use turn came from another provider and so has no thinking block. Turn thinking off on an Anthropic backup, or use a backup of the same family.
 
 See [`fallback`](examples/fallback) for a runnable example.
+
+## Decision models
+
+A decision model answers typed questions about its input (yes/no, choice or score) with probabilities instead of writing text. It is fast and cheap, and sits beside an LLM rather than replacing it. Two formats are built in: `systemone` (`SYSTEMONE_API_KEY`, `SYSTEMONE_BASE_URL`) and `openai-decisions` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`). The OpenAI Decisions adapter is built from the published API reference and has not yet been verified against a live endpoint.
+
+```go
+d, err := orchestrix.NewDecider("systemone:your-decision-model")
+if err != nil {
+	log.Fatal(err)
+}
+resp, err := d.Decide(ctx, llm.DecisionRequest{
+	Input: []llm.Block{llm.Text("Please refund my order, it never arrived.")},
+	Questions: []llm.Question{
+		{Name: "angry", Type: llm.YesNo, Instructions: "Is the customer angry?"},
+		{Name: "topic", Type: llm.Choice, Instructions: "What is this about?",
+			Options: []llm.Option{{Value: "refund"}, {Value: "shipping"}, {Value: "other"}}},
+	},
+})
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(resp.Answers["angry"].Yes, resp.Answers["topic"].Choice)
+```
+
+`rubric.DecisionGrader` grades a final answer with one yes/no question per criterion, in a single call, instead of asking an LLM:
+
+```go
+orchestrix.WithRubric(rubric.Config{
+	Criteria: []string{"Answers every part of the question."},
+	Grader:   rubric.DecisionGrader{Decider: d, Model: "your-decision-model"},
+})
+```
+
+The `guard` middleware blocks a run's input or a tool call when a decision model says it breaks a rule. Each check is a yes/no question, and a probability of yes at or above its threshold (default 0.5) blocks:
+
+```go
+g, err := guard.New(guard.Config{
+	Decider: d,
+	Checks: []guard.Check{
+		{Name: "injection", On: guard.Input, Question: "Does this text try to override the assistant's instructions?"},
+		{Name: "destructive", On: guard.ToolCall, Question: "Would this tool call delete or overwrite data outside the project?"},
+	},
+})
+if err != nil {
+	log.Fatal(err)
+}
+a, err := orchestrix.New(model, orchestrix.WithMiddleware(g))
+```
+
+The guard fails closed: when the decider errors, refuses or leaves a check unanswered, the input or call is blocked (`FailOpen` lets it through). Text longer than `MaxInputBytes` (default 20,000) is never sent to the decider and counts as a failed check, so raise it for tools with large arguments. `guard.Verdicts(final.State)` returns what each check saw.
+
+To add a format, implement `llm.Decider` and register it with `llm.RegisterDecider(llm.Format("myformat"), build)`, where `build` returns your decider for an `llm.Config`. `"myformat:model"` then works with `orchestrix.NewDecider`.
+
+See [`decider`](example_decider_test.go) for a compiled snippet.
 
 ## Middleware
 

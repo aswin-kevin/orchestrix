@@ -45,6 +45,10 @@
 // fails with an overload, a rate limit or a network error, the call moves to
 // the next one (see llm.NewFallback).
 //
+// NewDecider builds a decision model (llm.Decider) that answers typed yes/no,
+// choice and score questions with probabilities; the rubric DecisionGrader and
+// the guard middleware use one.
+//
 // The separate module github.com/aswin-kevin/orchestrix/orxotel traces runs,
 // model calls and tool calls with OpenTelemetry (see README, "Tracing").
 //
