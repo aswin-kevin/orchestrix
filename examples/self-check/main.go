@@ -25,7 +25,11 @@ import (
 )
 
 func main() {
-	if err := run(context.Background(), os.Stdout); err != nil {
+	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	if err == nil {
+		err = run(context.Background(), os.Stdout)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "self-check:", exmodel.Safe(err.Error()))
 		os.Exit(1)
 	}
@@ -38,7 +42,10 @@ const criterion = "The answer mentions units for every number."
 var units = []string{"km", "kilometers", "kilometres", "miles"}
 
 // mentionsUnits is the offline grader: a plain Go check, standing in for
-// the model grader so the example runs without a network.
+// the model grader so the example runs without a network. It is
+// deliberately naive (any answer containing one of units passes, even
+// "km" inside another word); it only shows the Grader contract. Use the
+// model grader, or a real check, for anything that matters.
 var mentionsUnits = rubric.GraderFunc(func(_ context.Context, req rubric.GradeRequest) (rubric.Grade, error) {
 	for _, u := range units {
 		if strings.Contains(req.Answer, u) {

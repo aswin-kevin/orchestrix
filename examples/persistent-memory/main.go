@@ -33,7 +33,11 @@ var storeDir = flag.String("store", "", "directory that keeps the memories acros
 
 func main() {
 	flag.Parse()
-	if err := run(context.Background(), os.Stdout); err != nil {
+	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	if err == nil {
+		err = run(context.Background(), os.Stdout)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "persistent-memory:", exmodel.Safe(err.Error()))
 		os.Exit(1)
 	}

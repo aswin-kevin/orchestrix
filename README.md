@@ -108,7 +108,7 @@ The [`examples`](examples) directory holds small, runnable programs, one per fea
 | [`quickstart`](examples/quickstart) | `orchestrix.New` with one typed tool (`tool.New`) that the model calls to answer. |
 | [`approval`](examples/approval) | `WithInterruptOn("write_file")` and a file checkpointer: the run pauses, the pending action is shown, and `Thread.Resume` approves it. |
 | [`persistent-memory`](examples/persistent-memory) | `WithMemory` and `WithMount` over a `kv.DirStore`: a preference recorded in one thread is recalled in another (`-store DIR` keeps it across runs). |
-| [`background-tasks`](examples/background-tasks) | `WithAsync`: the model starts a researcher subagent in the background, waits for it with `check_task` and answers with its result. |
+| [`background-tasks`](examples/background-tasks) | `WithAsync`: the model starts a researcher subagent in the background, checks on it with `check_task` and ends its turn; on the next prompt of the thread a task notification brings the result, and the model answers from it. |
 | [`coordinator`](examples/coordinator) | `coordinator.New` delegating to a researcher and a writer, then `coordinator.RunParallel` answering three questions at once. |
 | [`self-check`](examples/self-check) | `WithRubric`: the first answer fails the rubric, the revision passes, and the grades are printed. |
 
@@ -127,6 +127,10 @@ Set `ORX_MODEL` (the variable `orx` reads) to run the same programs against a re
 ANTHROPIC_API_KEY=... ORX_MODEL=anthropic:claude-sonnet-4-5 go run ./examples/quickstart
 OPENAI_API_KEY=... ORX_MODEL=openai:gpt-4o go run ./examples/coordinator
 ```
+
+A live run stops at once, naming the variable, when the provider's API key is not set.
+
+To copy an example into your own module, replace `exmodel.Model(...)` with your model spec (such as `"anthropic:claude-sonnet-4-5"`) or an `llm.Provider`, leave out `exmodel.Sub` and `exmodel.SubHeld` (a subagent without a `Provider` uses its parent's model) and `exmodel.Check` and `exmodel.WaitTasks` (they only keep the examples predictable), and replace `exmodel.Safe` with your own escaping of model text before printing it: `exmodel` and the `termsafe` package behind it are internal to this repository and cannot be imported from outside it.
 
 ## Providers
 

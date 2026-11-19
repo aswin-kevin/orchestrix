@@ -20,7 +20,11 @@ import (
 )
 
 func main() {
-	if err := run(context.Background(), os.Stdout); err != nil {
+	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	if err == nil {
+		err = run(context.Background(), os.Stdout)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "quickstart:", exmodel.Safe(err.Error()))
 		os.Exit(1)
 	}

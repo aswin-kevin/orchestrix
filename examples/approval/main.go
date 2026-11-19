@@ -29,7 +29,11 @@ import (
 )
 
 func main() {
-	if err := run(context.Background(), os.Stdout); err != nil {
+	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	if err == nil {
+		err = run(context.Background(), os.Stdout)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "approval:", exmodel.Safe(err.Error()))
 		os.Exit(1)
 	}
@@ -37,6 +41,10 @@ func main() {
 
 // threadID names the conversation; reopening it continues where it paused.
 const threadID = "approval-demo"
+
+// maxApprovalRounds caps how many times the run may pause for approval, so
+// a live model that keeps asking cannot loop forever.
+const maxApprovalRounds = 5
 
 func run(ctx context.Context, w io.Writer) error {
 	// A scratch directory for the saved conversation and the workspace.
@@ -87,7 +95,10 @@ func run(ctx context.Context, w io.Writer) error {
 	}
 
 	var written []string
-	for final.Reason == agent.ReasonInterrupted {
+	for round := 1; final.Reason == agent.ReasonInterrupted; round++ {
+		if round > maxApprovalRounds {
+			return fmt.Errorf("still waiting for approval after %d rounds; giving up", maxApprovalRounds)
+		}
 		// Reopen the thread from its checkpoint, as a separate approval
 		// process would, and decide on every pending action.
 		th, err = a.Thread(ctx, threadID)

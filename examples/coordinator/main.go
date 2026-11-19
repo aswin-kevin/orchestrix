@@ -22,7 +22,11 @@ import (
 )
 
 func main() {
-	if err := run(context.Background(), os.Stdout); err != nil {
+	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	if err == nil {
+		err = run(context.Background(), os.Stdout)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "coordinator:", exmodel.Safe(err.Error()))
 		os.Exit(1)
 	}
@@ -129,7 +133,7 @@ func parallel(ctx context.Context, w io.Writer) error {
 		a := shared
 		if a == nil {
 			var err error
-			if a, err = orchestrix.New(exmodel.Model(llmtest.Turn{Text: q.offline})); err != nil {
+			if a, err = orchestrix.New(exmodel.Model(llmtest.Turn{Text: q.offline}), orchestrix.WithMaxTurns(5)); err != nil {
 				return err
 			}
 		}
