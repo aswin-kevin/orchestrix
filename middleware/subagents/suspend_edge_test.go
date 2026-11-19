@@ -122,7 +122,22 @@ func TestInvalidDecisionKeepsSuspendedChild(t *testing.T) {
 	}
 }
 
-func TestParallelSuspendedTasksResumeTogether(t *testing.T) {
+// TestParallelSuspendedTasksResume runs two task calls that both need
+// approval. Usually both start before either suspends, and one interrupt
+// covers both. But the scheduler starts no further call once one is pending,
+// so if task a suspends before task b starts, b runs only on resume and asks
+// in a second round; with one call at a time that always happens. Either
+// way, approving every pending task until the run completes runs both, with
+// their answers in call order.
+func TestParallelSuspendedTasksResume(t *testing.T) {
+	t.Run("parallel", func(t *testing.T) { testSuspendedTasksResume(t, 0, 0) })
+	t.Run("one at a time", func(t *testing.T) { testSuspendedTasksResume(t, 1, 2) })
+}
+
+// testSuspendedTasksResume runs the scenario with the given MaxConcurrency (0
+// for the default); wantRounds, when not 0, is the number of interrupts the
+// run must take.
+func testSuspendedTasksResume(t *testing.T, maxConcurrency, wantRounds int) {
 	var writes atomic.Int32
 	childTurns := func(text string) *llmtest.Scripted {
 		return llmtest.New(
@@ -139,29 +154,45 @@ func TestParallelSuspendedTasksResumeTogether(t *testing.T) {
 		{Name: "a", Description: "A.", SystemPrompt: "a", Provider: childTurns("a"), Tools: writer},
 		{Name: "b", Description: "B.", SystemPrompt: "b", Provider: childTurns("b"), Tools: writer},
 	}})
-	a, err := agent.New(agent.Config{Provider: parent, Backend: memory.New(), Middleware: []agent.Middleware{mw}})
+	a, err := agent.New(agent.Config{
+		Provider: parent, Backend: memory.New(), Middleware: []agent.Middleware{mw},
+		MaxConcurrency: maxConcurrency,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, final := collect(t, context.Background(), a, userInput("go"))
-	pending, ok := agent.Pending(final.State)
-	if !ok || len(pending.Requests) != 2 {
-		t.Fatalf("pending = %+v, want both task calls", pending)
-	}
-	if entries, _ := suspendedKey.Get(final.State); len(entries) != 2 {
-		t.Fatalf("suspended entries = %v, want two", entries)
-	}
-
-	var resumed *agent.Final
-	for ev := range a.Resume(context.Background(), "thread", final.State, []agent.Decision{
-		{ToolUseID: "ta", Type: agent.Approve}, {ToolUseID: "tb", Type: agent.Approve},
-	}) {
-		if ev.Kind == agent.KindFinal {
-			resumed = ev.Final
+	rounds := 0
+	for final.Reason == agent.ReasonInterrupted {
+		rounds++
+		if rounds > 2 {
+			t.Fatal("still interrupted after two rounds of approvals")
+		}
+		pending, _ := agent.Pending(final.State)
+		entries, _ := suspendedKey.Get(final.State)
+		if len(entries) != len(pending.Requests) {
+			t.Fatalf("round %d: %d suspended entries for %d pending calls", rounds, len(entries), len(pending.Requests))
+		}
+		var decisions []agent.Decision
+		for _, req := range pending.Requests {
+			decisions = append(decisions, agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Approve})
+		}
+		state := final.State
+		final = nil
+		for ev := range a.Resume(context.Background(), "thread", state, decisions) {
+			if ev.Kind == agent.KindFinal {
+				final = ev.Final
+			}
+		}
+		if final == nil {
+			t.Fatalf("round %d: resume produced no final event", rounds)
 		}
 	}
-	if resumed.Reason != agent.ReasonCompleted {
-		t.Fatalf("resumed reason = %s (%v), want completed", resumed.Reason, resumed.Err)
+	if final.Reason != agent.ReasonCompleted {
+		t.Fatalf("final reason = %s (%v), want completed", final.Reason, final.Err)
+	}
+	if wantRounds != 0 && rounds != wantRounds {
+		t.Fatalf("took %d rounds of approvals, want %d", rounds, wantRounds)
 	}
 	if writes.Load() != 2 {
 		t.Fatalf("write_file ran %d times, want twice", writes.Load())
@@ -170,7 +201,7 @@ func TestParallelSuspendedTasksResumeTogether(t *testing.T) {
 	if len(results) != 2 || blockText(results[0]) != "finished a" || blockText(results[1]) != "finished b" {
 		t.Fatalf("task results = %+v, want both children's answers in call order", results)
 	}
-	if entries, _ := suspendedKey.Get(resumed.State); len(entries) != 0 {
+	if entries, _ := suspendedKey.Get(final.State); len(entries) != 0 {
 		t.Fatalf("suspended entries = %v, want none", entries)
 	}
 }
