@@ -282,3 +282,29 @@ func TestNewValidation(t *testing.T) {
 		t.Fatalf("valid config: %v, %v", mw, err)
 	}
 }
+
+func TestTaskFallbackSkipsStopContinuations(t *testing.T) {
+	g, _ := verdicts(Grade{Feedback: "more"}, Grade{Pass: true})
+	p := llmtest.New(llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"})
+	first := finalOf(newAgent(t, p, nil, mustNew(t, Config{Criteria: []string{"x"}, Grader: g})), input("original task"))
+	s := first.State
+	// Without the saved task, the fallback reads State, whose last user
+	// message is the feedback the core appended as a stop continuation.
+	taskKey.Delete(s)
+	msgs := s.Messages()
+	fb := msgs[len(msgs)-2]
+	if !strings.Contains(fb.Text(), "<rubric_feedback>") || fb.Meta[agent.InjectedMetaKey] != agent.ContinuationMetaValue {
+		t.Fatalf("feedback message = %q with Meta %v, want a marked stop continuation", fb.Text(), fb.Meta)
+	}
+	if got := taskOf(s); got != "original task" {
+		t.Fatalf("taskOf = %q, want the original task", got)
+	}
+
+	// The same feedback unmarked would be taken for the task.
+	fb.Meta = nil
+	msgs[len(msgs)-2] = fb
+	s.SetMessages(msgs)
+	if got := taskOf(s); got == "original task" {
+		t.Fatal("an unmarked user message after the task was skipped; the fallback must only skip injected ones")
+	}
+}

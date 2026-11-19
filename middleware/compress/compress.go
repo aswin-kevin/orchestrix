@@ -7,11 +7,15 @@
 // The model answers by calling compress_context with a summary of that
 // range. The range then becomes an elision (agent.AddElision): the request
 // view shows the summary in its place, while State keeps every original
-// message. The originals are also archived to the backend, under
-// ArchiveDir/<thread>, and restore_context brings a range back verbatim.
+// message. restore_context removes the elision, so the range shows verbatim
+// again; it needs no archive. With a backend and a thread, the originals are
+// also archived under ArchiveDir/<thread>.
 //
 // A proposal never covers the newest KeepTurns user turns, so the current
 // turn (the run's input and the tool loop answering it) is never touched.
+// Only user input starts a turn: a message marked agent.InjectedMetaKey,
+// such as a stop continuation the agent core appended (rubric feedback, a
+// reminder, a resume prompt) or a background notification, does not.
 // It starts at or after summarize's boundary, never straddles an existing
 // elision, and stays clear of any call left unanswered. A proposal the model
 // ignores closes after DefaultProposalTurns model turns; after MaxIgnored

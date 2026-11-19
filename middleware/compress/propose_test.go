@@ -137,3 +137,30 @@ func TestEmptyPromptKeepsRequest(t *testing.T) {
 		t.Fatalf("system = %q, want only the compression request", sys)
 	}
 }
+
+// continuing keeps a run going with one BeforeStop prompt per call, up to
+// agent.MaxStopContinuations, as rubric feedback or a reminder would.
+type continuing struct{}
+
+func (continuing) Name() string { return "continuing" }
+
+func (continuing) BeforeStop(context.Context, *state.State, *llm.Response) (string, error) {
+	return "try again", nil
+}
+
+func TestStopContinuationsAreNotTurns(t *testing.T) {
+	// The run's input lands at index 10; three stop continuations follow
+	// its answers, as the agent core appends them.
+	p := llmtest.New(llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"}, llmtest.Turn{Text: "c"}, llmtest.Turn{Text: "d"})
+	s := run(t, p, memory.New(), Config{}, seeded(), continuing{})
+	if n := len(s.Messages()); n != 18 {
+		t.Fatalf("state has %d messages, want 18 (input, 4 answers, 3 continuations)", n)
+	}
+
+	wrap(t, New(testCfg), s)
+
+	pr, ok := ProposalKey.Get(s)
+	if !ok || pr.To > 10 {
+		t.Fatalf("proposal = %+v (set %v), want one that ends before the run's input at 10", pr, ok)
+	}
+}

@@ -43,7 +43,8 @@ var (
 	// GradesKey holds the gradings of the current run, oldest first.
 	GradesKey = state.NewKey[[]Record]("rubric.grades", state.Private[[]Record]())
 	// taskKey holds the run's task text, so a run without input (a resumed
-	// one) is still graded against it, not against a stop continuation.
+	// one) is still graded against it, not against a stop continuation. It
+	// persists with the thread until a run with user input replaces it.
 	taskKey = state.NewKey[string]("rubric.task", state.Private[string]())
 )
 

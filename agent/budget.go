@@ -221,8 +221,16 @@ func (r *run) continueWith(prompt string) *Final {
 	if r.budget.expired() {
 		return r.limitReached(ReasonTimeout)
 	}
-	r.state.AppendMessages(llm.UserText(prompt))
+	r.state.AppendMessages(continuation(prompt))
 	return nil
+}
+
+// continuation is prompt as a user message marked injected, so middleware
+// that reasons about user turns does not take it for user input.
+func continuation(prompt string) llm.Message {
+	msg := llm.UserText(prompt)
+	msg.Meta = map[string]string{InjectedMetaKey: ContinuationMetaValue}
+	return msg
 }
 
 // limitReached ends the run with reason, or first enters the settlement
@@ -234,7 +242,7 @@ func (r *run) limitReached(reason TerminalReason) *Final {
 	}
 	r.budget.settleReason = reason
 	r.budget.settleTurnsLeft = r.agent.cfg.Settlement.MaxTurns
-	r.state.AppendMessages(llm.UserText(prompt))
+	r.state.AppendMessages(continuation(prompt))
 	return nil
 }
 
