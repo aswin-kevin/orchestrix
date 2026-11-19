@@ -131,4 +131,7 @@ func TestRegisterPanics(t *testing.T) {
 	mustPanic("empty format", func() {
 		RegisterProvider("", func(Config) (Provider, error) { return nil, nil })
 	})
+	mustPanic("format with colon", func() {
+		RegisterDecider("a:b", func(Config) (Decider, error) { return nil, nil })
+	})
 }

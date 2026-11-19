@@ -3,6 +3,7 @@ package llm
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -49,7 +50,8 @@ func init() {
 // RegisterProvider makes New build a Provider with build for configs of
 // format f, and ParseModel accept "f:model" specs. It replaces any entry
 // already registered for f, including a built-in one or a decision format.
-// It panics if f is empty or build is nil. It is safe for concurrent use.
+// It panics if f is empty or contains a colon (a spec is cut at its first
+// colon) or build is nil. It is safe for concurrent use.
 func RegisterProvider(f Format, build func(Config) (Provider, error)) {
 	if build == nil {
 		panic("llm: RegisterProvider with nil build")
@@ -60,7 +62,8 @@ func RegisterProvider(f Format, build func(Config) (Provider, error)) {
 // RegisterDecider makes NewDecider build a Decider with build for configs of
 // format f, and ParseModel accept "f:model" specs. It replaces any entry
 // already registered for f, including a text format. It panics if f is empty
-// or build is nil. It is safe for concurrent use.
+// or contains a colon (a spec is cut at its first colon) or build is nil. It
+// is safe for concurrent use.
 func RegisterDecider(f Format, build func(Config) (Decider, error)) {
 	if build == nil {
 		panic("llm: RegisterDecider with nil build")
@@ -71,6 +74,9 @@ func RegisterDecider(f Format, build func(Config) (Decider, error)) {
 func register(f Format, e entry) {
 	if f == "" {
 		panic("llm: register with empty format")
+	}
+	if strings.Contains(string(f), ":") {
+		panic("llm: register with a format containing a colon")
 	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
