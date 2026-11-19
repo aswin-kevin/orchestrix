@@ -229,6 +229,9 @@ func (a *approver) readAnswer(ctx, tctx context.Context) (string, error) {
 		fmt.Fprintln(a.out, noAnswerTurnEnded)
 		return "", errTurnEnded
 	}
+	if r, ok := a.out.(answerReader); ok && err == nil {
+		r.answerRead()
+	}
 	return line, err
 }
 

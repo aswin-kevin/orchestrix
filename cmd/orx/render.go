@@ -45,6 +45,9 @@ type renderer struct {
 	// pending holds the leading bytes of a UTF-8 rune split across textAgent's
 	// deltas, until the rest arrives; see splitIncompleteRune.
 	pending string
+	// promptOpen is true while a prompt written through prompts() waits on
+	// its line for an answer, so a status line must start a new one.
+	promptOpen bool
 }
 
 func newRenderer(stdout, stderr io.Writer) *renderer {
@@ -73,7 +76,22 @@ func (w promptWriter) Write(p []byte) (int, error) {
 	w.r.mu.Lock()
 	defer w.r.mu.Unlock()
 	w.r.endText()
+	if len(p) > 0 {
+		w.r.promptOpen = p[len(p)-1] != '\n'
+	}
 	return w.r.stderr.Write(p)
+}
+
+// answerReader is implemented by the prompt writer: the approver calls
+// answerRead once it read the answer to a prompt it printed.
+type answerReader interface{ answerRead() }
+
+// answerRead implements answerReader: the user's answer ended the prompt's
+// line on the terminal.
+func (w promptWriter) answerRead() {
+	w.r.mu.Lock()
+	defer w.r.mu.Unlock()
+	w.r.promptOpen = false
 }
 
 // lockedWriter serializes writes. The approval prompt is written from the
@@ -202,9 +220,14 @@ func (r *renderer) flush() {
 	r.endText()
 }
 
-// status prints one line of tool activity to stderr, dimmed on a terminal.
+// status prints one line of tool activity to stderr, dimmed on a terminal,
+// on a line of its own even when a prompt is still open.
 func (r *renderer) status(line string) {
 	r.endText()
+	if r.promptOpen {
+		fmt.Fprintln(r.stderr)
+		r.promptOpen = false
+	}
 	if r.dim {
 		line = ansiDim + line + ansiReset
 	}
