@@ -18,7 +18,7 @@
 // change it. Outside a run (no agent.Info in the context) the middleware
 // does nothing.
 //
-// The unit is an Adjustment, selected by glob patterns on the model name. It
+// The unit is an Adjustment, selected by name patterns on the model name. It
 // is not an llm.Profile, which describes what a model can do; an Adjustment
 // describes how this agent treats it.
 //
@@ -51,8 +51,8 @@ const ExcludedText = "tool %s is not available for model %s"
 
 // Adjustment is a set of changes applied to the models it matches.
 type Adjustment struct {
-	// Models are glob patterns (* and ?) on the model name; the adjustment
-	// applies when any matches. At least one is required.
+	// Models are name patterns (* and ?, see Patterns) on the model name;
+	// the adjustment applies when any matches. At least one is required.
 	Models []string
 	// PromptSuffix is appended as the last system segment; "" adds none. It
 	// is last among the segments added by middleware that wrap outside
@@ -63,13 +63,16 @@ type Adjustment struct {
 	// none. Search results of other middleware (search_tools) still show the
 	// tool's own description.
 	ToolDescriptions map[string]string
-	// ExcludeTools are glob patterns on tool names: a matching tool is hidden
+	// ExcludeTools are name patterns on tool names: a matching tool is hidden
 	// from the model and refused when called, and left out of search_tools.
 	// A model that names a hidden tool anyway may be asked for approval
 	// before the refusal. Nil excludes none.
 	ExcludeTools []string
 	// ExcludeMiddleware names middleware removed when the agent is built;
-	// names matching nothing are ignored, and "profiles" is rejected. No
+	// names matching nothing are ignored. "profiles" is rejected, and so are
+	// the safety middleware "hitl", "hooks" and "planmode": removing them
+	// for a model would silently drop its approvals, PreToolUse hooks or
+	// plan mode. No
 	// dependency check is made: excluding a middleware that others rely on
 	// (filesystem, for instance) leaves them configured and the agent still
 	// runs. Nil removes none.
@@ -90,9 +93,14 @@ type Middleware struct {
 	adjustments []Adjustment
 }
 
+// safetyMiddleware are the middleware ExcludeMiddleware must not name: they
+// gate what the agent may do.
+var safetyMiddleware = []string{"hitl", "hooks", "planmode"}
+
 // New validates cfg and returns the middleware. It fails for an adjustment
 // without Models, a pattern that is empty, blank or holds a NUL byte, or an
-// ExcludeMiddleware naming the profiles middleware itself.
+// ExcludeMiddleware naming the profiles middleware itself or a safety
+// middleware (hitl, hooks, planmode).
 func New(cfg Config) (*Middleware, error) {
 	adjs := make([]Adjustment, len(cfg.Adjustments))
 	for i, a := range cfg.Adjustments {
@@ -106,6 +114,11 @@ func New(cfg Config) (*Middleware, error) {
 		}
 		if slices.Contains(a.ExcludeMiddleware, MiddlewareName) {
 			return nil, errors.New("profiles: ExcludeMiddleware must not name profiles")
+		}
+		for _, name := range a.ExcludeMiddleware {
+			if slices.Contains(safetyMiddleware, name) {
+				return nil, fmt.Errorf("profiles: adjustment %d excludes the safety middleware %q", i, name)
+			}
 		}
 		a.Models = slices.Clone(a.Models)
 		a.ExcludeTools = slices.Clone(a.ExcludeTools)
@@ -121,13 +134,23 @@ func (m *Middleware) Name() string { return MiddlewareName }
 
 // Match returns copies of the adjustments whose Models match model, in order.
 func (m *Middleware) Match(model string) []Adjustment {
+	out := m.matching(model)
+	for i, a := range out {
+		out[i].Models = slices.Clone(a.Models)
+		out[i].ExcludeTools = slices.Clone(a.ExcludeTools)
+		out[i].ExcludeMiddleware = slices.Clone(a.ExcludeMiddleware)
+		out[i].ToolDescriptions = maps.Clone(a.ToolDescriptions)
+	}
+	return out
+}
+
+// matching returns the adjustments whose Models match model, in order,
+// sharing their slices and maps with m: callers only read them. It spares
+// the per-call cloning on hot paths (HidesTool runs per tool per search).
+func (m *Middleware) matching(model string) []Adjustment {
 	var out []Adjustment
 	for _, a := range m.adjustments {
 		if slices.ContainsFunc(a.Models, func(p string) bool { return matchName(p, model) }) {
-			a.Models = slices.Clone(a.Models)
-			a.ExcludeTools = slices.Clone(a.ExcludeTools)
-			a.ExcludeMiddleware = slices.Clone(a.ExcludeMiddleware)
-			a.ToolDescriptions = maps.Clone(a.ToolDescriptions)
 			out = append(out, a)
 		}
 	}
@@ -163,7 +186,7 @@ func matchName(pattern, name string) bool {
 // ExcludeMiddleware implements agent.MiddlewareExcluder.
 func (m *Middleware) ExcludeMiddleware(model string) []string {
 	var out []string
-	for _, a := range m.Match(model) {
+	for _, a := range m.matching(model) {
 		out = append(out, a.ExcludeMiddleware...)
 	}
 	return out
@@ -187,7 +210,7 @@ func (m *Middleware) forRun(ctx context.Context) (adjs []Adjustment, model strin
 		return nil, "", false
 	}
 	model = info.Model()
-	return m.Match(model), model, true
+	return m.matching(model), model, true
 }
 
 // HidesTool implements agent.ToolHider.

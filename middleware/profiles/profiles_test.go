@@ -233,6 +233,9 @@ func TestNewValidation(t *testing.T) {
 		{"nul pattern", Adjustment{Models: []string{"a\x00b"}}, "invalid pattern"},
 		{"bad tool pattern", Adjustment{Models: []string{"x"}, ExcludeTools: []string{""}}, "invalid pattern"},
 		{"excludes itself", Adjustment{Models: []string{"x"}, ExcludeMiddleware: []string{"profiles"}}, "profiles"},
+		{"excludes hitl", Adjustment{Models: []string{"x"}, ExcludeMiddleware: []string{"hitl"}}, "safety"},
+		{"excludes hooks", Adjustment{Models: []string{"x"}, ExcludeMiddleware: []string{"hooks"}}, "safety"},
+		{"excludes planmode", Adjustment{Models: []string{"x"}, ExcludeMiddleware: []string{"planmode"}}, "safety"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

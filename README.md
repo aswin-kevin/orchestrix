@@ -862,7 +862,7 @@ Only top-level runs are graded; subagents that inherit the stack are not. Gradin
 
 ## Model profiles
 
-`WithProfiles` adjusts the agent for the model it runs. Each `profiles.Adjustment` names the models it applies to and can append a prompt suffix, replace tool descriptions, and leave out tools (`ExcludeTools`) or whole middleware (`ExcludeMiddleware`). An adjustment describes how this agent treats a model; what the model can do (context window, output limit, thinking, images) is its `llm.Profile`, registered with `llm.RegisterProfile`.
+`WithProfiles` adjusts the agent for the model it runs. Each `profiles.Adjustment` names the models it applies to and can append a prompt suffix, replace tool descriptions, and leave out tools (`ExcludeTools`) or whole middleware (`ExcludeMiddleware`, which refuses the safety middleware `hitl`, `hooks` and `planmode`). An adjustment describes how this agent treats a model; what the model can do (context window, output limit, thinking, images) is its `llm.Profile`, registered with `llm.RegisterProfile`.
 
 ```go
 // Imports omitted; model comes from surrounding code.

@@ -106,3 +106,12 @@ func (r *run) callContext(ctx context.Context, toolUseID string) (callCtx contex
 	scope := &toolScope{run: r, toolUseID: toolUseID}
 	return context.WithValue(ctx, toolScopeKey{}, scope), func() { scope.done.Store(true) }
 }
+
+// Model returns the model the run's agent is configured with (Config.Model)
+// without copying the configuration. The zero RunInfo has none.
+func (i RunInfo) Model() string {
+	if i.Agent == nil {
+		return ""
+	}
+	return i.Agent.cfg.Model
+}

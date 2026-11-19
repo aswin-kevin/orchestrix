@@ -71,12 +71,3 @@ func ToolHidden(ctx context.Context, name string) bool {
 	}
 	return false
 }
-
-// Model returns the model the run's agent is configured with (Config.Model)
-// without copying the configuration. The zero RunInfo has none.
-func (i RunInfo) Model() string {
-	if i.Agent == nil {
-		return ""
-	}
-	return i.Agent.cfg.Model
-}

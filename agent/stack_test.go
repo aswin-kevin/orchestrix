@@ -200,7 +200,10 @@ func (p *probe) Name() string { return "probe" }
 func (p *probe) BeforeAgent(ctx context.Context, _ *state.State) error {
 	info, _ := Info(ctx)
 	p.model = info.Model()
-	p.hidden = map[string]bool{"a": ToolHidden(ctx, "a"), "b": ToolHidden(ctx, "b")}
+	p.hidden = map[string]bool{}
+	for _, name := range []string{"a", "b", "c", "d"} {
+		p.hidden[name] = ToolHidden(ctx, name)
+	}
 	return nil
 }
 
@@ -223,5 +226,30 @@ func TestToolHiddenAndRunInfoModel(t *testing.T) {
 	}
 	if (RunInfo{}).Model() != "" {
 		t.Fatal("zero RunInfo has a model")
+	}
+}
+
+func TestToolHiddenConsultsEveryHiderOfTheComposedStack(t *testing.T) {
+	p := &probe{}
+	// A hider after a non-hider still counts; h3, removed for this model,
+	// stays in Config().Middleware but must not hide anything.
+	a := newExcluded(t, "small-1",
+		excluder{name: "ex", remove: []string{"h3"}},
+		ownerStub{id: "plain"},
+		hider{id: "h1", names: []string{"a"}},
+		ownerStub{id: "plain2"},
+		hider{id: "h2", names: []string{"b"}},
+		hider{id: "h3", names: []string{"c"}},
+		p)
+	for _, err := range a.Run(context.Background(), Input{Messages: []llm.Message{llm.UserText("go")}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := map[string]bool{"a": true, "b": true, "c": false, "d": false}; !reflect.DeepEqual(p.hidden, want) {
+		t.Fatalf("hidden = %v, want %v", p.hidden, want)
+	}
+	if got := names(a.Config().Middleware); !slices.Contains(got, "h3") {
+		t.Fatalf("Config().Middleware = %v, want h3 still configured", got)
 	}
 }
