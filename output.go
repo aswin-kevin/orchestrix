@@ -16,6 +16,12 @@ import (
 // (up to agent.OutputRetries times) when it does not match. A completed run
 // carries the normalized answer in Final.Output. New fails when the schema's
 // top-level "type" is not "object".
+//
+// Answers are checked with tool.Validate's subset: type, properties,
+// required, enum, items and additionalProperties: false. A hand-written
+// schema must use []any for enum lists and map[string]any for nested schemas,
+// as tool.SchemaFor produces; other Go types there are not checked. For a Go
+// struct, use WithOutputType instead.
 func WithOutputSchema(schema map[string]any) Option {
 	return func(s *settings) { s.cfg.OutputSchema = schema }
 }
@@ -28,7 +34,10 @@ func WithOutputSchema(schema map[string]any) Option {
 //	type Verdict struct {
 //		Severity string `json:"severity" enum:"low,high"`
 //	}
-//	a, _ := orchestrix.New("claude-sonnet-4-5", orchestrix.WithOutputType[Verdict]())
+//	a, err := orchestrix.New("claude-sonnet-4-5", orchestrix.WithOutputType[Verdict]())
+//	if err != nil {
+//		return err
+//	}
 //	v, _, err := orchestrix.RunTyped[Verdict](ctx, a, in)
 func WithOutputType[T any]() Option {
 	return WithOutputSchema(tool.SchemaFor[T]())
@@ -63,24 +72,40 @@ func Decode[T any](final *agent.Final) (T, error) {
 }
 
 // RunTyped runs a to completion, ignoring intermediate events, and decodes
-// the structured output into T. It returns the first stream error, if any,
-// and otherwise the result of Decode. The Final is returned whenever the run
-// produced one, so an interrupted run can be resumed from it.
+// the structured output into T. The Final is returned whenever the run
+// produced one, also when the run failed, so an interrupted run can be
+// resumed from it and a failed one inspected. With a Final the error is
+// Decode's, which names the reason and wraps Final.Err (so
+// errors.Is(err, agent.ErrInvalidOutput) holds for an invalid_output run);
+// without one it is the stream error.
 //
 //	v, final, err := orchestrix.RunTyped[Verdict](ctx, a, agent.Input{
 //		Messages: []llm.Message{llm.UserText("assess this change")},
 //	})
 func RunTyped[T any](ctx context.Context, a *agent.Agent, in agent.Input) (T, *agent.Final, error) {
 	var final *agent.Final
+	var runErr error
 	for ev, err := range a.Run(ctx, in) {
-		if err != nil {
-			var zero T
-			return zero, final, err
-		}
+		// The Final event carries Final.Err as its stream error, so the
+		// Final is kept before the error is looked at.
 		if ev.Kind == agent.KindFinal {
 			final = ev.Final
 		}
+		if err != nil && runErr == nil {
+			runErr = err
+		}
+	}
+	if final == nil {
+		var zero T
+		if runErr == nil {
+			runErr = errors.New("orchestrix: no final event")
+		}
+		return zero, nil, runErr
 	}
 	v, err := Decode[T](final)
+	if err == nil && runErr != nil {
+		var zero T
+		return zero, final, runErr
+	}
 	return v, final, err
 }

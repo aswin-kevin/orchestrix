@@ -86,8 +86,39 @@ func TestDecodeErrors(t *testing.T) {
 		Reason: agent.ReasonCompleted,
 		Output: json.RawMessage(`{"severity":"low","cves":[],"extra":1}`),
 	})
+	if err == nil || !strings.Contains(err.Error(), "extra") {
+		t.Errorf("unknown field: err = %v, want it to name the field", err)
+	}
+}
+
+func TestRunTypedInvalidOutputKeepsFinal(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"}, llmtest.Turn{Text: "c"})
+	_, final, err := runVerdict(t, p)
+	if !errors.Is(err, agent.ErrInvalidOutput) {
+		t.Errorf("err = %v, want ErrInvalidOutput", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), string(agent.ReasonInvalidOutput)) {
+		t.Errorf("err = %v, want it to name the reason", err)
+	}
+	if final == nil {
+		t.Fatal("final = nil, want the Final of the run")
+	}
+	if final.Text != "c" || final.Reason != agent.ReasonInvalidOutput {
+		t.Errorf("final = %+v, want text c and reason invalid_output", final)
+	}
+}
+
+func TestRunTypedModelErrorKeepsFinal(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{Err: errors.New("model down")})
+	_, final, err := runVerdict(t, p)
 	if err == nil {
-		t.Error("unknown field: want error")
+		t.Error("want error for a failed model call")
+	}
+	if final == nil {
+		t.Fatal("final = nil, want the Final of the run")
+	}
+	if final.Reason == agent.ReasonCompleted {
+		t.Errorf("final reason = %s, want a failure", final.Reason)
 	}
 }
 

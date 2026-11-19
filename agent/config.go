@@ -117,7 +117,12 @@ type Config struct {
 	// must be "object". The run's request then carries one more system
 	// segment, after System, that asks for such an answer. Nested runs
 	// (forks, subagents) are unaffected. The schema is treated as read-only:
-	// Config copies clone only its top-level map. Nil disables it.
+	// Config copies clone only its top-level map. Answers are checked with
+	// tool.Validate's subset (type, properties, required, enum, items and
+	// additionalProperties: false); a hand-written schema must use []any for
+	// enum lists and map[string]any for nested schemas, as tool.SchemaFor
+	// produces, or those parts are not checked. orchestrix.WithOutputType
+	// builds the schema from a Go struct. Nil disables it.
 	OutputSchema map[string]any
 	// NonStreaming makes model calls use Complete instead of Stream.
 	NonStreaming bool
