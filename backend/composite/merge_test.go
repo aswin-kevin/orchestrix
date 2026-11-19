@@ -2,6 +2,7 @@ package composite_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -135,13 +136,14 @@ func TestGrepDoublestarGlobsReachMounts(t *testing.T) {
 	def := memory.New()
 	put(t, def, "/x/memories/b.md", "hit")
 	c := mustNew(t, def, composite.Route{Prefix: "/.orchestrix/memories", Backend: memory.New()})
-	put(t, c, "/.orchestrix/memories/memories/a.md", "hit")
+	put(t, c, "/.orchestrix/memories/a.md", "hit")
+	const a, b = "/.orchestrix/memories/a.md", "/x/memories/b.md"
 	for glob, want := range map[string][]string{
-		"**/memories/*.md":                 {"/.orchestrix/memories/memories/a.md", "/x/memories/b.md"},
-		"/.orchestrix/**/memories/*.md":    {"/.orchestrix/memories/memories/a.md"},
-		"**/.orchestrix/**":                {"/.orchestrix/memories/memories/a.md"},
-		"/.orchestrix/memories/memories/*": {"/.orchestrix/memories/memories/a.md"},
-		"/.orchestrix/*/memories/a.md":     {"/.orchestrix/memories/memories/a.md"},
+		"**/memories/*.md":              {a, b},
+		"/.orchestrix/**/memories/*.md": {a},
+		"**/.orchestrix/**":             {a},
+		"/.orchestrix/memories/*":       {a},
+		"/.orchestrix/*/a.md":           {a},
 	} {
 		ms, err := c.Grep(ctx, "hit", backend.GrepOptions{Glob: glob})
 		if err != nil {
@@ -151,7 +153,7 @@ func TestGrepDoublestarGlobsReachMounts(t *testing.T) {
 		for _, m := range ms {
 			got = append(got, m.Path)
 		}
-		if !slicesEqual(got, want) {
+		if !slices.Equal(got, want) {
 			t.Errorf("Grep glob %q = %q, want %q", glob, got, want)
 		}
 	}
@@ -191,14 +193,26 @@ func TestNestedMountAncestorsProtected(t *testing.T) {
 	wantPaths(t, "Ls(/m/a)", infos, "/m/a/b", "/m/a/other.txt")
 }
 
-func slicesEqual(a, b []string) bool {
-	return len(a) == len(b) && (len(a) == 0 || joined(a) == joined(b))
-}
-
-func joined(s []string) string {
-	out := ""
-	for _, x := range s {
-		out += x + "\x00"
+func TestAncestorsFilteredFromFileResults(t *testing.T) {
+	// A def file standing where a mount ancestor is.
+	def := memory.New()
+	put(t, def, "/m", "hit")
+	c := mustNew(t, def, composite.Route{Prefix: "/m/sub", Backend: memory.New()})
+	ms, err := c.Grep(ctx, "hit", backend.GrepOptions{})
+	if err != nil || len(ms) != 0 {
+		t.Fatalf("Grep = %+v, %v; want none", ms, err)
 	}
-	return out
+
+	// An outer mount's file standing where a nested mount's ancestor is.
+	a := memory.New()
+	put(t, a, "/a", "hit")
+	c2 := mustNew(t, memory.New(), composite.Route{Prefix: "/m", Backend: a}, composite.Route{Prefix: "/m/a/b", Backend: memory.New()})
+	infos, err := c2.Glob(ctx, "**", "/")
+	if err != nil || len(infos) != 0 {
+		t.Fatalf("Glob = %q, %v; want none", paths(infos), err)
+	}
+	ms, err = c2.Grep(ctx, "hit", backend.GrepOptions{})
+	if err != nil || len(ms) != 0 {
+		t.Fatalf("Grep = %+v, %v; want none", ms, err)
+	}
 }

@@ -65,7 +65,7 @@ func (c *composite) Glob(ctx context.Context, pattern, base string) ([]backend.F
 	var out []backend.FileInfo
 	for _, fi := range infos {
 		fi.Path = join(src.prefix, fi.Path)
-		if c.owns(src.prefix, fi.Path) && !c.isAncestor(fi.Path) && backend.MatchGlob(abs, fi.Path) {
+		if c.keeps(src.prefix, fi.Path) && backend.MatchGlob(abs, fi.Path) {
 			out = append(out, fi)
 		}
 	}
@@ -102,7 +102,7 @@ func (c *composite) globMount(ctx context.Context, m mount, rel, abs string, out
 	}
 	for _, fi := range infos {
 		fi.Path = join(m.prefix, fi.Path)
-		if c.owns(m.prefix, fi.Path) && backend.MatchGlob(abs, fi.Path) {
+		if c.keeps(m.prefix, fi.Path) && backend.MatchGlob(abs, fi.Path) {
 			out = append(out, fi)
 		}
 	}
@@ -165,7 +165,7 @@ func (c *composite) grepMount(ctx context.Context, src mount, rel, pattern strin
 		var kept []backend.GrepMatch
 		for _, gm := range got {
 			gm.Path = join(src.prefix, gm.Path)
-			if c.owns(src.prefix, gm.Path) && (src.prefix == "" || absGlob == "" || backend.MatchGlob(absGlob, gm.Path)) {
+			if c.keeps(src.prefix, gm.Path) && (src.prefix == "" || absGlob == "" || backend.MatchGlob(absGlob, gm.Path)) {
 				kept = append(kept, gm)
 			}
 		}

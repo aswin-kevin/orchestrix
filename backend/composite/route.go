@@ -124,3 +124,10 @@ func (c *composite) owns(prefix, p string) bool {
 
 // isAncestor reports whether p is a proper ancestor of some mount.
 func (c *composite) isAncestor(p string) bool { return len(c.under(p)) > 0 }
+
+// keeps reports whether a file result at composite path p belongs to the
+// backend with the given prefix: it is not shadowed by a deeper mount, and it
+// is not a file standing where a mount ancestor (a directory) is.
+func (c *composite) keeps(prefix, p string) bool {
+	return c.owns(prefix, p) && !c.isAncestor(p)
+}
