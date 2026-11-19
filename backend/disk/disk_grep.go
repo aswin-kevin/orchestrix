@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -25,7 +24,7 @@ import (
 // is missed on the ripgrep path. Symlinks are never followed, files over
 // backend.MaxGrepFileBytes are skipped, and .git and node_modules are skipped.
 func (b *Backend) Grep(ctx context.Context, pattern string, opts backend.GrepOptions) ([]backend.GrepMatch, error) {
-	clean, realPath, info, err := b.resolveBase("grep", opts.Path)
+	clean, rel, info, err := b.resolveBase("grep", opts.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -33,12 +32,12 @@ func (b *Backend) Grep(ctx context.Context, pattern string, opts backend.GrepOpt
 	if err != nil {
 		return nil, err
 	}
-	s := search{grepper: grepper, clean: clean, realPath: realPath}
+	s := search{backend: b, grepper: grepper, clean: clean, rel: rel}
 	if !info.IsDir() {
 		return grepFile(s), nil
 	}
 	if b.rgPath != "" {
-		if candidates, ok := b.ripgrepCandidates(ctx, pattern, opts, s); ok {
+		if candidates, ok := b.ripgrepCandidates(ctx, pattern, opts, filepath.Join(b.root, rel)); ok {
 			return grepCandidates(s, candidates), nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -50,26 +49,23 @@ func (b *Backend) Grep(ctx context.Context, pattern string, opts backend.GrepOpt
 
 // search describes one Grep call after its base path has been resolved.
 type search struct {
-	grepper  *backend.Grepper
-	clean    string // virtual path searched
-	realPath string // resolved real path searched
+	backend *Backend
+	grepper *backend.Grepper
+	clean   string // virtual path searched
+	rel     string // resolved path searched, relative to the root
 }
 
-// readForGrep reads a file unless it is not a regular file or is too large to
-// be worth searching.
-func readForGrep(realPath string) ([]byte, bool) {
-	info, err := os.Stat(realPath)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > backend.MaxGrepFileBytes {
-		return nil, false
-	}
-	content, err := os.ReadFile(realPath)
+// readForGrep reads the file at rel (relative to the root) unless it is not a
+// regular file or is too large to be worth searching.
+func (s search) readForGrep(rel string) ([]byte, bool) {
+	content, _, err := s.backend.readRegular(rel, backend.MaxGrepFileBytes)
 	return content, err == nil
 }
 
 // grepFile searches the single file a Grep call was pointed at.
 func grepFile(s search) []backend.GrepMatch {
 	if s.grepper.WantsPath(s.clean) {
-		if content, ok := readForGrep(s.realPath); ok {
+		if content, ok := s.readForGrep(s.rel); ok {
 			s.grepper.AddFile(s.clean, content)
 		}
 	}
@@ -77,7 +73,7 @@ func grepFile(s search) []backend.GrepMatch {
 }
 
 func grepWalk(ctx context.Context, s search) ([]backend.GrepMatch, error) {
-	err := walkFiles(ctx, s.realPath, skippedDirs, func(rel string, _ fs.DirEntry) error {
+	err := s.backend.walkFiles(ctx, s.rel, skippedDirs, func(rel string, _ fs.DirEntry) error {
 		if s.addRelative(rel) {
 			return filepath.SkipAll
 		}
@@ -109,18 +105,19 @@ func (s search) addRelative(rel string) (full bool) {
 	if !s.grepper.WantsPath(virtualPath) {
 		return false
 	}
-	content, ok := readForGrep(filepath.Join(s.realPath, filepath.FromSlash(rel)))
+	content, ok := s.readForGrep(filepath.Join(s.rel, filepath.FromSlash(rel)))
 	return ok && s.grepper.AddFile(virtualPath, content)
 }
 
-// ripgrepCandidates asks ripgrep which files under the search directory may
+// ripgrepCandidates asks ripgrep which files under the real directory dir may
 // contain a match. ok is false when ripgrep failed (for example its regex
 // engine rejected the pattern) and the caller should walk the tree itself.
 // Paths are streamed NUL-separated, so memory is bounded by the file count,
-// not by match volume.
-func (b *Backend) ripgrepCandidates(ctx context.Context, pattern string, opts backend.GrepOptions, s search) (candidates []string, ok bool) {
+// not by match volume. Ripgrep only names candidates; reading them goes
+// through the root like every other file operation.
+func (b *Backend) ripgrepCandidates(ctx context.Context, pattern string, opts backend.GrepOptions, dir string) (candidates []string, ok bool) {
 	cmd := exec.CommandContext(ctx, b.rgPath, rgArgs(pattern, opts)...)
-	cmd.Dir = s.realPath
+	cmd.Dir = dir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil || cmd.Start() != nil {
 		return nil, false
