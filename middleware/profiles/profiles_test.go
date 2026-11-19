@@ -10,7 +10,9 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
+	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
 	"github.com/aswin-kevin/orchestrix/middleware/planning"
+	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -258,5 +260,180 @@ func TestMatch(t *testing.T) {
 	}
 	if got := m.Match("other"); len(got) != 0 {
 		t.Fatalf("Match(other) = %+v", got)
+	}
+}
+
+func TestNameWildcard(t *testing.T) {
+	tests := []struct {
+		pattern, name string
+		want          bool
+	}{
+		{"gpt-*", "gpt-5", true},
+		{"gpt-*", "openai/gpt-5", false},
+		{"*gpt-*", "openai/gpt-5", true},
+		{"small-*", "org/small-1", false},
+		{"*/small-*", "org/small-1", true},
+		{"a//b", "a//b", true},
+		{"a//b", "a/b", false},
+		{"a/*", "a//b", true},
+		{"small-?", "small-1", true},
+		{"small-?", "small-12", false},
+		{"?", "/", true},
+		{"*", "", true},
+	}
+	for _, tc := range tests {
+		if got := matchName(tc.pattern, tc.name); got != tc.want {
+			t.Errorf("matchName(%q, %q) = %v, want %v", tc.pattern, tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestSlashedModelFailsClosedForExclusion(t *testing.T) {
+	m := mustProfiles(t, Adjustment{Models: []string{"*/small-*"}, ExcludeTools: []string{"ns_*"}})
+	if len(m.Match("org/small-1")) != 1 || len(m.Match("small-1")) != 0 {
+		t.Fatal("slashed model names are not matched by * across /")
+	}
+	p := llmtest.New(llmtest.Turn{Text: "ok"})
+	runAgent(t, agent.Config{Provider: p, Model: "org/small-1",
+		Tools: []tool.Tool{stub("ns_a", "A."), stub("b", "B.")}, Middleware: []agent.Middleware{m}})
+	if got := schemaNames(p.Requests[0]); !slices.Equal(got, []string{"b"}) {
+		t.Fatalf("schemas = %v, want b only", got)
+	}
+}
+
+// deferredAndProfiles returns the stack in the order asked for.
+func deferredAndProfiles(m *Middleware, profilesFirst bool) []agent.Middleware {
+	d := deferred.New(deferred.Config{Tools: []string{"execute", "weather"}})
+	if profilesFirst {
+		return []agent.Middleware{m, d}
+	}
+	return []agent.Middleware{d, m}
+}
+
+func TestExcludedToolAbsentFromSearchAndListing(t *testing.T) {
+	for _, profilesFirst := range []bool{false, true} {
+		m := mustProfiles(t, Adjustment{Models: []string{"small-*"}, ExcludeTools: []string{"execute"}})
+		p := llmtest.New(
+			llmtest.Turn{ToolCalls: []llmtest.Call{
+				{ID: "s1", Name: deferred.ToolSearch, Input: obj{"query": "select:execute,weather"}},
+				{ID: "s2", Name: deferred.ToolSearch, Input: obj{"query": "runs command"}},
+			}},
+			llmtest.Turn{Text: "done"},
+		)
+		final := runAgent(t, agent.Config{
+			Provider: p, Model: "small-1",
+			Tools:      []tool.Tool{stub("execute", "Runs a command."), stub("weather", "Weather.")},
+			Middleware: deferredAndProfiles(m, profilesFirst),
+		})
+		blocks := final.State.Messages()[2].Content
+		if txt := blocks[0].Content[0].Text; strings.Contains(txt, "execute") || !strings.Contains(txt, "weather") {
+			t.Fatalf("profilesFirst=%v: select result = %q", profilesFirst, txt)
+		}
+		if txt := blocks[1].Content[0].Text; strings.Contains(txt, "execute") {
+			t.Fatalf("profilesFirst=%v: keyword result leaks execute: %q", profilesFirst, txt)
+		}
+		for _, s := range p.Requests[0].System {
+			if strings.Contains(s, "- execute") {
+				t.Fatalf("profilesFirst=%v: listing leaks execute: %q", profilesFirst, s)
+			}
+		}
+		if !slices.ContainsFunc(p.Requests[0].System, func(s string) bool { return strings.Contains(s, "- weather") }) {
+			t.Fatalf("profilesFirst=%v: weather missing from the listing: %q", profilesFirst, p.Requests[0].System)
+		}
+		if slices.Contains(schemaNames(p.Requests[1]), "execute") {
+			t.Fatalf("profilesFirst=%v: execute was unlocked into the next request", profilesFirst)
+		}
+	}
+}
+
+// requestModelRewriter changes Request.Model before profiles sees it.
+type requestModelRewriter struct{}
+
+func (requestModelRewriter) Name() string { return "rewriter" }
+
+func (requestModelRewriter) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+	req.Request.Model = "big-1"
+	return next(ctx, req)
+}
+
+func TestProfileFollowsConfiguredModelNotRequestModel(t *testing.T) {
+	m := mustProfiles(t, Adjustment{Models: []string{"small-*"}, ExcludeTools: []string{"execute"}})
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "c1", Name: "execute"}}},
+		llmtest.Turn{Text: "done"},
+	)
+	final := runAgent(t, agent.Config{Provider: p, Model: "small-1", Tools: []tool.Tool{stub("execute", "Runs.")},
+		Middleware: []agent.Middleware{requestModelRewriter{}, m}})
+	if got := schemaNames(p.Requests[0]); len(got) != 0 {
+		t.Fatalf("schemas = %v, want none: the profile is the configured model's", got)
+	}
+	if res := firstResult(t, final); !res.IsError {
+		t.Fatalf("call was not refused: %+v", res)
+	}
+}
+
+// segmentAdder appends one system segment.
+type segmentAdder struct{}
+
+func (segmentAdder) Name() string { return "adder" }
+
+func (segmentAdder) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+	req.Request.System = append(slices.Clone(req.Request.System), "from adder")
+	return next(ctx, req)
+}
+
+func TestSuffixLastAfterEarlierMiddleware(t *testing.T) {
+	m := mustProfiles(t, Adjustment{Models: []string{"big-*"}, PromptSuffix: "suffix"})
+	// profiles is outermost-after: listed after the adder, so it wraps the
+	// adder's request change from inside and appends last.
+	p := llmtest.New(llmtest.Turn{Text: "ok"})
+	runAgent(t, agent.Config{Provider: p, Model: "big-1", Middleware: []agent.Middleware{segmentAdder{}, m}})
+	sys := p.Requests[0].System
+	if sys[len(sys)-1] != "suffix" || !slices.Contains(sys, "from adder") {
+		t.Fatalf("system = %q, want suffix last after the adder's segment", sys)
+	}
+}
+
+func TestExcludingFilesystemLeavesAgentRunnable(t *testing.T) {
+	m := mustProfiles(t, Adjustment{Models: []string{"small-*"}, ExcludeMiddleware: []string{"filesystem"}})
+	sk, err := skills.New(skills.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := llmtest.New(llmtest.Turn{Text: "ok"})
+	final := runAgent(t, agent.Config{Provider: p, Model: "small-1",
+		Middleware: []agent.Middleware{m, filesystem.New(filesystem.Config{}), sk}})
+	if final.Reason != agent.ReasonCompleted {
+		t.Fatalf("reason = %s (%v)", final.Reason, final.Err)
+	}
+	if slices.Contains(schemaNames(p.Requests[0]), "read_file") {
+		t.Fatal("filesystem tools still offered")
+	}
+}
+
+func TestMatchReturnsIndependentCopies(t *testing.T) {
+	m := mustProfiles(t, Adjustment{Models: []string{"x"}, ToolDescriptions: map[string]string{"a": "orig"}, ExcludeTools: []string{"t"}})
+	got := m.Match("x")
+	got[0].ToolDescriptions["a"] = "changed"
+	got[0].ExcludeTools[0] = "other"
+	again := m.Match("x")
+	if again[0].ToolDescriptions["a"] != "orig" || again[0].ExcludeTools[0] != "t" {
+		t.Fatalf("Match leaked internal state: %+v", again[0])
+	}
+}
+
+func TestWrapToolOutsideRunPassesThrough(t *testing.T) {
+	m := mustProfiles(t, Adjustment{Models: []string{"*"}, ExcludeTools: []string{"execute"}})
+	called := false
+	_, err := m.WrapTool(context.Background(), &agent.ToolCall{Name: "execute"},
+		func(context.Context, *agent.ToolCall) (tool.Result, error) {
+			called = true
+			return tool.Text("ok"), nil
+		})
+	if err != nil || !called {
+		t.Fatalf("err = %v, called = %v, want pass-through outside a run", err, called)
+	}
+	if m.HidesTool(context.Background(), "execute") {
+		t.Fatal("HidesTool true outside a run")
 	}
 }

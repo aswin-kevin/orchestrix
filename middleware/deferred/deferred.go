@@ -115,6 +115,8 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 		// kept: its calls are still resolved and checked by the loop.
 		t, ok := tools[schema.Name]
 		switch {
+		case ok && agent.ToolHidden(ctx, schema.Name):
+			// Hidden by another middleware: neither shown nor listed.
 		case !ok:
 			shown = append(shown, schema)
 		case gatedLocked(req.State, t):

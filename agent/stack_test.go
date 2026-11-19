@@ -3,10 +3,13 @@ package agent
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -171,5 +174,54 @@ func TestExcluderFiltersOnlyComposedStack(t *testing.T) {
 	}
 	if got := exToolNames(child); !reflect.DeepEqual(got, []string{"planning_tool"}) {
 		t.Fatalf("child tools = %v, want planning_tool", got)
+	}
+}
+
+// hider hides the tool names it holds.
+type hider struct {
+	id    string
+	names []string
+}
+
+func (h hider) Name() string { return h.id }
+
+func (h hider) HidesTool(_ context.Context, name string) bool {
+	return slices.Contains(h.names, name)
+}
+
+// probe records what ToolHidden and RunInfo.Model report inside a run.
+type probe struct {
+	hidden map[string]bool
+	model  string
+}
+
+func (p *probe) Name() string { return "probe" }
+
+func (p *probe) BeforeAgent(ctx context.Context, _ *state.State) error {
+	info, _ := Info(ctx)
+	p.model = info.Model()
+	p.hidden = map[string]bool{"a": ToolHidden(ctx, "a"), "b": ToolHidden(ctx, "b")}
+	return nil
+}
+
+func TestToolHiddenAndRunInfoModel(t *testing.T) {
+	p := &probe{}
+	a := newExcluded(t, "small-1", hider{id: "h", names: []string{"a"}}, p)
+	for _, err := range a.Run(context.Background(), Input{Messages: []llm.Message{llm.UserText("go")}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !p.hidden["a"] || p.hidden["b"] {
+		t.Fatalf("hidden = %v, want a only", p.hidden)
+	}
+	if p.model != "small-1" {
+		t.Fatalf("model = %q", p.model)
+	}
+	if ToolHidden(context.Background(), "a") {
+		t.Fatal("ToolHidden true outside a run")
+	}
+	if (RunInfo{}).Model() != "" {
+		t.Fatal("zero RunInfo has a model")
 	}
 }

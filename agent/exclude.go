@@ -1,6 +1,9 @@
 package agent
 
-import "slices"
+import (
+	"context"
+	"slices"
+)
 
 // MiddlewareExcluder is implemented by middleware that removes other
 // middleware for some models. New calls ExcludeMiddleware(Config.Model) on
@@ -42,4 +45,38 @@ func filterExcluded(stack []Middleware, model string) []Middleware {
 		}
 	}
 	return out
+}
+
+// ToolHider is implemented by middleware that hides tools from the model for
+// the run in ctx, such as a per-model exclusion. Middleware that lists or
+// searches tools (deferred's search_tools) consult ToolHidden and leave out
+// what is hidden, so a hidden tool is not leaked through them. HidesTool must
+// be fast (no I/O) and safe for concurrent use.
+type ToolHider interface {
+	HidesTool(ctx context.Context, name string) bool
+}
+
+// ToolHidden reports whether any middleware of the composed stack of the run
+// ctx belongs to hides the tool name (see ToolHider). It is false outside a
+// run.
+func ToolHidden(ctx context.Context, name string) bool {
+	info, ok := Info(ctx)
+	if !ok || info.Agent == nil {
+		return false
+	}
+	for _, m := range info.Agent.stack {
+		if h, ok := m.(ToolHider); ok && h.HidesTool(ctx, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// Model returns the model the run's agent is configured with (Config.Model)
+// without copying the configuration. The zero RunInfo has none.
+func (i RunInfo) Model() string {
+	if i.Agent == nil {
+		return ""
+	}
+	return i.Agent.cfg.Model
 }

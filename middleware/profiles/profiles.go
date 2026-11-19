@@ -3,6 +3,21 @@
 // differently trained models often need a firmer instruction, a shorter tool
 // description or one less tool than a strong model does.
 //
+// # Patterns
+//
+// Models and ExcludeTools hold name patterns, not path globs: * matches any
+// run of characters, including "/" (so "gpt-*" does not match "org/gpt-5" but
+// "*gpt-*" does), ? matches exactly one character, and nothing is cleaned or
+// collapsed. A pattern must not be empty, blank or contain a NUL byte.
+//
+// # Which model
+//
+// The profile of a run is chosen by the model its agent is configured with
+// (agent.Config.Model), for the model call, the tool call and the hiding of
+// tools alike. A Request.Model rewritten by another middleware does not
+// change it. Outside a run (no agent.Info in the context) the middleware
+// does nothing.
+//
 // The unit is an Adjustment, selected by glob patterns on the model name. It
 // is not an llm.Profile, which describes what a model can do; an Adjustment
 // describes how this agent treats it.
@@ -23,7 +38,6 @@ import (
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/internal/glob"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -40,17 +54,25 @@ type Adjustment struct {
 	// Models are glob patterns (* and ?) on the model name; the adjustment
 	// applies when any matches. At least one is required.
 	Models []string
-	// PromptSuffix is appended as the last system segment; "" adds none.
+	// PromptSuffix is appended as the last system segment; "" adds none. It
+	// is last among the segments added by middleware that wrap outside
+	// profiles; the preset lists profiles last so that it is last overall.
 	PromptSuffix string
 	// ToolDescriptions maps a tool name to the description shown to the
-	// model instead of the tool's own; nil or empty changes none.
+	// model instead of the tool's own in its requests; nil or empty changes
+	// none. Search results of other middleware (search_tools) still show the
+	// tool's own description.
 	ToolDescriptions map[string]string
 	// ExcludeTools are glob patterns on tool names: a matching tool is hidden
-	// from the model and refused when called. Nil excludes none.
+	// from the model and refused when called, and left out of search_tools.
+	// A model that names a hidden tool anyway may be asked for approval
+	// before the refusal. Nil excludes none.
 	ExcludeTools []string
 	// ExcludeMiddleware names middleware removed when the agent is built;
-	// names matching nothing are ignored, and "profiles" is rejected. Nil
-	// removes none.
+	// names matching nothing are ignored, and "profiles" is rejected. No
+	// dependency check is made: excluding a middleware that others rely on
+	// (filesystem, for instance) leaves them configured and the agent still
+	// runs. Nil removes none.
 	ExcludeMiddleware []string
 }
 
@@ -97,15 +119,45 @@ func New(cfg Config) (*Middleware, error) {
 // Name implements agent.Middleware.
 func (m *Middleware) Name() string { return MiddlewareName }
 
-// Match returns the adjustments whose Models match model, in order.
+// Match returns copies of the adjustments whose Models match model, in order.
 func (m *Middleware) Match(model string) []Adjustment {
 	var out []Adjustment
 	for _, a := range m.adjustments {
-		if slices.ContainsFunc(a.Models, func(p string) bool { return glob.Match(p, model) }) {
+		if slices.ContainsFunc(a.Models, func(p string) bool { return matchName(p, model) }) {
+			a.Models = slices.Clone(a.Models)
+			a.ExcludeTools = slices.Clone(a.ExcludeTools)
+			a.ExcludeMiddleware = slices.Clone(a.ExcludeMiddleware)
+			a.ToolDescriptions = maps.Clone(a.ToolDescriptions)
 			out = append(out, a)
 		}
 	}
 	return out
+}
+
+// matchName reports whether name matches pattern: * is any run of characters
+// (including "/"), ? is exactly one character, anything else matches itself.
+func matchName(pattern, name string) bool {
+	p, n := []rune(pattern), []rune(name)
+	pi, ni, star, mark := 0, 0, -1, 0
+	for ni < len(n) {
+		switch {
+		case pi < len(p) && p[pi] == '*':
+			star, mark = pi, ni
+			pi++
+		case pi < len(p) && (p[pi] == '?' || p[pi] == n[ni]):
+			pi++
+			ni++
+		case star >= 0:
+			mark++
+			pi, ni = star+1, mark
+		default:
+			return false
+		}
+	}
+	for pi < len(p) && p[pi] == '*' {
+		pi++
+	}
+	return pi == len(p)
 }
 
 // ExcludeMiddleware implements agent.MiddlewareExcluder.
@@ -117,33 +169,38 @@ func (m *Middleware) ExcludeMiddleware(model string) []string {
 	return out
 }
 
-// excluded reports whether a matching adjustment hides the tool name.
+// excluded reports whether an adjustment hides the tool name.
 func excluded(adjs []Adjustment, name string) bool {
 	for _, a := range adjs {
-		if slices.ContainsFunc(a.ExcludeTools, func(p string) bool { return glob.Match(p, name) }) {
+		if slices.ContainsFunc(a.ExcludeTools, func(p string) bool { return matchName(p, name) }) {
 			return true
 		}
 	}
 	return false
 }
 
-// runModel is the model of the run in ctx, or "".
-func runModel(ctx context.Context) string {
-	if info, ok := agent.Info(ctx); ok {
-		return info.Agent.Config().Model
+// forRun returns the adjustments for the model the run in ctx is configured
+// with, and that model; ok is false outside a run.
+func (m *Middleware) forRun(ctx context.Context) (adjs []Adjustment, model string, ok bool) {
+	info, ok := agent.Info(ctx)
+	if !ok {
+		return nil, "", false
 	}
-	return ""
+	model = info.Model()
+	return m.Match(model), model, true
+}
+
+// HidesTool implements agent.ToolHider.
+func (m *Middleware) HidesTool(ctx context.Context, name string) bool {
+	adjs, _, ok := m.forRun(ctx)
+	return ok && excluded(adjs, name)
 }
 
 // WrapModel implements agent.ModelWrapper. It drops the excluded tools from
 // the request, rewrites descriptions and appends the suffixes.
 func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
-	model := req.Request.Model
-	if model == "" {
-		model = runModel(ctx)
-	}
-	adjs := m.Match(model)
-	if len(adjs) == 0 {
+	adjs, _, ok := m.forRun(ctx)
+	if !ok || len(adjs) == 0 {
 		return next(ctx, req)
 	}
 	descriptions := map[string]string{}
@@ -170,8 +227,8 @@ func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 // WrapTool implements agent.ToolWrapper. It refuses a call to an excluded
 // tool, whether the model called it directly or through a dispatcher.
 func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
-	model := runModel(ctx)
-	if excluded(m.Match(model), call.Name) {
+	adjs, model, ok := m.forRun(ctx)
+	if ok && excluded(adjs, call.Name) {
 		return tool.Errorf(ExcludedText, call.Name, model), nil
 	}
 	return next(ctx, call)
