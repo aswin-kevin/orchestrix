@@ -50,17 +50,22 @@ func newApprover(in *lineReader, out io.Writer) *approver {
 // including end of input, denies the call; cancellation denies it as
 // "cancelled".
 func (a *approver) decide(ctx context.Context, req permission.Request, _ string) permission.Decision {
-	if a.isAlways(req.Tool) {
+	remember := !req.NoRemember
+	if remember && a.isAlways(req.Tool) {
 		return permission.Allowed()
 	}
 	a.prompt.Lock()
 	defer a.prompt.Unlock()
 	// The question answered while this call waited may have been "a" for
 	// the same tool.
-	if a.isAlways(req.Tool) {
+	if remember && a.isAlways(req.Tool) {
 		return permission.Allowed()
 	}
-	fmt.Fprintf(a.out, "%sAllow %s? [y/N/a] ", askerLabel(agent.Info(ctx)), describe(req))
+	choices := "[y/N/a]"
+	if !remember {
+		choices = "[y/N]"
+	}
+	fmt.Fprintf(a.out, "%sAllow %s? %s ", askerLabel(agent.Info(ctx)), describe(req), choices)
 	answer, err := a.in.next(ctx)
 	if ctx.Err() != nil {
 		return permission.Denied(deniedCancelled)
@@ -70,6 +75,9 @@ func (a *approver) decide(ctx context.Context, req permission.Request, _ string)
 	}
 	switch strings.ToLower(strings.TrimSpace(answer)) {
 	case "a":
+		if !remember {
+			return permission.Denied(deniedByUser) // "a" is not offered here
+		}
 		a.allowAlways(req.Tool)
 		return permission.Allowed()
 	case "y":

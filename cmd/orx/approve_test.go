@@ -123,3 +123,48 @@ func TestPromptNamesSubagent(t *testing.T) {
 		})
 	}
 }
+
+func TestApproverNeverRemembersNoRememberRequests(t *testing.T) {
+	out := &promptLog{}
+	ap := newApprover(newLineReader(strings.NewReader("y\ny\na\n")), out)
+	req := permission.Request{Tool: "exit_plan_mode", NoRemember: true}
+
+	if d := ap.decide(context.Background(), req, ""); d.Behavior != permission.Allow {
+		t.Fatalf("first = %+v, want allow", d)
+	}
+	if d := ap.decide(context.Background(), req, ""); d.Behavior != permission.Allow {
+		t.Fatalf("second = %+v, want allow", d)
+	}
+	if d := ap.decide(context.Background(), req, ""); d.Behavior != permission.Deny {
+		t.Fatalf("third = %+v, want deny: a is not offered, so it does not allow", d)
+	}
+	if got := out.prompts(); got != 3 {
+		t.Fatalf("prompts = %d, want 3", got)
+	}
+	if strings.Contains(out.buf.String(), "/a]") {
+		t.Fatalf("prompt offers always for a NoRemember request: %q", out.buf.String())
+	}
+	if ap.isAlways("exit_plan_mode") {
+		t.Fatal("always recorded")
+	}
+}
+
+func TestApproverAlwaysStillWorksForOrdinaryRequests(t *testing.T) {
+	out := &promptLog{}
+	ap := newApprover(newLineReader(strings.NewReader("a\n")), out)
+	req := permission.Request{Tool: "write_file"}
+	ap.decide(context.Background(), req, "")
+	ap.decide(context.Background(), req, "")
+	if got := out.prompts(); got != 1 {
+		t.Fatalf("prompts = %d, want 1", got)
+	}
+}
+
+func TestApproverIgnoresEarlierAlwaysForNoRemember(t *testing.T) {
+	ap := newApprover(newLineReader(strings.NewReader("n\n")), &promptLog{})
+	ap.allowAlways("exit_plan_mode")
+	d := ap.decide(context.Background(), permission.Request{Tool: "exit_plan_mode", NoRemember: true}, "")
+	if d.Behavior != permission.Deny {
+		t.Fatalf("decision = %+v, want the prompt to run and deny", d)
+	}
+}

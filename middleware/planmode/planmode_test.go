@@ -450,3 +450,194 @@ func TestPromptOverride(t *testing.T) {
 		t.Fatalf("system = %q, want only the host segment", p.Requests[0].System)
 	}
 }
+
+// recordingApprover records every request and answers with decide.
+type recordingApprover struct {
+	mu   sync.Mutex
+	reqs []permission.Request
+	next func(n int) permission.Decision
+}
+
+func (r *recordingApprover) approve(_ context.Context, req permission.Request, _ string) permission.Decision {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reqs = append(r.reqs, req)
+	return r.next(len(r.reqs))
+}
+
+func TestApproverRequestShowsPlanAndForbidsRemembering(t *testing.T) {
+	long := strings.Repeat("x", 3*maxSubjectBytes)
+	rec := &recordingApprover{next: func(n int) permission.Decision {
+		if n == 1 {
+			return permission.Decision{Behavior: permission.Deny, Message: "revise"}
+		}
+		return permission.Allowed()
+	}}
+	a, _ := newAgent(t, Config{}, agent.Config{PermissionMode: permission.ModeAcceptEdits, Approver: rec.approve},
+		turn(call("e", ToolEnter, obj{})),
+		turn(exitCall("short plan")),
+		turn(exitCall(long)),
+		llmtest.Turn{Text: "done"},
+	)
+	runToEnd(t, a)
+	if len(rec.reqs) != 2 {
+		t.Fatalf("approver asked %d times, want 2 (an always-allow must not skip it)", len(rec.reqs))
+	}
+	for i, req := range rec.reqs {
+		if !req.NoRemember {
+			t.Errorf("request %d: NoRemember = false", i)
+		}
+	}
+	if rec.reqs[0].Subject != "short plan" {
+		t.Errorf("subject = %q, want the plan", rec.reqs[0].Subject)
+	}
+	got := rec.reqs[1].Subject
+	if len(got) > maxSubjectBytes+len(truncationMarker) || !strings.HasSuffix(got, truncationMarker) {
+		t.Errorf("long subject len %d, suffix ok = %v", len(got), strings.HasSuffix(got, truncationMarker))
+	}
+}
+
+func TestApproverUpdatedInputReplacesPlan(t *testing.T) {
+	rec := &recordingApprover{next: func(int) permission.Decision {
+		return permission.Decision{Behavior: permission.Allow, UpdatedInput: []byte(`{"plan":"edited plan"}`)}
+	}}
+	a, p := newAgent(t, Config{}, agent.Config{PermissionMode: permission.ModeAcceptEdits, Approver: rec.approve},
+		turn(call("e", ToolEnter, obj{})),
+		turn(exitCall("original")),
+		llmtest.Turn{Text: "done"},
+	)
+	final := runToEnd(t, a)
+	if plan, _ := PlanKey.Get(final.State); plan != "edited plan" {
+		t.Fatalf("PlanKey = %q, want the edited plan", plan)
+	}
+	if got := text(resultFor(t, p, "x")); !strings.Contains(got, "edited plan") {
+		t.Fatalf("result = %q", got)
+	}
+}
+
+func TestApproverUpdatedInputInvalidKeepsPlanMode(t *testing.T) {
+	rec := &recordingApprover{next: func(int) permission.Decision {
+		return permission.Decision{Behavior: permission.Allow, UpdatedInput: []byte(`{"plan":""}`)}
+	}}
+	a, p := newAgent(t, Config{}, agent.Config{PermissionMode: permission.ModeAcceptEdits, Approver: rec.approve},
+		turn(call("e", ToolEnter, obj{})),
+		turn(exitCall("original")),
+		llmtest.Turn{Text: "done"},
+	)
+	final := runToEnd(t, a)
+	if got := effectiveMode(a, final.State); got != permission.ModePlan {
+		t.Fatalf("mode = %s, want plan", got)
+	}
+	if !resultFor(t, p, "x").IsError {
+		t.Fatal("empty edited plan should be an error result")
+	}
+}
+
+func TestEnterRefusedInSubagent(t *testing.T) {
+	child, childP := newAgent(t, Config{}, agent.Config{PermissionMode: permission.ModeAcceptEdits},
+		turn(call("e", ToolEnter, obj{})),
+		llmtest.Turn{Text: "child done"},
+	)
+	spawn := tool.New("spawn", "Runs a child.", func(ctx context.Context, _ struct{}, _ *tool.Call) (tool.Result, error) {
+		var last *agent.Final
+		for ev := range child.Run(ctx, agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
+			if ev.Kind == agent.KindFinal {
+				last = ev.Final
+			}
+		}
+		return tool.Text(string(effectiveMode(child, last.State))), nil
+	}, tool.WithReadOnly())
+	parent, parentP := newAgent(t, Config{}, agent.Config{Tools: []tool.Tool{spawn}},
+		turn(call("s", "spawn", obj{})),
+		llmtest.Turn{Text: "done"},
+	)
+	runToEnd(t, parent)
+	r := resultFor(t, childP, "e")
+	if r.IsError || !strings.Contains(text(r), "top-level") {
+		t.Fatalf("child enter result = %+v", r)
+	}
+	if got := text(resultFor(t, parentP, "s")); got != string(permission.ModeAcceptEdits) {
+		t.Fatalf("child mode = %q, want unchanged acceptEdits", got)
+	}
+}
+
+func TestOversizePlanIsRefusedWithoutError(t *testing.T) {
+	approver := func(context.Context, permission.Request, string) permission.Decision {
+		t.Error("approver asked about an oversize plan")
+		return permission.Allowed()
+	}
+	a, p := newAgent(t, Config{DisableEnter: true}, agent.Config{PermissionMode: permission.ModePlan, Approver: approver},
+		turn(exitCall(strings.Repeat("x", maxPlanBytes+1))),
+		llmtest.Turn{Text: "done"},
+	)
+	final := runToEnd(t, a)
+	r := resultFor(t, p, "x")
+	if r.IsError || !strings.Contains(text(r), "Shorten") {
+		t.Fatalf("result = %+v", r)
+	}
+	if got := effectiveMode(a, final.State); got != permission.ModePlan {
+		t.Fatalf("mode = %s", got)
+	}
+}
+
+func TestWriteInSameTurnAsEnterIsDenied(t *testing.T) {
+	w := &writes{}
+	a, p := newAgent(t, Config{},
+		agent.Config{PermissionMode: permission.ModeAcceptEdits, Tools: []tool.Tool{writeFile(w)}},
+		turn(call("e", ToolEnter, obj{}), call("w", "write_file", obj{"path": "/a"})),
+		llmtest.Turn{Text: "done"},
+	)
+	runToEnd(t, a)
+	if got := text(resultFor(t, p, "w")); !strings.Contains(got, planDenied) {
+		t.Fatalf("write result = %q, want %q", got, planDenied)
+	}
+	if w.count() != 0 {
+		t.Fatal("write ran")
+	}
+}
+
+func TestSiblingAfterPendingExitIsHeldThenReevaluated(t *testing.T) {
+	dir := t.TempDir()
+	w := &writes{}
+	a, _ := newCheckpointed(t, dir, Config{}, permission.ModeAcceptEdits, w,
+		turn(call("e", ToolEnter, obj{})),
+		turn(exitCall("plan"), call("w", "write_file", obj{"path": "/a"})),
+	)
+	th, err := a.Thread(context.Background(), "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := drain(t, th.Prompt(context.Background(), "go")); f.Reason != agent.ReasonInterrupted {
+		t.Fatalf("reason = %s (%v)", f.Reason, f.Err)
+	}
+	if w.count() != 0 {
+		t.Fatal("sibling ran while the exit was pending")
+	}
+
+	w2 := &writes{}
+	a2, p2 := newCheckpointed(t, dir, Config{}, permission.ModeAcceptEdits, w2, llmtest.Turn{Text: "done"})
+	th2, _ := pendingOf(t, a2, "t1")
+	f := drain(t, th2.Resume(context.Background(), []agent.Decision{{ToolUseID: "x", Type: agent.Approve}}))
+	if f.Reason != agent.ReasonCompleted {
+		t.Fatalf("reason = %s (%v)", f.Reason, f.Err)
+	}
+	if w2.count() != 1 {
+		t.Fatalf("sibling writes after approval = %d, want 1 (re-evaluated under the restored mode)", w2.count())
+	}
+	if r := resultFor(t, p2, "w"); r.IsError {
+		t.Fatalf("sibling result = %+v", r)
+	}
+}
+
+func TestExitRestoresDontAsk(t *testing.T) {
+	approver := func(context.Context, permission.Request, string) permission.Decision { return permission.Allowed() }
+	a, _ := newAgent(t, Config{}, agent.Config{PermissionMode: permission.ModeDontAsk, Approver: approver},
+		turn(call("e", ToolEnter, obj{})),
+		turn(exitCall("plan")),
+		llmtest.Turn{Text: "done"},
+	)
+	final := runToEnd(t, a)
+	if got := effectiveMode(a, final.State); got != permission.ModeDontAsk {
+		t.Fatalf("mode = %s, want dontAsk", got)
+	}
+}

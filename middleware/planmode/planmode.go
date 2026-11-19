@@ -40,8 +40,22 @@ const (
 	interruptReason = "Approve the plan to leave plan mode"
 )
 
+// Limits on the plan text.
+const (
+	// maxPlanBytes is the largest plan exit_plan_mode accepts.
+	maxPlanBytes = 64 << 10
+	// maxSubjectBytes is how much of the plan the permission request's
+	// Subject (shown to a human Approver) carries before it is cut.
+	maxSubjectBytes = 4 << 10
+	// truncationMarker ends a Subject that was cut.
+	truncationMarker = "\n... [plan truncated]"
+)
+
 // previousKey holds the mode a run was in when it entered plan mode. It is
-// bookkeeping of the run that owns it, so forks do not inherit it.
+// bookkeeping of the run that owns it, so forks do not inherit it: a forked
+// thread that is still in plan mode has no recorded mode, and approving its
+// plan restores Config.ApproveMode, else permission.ModeDefault. It never
+// escalates beyond what the host configured.
 var previousKey = state.NewKey[permission.Mode]("planmode.previous", state.RunLocal[permission.Mode]())
 
 // PlanKey holds the last approved plan. It is private to the run.
@@ -50,8 +64,9 @@ var PlanKey = state.NewKey[string]("planmode.plan", state.Private[string]())
 // Config configures the planmode middleware.
 type Config struct {
 	// ApproveMode is the permission mode after the plan is approved. Empty
-	// means the mode recorded when plan mode was entered, unless that is
-	// plan (the run started in plan mode), in which case permission.ModeDefault.
+	// means the mode recorded when plan mode was entered, unless none is
+	// recorded or it is plan (the run started in plan mode, or is a fork
+	// of a run that entered it), in which case permission.ModeDefault.
 	ApproveMode permission.Mode
 	// DisableEnter offers only exit_plan_mode, for hosts that start runs in
 	// plan mode. False offers both tools.
@@ -99,7 +114,10 @@ func (m *middleware) Tools() []tool.Tool {
 		// read-only and work in plan and dontAsk modes. They are not
 		// concurrency-safe: the mode they set must apply to the calls that
 		// follow in the same turn.
-		tool.WithReadOnly())
+		tool.WithReadOnly(),
+		// The subject lets a human Approver see what it approves; rules
+		// can match it too.
+		tool.WithSubject(planSubject))
 	if m.cfg.DisableEnter {
 		return []tool.Tool{exit}
 	}
@@ -134,7 +152,21 @@ func modeOf(ctx context.Context, s *state.State) permission.Mode {
 	return mode
 }
 
+// planSubject renders the plan of an exit_plan_mode input for an Approver,
+// cut to maxSubjectBytes. The plan is model-written text: it is shown as
+// data and never interpreted.
+func planSubject(raw json.RawMessage) string {
+	var in ExitInput
+	if json.Unmarshal(raw, &in) != nil || len(in.Plan) <= maxSubjectBytes {
+		return in.Plan
+	}
+	return strings.ToValidUTF8(in.Plan[:maxSubjectBytes], "") + truncationMarker
+}
+
 func enter(ctx context.Context, _ EnterInput, c *tool.Call) (tool.Result, error) {
+	if info, _ := agent.Info(ctx); info.Depth > 0 {
+		return tool.Text("Plan mode is for the top-level agent; a subagent cannot enter it. Continue with your task."), nil
+	}
 	if Active(ctx, c.State) {
 		return tool.Text("Already in plan mode."), nil
 	}
@@ -152,8 +184,9 @@ func (m *middleware) exit(ctx context.Context, in ExitInput, c *tool.Call) (tool
 		return tool.Errorf("exit_plan_mode is not available to a subagent: only the top-level agent can leave plan mode"), nil
 	case !Active(ctx, c.State):
 		return tool.Errorf("not in plan mode"), nil
-	case strings.TrimSpace(in.Plan) == "":
-		return tool.Errorf("plan is empty: write the implementation plan and call exit_plan_mode again"), nil
+	}
+	if res := checkPlan(in.Plan); res != nil {
+		return *res, nil
 	}
 	if r := c.Resume; r != nil {
 		switch r.Type {
@@ -164,16 +197,7 @@ func (m *middleware) exit(ctx context.Context, in ExitInput, c *tool.Call) (tool
 		}
 	}
 	if approver := approverOf(info); approver != nil {
-		input, err := json.Marshal(in)
-		if err != nil {
-			return tool.Result{}, err
-		}
-		req := info.Agent.PermissionRequest(ctx, &agent.ToolCall{ID: c.ToolUseID, Name: ToolExit, Input: input, State: c.State})
-		d := approver(ctx, req, approverReason)
-		if d.Behavior != permission.Allow {
-			return refuse(d.Message), nil
-		}
-		return m.approve(c, in.Plan)
+		return m.ask(ctx, info.Agent, approver, in, c)
 	}
 	return tool.Result{}, &agent.Interrupt{
 		Requests: []agent.ActionRequest{{
@@ -182,6 +206,50 @@ func (m *middleware) exit(ctx context.Context, in ExitInput, c *tool.Call) (tool
 		}},
 		ReinvokeOnReject: true,
 	}
+}
+
+// checkPlan returns the result that sends the model back to fix plan, or nil
+// when plan is acceptable. An empty plan is an error; an oversize one is
+// ordinary feedback.
+func checkPlan(plan string) *tool.Result {
+	var res tool.Result
+	switch {
+	case strings.TrimSpace(plan) == "":
+		res = tool.Errorf("plan is empty: write the implementation plan and call exit_plan_mode again")
+	case len(plan) > maxPlanBytes:
+		res = tool.Text(fmt.Sprintf("The plan is too long (%d bytes, limit %d). Shorten it and call exit_plan_mode again.", len(plan), maxPlanBytes))
+	default:
+		return nil
+	}
+	return &res
+}
+
+// ask puts the plan to the run's Approver. The request forbids remembering
+// an answer, so an "always allow" can never turn into silent approvals, and
+// an UpdatedInput in the answer replaces the plan, like an Edit decision.
+func (m *middleware) ask(ctx context.Context, a *agent.Agent, approver permission.Approver, in ExitInput, c *tool.Call) (tool.Result, error) {
+	input, err := json.Marshal(in)
+	if err != nil {
+		return tool.Result{}, err
+	}
+	req := a.PermissionRequest(ctx, &agent.ToolCall{ID: c.ToolUseID, Name: ToolExit, Input: input, State: c.State})
+	req.NoRemember = true
+	d := approver(ctx, req, approverReason)
+	if d.Behavior != permission.Allow {
+		return refuse(d.Message), nil
+	}
+	plan := in.Plan
+	if len(d.UpdatedInput) > 0 {
+		var edited ExitInput
+		if err := json.Unmarshal(d.UpdatedInput, &edited); err != nil {
+			return tool.Errorf("the approver's edited plan is invalid: %v", err), nil
+		}
+		if res := checkPlan(edited.Plan); res != nil {
+			return *res, nil
+		}
+		plan = edited.Plan
+	}
+	return m.approve(c, plan)
 }
 
 func approverOf(info agent.RunInfo) permission.Approver {

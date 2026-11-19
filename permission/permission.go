@@ -165,6 +165,11 @@ type Request struct {
 	Paths []PathAccess
 	// SelfCheck is the tool's own CheckPermission verdict.
 	SelfCheck Decision
+	// NoRemember tells the Approver to ask every time: it must never cache
+	// an "always allow" answer for this request, nor apply one given
+	// earlier. A tool sets it on the request for a decision that must be a
+	// fresh human choice each time. False lets an Approver remember.
+	NoRemember bool
 }
 
 // Approver resolves an Ask decision, typically by prompting a human.
