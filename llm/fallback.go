@@ -3,10 +3,14 @@ package llm
 import (
 	"context"
 	"fmt"
-	"iter"
+	"maps"
 	"sync"
 	"time"
 )
+
+// sourceKey is the Block.ProviderData key under which a fallback provider
+// records the name of the entry that produced a reply block.
+const sourceKey = "orchestrix.source"
 
 // DefaultFallbackCooldown is how long an entry that failed with a fallback
 // error is skipped when FallbackConfig.Cooldown is zero.
@@ -19,8 +23,10 @@ type FallbackEntry struct {
 	// registered profile, MaxTokens is lowered to that profile's MaxOutput;
 	// a model matching no profile leaves MaxTokens unchanged. Optional.
 	Model string
-	// Name identifies the entry in events; it must be unique within the
-	// chain. Default: Model, else "fallback-<index>".
+	// Name identifies the entry in events and in the "orchestrix.source"
+	// stamp on its replies; it must be unique within the chain and stay the
+	// same across runs that share a conversation. Default: Model, else
+	// "fallback-<index>".
 	Name string
 }
 
@@ -59,8 +65,16 @@ func DefaultShouldFallback(err error) bool {
 // the next entry only when ShouldFallback accepts the error. An entry that
 // failed that way is skipped for the cool-down period unless every entry is
 // cooling down. Backups get the request with Model cleared, so they answer
-// with the model they were built with. The returned Provider is safe for
-// concurrent use.
+// with the model they were built with.
+//
+// Every block of a reply is stamped with ProviderData["orchestrix.source"]
+// set to the answering entry's name. Before a request goes to an entry,
+// assistant blocks stamped by another entry (unstamped blocks count as the
+// primary's) are rewritten: thinking blocks are dropped, and other blocks
+// lose their Signature and every other ProviderData key. The caller's
+// messages are never modified. Stream switches only before the attempt has
+// yielded content; see Stream. The returned Provider is safe for concurrent
+// use.
 func NewFallback(cfg FallbackConfig) (Provider, error) {
 	if len(cfg.Entries) < 2 {
 		return nil, fmt.Errorf("llm: fallback needs at least 2 entries, got %d", len(cfg.Entries))
@@ -153,11 +167,13 @@ func (f *fallback) markUp(i int) {
 // prepare returns the request sent to entry i. The primary keeps req.Model;
 // other entries get it cleared so they use their own model. MaxTokens is
 // lowered to the MaxOutput of the profile the entry's Model matches, if any.
-// req itself is never modified.
+// Assistant blocks from another entry are rewritten by provenance. req
+// itself, its messages and their blocks are never modified.
 func (f *fallback) prepare(i int, req Request) Request {
 	if i > 0 {
 		req.Model = ""
 	}
+	req.Messages = f.provenance(i, req.Messages)
 	if m := f.entries[i].Model; m != "" && req.MaxTokens > 0 {
 		if p, ok := lookupProfile(m); ok && p.MaxOutput > 0 && p.MaxOutput < req.MaxTokens {
 			req.MaxTokens = p.MaxOutput
@@ -192,6 +208,7 @@ func (f *fallback) Complete(ctx context.Context, req Request) (*Response, error)
 		resp, err := f.entries[i].Provider.Complete(ctx, f.prepare(i, req))
 		if err == nil {
 			f.markUp(i)
+			stamp(resp, f.entries[i].Name)
 			return resp, nil
 		}
 		if !f.should(err) {
@@ -203,38 +220,102 @@ func (f *fallback) Complete(ctx context.Context, req Request) (*Response, error)
 	return nil, allFailed(last)
 }
 
-// Stream implements Provider. It moves to the next entry only when an
-// attempt's first item is a fallback error; any later error ends the stream.
-func (f *fallback) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
-	return func(yield func(StreamEvent, error) bool) {
-		order := f.order(f.now())
-		var last error
-		for k, i := range order {
-			switched, err := f.streamEntry(ctx, i, req, yield)
-			if !switched {
-				return
-			}
-			last = err
-			f.failed(ctx, order, k, err)
-		}
-		yield(StreamEvent{}, allFailed(last))
+// stamp marks every block of resp as produced by the entry called name. Each
+// ProviderData map is copied first, so a map the provider shares elsewhere is
+// never written.
+func stamp(resp *Response, name string) {
+	if resp == nil {
+		return
+	}
+	for i := range resp.Message.Content {
+		b := &resp.Message.Content[i]
+		pd := make(map[string]string, len(b.ProviderData)+1)
+		maps.Copy(pd, b.ProviderData)
+		pd[sourceKey] = name
+		b.ProviderData = pd
 	}
 }
 
-// streamEntry relays entry i's stream to yield. It returns switched true,
-// with the error, when the first item was a fallback error; nothing has been
-// yielded then.
-func (f *fallback) streamEntry(ctx context.Context, i int, req Request, yield func(StreamEvent, error) bool) (switched bool, err error) {
-	first := true
-	for ev, err := range f.entries[i].Provider.Stream(ctx, f.prepare(i, req)) {
-		if err != nil && first && f.should(err) {
-			return true, err
+// provenance returns msgs as entry i may see them. In assistant messages, a
+// block whose source (its sourceKey stamp, or the primary when unstamped) is
+// not entry i is rewritten: a thinking block is dropped, any other block loses
+// its Signature and every ProviderData key but sourceKey. Other roles carry
+// no provider data and pass through. msgs is never modified: a message or
+// block slice is copied only when something in it changes, and unchanged
+// messages are shared with the result.
+func (f *fallback) provenance(i int, msgs []Message) []Message {
+	var out []Message // nil until the first message changes
+	for k, m := range msgs {
+		if m.Role == RoleAssistant {
+			if blocks, changed := f.foreignBlocks(i, m.Content); changed {
+				if out == nil {
+					out = make([]Message, k, len(msgs))
+					copy(out, msgs[:k])
+				}
+				m.Content = blocks
+			}
 		}
-		first = false
-		if !yield(ev, err) || err != nil {
-			return false, nil
+		if out != nil {
+			out = append(out, m)
 		}
 	}
-	f.markUp(i)
-	return false, nil
+	if out == nil {
+		return msgs
+	}
+	return out
+}
+
+// foreignBlocks applies the provenance rules to blocks for entry i. It
+// returns blocks itself and false when nothing changes, else a new slice.
+func (f *fallback) foreignBlocks(i int, blocks []Block) ([]Block, bool) {
+	name, primary := f.entries[i].Name, f.entries[0].Name
+	var out []Block // nil until the first block changes
+	for k, b := range blocks {
+		src := b.ProviderData[sourceKey]
+		if src == "" {
+			src = primary
+		}
+		keep, changed := true, false
+		if src != name {
+			switch {
+			case b.Type == BlockThinking:
+				keep, changed = false, true
+			case b.Signature != "" || hasOtherKeys(b.ProviderData):
+				b.Signature = ""
+				b.ProviderData = onlySource(b.ProviderData)
+				changed = true
+			}
+		}
+		if changed && out == nil {
+			out = make([]Block, k, len(blocks))
+			copy(out, blocks[:k])
+		}
+		if out != nil && keep {
+			out = append(out, b)
+		}
+	}
+	if out == nil {
+		return blocks, false
+	}
+	return out, true
+}
+
+// hasOtherKeys reports whether pd holds any key but sourceKey.
+func hasOtherKeys(pd map[string]string) bool {
+	for k := range pd {
+		if k != sourceKey {
+			return true
+		}
+	}
+	return false
+}
+
+// onlySource returns a new map holding just pd's sourceKey, or nil when pd
+// has none.
+func onlySource(pd map[string]string) map[string]string {
+	src, ok := pd[sourceKey]
+	if !ok {
+		return nil
+	}
+	return map[string]string{sourceKey: src}
 }

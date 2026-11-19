@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"net"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -257,20 +258,6 @@ func TestFallbackCustomShouldFallback(t *testing.T) {
 	}
 }
 
-func TestFallbackStreamSwitchesOnFirstError(t *testing.T) {
-	p := newFallback(t, llm.FallbackConfig{Entries: []llm.FallbackEntry{
-		{Provider: llmtest.New(overloaded())},
-		{Provider: llmtest.New(llmtest.Turn{Text: "ok"})},
-	}})
-	resp, err := llm.Collect(context.Background(), p, llm.Request{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Message.Text() != "ok" {
-		t.Errorf("text = %q", resp.Message.Text())
-	}
-}
-
 // stub is a Provider that answers every call the same way, for any number of
 // concurrent calls.
 type stub struct {
@@ -349,5 +336,108 @@ func TestFallbackSkipsCoolingWhenOthersFail(t *testing.T) {
 	}
 	if primary.Calls() != 1 {
 		t.Errorf("primary calls = %d, want 1 (still cooling down)", primary.Calls())
+	}
+}
+
+// stampedTurn is a reply with a thinking, a text and a tool-call block.
+func stampedTurn() llmtest.Turn {
+	return llmtest.Turn{Thinking: "hmm", Text: "ok", ToolCalls: []llmtest.Call{{ID: "c1", Name: "look"}}}
+}
+
+func checkStamps(t *testing.T, how string, resp *llm.Response, want string) {
+	t.Helper()
+	if len(resp.Message.Content) != 3 {
+		t.Fatalf("%s: %d blocks, want 3", how, len(resp.Message.Content))
+	}
+	for i, b := range resp.Message.Content {
+		if got := b.ProviderData["orchestrix.source"]; got != want {
+			t.Errorf("%s: block %d (%s) source = %q, want %q", how, i, b.Type, got, want)
+		}
+	}
+}
+
+func TestFallbackStampsBlocks(t *testing.T) {
+	ctx := context.Background()
+	entries := func() []llm.FallbackEntry {
+		return []llm.FallbackEntry{
+			{Provider: llmtest.New(overloaded()), Name: "a"},
+			{Provider: llmtest.New(stampedTurn()), Name: "b"},
+		}
+	}
+	resp, err := llm.Collect(ctx, newFallback(t, llm.FallbackConfig{Entries: entries()}), llm.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkStamps(t, "Collect", resp, "b")
+
+	resp, err = newFallback(t, llm.FallbackConfig{Entries: entries()}).Complete(ctx, llm.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkStamps(t, "Complete", resp, "b")
+
+	// The primary's replies are stamped too.
+	primary := newFallback(t, llm.FallbackConfig{Entries: []llm.FallbackEntry{
+		{Provider: llmtest.New(stampedTurn()), Name: "a"},
+		{Provider: llmtest.New(), Name: "b"},
+	}})
+	resp, err = primary.Complete(ctx, llm.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkStamps(t, "primary", resp, "a")
+}
+
+// provenanceHistory is a conversation with an assistant turn from "b" and
+// an older, unstamped assistant turn.
+func provenanceHistory() []llm.Message {
+	return []llm.Message{
+		llm.UserText("q1"),
+		{Role: llm.RoleAssistant, Content: []llm.Block{
+			{Type: llm.BlockThinking, Thinking: "old", Signature: "sig-a"},
+			llm.TextBlock("a1"),
+		}},
+		llm.UserText("q2"),
+		{Role: llm.RoleAssistant, Content: []llm.Block{
+			{Type: llm.BlockThinking, Thinking: "deep", Signature: "sig-b", ProviderData: map[string]string{"orchestrix.source": "b"}},
+			{Type: llm.BlockText, Text: "b1", ProviderData: map[string]string{"orchestrix.source": "b", "x": "1"}},
+		}},
+		llm.UserText("q3"),
+	}
+}
+
+func TestFallbackProvenanceRoundTrip(t *testing.T) {
+	a := llmtest.New(llmtest.Turn{Text: "ok"}, overloaded())
+	b := llmtest.New(llmtest.Turn{Text: "ok"})
+	p := newFallback(t, llm.FallbackConfig{
+		Entries:  []llm.FallbackEntry{{Provider: a, Name: "a"}, {Provider: b, Name: "b"}},
+		Cooldown: -1,
+	})
+	msgs := provenanceHistory()
+	ctx := context.Background()
+	if _, err := p.Complete(ctx, llm.Request{Messages: msgs}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Complete(ctx, llm.Request{Messages: msgs}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(msgs, provenanceHistory()) {
+		t.Fatalf("caller's messages changed:\n%+v", msgs)
+	}
+
+	toA := a.Requests[0].Messages
+	wantA := provenanceHistory()
+	wantA[3].Content = []llm.Block{
+		{Type: llm.BlockText, Text: "b1", ProviderData: map[string]string{"orchestrix.source": "b"}},
+	}
+	if !reflect.DeepEqual(toA, wantA) {
+		t.Errorf("request to a:\n got %+v\nwant %+v", toA, wantA)
+	}
+
+	toB := b.Requests[0].Messages
+	wantB := provenanceHistory()
+	wantB[1].Content = []llm.Block{llm.TextBlock("a1")}
+	if !reflect.DeepEqual(toB, wantB) {
+		t.Errorf("request to b:\n got %+v\nwant %+v", toB, wantB)
 	}
 }
