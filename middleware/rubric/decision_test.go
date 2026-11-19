@@ -3,6 +3,7 @@ package rubric
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -84,12 +85,34 @@ func TestDecisionGraderRequestShape(t *testing.T) {
 func TestDecisionGraderErrors(t *testing.T) {
 	boom := errors.New("boom")
 	missing := deciderFunc(func(context.Context, llm.DecisionRequest) (*llm.DecisionResponse, error) {
-		return &llm.DecisionResponse{Answers: map[string]llm.Answer{"c1": {Yes: 1}, "c3": {Yes: 1}}}, nil
+		return &llm.DecisionResponse{Answers: map[string]llm.Answer{"c1": {Type: llm.YesNo, Yes: 1}, "c3": {Type: llm.YesNo, Yes: 1}}}, nil
 	})
+	answering := func(a llm.Answer) deciderFunc {
+		return func(_ context.Context, req llm.DecisionRequest) (*llm.DecisionResponse, error) {
+			answers := map[string]llm.Answer{}
+			for _, q := range req.Questions {
+				answers[q.Name] = llm.Answer{Type: llm.YesNo, Yes: 1}
+			}
+			answers["c2"] = a
+			return &llm.DecisionResponse{Answers: answers}, nil
+		}
+	}
+	const invalid = "rubric: decider gave no valid yes/no answer for criterion 2"
 	tests := map[string]struct {
 		g    DecisionGrader
 		want string
 	}{
+		"wrong type":   {DecisionGrader{Decider: answering(llm.Answer{Type: llm.Choice, Choice: "a"})}, invalid},
+		"zero type":    {DecisionGrader{Decider: answering(llm.Answer{Yes: 1})}, invalid},
+		"yes above 1":  {DecisionGrader{Decider: answering(llm.Answer{Type: llm.YesNo, Yes: 1.5})}, invalid},
+		"yes negative": {DecisionGrader{Decider: answering(llm.Answer{Type: llm.YesNo, Yes: -0.1})}, invalid},
+		"yes NaN":      {DecisionGrader{Decider: answering(llm.Answer{Type: llm.YesNo, Yes: math.NaN()})}, invalid},
+		"threshold above 1": {DecisionGrader{Decider: yesValues(1, 1, 1), Threshold: 1.5},
+			"rubric: DecisionGrader Threshold must be between 0 and 1"},
+		"threshold NaN": {DecisionGrader{Decider: yesValues(1, 1, 1), Threshold: math.NaN()},
+			"rubric: DecisionGrader Threshold must be between 0 and 1"},
+		"threshold negative": {DecisionGrader{Decider: yesValues(1, 1, 1), Threshold: -0.5},
+			"rubric: DecisionGrader Threshold must be between 0 and 1"},
 		"nil decider": {DecisionGrader{}, "rubric: DecisionGrader needs a Decider"},
 		"refused":     {DecisionGrader{Decider: deciderFunc(refusing)}, "rubric: decider refused criterion 2"},
 		"missing":     {DecisionGrader{Decider: missing}, "rubric: decider gave no answer for criterion 2"},

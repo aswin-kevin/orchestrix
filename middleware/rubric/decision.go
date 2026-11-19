@@ -22,8 +22,9 @@ type DecisionGrader struct {
 	Decider llm.Decider
 	// Model is sent as the request model; "" means the Decider's default.
 	Model string
-	// Threshold is the probability of yes a criterion needs; 0 means
-	// DefaultPassThreshold.
+	// Threshold is the probability of yes a criterion needs, from 0 to 1; 0
+	// means DefaultPassThreshold. Any other value outside that range makes
+	// Grade fail.
 	Threshold float64
 	// Timeout bounds the grading call; 0 means DefaultGradeTimeout. A call
 	// that runs out fails, and the run completes (grading fails open).
@@ -36,8 +37,11 @@ func (g DecisionGrader) Grade(ctx context.Context, req GradeRequest) (Grade, err
 	if g.Decider == nil {
 		return Grade{}, errors.New("rubric: DecisionGrader needs a Decider")
 	}
+	if g.Threshold != g.Threshold || g.Threshold < 0 || g.Threshold > 1 {
+		return Grade{}, errors.New("rubric: DecisionGrader Threshold must be between 0 and 1")
+	}
 	threshold := g.Threshold
-	if threshold <= 0 {
+	if threshold == 0 {
 		threshold = DefaultPassThreshold
 	}
 	timeout := g.Timeout
@@ -74,6 +78,8 @@ func (g DecisionGrader) Grade(ctx context.Context, req GradeRequest) (Grade, err
 			return Grade{}, fmt.Errorf("rubric: decider gave no answer for criterion %d", i+1)
 		case a.Refused:
 			return Grade{}, fmt.Errorf("rubric: decider refused criterion %d", i+1)
+		case a.Type != llm.YesNo || !(a.Yes >= 0 && a.Yes <= 1):
+			return Grade{}, fmt.Errorf("rubric: decider gave no valid yes/no answer for criterion %d", i+1)
 		case a.Yes < threshold:
 			fmt.Fprintf(&failed, "%d. %s\n", i+1, c)
 		}
