@@ -49,7 +49,10 @@ type HTTPConfig struct {
 	BearerToken string
 	// Client makes the requests; nil → a client of the transport's own with
 	// no overall timeout (streams are long-lived), whose idle connections
-	// are closed on Close.
+	// are closed on Close. Either way redirects are never followed (a
+	// given client is copied with its CheckRedirect replaced), so Headers,
+	// the bearer token and the request body never reach another URL; a 3xx
+	// reply is an error naming the status.
 	Client *http.Client
 	// MaxMessageBytes caps one incoming message (a JSON body or an SSE
 	// event); 0 → DefaultMaxMessageBytes.
@@ -119,20 +122,23 @@ func DialHTTP(cfg HTTPConfig) (Transport, error) {
 	t := &httpTransport{
 		url:      u.String(),
 		header:   header,
-		client:   cfg.Client,
 		max:      positiveOr(cfg.MaxMessageBytes, DefaultMaxMessageBytes),
 		retry:    DefaultSSERetry,
 		msgs:     make(chan json.RawMessage),
 		done:     make(chan struct{}),
 		finished: make(chan struct{}),
 	}
-	if t.client == nil {
+	if cfg.Client != nil {
+		c := *cfg.Client
+		t.client = &c
+	} else {
 		t.client = &http.Client{}
 		if base, ok := http.DefaultTransport.(*http.Transport); ok {
 			t.own = base.Clone()
 			t.client.Transport = t.own
 		}
 	}
+	t.client.CheckRedirect = refuseRedirect
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 	return t, nil
 }
@@ -384,11 +390,18 @@ func readLimited(r io.Reader, max int) ([]byte, error) {
 	return body, nil
 }
 
+// refuseRedirect is the CheckRedirect of every transport client: the 3xx
+// response is returned as is, so a redirect is never followed.
+func refuseRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
 // statusError describes an error response by its status and the start of
-// its body, and closes the body.
+// its body, and closes the body. A 3xx is reported as a refused redirect.
 func statusError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 	drainClose(resp.Body)
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return fmt.Errorf("mcp: http: POST: %s: redirect to %q not followed", resp.Status, resp.Header.Get("Location"))
+	}
 	return fmt.Errorf("mcp: http: POST: %s: %q", resp.Status, bytes.TrimSpace(body))
 }
 

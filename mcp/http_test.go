@@ -644,3 +644,50 @@ func TestHTTPSessionWithOpenStreamDoesNotExpire(t *testing.T) {
 		t.Errorf("echo = %q", got)
 	}
 }
+
+func TestHTTPRefusesRedirects(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var reached atomic.Int32
+			var leaked sync.Map // header or body seen by the second server
+			other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reached.Add(1)
+				if v := r.Header.Get("X-Api-Key"); v != "" {
+					leaked.Store("header", v)
+				}
+				if body, _ := io.ReadAll(r.Body); len(body) > 0 {
+					leaked.Store("body", string(body))
+				}
+				w.WriteHeader(http.StatusAccepted)
+			}))
+			defer other.Close()
+			first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, other.URL, status)
+			}))
+			defer first.Close()
+
+			for _, client := range []*http.Client{nil, {}} {
+				tr, err := DialHTTP(HTTPConfig{
+					URL:     first.URL,
+					Headers: map[string]string{"X-Api-Key": "secret"},
+					Client:  client,
+				})
+				if err != nil {
+					t.Fatalf("DialHTTP: %v", err)
+				}
+				err = tr.Send(context.Background(), json.RawMessage(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
+				tr.Close()
+				if err == nil || !strings.Contains(err.Error(), fmt.Sprint(status)) || !strings.Contains(err.Error(), "redirect") {
+					t.Errorf("Send (own client %v) error = %v, want a redirect error naming %d", client == nil, err, status)
+				}
+			}
+			if n := reached.Load(); n != 0 {
+				t.Errorf("the redirect target received %d requests, want none", n)
+			}
+			leaked.Range(func(k, v any) bool {
+				t.Errorf("the redirect target received the %v %q", k, v)
+				return true
+			})
+		})
+	}
+}
