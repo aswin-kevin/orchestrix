@@ -336,7 +336,7 @@ func (c *Client) read() {
 	}
 	c.err = ErrClosed
 	if err := c.t.Err(); err != nil {
-		c.err = fmt.Errorf("%w: %v", ErrClosed, err)
+		c.err = fmt.Errorf("%w: %w", ErrClosed, err)
 	}
 	close(c.done)
 }

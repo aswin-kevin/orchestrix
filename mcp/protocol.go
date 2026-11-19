@@ -1,8 +1,8 @@
 // Package mcp speaks the Model Context Protocol (revision 2025-06-18): a
 // JSON-RPC 2.0 client for tools and resources over a pluggable Transport, a
-// stdio transport that runs a server as a child process, and a small Server
-// that can be served over stdio or in process. OAuth, sampling and
-// elicitation are not supported.
+// stdio transport that runs a server as a child process, a streamable HTTP
+// transport, and a small Server that can be served over stdio, HTTP or in
+// process. OAuth, sampling and elicitation are not supported.
 package mcp
 
 import (
@@ -24,7 +24,8 @@ const (
 	// DefaultCallTimeout bounds a tool call made on behalf of an agent.
 	DefaultCallTimeout = 5 * time.Minute
 	// DefaultCloseGrace is how long each step of closing a stdio server
-	// (stdin EOF, SIGTERM, SIGKILL) waits for the server to exit.
+	// (stdin EOF, SIGTERM, SIGKILL) waits for the server to exit, and how
+	// long closing an HTTP transport waits for the session's DELETE.
 	DefaultCloseGrace = 2 * time.Second
 	// DefaultMaxMessageBytes caps one incoming message.
 	DefaultMaxMessageBytes = 16 << 20

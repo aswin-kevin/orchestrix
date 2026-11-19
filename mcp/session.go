@@ -12,6 +12,17 @@ import (
 // session, for Notify.
 type sessionKey struct{}
 
+// requestIDKey is the context key under which a handler's ctx carries its
+// request's raw id, so a transport can route the handler's notifications to
+// that request's stream.
+type requestIDKey struct{}
+
+// requestID returns the raw id of the request whose handler ctx belongs to.
+func requestID(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(requestIDKey{}).(string)
+	return id, ok
+}
+
 // session is one client's connection to a Server: it runs each request in
 // its own goroutine and writes replies and notifications through write.
 type session struct {
@@ -99,8 +110,9 @@ func (sess *session) handle(raw json.RawMessage) error {
 // before handle returns means a notifications/cancelled that follows the
 // request always finds it.
 func (sess *session) start(m message) error {
-	ctx, cancel := context.WithCancel(context.WithValue(sess.ctx, sessionKey{}, sess))
 	id := string(m.ID)
+	ctx := context.WithValue(context.WithValue(sess.ctx, sessionKey{}, sess), requestIDKey{}, id)
+	ctx, cancel := context.WithCancel(ctx)
 	req := &request{cancel: cancel}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
