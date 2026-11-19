@@ -77,7 +77,9 @@ func WithRubric(cfg rubric.Config) Option {
 // memory.DefaultDir on a kv or disk backend keeps memories across threads.
 //
 // Commands (execute) run only in the underlying backend: files under a mount
-// are invisible to them. An invalid or duplicate prefix ("/" included) makes
+// are invisible to them. A backend installed through WithConfig (a patch of
+// agent.Config.Backend or BackendFactory) is not mounted: the mounts wrap the
+// backend options above, and WithConfig patches apply after them. An invalid or duplicate prefix ("/" included) makes
 // New fail. With the default workspace and WithCheckpointer, a checkpoint
 // saves the per-thread part only; mounted backends persist on their own.
 func WithMount(prefix string, b backend.Backend) Option {

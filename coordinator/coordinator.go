@@ -16,8 +16,8 @@ import (
 )
 
 // DefaultMaxConcurrency is how many background workers a Coordinator runs at
-// once, and how many jobs RunParallel runs at once, when the matching field
-// is zero.
+// once per thread, and how many jobs RunParallel runs at once, when the
+// matching field is zero.
 const DefaultMaxConcurrency = 4
 
 // Config configures a Coordinator.

@@ -370,9 +370,6 @@ func TestRubricAndAsyncReminderShareContinuations(t *testing.T) {
 	if want := []string{"answer 2", "answer 3"}; !slices.Equal(answers, want) {
 		t.Errorf("graded answers = %q, want %q: the async reminder must come before grading", answers, want)
 	}
-	if continuations := p.Calls() - 2; continuations > agent.MaxStopContinuations {
-		t.Errorf("%d stop continuations, want at most %d", continuations, agent.MaxStopContinuations)
-	}
 	if p.Calls() != 4 {
 		t.Fatalf("model calls = %d, want 4 (start, reminder, feedback, pass)", p.Calls())
 	}

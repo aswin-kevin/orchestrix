@@ -285,6 +285,8 @@ func TestConcurrentStartRespectsLimitAndShutdown(t *testing.T) {
 	const limit, workers = 3, 40
 	m := NewManager[*fake]("x_", Limits{MaxRunning: limit, MaxFinished: 5})
 	var ok, limited, refused atomic.Int32
+	var mu sync.Mutex
+	var started []*Job[*fake]
 	var wg sync.WaitGroup
 	for i := range workers {
 		wg.Add(1)
@@ -294,11 +296,14 @@ func TestConcurrentStartRespectsLimitAndShutdown(t *testing.T) {
 				m.Shutdown(time.Second)
 				return
 			}
-			_, err := m.Start("t", nil, func() (*fake, error) { return newFake(), nil })
+			j, err := m.Start("t", nil, func() (*fake, error) { return newFake(), nil })
 			var le *LimitError
 			switch {
 			case err == nil:
 				ok.Add(1)
+				mu.Lock()
+				started = append(started, j)
+				mu.Unlock()
 			case errors.As(err, &le):
 				limited.Add(1)
 			case errors.Is(err, ErrShutdown):
@@ -314,6 +319,13 @@ func TestConcurrentStartRespectsLimitAndShutdown(t *testing.T) {
 	}
 	if ok.Load()+limited.Load()+refused.Load() != workers-1 {
 		t.Fatalf("outcomes %d/%d/%d", ok.Load(), limited.Load(), refused.Load())
+	}
+	// A start that succeeded came before Shutdown took its snapshot, so
+	// Shutdown stopped it.
+	for _, j := range started {
+		if !j.Stopped() || !j.Ended() {
+			t.Errorf("job %s survived Shutdown: stopped %v, ended %v", j.ID, j.Stopped(), j.Ended())
+		}
 	}
 }
 

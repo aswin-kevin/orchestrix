@@ -53,9 +53,11 @@ type ParallelOptions struct {
 // stream has ended, so a job whose agent ignores ctx keeps it from
 // returning.
 //
-// One failing job does not stop or cancel the others. A panic in OnEvent is
-// the exception: it cancels every job, and once they have ended RunParallel
-// panics on the caller's goroutine with the first such panic, whose message
+// One failing job does not stop or cancel the others. A panic on a job's
+// goroutine (in OnEvent, or in the job's run itself where the agent does not
+// recover it) is the exception: it cancels every job, and once they have
+// ended RunParallel panics on the caller's goroutine with the first such
+// panic, whose message
 // carries the job goroutine's stack (errors.Unwrap gives back the original
 // value when it was an error).
 func RunParallel(ctx context.Context, jobs []Job, opts ParallelOptions) []Result {

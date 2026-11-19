@@ -250,6 +250,7 @@ func TestCoordinatorRejectsReplacedAsync(t *testing.T) {
 	for name, opt := range map[string]orchestrix.Option{
 		"WithAsync":         orchestrix.WithAsync(other),
 		"WithoutMiddleware": orchestrix.WithoutMiddleware("async"),
+		"WithMiddleware":    orchestrix.WithMiddleware(other),
 	} {
 		c, err := New(llmtest.New(), Config{Workers: workers()}, opt)
 		if err == nil || !strings.Contains(err.Error(), "must not replace or remove the async middleware") {
