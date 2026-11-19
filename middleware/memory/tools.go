@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -69,9 +70,14 @@ func (s *store) recallTool() tool.Tool {
 
 func (s *store) recordTool() tool.Tool {
 	return tool.New(ToolRecord,
-		"Save a durable fact to long-term memory, such as a user preference, feedback on how to work, a project fact, or where to find something. Saving a name that exists updates that memory. Do not use it for task progress.",
+		"Save a durable fact to long-term memory, such as a user preference, feedback on how to work, a project fact, or where to find something. Saving a name that exists updates that memory; a different name that maps to the same file is not saved. Do not use it for task progress.",
 		func(ctx context.Context, in RecordInput, c *tool.Call) (tool.Result, error) {
 			p, updated, err := s.record(ctx, c.Backend, in)
+			var collision *collisionError
+			if errors.As(err, &collision) {
+				return tool.Text(fmt.Sprintf("Not saved: %s. Use the name %q to update that memory, or pick a more distinct name.",
+					collision.Error(), collision.existing)), nil
+			}
 			if err != nil {
 				return tool.Errorf("record failed: %v", err), nil
 			}

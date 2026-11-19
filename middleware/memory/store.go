@@ -39,8 +39,9 @@ const (
 	MaxEntryBytes = 16 << 10
 	// MaxDescriptionChars caps an entry's description, in runes.
 	MaxDescriptionChars = 300
-	// MaxNameChars caps an entry's name, in runes.
-	MaxNameChars = 100
+	// MaxNameChars caps an entry's name, in runes. It equals MaxSlugLen, so
+	// an ASCII name is never cut to build its file name.
+	MaxNameChars = MaxSlugLen
 	// MaxRecallBytes caps the text one recall_memory call returns.
 	MaxRecallBytes = 32 << 10
 	// MaxSlugLen caps the file-name stem derived from an entry's name.
@@ -111,7 +112,9 @@ var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
 
 // Slug derives the file-name stem for an entry name: lowercase, every run of
 // characters outside [a-z0-9] collapsed to "-", trimmed, and cut to
-// MaxSlugLen. A name with no letters or digits is an error.
+// MaxSlugLen. A name with no letters or digits is an error. Different names
+// can share a slug ("C++ tips" and "C tips"); recording one whose slug
+// belongs to an entry of another name is refused (see record).
 func Slug(name string) (string, error) {
 	slug := strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(name), "-"), "-")
 	if len(slug) > MaxSlugLen {
@@ -225,9 +228,27 @@ func (in RecordInput) validate() (string, error) {
 	return slug, err
 }
 
+// collisionError reports that a name's slug is the file of an entry with
+// another name, which record refuses to overwrite.
+type collisionError struct {
+	name, existing, file string
+}
+
+func (e *collisionError) Error() string {
+	return fmt.Sprintf("memory %q would be stored in %s, which holds the memory %q", e.name, e.file, e.existing)
+}
+
+// sameName reports whether two entry names are the same up to case and
+// whitespace.
+func sameName(a, b string) bool {
+	return strings.EqualFold(strings.Join(strings.Fields(a), " "), strings.Join(strings.Fields(b), " "))
+}
+
 // record creates or updates the entry for in and rebuilds the index. An
-// existing entry keeps its Created time. It returns the entry's path and
-// whether it replaced an existing entry.
+// existing entry of the same name (see sameName) keeps its Created time; an
+// existing entry of another name that shares the slug is left alone and a
+// *collisionError returned. It returns the entry's path and whether it
+// replaced an existing entry.
 func (s *store) record(ctx context.Context, b backend.Backend, in RecordInput) (p string, updated bool, err error) {
 	slug, err := in.validate()
 	if err != nil {
@@ -242,6 +263,9 @@ func (s *store) record(ctx context.Context, b backend.Backend, in RecordInput) (
 		Type: in.Type, Created: now, Updated: now,
 	}
 	if old, ok := s.readEntry(ctx, b, slug+entryExt); ok {
+		if !sameName(old.Name, e.Name) {
+			return "", false, &collisionError{name: e.Name, existing: old.Name, file: old.File}
+		}
 		e.Created, updated = old.Created, true
 	}
 	data, err := frontmatter.Render(e, strings.TrimSpace(in.Content)+"\n")

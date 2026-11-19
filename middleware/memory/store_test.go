@@ -356,3 +356,42 @@ func TestRecallShortQueryAndOutputCap(t *testing.T) {
 		t.Fatalf("len=%d, want capped with a note", len(out))
 	}
 }
+
+func TestRecordRefusesSlugCollision(t *testing.T) {
+	env := newStoreEnv(t, StoreConfig{})
+	env.record("C++ tips", "Notes on C++", TypeReference, "prefer RAII")
+
+	res := env.record("C tips", "Notes on C", TypeReference, "check malloc")
+	if res.IsError {
+		t.Fatalf("collision result is an error: %q; want a plain result the model can act on", res.Flatten())
+	}
+	if got := res.Flatten(); !strings.Contains(got, "Not saved") || !strings.Contains(got, `"C++ tips"`) || !strings.Contains(got, "c-tips.md") {
+		t.Fatalf("collision result = %q, want it to name the existing memory and its file", got)
+	}
+	var e Entry
+	body, _, err := frontmatter.Parse([]byte(env.read("/memories/c-tips.md")), &e)
+	if err != nil || e.Name != "C++ tips" || strings.TrimSpace(body) != "prefer RAII" {
+		t.Fatalf("entry after the collision = %+v %q, %v; want C++ tips unchanged", e, body, err)
+	}
+
+	// The same name, also with other case and spacing, still updates.
+	for _, name := range []string{"C++ tips", "c++  TIPS"} {
+		if got := env.record(name, "Notes on C++", TypeReference, "prefer RAII; "+name).Flatten(); !strings.HasPrefix(got, "Updated memory") {
+			t.Fatalf("record %q = %q, want an update", name, got)
+		}
+	}
+}
+
+func TestNameCapMatchesSlugCap(t *testing.T) {
+	if MaxNameChars > MaxSlugLen {
+		t.Fatalf("MaxNameChars = %d exceeds MaxSlugLen = %d, so two names can share a cut slug", MaxNameChars, MaxSlugLen)
+	}
+	env := newStoreEnv(t, StoreConfig{})
+	prefix := strings.Repeat("a", MaxSlugLen)
+	if res := env.record(prefix, "d", TypeUser, "first"); res.IsError {
+		t.Fatalf("a %d-character name was refused: %q", MaxSlugLen, res.Flatten())
+	}
+	if res := env.record(prefix+"b", "d", TypeUser, "second"); !res.IsError {
+		t.Fatalf("a %d-character name was accepted: %q", MaxSlugLen+1, res.Flatten())
+	}
+}
