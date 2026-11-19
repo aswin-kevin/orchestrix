@@ -24,6 +24,9 @@
 // Config.TokenBudget, and each call is bounded by ModelGrader.Timeout. A
 // grader error is not an event: it shows only as Record.Error in Grades.
 //
+// DecisionGrader is a Grader backed by a decision model: one yes/no question
+// per criterion, answered in a single call, instead of a free-form LLM reply.
+//
 // Feedback is a BeforeStop continuation, so it shares the run's
 // agent.MaxStopContinuations slots with every other BeforeStop middleware;
 // BeforeStop middleware later in the stack (the async reminder) are
