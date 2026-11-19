@@ -18,6 +18,10 @@ const (
 	FormatAnthropic       Format = "anthropic"
 	FormatOpenAI          Format = "openai"
 	FormatOpenAIResponses Format = "openai-responses"
+	// FormatSystemOne and FormatOpenAIDecisions are decision formats: build
+	// them with NewDecider, not New.
+	FormatSystemOne       Format = "systemone"
+	FormatOpenAIDecisions Format = "openai-decisions"
 )
 
 // Defaults applied when the corresponding Config field is zero.
@@ -100,11 +104,16 @@ func ParseModel(spec string) (Config, error) {
 	case FormatAnthropic:
 		cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
 		cfg.BaseURL = envOr("ANTHROPIC_BASE_URL", defaultAnthropicBaseURL)
-	case FormatOpenAI, FormatOpenAIResponses:
+	case FormatOpenAI, FormatOpenAIResponses, FormatOpenAIDecisions:
 		cfg.APIKey = os.Getenv("OPENAI_API_KEY")
 		cfg.BaseURL = envOr("OPENAI_BASE_URL", defaultOpenAIBaseURL)
+	case FormatSystemOne:
+		cfg.APIKey = os.Getenv("SYSTEMONE_API_KEY")
+		cfg.BaseURL = os.Getenv("SYSTEMONE_BASE_URL")
 	default:
-		return Config{}, fmt.Errorf("llm: unknown provider format %q in model spec %q", prefix, spec)
+		if _, ok := lookup(cfg.Format); !ok {
+			return Config{}, fmt.Errorf("llm: unknown provider format %q in model spec %q", prefix, spec)
+		}
 	}
 	return cfg, nil
 }
@@ -163,26 +172,16 @@ func New(cfg Config) (Provider, error) {
 	if cfg.Model == "" {
 		return nil, errors.New("llm: config has no model")
 	}
-	switch cfg.Format {
-	case FormatAnthropic:
-		// Unpack so a failure yields a nil Provider, not a typed nil.
-		p, err := newAnthropic(cfg)
-		if err != nil {
-			return nil, err
-		}
-		return p, nil
-	case FormatOpenAI:
-		p, err := newOpenAI(cfg)
-		if err != nil {
-			return nil, err
-		}
-		return p, nil
-	case FormatOpenAIResponses:
-		p, err := newResponses(cfg)
-		if err != nil {
-			return nil, err
-		}
-		return p, nil
+	e, ok := lookup(cfg.Format)
+	if !ok {
+		return nil, fmt.Errorf("llm: unknown provider format %q", cfg.Format)
 	}
-	return nil, fmt.Errorf("llm: unknown provider format %q", cfg.Format)
+	if e.provider == nil {
+		return nil, fmt.Errorf("llm: format %q is a decision format; use NewDecider", cfg.Format)
+	}
+	p, err := e.provider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
 }
