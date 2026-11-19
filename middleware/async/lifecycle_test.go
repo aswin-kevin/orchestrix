@@ -106,12 +106,17 @@ func TestUpdateAfterChildEndedIsReported(t *testing.T) {
 		}
 	}}
 	h = newHarnessWith(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
-		[]agent.Middleware{late}, start("s1", "researcher", "x"), llmtest.Turn{Text: "started"})
+		[]agent.Middleware{late}, start("s1", "researcher", "x"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "noted"})
 	h.run(t, context.Background(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	out, _, _ := h.m.jobs.Get("t", "async_1").Handle.outcome()
 	if out.Status != StatusCompleted || out.Error != "1 update(s) arrived after the task finished" {
 		t.Fatalf("outcome = %+v", out)
+	}
+	// The notification of the completed task carries the note too.
+	h.run(t, context.Background(), "next", nil)
+	if notes := notifications(h.p); len(notes) != 1 || !strings.Contains(notes[0].Text(), "1 update(s) arrived after the task finished") {
+		t.Fatalf("notifications = %+v, want the late-update note", notes)
 	}
 }
 
@@ -119,7 +124,7 @@ func TestUpdateValidation(t *testing.T) {
 	g := newGate(llmtest.Turn{Text: "never"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
 		start("s1", "researcher", "x"),
-		update("u1", "async_1", strings.Repeat("a", MaxUpdateChars+1)),
+		update("u1", "async_1", strings.Repeat("a", MaxUpdateBytes+1)),
 		update("u2", "async_9", "hi"),
 		update("u3", "async_1", "  "),
 		llmtest.Turn{Text: "x"})

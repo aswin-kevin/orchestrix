@@ -25,9 +25,8 @@ const cancelDescription = "Cancel a running background task."
 // listDescription is list_tasks' description.
 const listDescription = "List this conversation's background tasks with their status."
 
-// updateDescription is update_task's description. The "8000" is
-// MaxUpdateChars; descriptions are constants.
-const updateDescription = "Send a message to a running background task, such as new instructions or information it needs. The task reads it before its next step. At most 8000 bytes."
+// updateDescription is update_task's description; %d is MaxUpdateBytes.
+const updateDescription = "Send a message to a running background task, such as new instructions or information it needs. The task reads it before its next step. At most %d bytes."
 
 // stopReminder is the prompt of a run about to end while tasks of its
 // thread still run; %s lists their ids.

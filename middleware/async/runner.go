@@ -227,11 +227,11 @@ func pendingTools(final *agent.Final) []string {
 }
 
 // addProgress appends text to the progress, keeping its last
-// DefaultProgressChars bytes.
+// DefaultProgressBytes bytes.
 func (t *localTask) addProgress(text string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.progress = tail(t.progress+text, DefaultProgressChars)
+	t.progress = tail(t.progress+text, DefaultProgressBytes)
 }
 
 // Done implements Handle.

@@ -2,6 +2,7 @@ package async
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,5 +84,24 @@ func waitJobEnded(t *testing.T, done func() bool) {
 			return
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestCheckTaskCapsResult(t *testing.T) {
+	huge := strings.Repeat("r", 3*MaxCheckResultBytes)
+	runner := funcRunner(func(context.Context, Request) (Handle, error) {
+		return ended(Outcome{Status: StatusCompleted, Text: huge}), nil
+	})
+	h := newHarness(t, Config{Runner: runner},
+		start("s1", subagents.GeneralPurpose, "big"),
+		call("c1", ToolCheck, obj{"task_id": "async_1", "wait": true}),
+		llmtest.Turn{Text: "done"})
+
+	evs, _ := h.run(t, context.Background(), "go", nil)
+
+	res := result(t, evs, ToolCheck).Flatten()
+	if len(res) > MaxCheckResultBytes+500 || !strings.Contains(res, "truncated") {
+		t.Fatalf("check_task result is %d bytes (truncation noted: %v), want at most about %d",
+			len(res), strings.Contains(res, "truncated"), MaxCheckResultBytes)
 	}
 }

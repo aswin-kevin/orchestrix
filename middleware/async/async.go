@@ -14,7 +14,10 @@
 // A background run has nobody to ask for approval in-band: with an Approver
 // on the parent agent the subagent inherits it, otherwise a subagent that
 // needs a decision ends as StatusBlocked, naming the tools it wanted to
-// call. A background subagent's State is not merged into the parent's (the
+// call. Its permission mode is fixed when it starts (the stricter of the
+// parent's mode at that moment and the spec's): a parent that later enters
+// plan mode or a stricter mode does not change the mode of a task already
+// running. A background subagent's State is not merged into the parent's (the
 // parent may have moved on by the time it ends); files are shared through
 // the backend.
 //
@@ -77,15 +80,18 @@ const (
 	// DefaultStopWait bounds how long cancel_task and Shutdown wait for
 	// stopped tasks to end.
 	DefaultStopWait = 5 * time.Second
-	// DefaultMaxResultChars caps, in bytes, the result excerpt shown in a
+	// DefaultMaxResultBytes caps, in bytes, the result excerpt shown in a
 	// notification and by list_tasks.
-	DefaultMaxResultChars = 4_000
+	DefaultMaxResultBytes = 4_000
 	// MaxRecordedResult caps, in bytes, TaskRecord.Result and
 	// TaskRecord.Error: records live in State, which every checkpoint saves.
 	MaxRecordedResult = 16 << 10
-	// DefaultProgressChars is how much of its most recent text, in bytes, a
+	// MaxCheckResultBytes caps, in bytes, the full result check_task shows
+	// of an ended task; a longer one is cut, with a note saying so.
+	MaxCheckResultBytes = 4 * MaxRecordedResult
+	// DefaultProgressBytes is how much of its most recent text, in bytes, a
 	// running task of the local runner reports as progress.
-	DefaultProgressChars = 2_000
+	DefaultProgressBytes = 2_000
 	// IDPrefix starts every task id; the rest is the task's number in its
 	// thread.
 	IDPrefix = "async_"
@@ -95,9 +101,9 @@ const (
 	NotificationMetaKey = "orchestrix.async_notification"
 )
 
-// descriptionPreviewChars caps, in bytes, the task description list_tasks
+// descriptionPreviewBytes caps, in bytes, the task description list_tasks
 // shows.
-const descriptionPreviewChars = 120
+const descriptionPreviewBytes = 120
 
 // Config configures the async middleware.
 type Config struct {

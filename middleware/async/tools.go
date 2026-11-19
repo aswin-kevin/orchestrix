@@ -11,6 +11,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/jobs"
+	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -54,7 +55,7 @@ func (m *Middleware) buildTools() []tool.Tool {
 			},
 		}),
 		tool.New(ToolCheck, checkDescription, m.checkTask, tool.WithReadOnly(), tool.WithConcurrent()),
-		tool.New(ToolUpdate, updateDescription, m.updateTask, tool.WithReadOnly()),
+		tool.New(ToolUpdate, fmt.Sprintf(updateDescription, MaxUpdateBytes), m.updateTask, tool.WithReadOnly()),
 		tool.New(ToolCancel, cancelDescription, m.cancelTask, tool.WithReadOnly()),
 		tool.New(ToolList, listDescription, m.listTasks, tool.WithReadOnly(), tool.WithConcurrent()),
 	}
@@ -192,7 +193,12 @@ func (m *Middleware) checkTask(ctx context.Context, in checkInput, c *tool.Call)
 	if text == "" {
 		return tool.Text(summary(r, now)), nil
 	}
-	return tool.Text(summary(r, now) + "\n" + frame(tagResult, neutralize(text))), nil
+	text, cut := promptsafe.CapBytes(text, MaxCheckResultBytes)
+	body := summary(r, now) + "\n" + frame(tagResult, neutralize(text))
+	if cut {
+		body += fmt.Sprintf("\n(The result was truncated to its first %d bytes.)", MaxCheckResultBytes)
+	}
+	return tool.Text(body), nil
 }
 
 func (m *Middleware) cancelTask(ctx context.Context, in taskIDInput, c *tool.Call) (tool.Result, error) {
@@ -220,8 +226,8 @@ func (m *Middleware) updateTask(_ context.Context, in UpdateInput, c *tool.Call)
 	switch {
 	case strings.TrimSpace(in.Message) == "":
 		return tool.Errorf("the message must not be empty"), nil
-	case len(in.Message) > MaxUpdateChars:
-		return tool.Errorf("the message is %d bytes; the limit is %d", len(in.Message), MaxUpdateChars), nil
+	case len(in.Message) > MaxUpdateBytes:
+		return tool.Errorf("the message is %d bytes; the limit is %d", len(in.Message), MaxUpdateBytes), nil
 	}
 	j, r, ok := m.lookup(c, in.TaskID)
 	if !ok {

@@ -21,8 +21,8 @@ type UpdateInput struct {
 // ErrFinished is the error of a message sent to a task that already ended.
 var ErrFinished = errors.New("async: task already finished")
 
-// MaxUpdateChars caps, in bytes, a message update_task sends.
-const MaxUpdateChars = 8_000
+// MaxUpdateBytes caps, in bytes, a message update_task sends.
+const MaxUpdateBytes = 8_000
 
 // inboxName is the name of the middleware that delivers messages to the
 // local runner's tasks.

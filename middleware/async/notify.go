@@ -52,7 +52,7 @@ func notification(r TaskRecord) llm.Message {
 	var b strings.Builder
 	fmt.Fprintf(&b, "<%s>Background task %s (%s) %s", tagNotification, r.ID, r.SubagentType, outcomeLine(r))
 	if r.Result != "" {
-		fmt.Fprintf(&b, "\n%s\nUse %s for the full result.", frame(tagResult, excerpt(r.Result, DefaultMaxResultChars)), ToolCheck)
+		fmt.Fprintf(&b, "\n%s\nUse %s for the full result.", frame(tagResult, excerpt(r.Result, DefaultMaxResultBytes)), ToolCheck)
 	}
 	fmt.Fprintf(&b, "</%s>", tagNotification)
 	msg := llm.UserText(b.String())
@@ -61,19 +61,21 @@ func notification(r TaskRecord) llm.Message {
 }
 
 // outcomeLine says how the task of an ended record ended, as a sentence
-// that follows the task's name; the error is excerpted and neutralized.
+// that follows the task's name; the error is excerpted and neutralized. A
+// completed or cancelled task may carry an error too, such as updates that
+// arrived after it finished, which is added as a note.
 func outcomeLine(r TaskRecord) string {
-	switch r.Status {
-	case StatusLost:
+	if r.Status == StatusLost {
 		return lostNote
-	case StatusCompleted, StatusCancelled:
-		return r.Status + "."
 	}
 	status := strings.ReplaceAll(r.Status, "_", " ")
-	if r.Error == "" {
+	switch {
+	case r.Error == "":
 		return status + "."
+	case r.Status == StatusCompleted || r.Status == StatusCancelled:
+		return fmt.Sprintf("%s (note: %s).", status, excerpt(r.Error, DefaultMaxResultBytes))
 	}
-	return fmt.Sprintf("%s: %s.", status, excerpt(r.Error, DefaultMaxResultChars))
+	return fmt.Sprintf("%s: %s.", status, excerpt(r.Error, DefaultMaxResultBytes))
 }
 
 // summary renders a task's one-line status: running for how long, or how it
@@ -86,7 +88,7 @@ func summary(r TaskRecord, now time.Time) string {
 	case r.Status == StatusLost:
 		return head + " " + lostNote
 	case r.Error != "":
-		return fmt.Sprintf("%s: %s after %s: %s", head, r.Status, elapsed(r.Started, r.Ended), excerpt(r.Error, DefaultMaxResultChars))
+		return fmt.Sprintf("%s: %s after %s: %s", head, r.Status, elapsed(r.Started, r.Ended), excerpt(r.Error, DefaultMaxResultBytes))
 	}
 	return fmt.Sprintf("%s: %s after %s.", head, r.Status, elapsed(r.Started, r.Ended))
 }
@@ -107,9 +109,9 @@ func progressText(progress string) string {
 // listEntry renders one task for list_tasks: its summary, its description
 // cut short and, once it ended, an excerpt of its result.
 func listEntry(r TaskRecord, now time.Time) string {
-	parts := []string{summary(r, now), frame(tagDescription, excerpt(r.Description, descriptionPreviewChars))}
+	parts := []string{summary(r, now), frame(tagDescription, excerpt(r.Description, descriptionPreviewBytes))}
 	if r.Result != "" {
-		parts = append(parts, frame(tagResult, excerpt(r.Result, DefaultMaxResultChars)))
+		parts = append(parts, frame(tagResult, excerpt(r.Result, DefaultMaxResultBytes)))
 	}
 	return strings.Join(parts, "\n")
 }
@@ -146,7 +148,7 @@ func runningFor(d time.Duration) string {
 
 // oneLine is the start of a description on a single line, neutralized.
 func oneLine(desc string) string {
-	cut, truncated := promptsafe.CapBytes(desc, descriptionPreviewChars)
+	cut, truncated := promptsafe.CapBytes(desc, descriptionPreviewBytes)
 	cut = neutralize(strings.Join(strings.Fields(cut), " "))
 	if truncated {
 		cut += "..."

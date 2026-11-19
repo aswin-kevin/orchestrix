@@ -121,7 +121,7 @@ func TestTaskTimeout(t *testing.T) {
 
 func TestCheckShowsCappedProgress(t *testing.T) {
 	hd := newCtlHandle(Outcome{Status: StatusCancelled})
-	hd.progress = strings.Repeat("a", 3*DefaultProgressChars) + "halfway there"
+	hd.progress = strings.Repeat("a", 3*DefaultProgressBytes) + "halfway there"
 	runner := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
 	h := newHarness(t, Config{Runner: runner, DisableStopReminder: true},
 		start("s1", gp, "d"), call("c1", ToolCheck, obj{"task_id": "async_1"}), llmtest.Turn{Text: "x"})
@@ -129,7 +129,7 @@ func TestCheckShowsCappedProgress(t *testing.T) {
 	text := result(t, evs, ToolCheck).Flatten()
 	_, body, ok := strings.Cut(text, "<task-progress>\n")
 	body, _, ok2 := strings.Cut(body, "\n</task-progress>")
-	if !ok || !ok2 || !strings.HasSuffix(body, "halfway there") || len(body) > DefaultProgressChars {
+	if !ok || !ok2 || !strings.HasSuffix(body, "halfway there") || len(body) > DefaultProgressBytes {
 		t.Fatalf("check = %d bytes: %.200q", len(text), text)
 	}
 }

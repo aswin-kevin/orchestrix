@@ -43,7 +43,9 @@ type Launcher struct {
 // already in that list as the very same value is not appended again; one
 // whose name clashes with a different value in the list makes Agent fail.
 // Identity needs a pointer or otherwise comparable middleware; a value that
-// is not comparable is never "the same" and so clashes by name.
+// is not comparable is never "the same" and so clashes by name. NewLauncher
+// does not check extra itself: two extras with the same name also make Agent
+// fail, when agent.New rejects the duplicate.
 func NewLauncher(extra ...agent.Middleware) *Launcher {
 	return &Launcher{extra: slices.Clone(extra)}
 }
