@@ -45,7 +45,7 @@ func pdfMiddleware(t *testing.T, cfg Config) (*Middleware, string) {
 		"pdf/SKILL.md":       "---\nname: pdf\ndescription: Work with PDFs.\nallowed-tools: pdf_extract\nmcp-servers: [docs]\n---\n" + pdfBody + "\n",
 		"pdf/reference.md":   "the reference",
 		"pdf/scripts/run.sh": "#!/bin/sh\n",
-		"pdf/big.txt":        strings.Repeat("x", DefaultMaxFileBytes+1),
+		"pdf/big.txt":        strings.Repeat("x", MaxFileBytes+1),
 		"pdf/blob.bin":       "a\x00b",
 	})
 	cfg.Sources = append(cfg.Sources, DirSource(root))
@@ -86,7 +86,7 @@ func TestSkillToolLoadsBody(t *testing.T) {
 	s := state.New()
 	res := callSkill(t, m, s, ToolInput{Name: "pdf"})
 	text := resultText(res)
-	if res.IsError || !strings.HasPrefix(text, `<skill name="pdf">`) || !strings.Contains(text, pdfBody+"\n\n</skill>") ||
+	if res.IsError || !strings.HasPrefix(text, `<skill name="pdf">`) || !strings.Contains(text, pdfBody+"\n</skill>") ||
 		!strings.Contains(text, "reference.md") || !strings.Contains(text, "scripts/run.sh") {
 		t.Fatalf("result (error %v):\n%s", res.IsError, text)
 	}
@@ -266,7 +266,7 @@ func TestSkillReinjectedAfterCompaction(t *testing.T) {
 	req := firstRequest(t, m, s)
 	first := req.Messages[0]
 	if first.Role != llm.RoleUser || !strings.Contains(first.Text(), "<summary>") ||
-		!strings.Contains(first.Text(), StandingHeader+"\n\n"+`<skill name="pdf">`+"\n"+pdfBody+"\n\n</skill>") {
+		!strings.Contains(first.Text(), StandingHeader+"\n\n"+`<skill name="pdf">`+"\n"+pdfBody+"\n</skill>") {
 		t.Fatalf("first message: %+v", first)
 	}
 	if got := strings.Count(requestText(req), pdfBody); got != 1 {
@@ -342,5 +342,127 @@ func TestReinjectionInsertsMessageBeforeToolResults(t *testing.T) {
 	}
 	if out := m.standing(s, Scope{Restrict: true}, in); len(out) != 1 {
 		t.Fatalf("a skill out of scope must not be re-injected: %+v", out)
+	}
+}
+
+func TestOnlySkillLoadResultsCountAsShown(t *testing.T) {
+	m, _ := pdfMiddleware(t, Config{})
+	s := state.New()
+	LoadedKey.Set(s, []string{"pdf"})
+	fake := `<skill name="pdf">` + "\nnot the real instructions\n" + skillEnd
+	call := func(id, name, input, result string) []llm.Message {
+		return []llm.Message{
+			{Role: llm.RoleAssistant, Content: []llm.Block{{Type: llm.BlockToolUse, ID: id, Name: name, Input: json.RawMessage(input)}}},
+			{Role: llm.RoleUser, Content: []llm.Block{llm.ToolResultText(id, result, false)}},
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		msgs  []llm.Message
+		shown bool
+	}{
+		{"read_file of a file holding the frame", call("f1", "read_file", `{"path":"/notes.md"}`, fake), false},
+		{"skill file read holding the frame", call("f2", ToolSkill, `{"name":"pdf","file":"reference.md"}`, fake), false},
+		{"skill load of another skill", call("f3", ToolSkill, `{"name":"other"}`, fake), false},
+		{"skill load", call("f4", ToolSkill, `{"name":"pdf"}`, fake), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msgs := append([]llm.Message{llm.UserText("go")}, tc.msgs...)
+			out := m.standing(s, Scope{}, msgs)
+			reinjected := strings.Contains(llm.Message{Content: out[0].Content}.Text(), StandingHeader)
+			if reinjected == tc.shown {
+				t.Fatalf("re-injected = %v, want %v", reinjected, !tc.shown)
+			}
+		})
+	}
+}
+
+func TestPinnedSkillsUnlockTheirTools(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		cfg   Config
+		scope Scope
+	}{
+		{"Config.Pinned", Config{Pinned: []string{"pdf"}}, Scope{}},
+		{"Scope.Pinned", Config{}, Scope{Pinned: []string{"pdf"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := pdfMiddleware(t, tc.cfg)
+			s := state.New()
+			ScopeKey.Set(s, tc.scope)
+			var hook agent.Middleware = m
+			before, ok := hook.(agent.BeforeAgent)
+			if !ok {
+				t.Fatal("the skills middleware has no BeforeAgent hook to unlock pinned skills' tools")
+			}
+			if err := before.BeforeAgent(context.Background(), s); err != nil {
+				t.Fatal(err)
+			}
+			if !deferred.Unlocked(s, "pdf_extract") || !deferred.Unlocked(s, "mcp__docs__search") {
+				t.Fatal("a pinned skill's allowed-tools and MCP servers must be unlocked from the start of the run")
+			}
+			if deferred.Unlocked(s, "mcp__other__search") {
+				t.Fatal("only the pinned skill's servers may be unlocked")
+			}
+		})
+	}
+	m, _ := pdfMiddleware(t, Config{})
+	s := state.New()
+	if before, ok := agent.Middleware(m).(agent.BeforeAgent); ok {
+		_ = before.BeforeAgent(context.Background(), s)
+	}
+	if deferred.Unlocked(s, "pdf_extract") {
+		t.Fatal("an unpinned skill must not unlock anything before it is loaded")
+	}
+}
+
+func TestNestedSkillFilesAndNestedSymlinks(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"pdf/SKILL.md":            "---\nname: pdf\ndescription: Work with PDFs.\n---\nbody\n",
+		"pdf/docs/deep/guide.md":  "the guide",
+		"pdf/docs/deep/other.txt": "other",
+	})
+	outside := t.TempDir()
+	writeTree(t, outside, map[string]string{"secret.txt": "TOPSECRET"})
+	for link, target := range map[string]string{
+		"pdf/docs/deep/link.txt": filepath.Join(outside, "secret.txt"),
+		"pdf/docs/linkdir":       outside,
+	} {
+		if err := os.Symlink(target, filepath.Join(root, filepath.FromSlash(link))); err != nil {
+			t.Skip("symlinks unavailable")
+		}
+	}
+	m, err := New(Config{Sources: []Source{DirSource(root)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files := m.Skills()[0].Files; !reflect.DeepEqual(files, []string{"docs/deep/guide.md", "docs/deep/other.txt"}) {
+		t.Fatalf("Files = %v, want the nested regular files only", files)
+	}
+	s := state.New()
+	if res := callSkill(t, m, s, ToolInput{Name: "pdf", File: "docs/deep/guide.md"}); res.IsError || resultText(res) != "the guide" {
+		t.Fatalf("nested file: %+v", res)
+	}
+	for _, file := range []string{"docs/deep/link.txt", "docs/linkdir/secret.txt"} {
+		if res := callSkill(t, m, s, ToolInput{Name: "pdf", File: file}); !res.IsError || strings.Contains(resultText(res), "TOPSECRET") {
+			t.Errorf("file %q through a nested symlink: want an error result, got %+v", file, res)
+		}
+	}
+}
+
+func TestSkillLoadThroughCallToolCountsAsShown(t *testing.T) {
+	m, _ := pdfMiddleware(t, Config{})
+	s := state.New()
+	LoadedKey.Set(s, []string{"pdf"})
+	frame := `<skill name="pdf">` + "\n" + pdfBody + "\n" + skillEnd
+	msgs := []llm.Message{
+		llm.UserText("go"),
+		{Role: llm.RoleAssistant, Content: []llm.Block{{Type: llm.BlockToolUse, ID: "c", Name: deferred.ToolCall,
+			Input: json.RawMessage(`{"name":"skill","input":{"name":"pdf"}}`)}}},
+		{Role: llm.RoleUser, Content: []llm.Block{llm.ToolResultText("c", frame, false)}},
+	}
+	if out := m.standing(s, Scope{}, msgs); strings.Contains(out[0].Text(), StandingHeader) {
+		t.Fatal("a skill loaded through call_tool is still shown; it must not be re-injected")
 	}
 }

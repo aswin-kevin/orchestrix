@@ -39,7 +39,7 @@ type frontmatterFields struct {
 
 // maxSkillFileBytes bounds what is read of one SKILL.md: the largest
 // frontmatter block plus the largest body, with room for the fences.
-const maxSkillFileBytes = frontmatter.MaxBytes + DefaultMaxBodyBytes + 64
+const maxSkillFileBytes = frontmatter.MaxBytes + MaxBodyBytes + 64
 
 // Load reads every <Dir>/<name>/SKILL.md of every source. A later source
 // replaces an earlier skill of the same name. Invalid skills are skipped and
@@ -116,7 +116,7 @@ func loadSkill(fsys fs.FS, dir, dirName string) (s Skill, ok bool, err error) {
 	if !found {
 		return Skill{}, false, errors.New("missing frontmatter")
 	}
-	body, _ = promptsafe.CapBytes(body, DefaultMaxBodyBytes)
+	body, _ = promptsafe.CapBytes(body, MaxBodyBytes)
 	s = Skill{
 		Name:          fm.Name,
 		Description:   fm.Description,
@@ -158,7 +158,7 @@ func listFiles(fsys fs.FS, dir string) []string {
 		if rel == SkillFile {
 			return nil
 		}
-		if files = append(files, rel); len(files) >= DefaultMaxListedFiles {
+		if files = append(files, rel); len(files) >= MaxListedFiles {
 			return fs.SkipAll
 		}
 		return nil

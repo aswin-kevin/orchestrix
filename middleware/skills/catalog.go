@@ -8,11 +8,26 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/state"
 )
 
 // neutralizeTags escapes any tag in skill text that could open or end one of
 // the segment's own elements.
 var neutralizeTags = promptsafe.NewTagNeutralizer("available_skills", "skill")
+
+// BeforeAgent implements agent.BeforeAgent: a pinned skill (Config.Pinned
+// and the run's Scope.Pinned) is in effect from the first turn, so the
+// tools it names in allowed-tools and the tools of its MCP servers are
+// unlocked as if it had been loaded.
+func (m *Middleware) BeforeAgent(_ context.Context, s *state.State) error {
+	scope, _ := ScopeKey.Get(s)
+	for _, name := range slices.Concat(m.pinned, scope.Pinned) {
+		if sk, ok := m.byName[name]; ok {
+			unlockTools(s, sk)
+		}
+	}
+	return nil
+}
 
 // WrapModel implements agent.ModelWrapper: it appends the catalog segment,
 // after the host's own segments, listing the skills the run is offered and the

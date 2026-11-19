@@ -37,10 +37,11 @@ const (
 func Marker(name string) string { return `<skill name="` + name + `">` }
 
 // frame renders s's body inside its skill element. Frame tags in the body are
-// neutralized, so the body cannot end the element early.
+// neutralized, so the body cannot end the element early; trailing newlines
+// are dropped, so the closing tag follows the last line.
 func frame(s Skill) string {
-	body, _ := promptsafe.CapBytes(neutralizeTags(s.Body), DefaultMaxBodyBytes)
-	return Marker(s.Name) + "\n" + body + "\n" + skillEnd
+	body, _ := promptsafe.CapBytes(neutralizeTags(s.Body), MaxBodyBytes)
+	return Marker(s.Name) + "\n" + strings.TrimRight(body, "\n") + "\n" + skillEnd
 }
 
 // skillTool builds the skill tool. It only reads skill files and records
@@ -67,15 +68,21 @@ func (m *Middleware) runSkill(_ context.Context, in ToolInput, c *tool.Call) (to
 		return tool.Text(text), nil
 	}
 	markLoaded(c.State, s.Name)
-	deferred.Unlock(c.State, s.AllowedTools...)
-	for _, server := range s.MCPServers {
-		deferred.Unlock(c.State, names.MCPPrefix(server)+"*")
-	}
+	unlockTools(c.State, s)
 	out := frame(s)
 	if len(s.Files) > 0 {
 		out += filesIntro + strings.Join(s.Files, ", ")
 	}
 	return tool.Text(out), nil
+}
+
+// unlockTools unlocks (deferred.Unlock) the tools s names in allowed-tools
+// and every tool of its MCP servers.
+func unlockTools(st *state.State, s Skill) {
+	deferred.Unlock(st, s.AllowedTools...)
+	for _, server := range s.MCPServers {
+		deferred.Unlock(st, names.MCPPrefix(server)+"*")
+	}
 }
 
 // offered returns the skill named name when scope offers it.
@@ -114,9 +121,14 @@ func markLoaded(s *state.State, name string) {
 
 // readSkillFile returns the text of file, a slash path relative to s's
 // directory. The file must be a regular text file of at most
-// DefaultMaxFileBytes inside the directory, reached without following any
+// MaxFileBytes inside the directory, reached without following any
 // symbolic link, so a skill cannot expose files from elsewhere; this matches
 // Skill.Files, which neither lists nor follows symlinks.
+//
+// The symlink walk and the Open that follows are separate steps, so a path
+// swapped for a link in between would be followed. That race needs write
+// access to the skill directory, which is trusted (see Trust in the package
+// documentation), so it is not guarded against.
 func readSkillFile(s Skill, file string) (string, error) {
 	if s.FS == nil {
 		return "", errors.New("the skill has no files")
@@ -133,20 +145,20 @@ func readSkillFile(s Skill, file string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if info.Size() > DefaultMaxFileBytes {
-		return "", fmt.Errorf("the file is %d bytes, over the limit of %d", info.Size(), DefaultMaxFileBytes)
+	if info.Size() > MaxFileBytes {
+		return "", fmt.Errorf("the file is %d bytes, over the limit of %d", info.Size(), MaxFileBytes)
 	}
 	f, err := s.FS.Open(path.Join(s.Dir, clean))
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, DefaultMaxFileBytes+1))
+	data, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
 	switch {
 	case err != nil:
 		return "", err
-	case len(data) > DefaultMaxFileBytes:
-		return "", fmt.Errorf("the file is over the limit of %d bytes", DefaultMaxFileBytes)
+	case len(data) > MaxFileBytes:
+		return "", fmt.Errorf("the file is over the limit of %d bytes", MaxFileBytes)
 	case backend.IsBinary(data):
 		return "", errors.New("the file is binary")
 	}

@@ -29,6 +29,7 @@ package skills
 import (
 	"fmt"
 	"io/fs"
+	"maps"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -50,12 +51,12 @@ const (
 	MaxDescriptionLen = 1024
 	// MaxCompatibilityLen is the longest legal compatibility note, in bytes.
 	MaxCompatibilityLen = 500
-	// DefaultMaxBodyBytes caps a skill's body when it is loaded.
-	DefaultMaxBodyBytes = 256 << 10
-	// DefaultMaxFileBytes caps a skill file read through the skill tool.
-	DefaultMaxFileBytes = 256 << 10
-	// DefaultMaxListedFiles caps Skill.Files.
-	DefaultMaxListedFiles = 50
+	// MaxBodyBytes caps a skill's body when it is loaded.
+	MaxBodyBytes = 256 << 10
+	// MaxFileBytes caps a skill file read through the skill tool.
+	MaxFileBytes = 256 << 10
+	// MaxListedFiles caps Skill.Files.
+	MaxListedFiles = 50
 	// ToolSkill is the name of the tool that loads a skill.
 	ToolSkill = "skill"
 )
@@ -78,14 +79,14 @@ type Skill struct {
 	// "mcp-servers").
 	MCPServers []string
 	// Body is the Markdown after the frontmatter, capped at
-	// DefaultMaxBodyBytes.
+	// MaxBodyBytes.
 	Body string
 	// FS and Dir locate the skill directory for file reads; both are zero for
 	// a programmatic skill, which has no files.
 	FS  fs.FS
 	Dir string
 	// Files lists the skill's other regular files as slash paths relative to
-	// Dir, sorted, at most DefaultMaxListedFiles; nil if none.
+	// Dir, sorted, at most MaxListedFiles; nil if none.
 	Files []string
 }
 
@@ -93,7 +94,10 @@ type Skill struct {
 // MaxNameLen characters of [a-z0-9-] with no leading, trailing or doubled
 // hyphen and, unless dirName is empty, equal to dirName; the description must
 // be non-empty and at most MaxDescriptionLen bytes; the compatibility note at
-// most MaxCompatibilityLen bytes; and allowed-tools must not hold a bare "*".
+// most MaxCompatibilityLen bytes; and no allowed-tools pattern may be made
+// only of the wildcards "*" and "?" (such as "*" or "**"), which would unlock
+// every gated tool. A broad prefix such as "mcp__*" is legal but unlocks
+// every tool it matches, here every MCP server's.
 func Validate(s Skill, dirName string) error {
 	if err := validateName(s.Name); err != nil {
 		return err
@@ -110,10 +114,24 @@ func Validate(s Skill, dirName string) error {
 	if len(s.Compatibility) > MaxCompatibilityLen {
 		return fmt.Errorf("compatibility is %d bytes, over the limit of %d", len(s.Compatibility), MaxCompatibilityLen)
 	}
-	if slices.Contains(s.AllowedTools, "*") {
-		return fmt.Errorf(`allowed-tools must not contain a bare "*"; name the tools`)
+	if i := slices.IndexFunc(s.AllowedTools, wildcardsOnly); i >= 0 {
+		return fmt.Errorf("allowed-tools pattern %q is only wildcards, which would unlock every tool; name the tools", s.AllowedTools[i])
 	}
 	return nil
+}
+
+// wildcardsOnly reports whether pattern is made only of "*" and "?".
+func wildcardsOnly(pattern string) bool {
+	return pattern != "" && strings.Trim(pattern, "*?") == ""
+}
+
+// clone returns s with its own copies of the slices and the metadata map.
+func (s Skill) clone() Skill {
+	s.Metadata = maps.Clone(s.Metadata)
+	s.AllowedTools = slices.Clone(s.AllowedTools)
+	s.MCPServers = slices.Clone(s.MCPServers)
+	s.Files = slices.Clone(s.Files)
+	return s
 }
 
 func validateName(name string) error {
@@ -142,7 +160,8 @@ type Scope struct {
 	// are ignored.
 	Allowed []string `json:"allowed,omitempty"`
 	// Pinned are skills injected for this run in addition to Config.Pinned,
-	// whether or not they are offered; unknown names are ignored.
+	// whether or not they are offered, with their tools unlocked as for
+	// Config.Pinned; unknown names are ignored.
 	Pinned []string `json:"pinned,omitempty"`
 }
 
@@ -170,7 +189,8 @@ type Config struct {
 	// later entry replaces an earlier one of the same name. Each must pass
 	// Validate with an empty directory name.
 	Skills []Skill
-	// Pinned names skills whose body is injected for every run. Each must
+	// Pinned names skills whose body is injected for every run and whose
+	// allowed-tools and MCP servers are unlocked from its start. Each must
 	// exist.
 	Pinned []string
 	// Tools are skill-scoped tools, offered gated (deferred.Gate): they are
@@ -196,6 +216,7 @@ var (
 	_ agent.Middleware   = (*Middleware)(nil)
 	_ agent.ToolProvider = (*Middleware)(nil)
 	_ agent.ModelWrapper = (*Middleware)(nil)
+	_ agent.BeforeAgent  = (*Middleware)(nil)
 )
 
 // New loads the sources and returns the middleware. It fails when a source is
@@ -214,8 +235,8 @@ func New(cfg Config) (*Middleware, error) {
 		if err := Validate(s, ""); err != nil {
 			return nil, fmt.Errorf("skills: programmatic skill %q: %w", s.Name, err)
 		}
-		s.Body, _ = promptsafe.CapBytes(s.Body, DefaultMaxBodyBytes)
-		byName[s.Name] = s
+		s.Body, _ = promptsafe.CapBytes(s.Body, MaxBodyBytes)
+		byName[s.Name] = s.clone() // the caller keeps its own slices
 	}
 	for _, name := range cfg.Pinned {
 		if _, ok := byName[name]; !ok {
@@ -255,8 +276,15 @@ func (m *Middleware) Has(name string) bool {
 	return ok
 }
 
-// Skills returns the skills the middleware knows, sorted by name.
-func (m *Middleware) Skills() []Skill { return slices.Clone(m.skills) }
+// Skills returns the skills the middleware knows, sorted by name. Each is a
+// deep copy: changing its slices or Metadata does not affect the middleware.
+func (m *Middleware) Skills() []Skill {
+	out := make([]Skill, len(m.skills))
+	for i, s := range m.skills {
+		out[i] = s.clone()
+	}
+	return out
+}
 
 // Warnings returns one error per skill that was skipped while loading the
 // sources.

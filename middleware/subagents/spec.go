@@ -55,10 +55,13 @@ type Subagent struct {
 	// name must be defined by the skills middleware in the subagent's
 	// stack.
 	Skills []string
-	// PinnedSkills are skills whose instructions are injected into the
-	// subagent's prompt, whether or not they are offered; nil keeps the
-	// delegating run's scope-pinned skills. Each name must be defined by
-	// the skills middleware in the subagent's stack.
+	// PinnedSkills are skills whose instructions are in the subagent's
+	// system prompt and whose allowed-tools and MCP servers are unlocked
+	// from its first turn (skills.Scope.Pinned). Pinning does not offer a
+	// skill: unless Skills (or the inherited scope) also offers it, the
+	// subagent cannot load it with the skill tool or read its files. nil
+	// keeps the delegating run's scope-pinned skills. Each name must be
+	// defined by the skills middleware in the subagent's stack.
 	PinnedSkills []string
 	// OutputSchema, when non-nil, is the JSON schema the subagent's final
 	// answer must satisfy; the answer must be a JSON object. An invalid

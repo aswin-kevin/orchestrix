@@ -1,10 +1,12 @@
 package skills
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/state"
 )
 
@@ -43,23 +45,47 @@ func (m *Middleware) standing(s *state.State, scope Scope, msgs []llm.Message) [
 	return slices.Insert(slices.Clone(msgs), 0, llm.UserText(text))
 }
 
-// shown reports whether a tool result in msgs still holds the full
-// instructions of the skill named name: its text has both Marker(name) and
-// the closing tag.
+// shown reports whether msgs still hold the full instructions of the skill
+// named name: the result of a skill tool call (direct or through call_tool)
+// that loaded name, not one that read a file of it, whose text has both
+// Marker(name) and the closing tag. Results of other tools never count, so
+// a file that merely contains the frame cannot stop the re-injection.
 func shown(msgs []llm.Message, name string) bool {
+	loads := map[string]bool{} // ids of skill tool calls that loaded name
 	marker := Marker(name)
 	for _, msg := range msgs {
 		for _, b := range msg.Content {
-			if !isToolResult(b) {
-				continue
-			}
-			text := llm.Message{Content: b.Content}.Text()
-			if strings.Contains(text, marker) && strings.Contains(text, skillEnd) {
-				return true
+			switch {
+			case b.Type == llm.BlockToolUse:
+				if in, ok := skillInput(b); ok && in.Name == name && in.File == "" {
+					loads[b.ID] = true
+				}
+			case isToolResult(b) && loads[b.ToolUseID]:
+				text := llm.Message{Content: b.Content}.Text()
+				if strings.Contains(text, marker) && strings.Contains(text, skillEnd) {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// skillInput returns the input of a tool_use block that calls the skill
+// tool, directly or through call_tool.
+func skillInput(use llm.Block) (ToolInput, bool) {
+	raw := use.Input
+	if use.Name == deferred.ToolCall {
+		var call deferred.CallInput
+		if json.Unmarshal(raw, &call) != nil || call.Name != ToolSkill {
+			return ToolInput{}, false
+		}
+		raw = call.Input
+	} else if use.Name != ToolSkill {
+		return ToolInput{}, false
+	}
+	var in ToolInput
+	return in, json.Unmarshal(raw, &in) == nil
 }
 
 func isToolResult(b llm.Block) bool { return b.Type == llm.BlockToolResult }
