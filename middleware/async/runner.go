@@ -72,7 +72,9 @@ type Handle interface {
 	// Progress returns recent output of a running task; "" when there is
 	// none or the runner reports none.
 	Progress() string
-	// Send delivers a message to the running task; an error when it cannot.
+	// Send delivers a message to the running task, which should read it
+	// before its next step; ErrFinished (or an error wrapping it) once the
+	// task ended, another error when it cannot take messages.
 	Send(message string) error
 	// Stop asks the task to end; it is a no-op once the task ended. The task
 	// should then end promptly with StatusCancelled.
@@ -88,11 +90,12 @@ type Runner interface {
 	Start(ctx context.Context, req Request) (Handle, error)
 }
 
+// errNoHandle is the start error of a Runner that returned neither a Handle
+// nor an error.
+var errNoHandle = errors.New("the runner returned no task")
+
 // errStopped is the cancel cause of a local task stopped on purpose.
 var errStopped = errors.New("async: task stopped")
-
-// errNoMessages is what the local runner's Send returns.
-var errNoMessages = errors.New("async: this task does not accept messages")
 
 // noTextResult is the result of a task that completed without text.
 const noTextResult = "(the background task returned no text)"
@@ -100,7 +103,8 @@ const noTextResult = "(the background task returned no text)"
 // localRunner runs tasks as subagents of the run that starts them.
 type localRunner struct {
 	specs    map[string]subagents.Subagent
-	launcher *subagents.Launcher
+	launcher *subagents.Launcher // built with inboxes as its extra
+	inboxes  *inboxes
 	timeout  time.Duration
 }
 
@@ -125,20 +129,25 @@ func (l *localRunner) Start(ctx context.Context, req Request) (Handle, error) {
 	if err != nil {
 		return nil, err
 	}
+	box, err := l.inboxes.open(in.ThreadID)
+	if err != nil {
+		return nil, err
+	}
 	stopCtx, stop := context.WithCancelCause(context.WithoutCancel(ctx))
 	runCtx, cancelTimeout := context.WithTimeout(stopCtx, l.timeout)
-	t := &localTask{stop: stop, done: make(chan struct{})}
+	t := &localTask{stop: stop, done: make(chan struct{}), inbox: box}
 	go func() {
 		defer cancelTimeout()
-		t.run(runCtx, child, in)
+		t.run(runCtx, child, in, func() int { return l.inboxes.remove(in.ThreadID) })
 	}()
 	return t, nil
 }
 
 // localTask is the Handle of a subagent running in this process.
 type localTask struct {
-	stop func(cause error)
-	done chan struct{}
+	stop  func(cause error)
+	done  chan struct{}
+	inbox *inbox
 
 	mu       sync.Mutex
 	progress string
@@ -146,8 +155,9 @@ type localTask struct {
 }
 
 // run consumes the subagent's stream to its end, keeping its recent text as
-// progress, then publishes the outcome and closes done, in that order.
-func (t *localTask) run(ctx context.Context, child *agent.Agent, in agent.Input) {
+// progress, then closes the inbox (closeInbox returns how many messages were
+// never read), publishes the outcome and closes done, in that order.
+func (t *localTask) run(ctx context.Context, child *agent.Agent, in agent.Input, closeInbox func() int) {
 	var final *agent.Final
 	for ev := range child.Run(ctx, in) {
 		switch {
@@ -158,6 +168,7 @@ func (t *localTask) run(ctx context.Context, child *agent.Agent, in agent.Input)
 		}
 	}
 	out := localOutcome(final, errors.Is(context.Cause(ctx), errStopped), errors.Is(ctx.Err(), context.DeadlineExceeded))
+	out = withLateUpdates(out, closeInbox())
 	t.mu.Lock()
 	t.out = out
 	t.mu.Unlock()
@@ -245,8 +256,9 @@ func (t *localTask) Progress() string {
 	return t.progress
 }
 
-// Send implements Handle; a local task does not take messages yet.
-func (t *localTask) Send(string) error { return errNoMessages }
+// Send implements Handle: the subagent reads message before its next model
+// call, or before it would end.
+func (t *localTask) Send(message string) error { return t.inbox.send(message) }
 
 // Stop implements Handle: it cancels the subagent's run.
 func (t *localTask) Stop() error {

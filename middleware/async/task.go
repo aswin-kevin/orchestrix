@@ -94,7 +94,8 @@ func (t *task) outcome() (out Outcome, ended time.Time, ok bool) {
 	return t.out, t.ended, true
 }
 
-// progress returns the attached Handle's progress; "" before attach.
+// progress returns the attached Handle's progress, cut to its last
+// DefaultProgressChars bytes whatever the Runner reports; "" before attach.
 func (t *task) progress() string {
 	t.mu.Lock()
 	h := t.h
@@ -102,5 +103,16 @@ func (t *task) progress() string {
 	if h == nil {
 		return ""
 	}
-	return h.Progress()
+	return tail(h.Progress(), DefaultProgressChars)
+}
+
+// send delivers msg to the attached Handle; ErrFinished once the task ended.
+func (t *task) send(msg string) error {
+	t.mu.Lock()
+	h := t.h
+	t.mu.Unlock()
+	if _, _, ok := t.outcome(); ok || h == nil {
+		return ErrFinished
+	}
+	return h.Send(msg)
 }

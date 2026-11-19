@@ -54,6 +54,7 @@ func (m *Middleware) buildTools() []tool.Tool {
 			},
 		}),
 		tool.New(ToolCheck, checkDescription, m.checkTask, tool.WithReadOnly(), tool.WithConcurrent()),
+		tool.New(ToolUpdate, updateDescription, m.updateTask, tool.WithReadOnly()),
 		tool.New(ToolCancel, cancelDescription, m.cancelTask, tool.WithReadOnly()),
 		tool.New(ToolList, listDescription, m.listTasks, tool.WithReadOnly(), tool.WithConcurrent()),
 	}
@@ -121,6 +122,9 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 		return tool.Errorf("cannot start background task: %v", err), nil
 	}
 	h, err := m.runner.Start(ctx, Request{TaskID: j.ID, ThreadID: c.ThreadID, SubagentType: in.SubagentType, Description: in.Description, Call: c})
+	if err == nil && h == nil {
+		err = errNoHandle
+	}
 	if err != nil {
 		// No record: the model learns of the failure from this result.
 		t.fail(err)
@@ -128,6 +132,12 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 		return tool.Errorf("cannot start background task %s: %v", in.SubagentType, err), nil
 	}
 	t.attach(h)
+	if j.Stopped() {
+		// Shutdown came while the Runner started the task, and attach
+		// stopped it; as for a failed start, this result is all there is.
+		m.jobs.MarkNotified(c.ThreadID, j.ID)
+		return tool.Errorf("background tasks are shut down; task %s was stopped as it started", j.ID), nil
+	}
 	addRecord(c.State, TaskRecord{
 		ID: j.ID, ThreadID: c.ThreadID, SubagentType: in.SubagentType, Description: in.Description,
 		Status: StatusRunning, Started: j.Started,
@@ -196,12 +206,35 @@ func (m *Middleware) cancelTask(ctx context.Context, in taskIDInput, c *tool.Cal
 	if err := jobs.Stop(ctx, j, DefaultStopWait); err != nil {
 		return tool.Errorf("%v", err), nil
 	}
+	if _, r, _ = m.lookup(c, in.TaskID); r.Status != StatusCancelled {
+		// It ended on its own first: the notification brings its result.
+		return tool.Text(fmt.Sprintf("Task %s ended before it could be cancelled: %s. You will be notified of its result.", r.ID, r.Status)), nil
+	}
 	// The model asked for the stop, so it needs no notification about it.
 	m.markSeen(c, in.TaskID)
-	if _, r, _ = m.lookup(c, in.TaskID); r.Status != StatusCancelled {
-		return tool.Text(fmt.Sprintf("Task %s ended before it could be cancelled: %s.", r.ID, r.Status)), nil
-	}
 	return tool.Text(fmt.Sprintf("Cancelled task %s.", in.TaskID)), nil
+}
+
+// updateTask sends a message to a running task.
+func (m *Middleware) updateTask(_ context.Context, in UpdateInput, c *tool.Call) (tool.Result, error) {
+	switch {
+	case strings.TrimSpace(in.Message) == "":
+		return tool.Errorf("the message must not be empty"), nil
+	case len(in.Message) > MaxUpdateChars:
+		return tool.Errorf("the message is %d bytes; the limit is %d", len(in.Message), MaxUpdateChars), nil
+	}
+	j, r, ok := m.lookup(c, in.TaskID)
+	if !ok {
+		return tool.Errorf("unknown task %q", in.TaskID), nil
+	}
+	err := ErrFinished
+	if !r.finished() && j != nil {
+		err = j.Handle.send(in.Message)
+	}
+	if err != nil {
+		return tool.Errorf("cannot update task %s: %v", in.TaskID, err), nil
+	}
+	return tool.Text(fmt.Sprintf("Sent the message to task %s; it reads it before its next step.", in.TaskID)), nil
 }
 
 func (m *Middleware) listTasks(_ context.Context, _ listInput, c *tool.Call) (tool.Result, error) {

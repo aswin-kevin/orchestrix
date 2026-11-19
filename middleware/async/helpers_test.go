@@ -3,6 +3,7 @@ package async
 import (
 	"context"
 	"iter"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -95,13 +96,21 @@ type harness struct {
 
 func newHarness(t *testing.T, cfg Config, turns ...llmtest.Turn) *harness {
 	t.Helper()
+	return newHarnessWith(t, cfg, nil, turns...)
+}
+
+// newHarnessWith is newHarness with before ahead of the async middleware in
+// the parent's (and so every child's) middleware.
+func newHarnessWith(t *testing.T, cfg Config, before []agent.Middleware, turns ...llmtest.Turn) *harness {
+	t.Helper()
 	m, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(m.Shutdown)
 	p := llmtest.New(turns...)
-	a, err := agent.New(agent.Config{Provider: p, Middleware: []agent.Middleware{m}, PermissionMode: permission.ModeDefault})
+	mws := append(slices.Clone(before), m)
+	a, err := agent.New(agent.Config{Provider: p, Middleware: mws, PermissionMode: permission.ModeDefault})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,23 +168,6 @@ func call(id, name string, in obj) llmtest.Turn {
 
 func start(id, typ, desc string) llmtest.Turn {
 	return call(id, ToolStart, obj{"subagent_type": typ, "description": desc})
-}
-
-// lastRequestText joins the text of every message of the provider's last
-// request, tool results included.
-func lastRequestText(p *llmtest.Scripted) string {
-	reqs := p.Requests
-	var sb strings.Builder
-	for _, m := range reqs[len(reqs)-1].Messages {
-		for _, b := range m.Content {
-			sb.WriteString(b.Text)
-			for _, c := range b.Content {
-				sb.WriteString(c.Text)
-			}
-		}
-		sb.WriteString("\n")
-	}
-	return sb.String()
 }
 
 // notifications returns the async notifications in the last request; the
@@ -256,3 +248,111 @@ func (h *fakeHandle) Outcome() (Outcome, bool) { return h.out, true }
 func (h *fakeHandle) Progress() string         { return "" }
 func (h *fakeHandle) Send(string) error        { return nil }
 func (h *fakeHandle) Stop() error              { return nil }
+
+// requestText joins the text of every message of req, tool results
+// included.
+func requestText(req llm.Request) string {
+	var sb strings.Builder
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			sb.WriteString(b.Text)
+			for _, c := range b.Content {
+				sb.WriteString(c.Text)
+			}
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// hooks is a test middleware running the functions that are set.
+type hooks struct {
+	beforeModel func(ctx context.Context, s *state.State)
+	afterAgent  func(ctx context.Context, s *state.State)
+}
+
+func (h *hooks) Name() string { return "test-hooks" }
+
+func (h *hooks) BeforeModel(ctx context.Context, s *state.State) error {
+	if h.beforeModel != nil {
+		h.beforeModel(ctx, s)
+	}
+	return nil
+}
+
+func (h *hooks) AfterAgent(ctx context.Context, s *state.State) error {
+	if h.afterAgent != nil {
+		h.afterAgent(ctx, s)
+	}
+	return nil
+}
+
+// funcRunner is a Runner made of a function.
+type funcRunner func(ctx context.Context, req Request) (Handle, error)
+
+func (f funcRunner) Start(ctx context.Context, req Request) (Handle, error) { return f(ctx, req) }
+
+// ctlHandle is a Handle the test ends by hand; Stop ends it with onStop.
+type ctlHandle struct {
+	done   chan struct{}
+	once   sync.Once
+	onStop Outcome
+	stops  atomic.Int32
+
+	mu       sync.Mutex
+	out      Outcome
+	progress string
+}
+
+func newCtlHandle(onStop Outcome) *ctlHandle {
+	return &ctlHandle{done: make(chan struct{}), onStop: onStop}
+}
+
+func (h *ctlHandle) end(out Outcome) {
+	h.once.Do(func() {
+		h.mu.Lock()
+		h.out = out
+		h.mu.Unlock()
+		close(h.done)
+	})
+}
+
+func (h *ctlHandle) Done() <-chan struct{} { return h.done }
+
+func (h *ctlHandle) Outcome() (Outcome, bool) {
+	select {
+	case <-h.done:
+	default:
+		return Outcome{}, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.out, true
+}
+
+func (h *ctlHandle) Progress() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.progress
+}
+
+func (h *ctlHandle) Send(string) error { return nil }
+
+func (h *ctlHandle) Stop() error {
+	h.stops.Add(1)
+	h.end(h.onStop)
+	return nil
+}
+
+// ended returns a handle that already ended with out.
+func ended(out Outcome) *ctlHandle {
+	h := newCtlHandle(out)
+	h.end(out)
+	return h
+}
+
+// hasRecord reports whether s holds a record id.
+func hasRecord(s *state.State, id string) bool {
+	records, _ := TasksKey.Get(s)
+	return slices.ContainsFunc(records, func(r TaskRecord) bool { return r.ID == id })
+}

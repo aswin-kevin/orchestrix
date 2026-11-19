@@ -7,6 +7,7 @@ const DefaultPrompt = `You can run subagents in the background with start_task a
 - Use start_task for independent work that can proceed in parallel with yours; use the task tool instead when you need the answer before you can continue.
 - A background subagent knows nothing of this conversation: put every detail it needs in the description, and say what it should return.
 - You are notified with a message when a task finishes. Use check_task to see a task's progress, or with wait set to wait for it; use list_tasks to see every task and cancel_task to stop one you no longer need.
+- Use update_task to send a running task new instructions or information; it reads them before its next step.
 - Do not give your final answer while a task whose result you need is still running.`
 
 // startDescription is start_task's description; the list of available
@@ -23,3 +24,11 @@ const cancelDescription = "Cancel a running background task."
 
 // listDescription is list_tasks' description.
 const listDescription = "List this conversation's background tasks with their status."
+
+// updateDescription is update_task's description. The "8000" is
+// MaxUpdateChars; descriptions are constants.
+const updateDescription = "Send a message to a running background task, such as new instructions or information it needs. The task reads it before its next step. At most 8000 bytes."
+
+// stopReminder is the prompt of a run about to end while tasks of its
+// thread still run; %s lists their ids.
+const stopReminder = "Background tasks are still running: %s. Wait for them with check_task (wait: true) or cancel them before giving your final answer."

@@ -16,11 +16,13 @@ const (
 	tagResult       = "task-result"
 	tagProgress     = "task-progress"
 	tagDescription  = "task-description"
+	tagUpdate       = "task-update"
+	tagRunning      = "background_tasks"
 )
 
 // neutralize escapes every tag in model-derived text that could open or end
 // one of the middleware's frames.
-var neutralize = promptsafe.NewTagNeutralizer(tagNotification, tagResult, tagProgress, tagDescription)
+var neutralize = promptsafe.NewTagNeutralizer(tagNotification, tagResult, tagProgress, tagDescription, tagUpdate, tagRunning)
 
 // truncatedNote ends an excerpt that was cut.
 const truncatedNote = "\n[truncated]"
@@ -110,4 +112,44 @@ func listEntry(r TaskRecord, now time.Time) string {
 		parts = append(parts, frame(tagResult, excerpt(r.Result, DefaultMaxResultChars)))
 	}
 	return strings.Join(parts, "\n")
+}
+
+// runningList renders the tasks of the running records for the system
+// prompt, one line each with the description cut short to one line; ""
+// without any.
+func runningList(records []TaskRecord, now time.Time) string {
+	var b strings.Builder
+	for _, r := range records {
+		if r.Status != StatusRunning {
+			continue
+		}
+		if b.Len() == 0 {
+			fmt.Fprintf(&b, "<%s>", tagRunning)
+		}
+		fmt.Fprintf(&b, "\n- %s (%s, %s %s): %s", r.ID, r.SubagentType, StatusRunning, runningFor(now.Sub(r.Started)), oneLine(r.Description))
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	fmt.Fprintf(&b, "\n</%s>", tagRunning)
+	return b.String()
+}
+
+// runningFor renders how long a task runs, in whole minutes, so the system
+// prompt changes at most once a minute.
+func runningFor(d time.Duration) string {
+	if d < time.Minute {
+		return "<1m"
+	}
+	return strings.TrimSuffix(d.Truncate(time.Minute).String(), "0s")
+}
+
+// oneLine is the start of a description on a single line, neutralized.
+func oneLine(desc string) string {
+	cut, truncated := promptsafe.CapBytes(desc, descriptionPreviewChars)
+	cut = neutralize(strings.Join(strings.Fields(cut), " "))
+	if truncated {
+		cut += "..."
+	}
+	return cut
 }
