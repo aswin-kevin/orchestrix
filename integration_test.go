@@ -592,7 +592,7 @@ func TestLiveAsyncBackgroundTask(t *testing.T) {
 	prompt := "Use start_task with the general-purpose subagent to compute 17*23 " +
 		"(it should reply with just the number), then call check_task with wait true and tell me the result."
 	in := orchestrix.Text(prompt)
-	in.ThreadID = "async"
+	in.ThreadID = "async" // start_task needs a thread
 	final, events := drain(t, a.Run(ctx, in))
 	requireCompleted(t, final)
 	for _, name := range []string{"start_task", "check_task"} {
@@ -614,6 +614,9 @@ func TestLiveCoordinatorFanOut(t *testing.T) {
 		SystemPrompt: "Reply with the capital city only.",
 	}}},
 		orchestrix.WithPermissionMode(permission.ModeBypass),
+		// Planning, two start_task calls, waiting for both workers (possibly
+		// over several check_task calls) and the answer need more turns than
+		// the other live tests.
 		orchestrix.WithMaxTurns(20),
 	)
 	if err != nil {
@@ -623,7 +626,7 @@ func TestLiveCoordinatorFanOut(t *testing.T) {
 
 	prompt := "Find the capitals of France and Japan using your capital worker, one task per country, in parallel."
 	in := orchestrix.Text(prompt)
-	in.ThreadID = "coordinator"
+	in.ThreadID = "coordinator" // start_task needs a thread
 	final, events := drain(t, c.Run(ctx, in))
 	requireCompleted(t, final)
 	starts := 0
@@ -695,7 +698,7 @@ func TestLiveCompressContext(t *testing.T) {
 	}
 
 	in := orchestrix.Text("Continue.")
-	in.ThreadID = "compress"
+	in.ThreadID = "compress" // with a thread, the originals are archived too
 	const seededTurns = 8
 	for i := range seededTurns {
 		in.Messages = append(in.Messages,
@@ -704,11 +707,26 @@ func TestLiveCompressContext(t *testing.T) {
 	}
 	final, events := drain(t, a.Run(ctx, in))
 	requireCompleted(t, final)
-	if !sawToolUse(events, "compress_context") {
-		t.Error("no compress_context tool use was observed")
+	// The elision must be the one the model's compress_context call made.
+	var rangeID string
+	for _, ev := range events {
+		if ev.Kind == agent.KindToolUse && ev.ToolName == compress.ToolCompress {
+			var input compress.CompressInput
+			if err := json.Unmarshal(ev.Input, &input); err == nil {
+				rangeID = input.RangeID
+			}
+		}
 	}
-	if got, _ := agent.ElisionsKey.Get(final.State); len(got) == 0 {
-		t.Error("the final state records no elisions")
+	if rangeID == "" {
+		t.Fatal("no compress_context tool use with a range_id was observed")
+	}
+	elisions, _ := agent.ElisionsKey.Get(final.State)
+	found := false
+	for _, e := range elisions {
+		found = found || e.ID == rangeID
+	}
+	if !found {
+		t.Errorf("elisions = %+v, want one for the compressed range %q", elisions, rangeID)
 	}
 }
 
