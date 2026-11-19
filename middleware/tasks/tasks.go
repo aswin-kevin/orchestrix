@@ -27,6 +27,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/jobs"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -116,6 +117,13 @@ func outputTail(output string) string {
 
 // finished reports whether the record describes an ended job.
 func (r JobRecord) finished() bool { return r.Status != StatusRunning }
+
+// Thread implements jobs.Record: it returns the record's ThreadID.
+func (r JobRecord) Thread() string { return r.ThreadID }
+
+// Settled implements jobs.Record: it reports whether the job ended and the
+// model was told so, which makes the record one that may be pruned.
+func (r JobRecord) Settled() bool { return r.finished() && r.Notified }
 
 // JobsKey holds the run's job records, oldest first. It is run-local
 // (state.RunLocal): neither a subagent nor a fork inherits the records, since
@@ -294,13 +302,7 @@ func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 // threadRecords returns the run's records of threadID, as stored.
 func (m *Middleware) threadRecords(s *state.State, threadID string) []JobRecord {
 	records, _ := JobsKey.Get(s)
-	var out []JobRecord
-	for _, r := range records {
-		if r.ThreadID == threadID {
-			out = append(out, r)
-		}
-	}
-	return out
+	return jobs.ThreadRecords(records, threadID)
 }
 
 // updateRecords brings the run's records of threadID up to date with the
@@ -309,27 +311,12 @@ func (m *Middleware) threadRecords(s *state.State, threadID string) []JobRecord 
 // its outcome; one whose job the middleware does not know is lost. Records
 // of other threads are kept untouched. edit may be nil.
 func (m *Middleware) updateRecords(s *state.State, threadID string, edit func(*JobRecord)) []JobRecord {
-	var out []JobRecord
-	JobsKey.Update(s, func(records []JobRecord) []JobRecord {
-		records = slices.Clone(records)
-		for i := range records {
-			if records[i].ThreadID != threadID {
-				continue
-			}
-			m.refresh(&records[i])
-			if edit != nil {
-				edit(&records[i])
-			}
+	return jobs.UpdateRecords(s, JobsKey, threadID, m.jobs.MaxFinished(), func(r *JobRecord) {
+		m.refresh(r)
+		if edit != nil {
+			edit(r)
 		}
-		records = pruneRecords(records, m.jobs.MaxFinished())
-		for _, r := range records {
-			if r.ThreadID == threadID {
-				out = append(out, r)
-			}
-		}
-		return records
 	})
-	return out
 }
 
 // refresh updates a running record from its job.
@@ -350,20 +337,5 @@ func (m *Middleware) refresh(r *JobRecord) {
 }
 
 // pruneRecords drops the oldest records the model has already been told
-// about, keeping at most keep of them, so the records stay bounded.
-func pruneRecords(records []JobRecord, keep int) []JobRecord {
-	settled := 0
-	for _, r := range records {
-		if r.finished() && r.Notified {
-			settled++
-		}
-	}
-	excess := settled - keep
-	return slices.DeleteFunc(records, func(r JobRecord) bool {
-		if excess > 0 && r.finished() && r.Notified {
-			excess--
-			return true
-		}
-		return false
-	})
-}
+// about, keeping at most keep of them (see jobs.PruneRecords).
+func pruneRecords(records []JobRecord, keep int) []JobRecord { return jobs.PruneRecords(records, keep) }
