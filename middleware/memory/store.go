@@ -177,8 +177,8 @@ func (s *store) load(ctx context.Context, b backend.Backend) (entries []Entry, u
 		if info.IsDir || file == IndexFile || path.Ext(file) != entryExt {
 			continue
 		}
-		e, ok := s.readEntry(ctx, b, file)
-		if !ok {
+		e, err := s.readEntry(ctx, b, file)
+		if err != nil {
 			unreadable = append(unreadable, file)
 			continue
 		}
@@ -189,20 +189,27 @@ func (s *store) load(ctx context.Context, b backend.Backend) (entries []Entry, u
 	return entries, unreadable, nil
 }
 
-// readEntry parses one file of the store; ok is false when it is not a
-// well-formed entry.
-func (s *store) readEntry(ctx context.Context, b backend.Backend, file string) (Entry, bool) {
+// errNotEntry marks a file that exists but is not a well-formed entry:
+// binary, without frontmatter, with malformed YAML or with an empty name.
+var errNotEntry = errors.New("not a readable memory")
+
+// readEntry parses one file of the store. It fails with the backend's error
+// (backend.ErrNotFound when the file is missing) or with errNotEntry.
+func (s *store) readEntry(ctx context.Context, b backend.Backend, file string) (Entry, error) {
 	res, err := b.Read(ctx, path.Join(s.dir, file), 0, 0)
-	if err != nil || res.Binary {
-		return Entry{}, false
+	if err != nil {
+		return Entry{}, err
+	}
+	if res.Binary {
+		return Entry{}, errNotEntry
 	}
 	var e Entry
 	body, ok, err := frontmatter.Parse([]byte(strings.Join(res.Lines, "\n")), &e)
 	if err != nil || !ok || e.Name == "" {
-		return Entry{}, false
+		return Entry{}, errNotEntry
 	}
 	e.Body, e.File = strings.TrimSpace(body), file
-	return e, true
+	return e, nil
 }
 
 // validate checks a record request and returns the entry's slug.
@@ -238,6 +245,14 @@ func (e *collisionError) Error() string {
 	return fmt.Sprintf("memory %q would be stored in %s, which holds the memory %q", e.name, e.file, e.existing)
 }
 
+// unreadableError reports that a name's slug is the file of something that is
+// not a readable memory, which record refuses to overwrite.
+type unreadableError struct{ file string }
+
+func (e *unreadableError) Error() string {
+	return fmt.Sprintf("Not saved: %s exists but is not a readable memory. Pick a different name, or fix or delete that file first.", e.file)
+}
+
 // sameName reports whether two entry names are the same up to case and
 // whitespace.
 func sameName(a, b string) bool {
@@ -247,7 +262,9 @@ func sameName(a, b string) bool {
 // record creates or updates the entry for in and rebuilds the index. An
 // existing entry of the same name (see sameName) keeps its Created time; an
 // existing entry of another name that shares the slug is left alone and a
-// *collisionError returned. It returns the entry's path and whether it
+// *collisionError returned. A file at the slug path that is not a readable
+// entry is left alone too, with an *unreadableError; only a missing file
+// means create. It returns the entry's path and whether it
 // replaced an existing entry.
 func (s *store) record(ctx context.Context, b backend.Backend, in RecordInput) (p string, updated bool, err error) {
 	slug, err := in.validate()
@@ -262,11 +279,17 @@ func (s *store) record(ctx context.Context, b backend.Backend, in RecordInput) (
 		Name: strings.TrimSpace(in.Name), Description: strings.TrimSpace(in.Description),
 		Type: in.Type, Created: now, Updated: now,
 	}
-	if old, ok := s.readEntry(ctx, b, slug+entryExt); ok {
+	old, err := s.readEntry(ctx, b, slug+entryExt)
+	switch {
+	case err == nil:
 		if !sameName(old.Name, e.Name) {
 			return "", false, &collisionError{name: e.Name, existing: old.Name, file: old.File}
 		}
 		e.Created, updated = old.Created, true
+	case errors.Is(err, errNotEntry):
+		return "", false, &unreadableError{file: p}
+	case !errors.Is(err, backend.ErrNotFound):
+		return "", false, err
 	}
 	data, err := frontmatter.Render(e, strings.TrimSpace(in.Content)+"\n")
 	if err != nil {

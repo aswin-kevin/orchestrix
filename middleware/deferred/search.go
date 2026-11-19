@@ -70,6 +70,7 @@ func (m *middleware) runSearch(ctx context.Context, in SearchInput, c *tool.Call
 		names[i] = t.Name()
 	}
 	Unlock(c.State, names...)
+	recordSearched(c.State, names)
 	return tool.Text(strings.Join(entries, "\n\n")), nil
 }
 

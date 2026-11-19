@@ -69,8 +69,9 @@ func SetPermissionMode(s *state.State, m permission.Mode) error {
 // tool's own SelfCheck, made under the mode of call.State (see
 // PermissionMode). call.Tool is used when set, else the tool named
 // call.Name (from the current turn's tools when ctx belongs to a run of a);
-// for a name the agent does not know, only Tool and Input are set. ctx is passed to the tool's own CheckPermission, and a panic in the
-// tool's methods propagates to the caller.
+// for a name the agent does not know, only Tool and Input are set. ctx is
+// passed to the tool's own CheckPermission, and a panic in the tool's
+// methods propagates to the caller.
 func (a *Agent) PermissionRequest(ctx context.Context, call *ToolCall) permission.Request {
 	t, ok := a.toolFor(ctx, call)
 	if !ok {

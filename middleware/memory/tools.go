@@ -75,9 +75,13 @@ func (s *store) recordTool() tool.Tool {
 		func(ctx context.Context, in RecordInput, c *tool.Call) (tool.Result, error) {
 			p, updated, err := s.record(ctx, c.Backend, in)
 			var collision *collisionError
-			if errors.As(err, &collision) {
-				return tool.Text(fmt.Sprintf("Not saved: %s. Use the name %q to update that memory, or pick a more distinct name.",
-					collision.Error(), collision.existing)), nil
+			var unreadable *unreadableError
+			switch {
+			case errors.As(err, &collision):
+				return tool.Errorf("Not saved: %s. Use the name %q to update that memory, or pick a more distinct name.",
+					collision.Error(), collision.existing), nil
+			case errors.As(err, &unreadable):
+				return tool.Errorf("%s", unreadable.Error()), nil
 			}
 			if err != nil {
 				return tool.Errorf("record failed: %v", err), nil
