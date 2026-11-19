@@ -2,6 +2,7 @@ package orxotel
 
 import (
 	"context"
+	"errors"
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -29,7 +30,11 @@ type Config struct {
 	// ProviderName is reported as gen_ai.provider.name (for example
 	// "anthropic" or "openai"); empty leaves it out.
 	ProviderName string
-	// CaptureContent records tool call arguments and results.
+	// CaptureContent records tool call arguments and results. The arguments
+	// are the input as this middleware receives it, after any middleware
+	// added before it has changed it. It does not cover Go errors: a tool's
+	// or model's error message is always the status description and the
+	// exception event of its span.
 	CaptureContent bool
 	// MaxContentBytes caps each captured value; 0 means 4096.
 	MaxContentBytes int
@@ -159,6 +164,13 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 // WrapTool implements agent.ToolWrapper: it traces one tool execution. The
 // span's context goes to next, so a subagent run started by the tool is a
 // child of this span.
+//
+// Captured arguments are call.Input as this middleware receives it. A Go
+// error from next is recorded with its message even without content
+// capture, except an *agent.Interrupt or agent.ErrStopRun: they pause or
+// stop the run on purpose, so the span keeps status Unset and gets
+// orchestrix.tool.outcome instead. A panic marks the span as an error and
+// is re-raised for the agent loop to recover.
 func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	attrs := []attribute.KeyValue{
 		attribute.String(keyOperationName, opExecuteTool),
@@ -177,9 +189,20 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 		trace.WithAttributes(attrs...),
 	)
 	defer span.End()
+	defer func() {
+		if v := recover(); v != nil {
+			span.SetAttributes(attribute.Bool(keyToolIsError, true))
+			span.SetStatus(codes.Error, "tool panicked")
+			panic(v)
+		}
+	}()
 
 	res, err := next(ctx, call)
 	if err != nil {
+		if outcome := controlOutcome(err); outcome != "" {
+			span.SetAttributes(attribute.String(keyToolOutcome, outcome))
+			return res, err
+		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return res, err
@@ -196,6 +219,19 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 		span.SetStatus(codes.Error, text)
 	}
 	return res, nil
+}
+
+// controlOutcome returns the orchestrix.tool.outcome of an error that
+// pauses or stops the run on purpose, or "" for a real failure.
+func controlOutcome(err error) string {
+	var intr *agent.Interrupt
+	switch {
+	case errors.As(err, &intr):
+		return outcomeInterrupted
+	case errors.Is(err, agent.ErrStopRun):
+		return outcomeStopped
+	}
+	return ""
 }
 
 // capped returns s cut to at most MaxContentBytes, on a rune boundary.

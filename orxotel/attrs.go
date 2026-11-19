@@ -41,6 +41,14 @@ const (
 	keyToolVia         = "orchestrix.tool.via"
 	keyToolApproved    = "orchestrix.tool.approved"
 	keyToolIsError     = "orchestrix.tool.is_error"
+	keyToolOutcome     = "orchestrix.tool.outcome"
+)
+
+// Values of orchestrix.tool.outcome: a tool call that ended the run's turn
+// on purpose rather than failing.
+const (
+	outcomeInterrupted = "interrupted"
+	outcomeStopped     = "stopped"
 )
 
 // The fallback event and its attribute keys.

@@ -2,13 +2,18 @@ package orxotel_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/checkpoint/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
@@ -17,6 +22,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -227,8 +233,51 @@ func TestCaptureContent(t *testing.T) {
 	}
 }
 
+// barrier releases its waiters once n of them have arrived, or after a
+// timeout, which it records, so a test without concurrency fails instead
+// of hanging.
+type barrier struct {
+	arrived  chan struct{}
+	release  chan struct{}
+	timedOut atomic.Bool
+}
+
+func newBarrier(n int) *barrier {
+	b := &barrier{arrived: make(chan struct{}, n), release: make(chan struct{})}
+	go func() {
+		defer close(b.release)
+		timeout := time.After(5 * time.Second)
+		for range n {
+			select {
+			case <-b.arrived:
+			case <-timeout:
+				b.timedOut.Store(true)
+				return
+			}
+		}
+	}()
+	return b
+}
+
+func (b *barrier) wait() {
+	b.arrived <- struct{}{}
+	<-b.release
+}
+
+// barrierTool is a concurrent read-only echo that returns only once every
+// call sharing b has started.
+func barrierTool(name string, b *barrier) tool.Tool {
+	return tool.New(name, "Echo the text back.",
+		func(_ context.Context, in textInput, _ *tool.Call) (tool.Result, error) {
+			b.wait()
+			return tool.Text(in.Text), nil
+		},
+		tool.WithReadOnly(), tool.WithConcurrent())
+}
+
 func TestParallelToolSpans(t *testing.T) {
 	rec, tp := newRecorder(t)
+	barrier := newBarrier(3)
 	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
 		{ToolCalls: []llmtest.Call{
 			{ID: "a", Name: "echo", Input: map[string]any{"text": "A"}},
@@ -236,9 +285,12 @@ func TestParallelToolSpans(t *testing.T) {
 			{ID: "c", Name: "lookup", Input: map[string]any{"text": "C"}},
 		}},
 		{Text: "done"},
-	}, orchestrix.WithTools(echoTool("echo"), echoTool("lookup")))
+	}, orchestrix.WithTools(barrierTool("echo", barrier), barrierTool("lookup", barrier)))
 
 	drain(t, a.Run(context.Background(), prompt("hi")))
+	if barrier.timedOut.Load() {
+		t.Fatal("the three tools did not all run at once")
+	}
 
 	run := oneSpan(t, rec, "invoke_agent worker")
 	spans := append(spansNamed(rec, "execute_tool echo"), spansNamed(rec, "execute_tool lookup")...)
@@ -287,6 +339,9 @@ func TestSubagentSpanNesting(t *testing.T) {
 	if childRun == nil {
 		t.Fatal("no child run span")
 	}
+	if childRun.Name() != "invoke_agent reviewer" {
+		t.Errorf("child run span = %q, want %q", childRun.Name(), "invoke_agent reviewer")
+	}
 	wantChild(t, childRun, task)
 	wantAttr(t, childRun, "orchestrix.run.depth", int64(1))
 
@@ -300,4 +355,146 @@ func TestSubagentSpanNesting(t *testing.T) {
 	if childChat != 1 {
 		t.Errorf("child chat spans = %d, want 1", childChat)
 	}
+}
+
+func TestChatSpanTemperature(t *testing.T) {
+	rec, tp := newRecorder(t)
+	temp := 0.25
+	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{{Text: "ok"}},
+		withModel("m"), orchestrix.WithConfig(func(c *agent.Config) { c.Temperature = &temp }))
+
+	drain(t, a.Run(context.Background(), prompt("hi")))
+
+	wantAttr(t, oneSpan(t, rec, "chat m"), "gen_ai.request.temperature", 0.25)
+}
+
+// failingTool returns a tool that runs fn.
+func failingTool(name string, fn func() (tool.Result, error)) tool.Tool {
+	return tool.New(name, "Fails in some way.",
+		func(context.Context, textInput, *tool.Call) (tool.Result, error) { return fn() },
+		tool.WithReadOnly())
+}
+
+// hasException reports whether s recorded an exception event.
+func hasException(s sdktrace.ReadOnlySpan) bool {
+	for _, ev := range s.Events() {
+		if ev.Name == "exception" {
+			return true
+		}
+	}
+	return false
+}
+
+// runOneCall runs an agent whose model calls the tool t once, then answers.
+func runOneCall(t *testing.T, tl tool.Tool, opts ...orchestrix.Option) (*tracetest.SpanRecorder, *agent.Final) {
+	t.Helper()
+	rec, tp := newRecorder(t)
+	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
+		{ToolCalls: []llmtest.Call{{ID: "c1", Name: tl.Name(), Input: map[string]any{"text": "x"}}}},
+		{Text: "done"},
+	}, append([]orchestrix.Option{orchestrix.WithTools(tl)}, opts...)...)
+	return rec, drain(t, a.Run(context.Background(), prompt("hi")))
+}
+
+func TestToolGoError(t *testing.T) {
+	rec, _ := runOneCall(t, failingTool("broken", func() (tool.Result, error) {
+		return tool.Result{}, errors.New("disk gone")
+	}))
+
+	s := oneSpan(t, rec, "execute_tool broken")
+	if s.Status().Code != codes.Error || s.Status().Description != "disk gone" {
+		t.Errorf("status = %v %q, want error %q", s.Status().Code, s.Status().Description, "disk gone")
+	}
+	if !hasException(s) {
+		t.Error("no exception event recorded")
+	}
+	noAttr(t, s, "orchestrix.tool.outcome")
+}
+
+func TestToolInterruptIsNotAnError(t *testing.T) {
+	rec, final := runOneCall(t, failingTool("ask", func() (tool.Result, error) {
+		return tool.Result{}, &agent.Interrupt{Requests: []agent.ActionRequest{{Reason: "need a human"}}}
+	}), orchestrix.WithCheckpointer(memory.New()))
+	if final.Reason != agent.ReasonInterrupted {
+		t.Fatalf("reason = %s, want interrupted", final.Reason)
+	}
+
+	s := oneSpan(t, rec, "execute_tool ask")
+	if s.Status().Code != codes.Unset {
+		t.Errorf("status = %v %q, want unset", s.Status().Code, s.Status().Description)
+	}
+	if hasException(s) {
+		t.Error("an interrupt was recorded as an exception")
+	}
+	wantAttr(t, s, "orchestrix.tool.outcome", "interrupted")
+}
+
+func TestToolStopRunIsNotAnError(t *testing.T) {
+	rec, final := runOneCall(t, failingTool("halt", func() (tool.Result, error) {
+		return tool.Result{}, fmt.Errorf("enough: %w", agent.ErrStopRun)
+	}))
+	if final.Reason != agent.ReasonHookStopped {
+		t.Fatalf("reason = %s, want hook_stopped", final.Reason)
+	}
+
+	s := oneSpan(t, rec, "execute_tool halt")
+	if s.Status().Code != codes.Unset {
+		t.Errorf("status = %v %q, want unset", s.Status().Code, s.Status().Description)
+	}
+	if hasException(s) {
+		t.Error("a stop was recorded as an exception")
+	}
+	wantAttr(t, s, "orchestrix.tool.outcome", "stopped")
+}
+
+func TestToolPanic(t *testing.T) {
+	rec, final := runOneCall(t, failingTool("crash", func() (tool.Result, error) {
+		panic("kaboom")
+	}))
+	if final.Reason != agent.ReasonCompleted {
+		t.Fatalf("reason = %s, want completed (the loop recovers the panic)", final.Reason)
+	}
+
+	s := oneSpan(t, rec, "execute_tool crash")
+	if s.Status().Code != codes.Error {
+		t.Errorf("status = %v, want error", s.Status().Code)
+	}
+	wantAttr(t, s, "orchestrix.tool.is_error", true)
+}
+
+// dispatchTool names another tool and its input, like call_tool.
+type dispatchTool struct{ tool.Tool }
+
+func (dispatchTool) Dispatch(in json.RawMessage) (string, json.RawMessage, error) {
+	var d struct {
+		Name  string          `json:"name"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(in, &d); err != nil {
+		return "", nil, err
+	}
+	return d.Name, d.Input, nil
+}
+
+func TestToolSpanVia(t *testing.T) {
+	type dispatchInput struct {
+		Name  string         `json:"name"`
+		Input map[string]any `json:"input"`
+	}
+	dispatcher := dispatchTool{tool.New("call_tool", "Call another tool.",
+		func(context.Context, dispatchInput, *tool.Call) (tool.Result, error) {
+			return tool.Errorf("call_tool ran itself"), nil
+		}, tool.WithReadOnly())}
+	rec, tp := newRecorder(t)
+	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
+		{ToolCalls: []llmtest.Call{{ID: "c1", Name: "call_tool",
+			Input: map[string]any{"name": "echo", "input": map[string]any{"text": "hi"}}}}},
+		{Text: "done"},
+	}, orchestrix.WithTools(dispatcher, echoTool("echo")))
+
+	drain(t, a.Run(context.Background(), prompt("hi")))
+
+	s := oneSpan(t, rec, "execute_tool echo")
+	wantAttr(t, s, "gen_ai.tool.name", "echo")
+	wantAttr(t, s, "orchestrix.tool.via", "call_tool")
 }
