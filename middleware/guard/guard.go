@@ -7,8 +7,10 @@
 // carry input, so a resumed run is not checked again. A blocked input ends
 // the run with agent.ReasonHookStopped and an error naming the check.
 // ToolCall checks see the tool's name and JSON arguments of every call, at
-// any depth; a blocked call is not run and gets an error result naming the
-// check, so the model can adapt. All checks for one target go in one Decide
+// any depth. The arguments are decoded and encoded again first, so string
+// escapes such as \u0072 cannot hide what the tool will receive; arguments
+// that are not valid JSON fail every check. A blocked call is not run and
+// gets an error result naming the check, so the model can adapt. All checks for one target go in one Decide
 // call. Text longer than Config.MaxInputBytes is never sent to the decider,
 // nor checked by a prefix: every check of that target fails, as if the
 // decider had erred, so by default the input or call is blocked. Raise
@@ -32,9 +34,12 @@
 package guard
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -179,7 +184,7 @@ func (m *middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 	if text == "" {
 		return nil
 	}
-	blockedBy, failed := m.evaluate(ctx, s, "input", text, m.input)
+	blockedBy, failed := m.evaluate(ctx, s, "input", text, nil, m.input)
 	switch {
 	case blockedBy != "":
 		return fmt.Errorf("guard: check %q blocked the input: %w", blockedBy, agent.ErrStopRun)
@@ -194,8 +199,9 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 	if len(m.tool) == 0 {
 		return next(ctx, call)
 	}
-	text := "Tool: " + call.Name + "\nArguments:\n" + string(call.Input)
-	blockedBy, failed := m.evaluate(ctx, call.State, "tool:"+call.Name, text, m.tool)
+	args, err := plainArguments(call.Input)
+	text := "Tool: " + call.Name + "\nArguments:\n" + args
+	blockedBy, failed := m.evaluate(ctx, call.State, "tool:"+call.Name, text, err, m.tool)
 	switch {
 	case blockedBy != "":
 		return tool.Errorf("blocked by guard check %q", blockedBy), nil
@@ -208,12 +214,15 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 // evaluate asks the decider every check in one call and records a verdict
 // per check in s. It returns the first check whose answer blocks, and
 // whether some check could not be completed while the guard fails closed.
-func (m *middleware) evaluate(ctx context.Context, s *state.State, target, text string, checks []Check) (blockedBy string, failed bool) {
+// A non-nil textErr means text could not be prepared: every check fails.
+func (m *middleware) evaluate(ctx context.Context, s *state.State, target, text string, textErr error, checks []Check) (blockedBy string, failed bool) {
 	var resp *llm.DecisionResponse
-	var err error
-	if len(text) > m.maxInput {
+	err := textErr
+	switch {
+	case err != nil:
+	case len(text) > m.maxInput:
 		err = fmt.Errorf("guard: input is %d bytes, over the %d-byte limit", len(text), m.maxInput)
-	} else {
+	default:
 		resp, err = m.decide(ctx, text, checks)
 	}
 	verdicts := make([]Verdict, len(checks))
@@ -268,6 +277,33 @@ func (m *middleware) decide(ctx context.Context, text string, checks []Check) (*
 		err = errors.New("guard: decider returned no response")
 	}
 	return resp, err
+}
+
+// plainArguments returns a tool call's JSON arguments as the tool will
+// receive them: decoded and encoded again, so string escapes such as
+// \u0072 cannot hide their meaning from the decider. Only quotes,
+// backslashes and control characters stay escaped. Arguments that are not a
+// single valid JSON value are an error. Empty arguments stay empty.
+func plainArguments(raw json.RawMessage) (string, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return "", nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber() // keep numbers exactly as written
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return "", fmt.Errorf("guard: tool arguments are not valid JSON: %w", err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return "", errors.New("guard: tool arguments are not a single JSON value")
+	}
+	var sb strings.Builder
+	enc := json.NewEncoder(&sb)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return "", fmt.Errorf("guard: encode tool arguments: %w", err)
+	}
+	return strings.TrimSuffix(sb.String(), "\n"), nil
 }
 
 // userText joins the text of the user messages in msgs.
