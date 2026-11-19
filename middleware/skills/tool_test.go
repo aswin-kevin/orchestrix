@@ -560,7 +560,8 @@ func resultTextBlock(b llm.Block) string {
 	return sb.String()
 }
 
-// This guards the keep clause: it passes without it only if nothing relocks.
+// A guard written to pass from the start: it fails if the relock ever drops
+// a loaded skill's tools from the keep set.
 func TestLoadedSkillKeepsUnlockWhenPinRemoved(t *testing.T) {
 	dir := t.TempDir()
 	pinRun(t, dir, []string{"pdf"},
@@ -641,13 +642,16 @@ func TestRemovedScopePinRelocks(t *testing.T) {
 func TestSearchGrantUnderRemovedGlobPinStays(t *testing.T) {
 	m, s := relockMiddleware(t), state.New()
 	beginRun(t, m, s, "m")
-	deferred.Unlock(s, "mcp__x__y") // as search_tools does
+	// An exact-name grant made outside the pin, which the relock does not
+	// record (search_tools would also add it to Searched): Lock removes only
+	// the pin's own pattern, so it stays.
+	deferred.Unlock(s, "mcp__x__y")
 	beginRun(t, m, s)
 	if deferred.Unlocked(s, "mcp__x__z") {
 		t.Fatal("the pin's glob must be relocked")
 	}
 	if !deferred.Unlocked(s, "mcp__x__y") {
-		t.Fatal("a name search_tools granted must stay unlocked")
+		t.Fatal("an exact-name grant under the removed glob must stay unlocked")
 	}
 }
 

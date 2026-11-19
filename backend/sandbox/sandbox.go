@@ -24,11 +24,14 @@
 // listings run wc and date per entry, so Glob and Grep over very large trees
 // are slow. Grep prunes .git and node_modules directories, like backend/disk.
 // Writes fill a temporary ".orx-tmp-<16 hex digits>" file next to the
-// target, and listings hide names of exactly that form. A file the sandbox
-// user cannot read is listed with size 0 (and its real mtime); Grep skips it. A file that grows by more than a few KiB between
-// the size check and the transfer in Read or Grep fails safely: the output
-// exceeds the cap computed from the earlier size and the operation returns a
-// truncation error, never partial content.
+// target, and listings hide names of exactly that form. Nothing sweeps them:
+// a write cut off between chunks (the executor died, the sandbox restarted)
+// leaves its temporary file behind, hidden but using space, until removed by
+// hand. A file the sandbox user cannot read is listed with size 0 (and its
+// real mtime); Grep skips it. A file that grows by more than a few KiB
+// between the size check and the transfer in Read or Grep fails safely: the
+// output exceeds the cap computed from the earlier size and the operation
+// returns a truncation error, never partial content.
 // A listing whose tools fail (an unsupported find flag, date -r erroring on
 // an existing entry) is an error, never a silently empty result.
 //
@@ -74,8 +77,9 @@ type Options struct {
 
 // Backend implements backend.Backend, backend.MultiEditor and
 // backend.Executor using only exec.Execute. The sandbox needs a POSIX sh with
-// mkdir, mv, rm, wc, base64 (with -d), find (with -H, -mindepth, -maxdepth
-// and -exec ... {} +) and date -r FILE. GNU coreutils and findutils, busybox,
+// mkdir, mv, rm, wc, tail (with -c), a true executable, base64 (with -d),
+// find (with -H, -mindepth, -maxdepth and -exec ... {} +) and date -r FILE.
+// GNU coreutils and findutils, busybox,
 // macOS and FreeBSD provide them; OpenBSD and NetBSD, whose date -r takes
 // only seconds, are not supported.
 type Backend struct {

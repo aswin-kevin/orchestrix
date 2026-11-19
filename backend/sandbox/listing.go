@@ -28,9 +28,12 @@ const (
 var skippedDirs = []string{".git", "node_modules"}
 
 // listPreflight runs before an error-tolerant listing and fails loudly when
-// wc, date -r or find's -H, -mindepth, -maxdepth and -exec {} + are
-// unsupported, so a missing tool is an error rather than an empty result.
+// wc, tail -c (which captureStderr reads stderr with), date -r, true or
+// find's -H, -mindepth, -maxdepth and -exec {} + are unsupported, so a
+// missing tool is an error rather than an empty result or an unreported
+// failure.
 var listPreflight = `wc -c < /dev/null >/dev/null` + orFail +
+	`tail -c 1 < /dev/null >/dev/null` + orFail +
 	`date -r "$p" +%s >/dev/null` + orFail +
 	`find -H "$p" -mindepth 0 -maxdepth 0 -exec true {} +` + orFail
 
@@ -69,9 +72,9 @@ func pruneSkipped() string {
 
 // captureStderr runs cmd with its stdout passed through and the last
 // stderrKeepBytes of its stderr collected, then appends that as the final
-// section after stderrMarker. The listing tolerates find's own exit status (unreadable
-// directories are skipped, as backend/disk does); failures that matter
-// surface as recordFailed records.
+// section after stderrMarker. The listing tolerates find's own exit status
+// (unreadable directories are skipped, as backend/disk does); failures that
+// matter surface as recordFailed records.
 func captureStderr(cmd string) string {
 	return "{ e=$( ( " + cmd + " 2>&1 >&3 ) | tail -c " + strconv.Itoa(stderrKeepBytes) + " ); } 3>&1\n" +
 		`printf '\000S\t%s' "$e"` + "\n"

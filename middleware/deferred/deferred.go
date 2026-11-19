@@ -10,8 +10,8 @@
 //
 // Both kinds share one per-run unlock set, UnlockedKey; search_tools also
 // records the names it unlocked in a second private key, read with Searched,
-// so a middleware that relocks its own grants can leave those alone. Nothing here weakens
-// a permission check: call_tool is a tool.Dispatcher, so the agent loop runs
+// so a middleware that relocks its own grants can leave those alone. Nothing
+// here weakens a permission check: call_tool is a tool.Dispatcher, so the agent loop runs
 // its target through the same permission rules, mode, approvals, hitl and
 // hooks as a direct call, and the Defer and Gate wrappers forward every
 // permission-relevant interface of the tool they wrap.
