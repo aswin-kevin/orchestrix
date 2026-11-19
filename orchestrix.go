@@ -37,7 +37,8 @@ import (
 // model is either a spec string such as "anthropic:claude-sonnet-4-5" or
 // "openai:gpt-4.1" (credentials and base URL come from the environment, see
 // llm.ParseModel), or a ready llm.Provider. When a spec string is given, its
-// model name also selects the model profile.
+// model name also selects the model profile. WithFallback and
+// WithFallbackConfig add backup models behind it.
 //
 // Without WithBackend, WithBackendFactory or WithShell, each thread gets its
 // own in-memory workspace; it lives as long as the agent and, with
@@ -51,6 +52,8 @@ func New(model any, opts ...Option) (*agent.Agent, error) {
 		opt(s)
 	}
 	if err := s.resolveModel(model); err != nil {
+		s.errs = append(s.errs, err)
+	} else if err := s.applyFallback(model); err != nil {
 		s.errs = append(s.errs, err)
 	}
 	s.validate()

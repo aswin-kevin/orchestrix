@@ -105,7 +105,7 @@ func main() {
 }
 ```
 
-`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTokens`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithOutputType`/`WithOutputSchema`, `WithProfiles`, `WithMount`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
+`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTokens`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithOutputType`/`WithOutputSchema`, `WithFallback`/`WithFallbackConfig`, `WithProfiles`, `WithMount`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
 
 ## Examples
 
@@ -120,6 +120,7 @@ The [`examples`](examples) directory holds small, runnable programs, one per fea
 | [`coordinator`](examples/coordinator) | `coordinator.New` delegating to a researcher and a writer, then `coordinator.RunParallel` answering three questions at once. |
 | [`self-check`](examples/self-check) | `WithRubric`: the first answer fails the rubric, the revision passes, and the grades are printed. |
 | [`structured-output`](examples/structured-output) | `WithOutputType` and `RunTyped`: the first answer is prose, one automatic correction later the final answer decodes into a Go struct. |
+| [`fallback`](examples/fallback) | `WithFallbackConfig`: the primary model is overloaded, the call moves to a backup and `OnFallback` reports the switch. |
 
 ```sh
 go run ./examples/quickstart
@@ -129,6 +130,7 @@ go run ./examples/background-tasks
 go run ./examples/coordinator
 go run ./examples/self-check
 go run ./examples/structured-output
+go run ./examples/fallback
 ```
 
 Set `ORX_MODEL` (the variable `orx` reads) to run the same programs against a real model, with the API key from the provider's usual variable:
@@ -138,7 +140,7 @@ ANTHROPIC_API_KEY=... ORX_MODEL=anthropic:claude-sonnet-4-5 go run ./examples/qu
 OPENAI_API_KEY=... ORX_MODEL=openai:gpt-4o go run ./examples/coordinator
 ```
 
-A live run stops at once, naming the variable, when the provider's API key is not set.
+A live run stops at once, naming the variable, when the provider's API key is not set. The `fallback` example also needs `ORX_FALLBACK_MODEL`, the backup's spec; a healthy primary answers without any switch, so see the example's doc comment for how to force one.
 
 To copy an example into your own module, replace `exmodel.Model(...)` with your model spec (such as `"anthropic:claude-sonnet-4-5"`) or an `llm.Provider`, leave out `exmodel.Sub` and `exmodel.SubHeld` (a subagent without a `Provider` uses its parent's model) and `exmodel.Check` and `exmodel.WaitTasks` (they only keep the examples predictable), and replace `exmodel.Safe` with your own escaping of model text before printing it: `exmodel` and the `termsafe` package behind it are internal to this repository and cannot be imported from outside it.
 
@@ -159,6 +161,44 @@ orchestrix.New("openai-responses:gpt-4o")
 ```
 
 Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. For full control (proxy, headers, retries, rate limits), build an `llm.Config`, create a provider with `llm.New`, and pass it to `orchestrix.New` instead of a string.
+
+## Model fallback
+
+`WithFallback` lists backup models behind the one given to `New`. Each backup is a model spec string or an `llm.Provider`:
+
+```go
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
+	orchestrix.WithFallback("openai:gpt-4o"))
+```
+
+The agent keeps the primary's model name and profile. For control over the cool-down, the trigger and a switch callback, use `WithFallbackConfig`: the model given to `New` is the first entry (the primary) and `cfg.Entries` are the backups, at least one. `New` fails when a backup is invalid or missing, or when both options are used. `llm.NewFallback` builds the same provider for use outside `New`.
+
+```go
+orchestrix.WithFallbackConfig(llm.FallbackConfig{
+	Entries:  []llm.FallbackEntry{{Provider: backup, Name: "backup"}},
+	Cooldown: time.Minute,
+	OnFallback: func(ctx context.Context, ev llm.FallbackEvent) {
+		log.Printf("model switched: %s -> %s: %v", ev.From, ev.To, ev.Err)
+	},
+})
+```
+
+Behaviour:
+
+- **Triggers.** A call moves to the next entry when the error is retryable (HTTP 408, 409, 429, 5xx or 529, or a network error) and not a context overflow. A cancelled context, a 400 and an authentication error never switch and come back unchanged. `ShouldFallback` replaces this rule. The error of the last entry is returned when every entry fails.
+- **Cool-down.** An entry that failed with a fallback error is skipped for `Cooldown` (default 30 seconds; a negative value turns it off), so traffic stays on the backup for that long after an outage even if the primary has recovered. When every entry is cooling down, they are all tried again.
+- **Model and `MaxTokens`.** A backup answers with the model it was built with, not the primary's. `MaxTokens` is lowered to the backup's output limit when `FallbackEntry.Model` (set automatically for spec strings) matches a registered profile; otherwise it is left as is.
+- **Provenance.** Reply blocks are stamped with the name of the entry that answered, and a provider never receives another entry's signatures, thinking or provider data, so a conversation can move from one model to another and back.
+- **Streaming.** A stream switches only before the failing attempt has produced content. After the first content event an error is returned as it is, so text is never duplicated or mixed; `OnFallback` is not called, but the entry still starts its cool-down.
+- **Concurrency.** The provider is safe for concurrent use. Calls already in flight when the primary starts failing may each reach it once before the failure is recorded; later calls skip it for the cool-down.
+- **Visibility.** Usage is reported per call as usual, but which model answered shows only in `OnFallback` and in the stamp on the reply blocks.
+
+Two limits are not handled for you:
+
+- **Context window.** The agent sizes requests for the primary's profile. A backup with a smaller window answers with prompt-too-long errors, which never trigger a switch. Choose backups whose window is at least the primary's.
+- **Thinking on Anthropic backups.** With extended thinking enabled, Anthropic may reject a history whose last tool-use turn came from another provider and so has no thinking block. Turn thinking off on an Anthropic backup, or use a backup of the same family.
+
+See [`fallback`](examples/fallback) for a runnable example.
 
 ## Middleware
 

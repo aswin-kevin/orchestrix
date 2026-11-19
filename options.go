@@ -7,6 +7,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/composite"
+	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/mcp"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 	"github.com/aswin-kevin/orchestrix/middleware/async"
@@ -45,6 +46,12 @@ type settings struct {
 	async          *async.Middleware
 	// mounts are the WithMount routes, put over the agent's backend.
 	mounts []composite.Route
+
+	// fallbackSpecs and fallbackCfg are the WithFallback and
+	// WithFallbackConfig inputs, applied after the model is resolved.
+	fallbackSpecs []any
+	fallbackSet   bool
+	fallbackCfg   *llm.FallbackConfig
 
 	// Optional middleware; nil leaves it out of the stack (see baseStack).
 	memory   *memory.Config
