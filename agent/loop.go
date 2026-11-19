@@ -52,6 +52,9 @@ type run struct {
 	// resume, when set, is the interrupted turn this run finishes before
 	// its first model call; see Agent.Resume.
 	resume *resumption
+	// outputActive is set when the run's final answer must satisfy
+	// Config.OutputSchema: the agent has one and the run is top-level.
+	outputActive bool
 
 	events chan Event
 	// gone is closed by the consumer when it stops reading events.
@@ -109,6 +112,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 		gone:      make(chan struct{}),
 		budget:    newBudget(ctx, a.cfg.MaxDuration),
 	}
+	r.outputActive = a.outputPrompt != "" && info.Depth == 0
 	info.run = r
 	innermost := r.streamModel
 	if a.cfg.NonStreaming {
@@ -237,12 +241,22 @@ func (r *run) callModel() (*llm.Response, error) {
 // ElidedView of State, so wrappers may rewrite them freely.
 func (r *run) modelRequest() *ModelRequest {
 	cfg := r.agent.cfg
+	system, boundary := slices.Clone(cfg.System), cfg.CacheBoundary
+	if r.outputActive {
+		// The format segment follows Config.System, ahead of any segment a
+		// wrapper adds, and joins the cached prefix when that covers all
+		// of Config.System.
+		system = append(system, r.agent.outputPrompt)
+		if boundary == len(cfg.System) {
+			boundary++
+		}
+	}
 	return &ModelRequest{
 		Provider: cfg.Provider,
 		Request: llm.Request{
 			Model:         cfg.Model,
-			System:        slices.Clone(cfg.System),
-			CacheBoundary: cfg.CacheBoundary,
+			System:        system,
+			CacheBoundary: boundary,
 			Messages:      ElidedView(r.state, 0),
 			Tools:         r.toolSchemas(),
 			MaxTokens:     r.maxTokens(),

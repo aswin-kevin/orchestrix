@@ -27,6 +27,9 @@ type Agent struct {
 	// runTool is the tool handler chain, built once because it holds no
 	// per-run data.
 	runTool ToolHandler
+	// outputPrompt is the system segment built from Config.OutputSchema,
+	// "" when there is none; see output.go.
+	outputPrompt string
 }
 
 // Input starts a run. Its fields override, for this run only, what the
@@ -57,8 +60,9 @@ type Input struct {
 
 // New validates cfg, applies its defaults and builds the agent. It fails for a
 // missing Provider, an unknown non-empty PermissionMode, an invalid middleware
-// stack (see Compose), or tools with clashing or illegal names across
-// Config.Tools and every ToolProvider.
+// stack (see Compose), tools with clashing or illegal names across
+// Config.Tools and every ToolProvider, or an OutputSchema whose top-level
+// "type" is not "object" or that cannot be encoded as JSON.
 //
 // The composed stack is then filtered by every MiddlewareExcluder for
 // Config.Model. Only the stack is filtered: Config().Middleware stays
@@ -71,6 +75,10 @@ func New(cfg Config) (*Agent, error) {
 		return nil, fmt.Errorf("agent: unknown permission mode %q", mode)
 	}
 	cfg = withDefaults(cloneConfig(cfg))
+	format, err := outputPrompt(cfg.OutputSchema)
+	if err != nil {
+		return nil, err
+	}
 	stack, err := Compose(nil, cfg.Middleware, nil)
 	if err != nil {
 		return nil, err
@@ -81,11 +89,12 @@ func New(cfg Config) (*Agent, error) {
 		return nil, err
 	}
 	return &Agent{
-		cfg:      cfg,
-		stack:    stack,
-		registry: registry,
-		dynamic:  dynamicProviders(stack),
-		runTool:  chainTool(stack, invokeTool),
+		cfg:          cfg,
+		stack:        stack,
+		registry:     registry,
+		dynamic:      dynamicProviders(stack),
+		runTool:      chainTool(stack, invokeTool),
+		outputPrompt: format,
 	}, nil
 }
 
@@ -173,6 +182,7 @@ func cloneConfig(cfg Config) Config {
 	cfg.Rules.Deny = slices.Clone(cfg.Rules.Deny)
 	cfg.Profile = clonePtr(cfg.Profile)
 	cfg.Temperature = clonePtr(cfg.Temperature)
+	cfg.OutputSchema = maps.Clone(cfg.OutputSchema)
 	if cfg.Settlement != nil {
 		settlement := *cfg.Settlement
 		settlement.DisabledTools = slices.Clone(settlement.DisabledTools)

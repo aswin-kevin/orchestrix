@@ -283,3 +283,22 @@ func TestResolveSpecs(t *testing.T) {
 		t.Error("want an error for an invalid spec")
 	}
 }
+
+func TestChildConfigUsesSpecOutputSchema(t *testing.T) {
+	parent := agent.Config{OutputSchema: map[string]any{"type": "object"}}
+	cfg, err := childConfig(parent, Subagent{Name: "plain", SystemPrompt: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OutputSchema != nil {
+		t.Errorf("child of a spec without a schema has OutputSchema %v", cfg.OutputSchema)
+	}
+	schema := map[string]any{"type": "object", "properties": map[string]any{"x": map[string]any{"type": "string"}}}
+	cfg, err = childConfig(parent, Subagent{Name: "typed", SystemPrompt: "p", OutputSchema: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.OutputSchema["properties"]; !ok {
+		t.Errorf("child OutputSchema = %v, want the spec's", cfg.OutputSchema)
+	}
+}

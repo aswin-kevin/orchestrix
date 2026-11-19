@@ -112,6 +112,13 @@ type Config struct {
 	EscalateMaxTokens bool
 	// Settlement configures the wrap-up phase; nil disables it.
 	Settlement *Settlement
+	// OutputSchema, when non-nil, is the JSON schema the final answer of a
+	// top-level run (RunInfo.Depth == 0) must satisfy; its top-level "type"
+	// must be "object". The run's request then carries one more system
+	// segment, after System, that asks for such an answer. Nested runs
+	// (forks, subagents) are unaffected. The schema is treated as read-only:
+	// Config copies clone only its top-level map. Nil disables it.
+	OutputSchema map[string]any
 	// NonStreaming makes model calls use Complete instead of Stream.
 	NonStreaming bool
 

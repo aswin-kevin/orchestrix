@@ -177,6 +177,10 @@ func childConfig(cfg agent.Config, spec Subagent) (agent.Config, error) {
 	cfg.Name = spec.Name
 	cfg.System = system
 	cfg.CacheBoundary = 1
+	// The child answers in the format of its own spec; childSystem already
+	// asks for it, and the core adds no second segment because the child
+	// runs nested.
+	cfg.OutputSchema = spec.OutputSchema
 	cfg.Checkpointer = nil
 	cfg.SyncWorkspace = false
 	if spec.Tools != nil {
