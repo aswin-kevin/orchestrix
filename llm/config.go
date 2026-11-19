@@ -100,6 +100,9 @@ func ParseModel(spec string) (Config, error) {
 		return Config{}, fmt.Errorf("llm: model spec %q must look like format:model", spec)
 	}
 	cfg := Config{Format: Format(prefix), Model: model}
+	if _, ok := lookup(cfg.Format); !ok {
+		return Config{}, fmt.Errorf("llm: unknown provider format %q in model spec %q", prefix, spec)
+	}
 	switch cfg.Format {
 	case FormatAnthropic:
 		cfg.APIKey = os.Getenv("ANTHROPIC_API_KEY")
@@ -110,10 +113,6 @@ func ParseModel(spec string) (Config, error) {
 	case FormatSystemOne:
 		cfg.APIKey = os.Getenv("SYSTEMONE_API_KEY")
 		cfg.BaseURL = os.Getenv("SYSTEMONE_BASE_URL")
-	default:
-		if _, ok := lookup(cfg.Format); !ok {
-			return Config{}, fmt.Errorf("llm: unknown provider format %q in model spec %q", prefix, spec)
-		}
 	}
 	return cfg, nil
 }
