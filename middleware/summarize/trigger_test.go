@@ -3,6 +3,7 @@ package summarize
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 )
 
@@ -303,5 +305,50 @@ func TestReactiveCompactionIgnoresOpenBreaker(t *testing.T) {
 	}
 	if bd, ok := Current(final.State); !ok || bd.Summary != "SUMMARY-1" {
 		t.Fatalf("boundary = %+v, want the reactive summary", bd)
+	}
+}
+
+// appender is an inner wrapper that appends a system segment and a tool
+// schema in place, as most middleware do.
+type appender struct{}
+
+func (appender) Name() string { return "appender" }
+
+func (appender) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+	req.Request.System = append(slices.Clone(req.Request.System), "INNER-SEGMENT")
+	req.Request.Tools = append(slices.Clone(req.Request.Tools), llm.ToolSchema{Name: "inner_tool"})
+	return next(ctx, req)
+}
+
+func TestReactiveRetryRestoresInnerWrappersRequest(t *testing.T) {
+	overflow := &llm.APIError{Status: 400, Body: "prompt is too long"}
+	main := llmtest.New(llmtest.Turn{Err: overflow}, llmtest.Turn{Text: "done"})
+	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})
+	a, err := agent.New(agent.Config{
+		Provider:       main,
+		Profile:        &llm.Profile{ContextWindow: triggerWindow, MaxOutput: 500},
+		Backend:        memory.New(),
+		Middleware:     []agent.Middleware{New(Config{Provider: summarizer}), appender{}},
+		PermissionMode: permission.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range a.Run(context.Background(), agent.Input{ThreadID: "t1", Messages: triggerHistory()}) {
+	}
+
+	if main.Calls() != 2 {
+		t.Fatalf("main called %d times, want the overflow and one retry", main.Calls())
+	}
+	first, retry := main.Requests[0], main.Requests[1]
+	if n := strings.Count(strings.Join(retry.System, "\n"), "INNER-SEGMENT"); n != 1 {
+		t.Fatalf("retry system holds the inner segment %d times, want once: %q", n, retry.System)
+	}
+	if len(retry.System) != len(first.System) || len(retry.Tools) != len(first.Tools) {
+		t.Fatalf("retry has %d segments and %d tools, want %d and %d as in the first call",
+			len(retry.System), len(retry.Tools), len(first.System), len(first.Tools))
+	}
+	if !strings.HasPrefix(retry.Messages[0].Text(), "<summary>\nSUMMARY-1\n") {
+		t.Fatalf("retry starts with %.60q, want the summary", retry.Messages[0].Text())
 	}
 }

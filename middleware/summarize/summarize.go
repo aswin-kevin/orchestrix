@@ -229,7 +229,8 @@ func (m *middleware) AfterModel(_ context.Context, s *state.State, resp *llm.Res
 // for it or the conversation nears the context window, then replaces the
 // request messages with the compacted, micro-compacted view of State. A
 // context overflow reported by the provider compacts harder and retries
-// once.
+// once, with the request as it was before the inner wrappers edited it, so
+// each of their system segments and tools is sent once.
 //
 // A compaction that fails never fails the turn: State still holds the whole
 // conversation, so the request just goes out uncompacted and the error is
@@ -247,6 +248,8 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 	}
 	base := req.Request.Messages
 	req.Request.Messages = m.view(req.State, base)
+	// The inner wrappers edit req in place; the retry starts from this copy.
+	saved := *req
 	resp, err := next(ctx, req)
 	if err == nil || !llm.IsContextOverflow(err) {
 		return resp, err
@@ -256,6 +259,7 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 	if !m.compactCounted(ctx, req, m.keepTokens(req.Profile, reactiveKeepShare)) {
 		return resp, err
 	}
+	*req = saved
 	req.Request.Messages = m.view(req.State, base)
 	return next(ctx, req)
 }

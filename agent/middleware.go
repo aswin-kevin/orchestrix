@@ -92,7 +92,10 @@ type BeforeStop interface {
 const MaxStopContinuations = 3
 
 // ModelWrapper wraps the model call. See the package documentation for the
-// wrapping semantics.
+// wrapping semantics. The ModelRequest is shared by every layer, and inner
+// wrappers edit it in place (appending system segments, filtering tools): a
+// wrapper that calls next more than once must restore the request it passed
+// first, or each retry carries the inner edits again.
 type ModelWrapper interface {
 	WrapModel(ctx context.Context, req *ModelRequest, next ModelHandler) (*llm.Response, error)
 }
