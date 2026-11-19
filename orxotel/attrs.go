@@ -37,6 +37,7 @@ const (
 	keyRunReason       = "orchestrix.run.reason"
 	keyRunTurns        = "orchestrix.run.turns"
 	keyCacheReadTokens = "orchestrix.usage.cache_read_tokens"
+	keyResponseSource  = "orchestrix.response.source"
 	keyTurn            = "orchestrix.turn"
 	keyToolVia         = "orchestrix.tool.via"
 	keyToolApproved    = "orchestrix.tool.approved"
@@ -58,6 +59,10 @@ const (
 	keyFallbackTo    = "to"
 	keyFallbackError = "error"
 )
+
+// fallbackSourceKey is the Block.ProviderData key under which a fallback
+// provider stamps the name of the entry that answered.
+const fallbackSourceKey = "orchestrix.source"
 
 // spanName returns "<op> <target>", or op alone when target is empty.
 func spanName(op, target string) string {

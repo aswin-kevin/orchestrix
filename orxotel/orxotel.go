@@ -24,8 +24,8 @@ const defaultMaxContentBytes = 4096
 
 // Config configures the tracing middleware.
 type Config struct {
-	// TracerProvider starts the spans; nil uses otel.GetTracerProvider()
-	// at the start of each run.
+	// TracerProvider starts the spans; nil uses otel.GetTracerProvider(),
+	// resolved once at the start of each run and used for all of its spans.
 	TracerProvider trace.TracerProvider
 	// ProviderName is reported as gen_ai.provider.name (for example
 	// "anthropic" or "openai"); empty leaves it out.
@@ -64,13 +64,26 @@ var (
 // Name implements agent.Middleware.
 func (m *middleware) Name() string { return "otel" }
 
-// tracer returns the tracer for a new span.
-func (m *middleware) tracer() trace.Tracer {
+// tracerKey is the context key of the tracer a run resolved in WrapRun.
+type tracerKey struct{}
+
+// newTracer resolves the tracer for a new run.
+func (m *middleware) newTracer() trace.Tracer {
 	tp := m.cfg.TracerProvider
 	if tp == nil {
 		tp = otel.GetTracerProvider()
 	}
 	return tp.Tracer(tracerName)
+}
+
+// tracer returns the tracer of the run in ctx, so every span of a run comes
+// from the provider resolved when it started; outside a traced run it
+// resolves a new one.
+func (m *middleware) tracer(ctx context.Context) trace.Tracer {
+	if t, ok := ctx.Value(tracerKey{}).(trace.Tracer); ok {
+		return t
+	}
+	return m.newTracer()
 }
 
 // WrapRun implements agent.RunWrapper: it starts the run span, which
@@ -85,7 +98,9 @@ func (m *middleware) WrapRun(ctx context.Context, info agent.RunInfo) (context.C
 	if info.ThreadID != "" {
 		attrs = append(attrs, attribute.String(keyConversationID, info.ThreadID))
 	}
-	ctx, span := m.tracer().Start(ctx, spanName(opInvokeAgent, info.AgentName),
+	tracer := m.newTracer()
+	ctx = context.WithValue(ctx, tracerKey{}, tracer)
+	ctx, span := tracer.Start(ctx, spanName(opInvokeAgent, info.AgentName),
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attrs...),
 	)
@@ -124,7 +139,9 @@ func runFailed(reason agent.TerminalReason) bool {
 
 // WrapModel implements agent.ModelWrapper: it traces one model call. The
 // span's context goes to next, so a fallback provider's OnFallback records
-// its event on this span.
+// its event on this span. A reply stamped by a fallback provider sets
+// orchestrix.response.source to the entry that answered, which also covers
+// a call where a cooling-down primary was skipped without a switch event.
 func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	attrs := []attribute.KeyValue{
 		attribute.String(keyOperationName, opChat),
@@ -138,7 +155,7 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 	if t := req.Request.Temperature; t != nil {
 		attrs = append(attrs, attribute.Float64(keyRequestTemperature, *t))
 	}
-	ctx, span := m.tracer().Start(ctx, spanName(opChat, req.Request.Model),
+	ctx, span := m.tracer(ctx).Start(ctx, spanName(opChat, req.Request.Model),
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attrs...),
 	)
@@ -157,8 +174,22 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 			attribute.Int(keyOutputTokens, resp.Usage.Output),
 			attribute.Int(keyCacheReadTokens, resp.Usage.CacheRead),
 		)
+		if src := responseSource(resp); src != "" {
+			span.SetAttributes(attribute.String(keyResponseSource, src))
+		}
 	}
 	return resp, err
+}
+
+// responseSource returns the fallback entry that answered resp: the
+// "orchestrix.source" stamp of its first block that has one, or "".
+func responseSource(resp *llm.Response) string {
+	for _, b := range resp.Message.Content {
+		if src := b.ProviderData[fallbackSourceKey]; src != "" {
+			return src
+		}
+	}
+	return ""
 }
 
 // WrapTool implements agent.ToolWrapper: it traces one tool execution. The
@@ -184,7 +215,7 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 	if m.cfg.CaptureContent {
 		attrs = append(attrs, attribute.String(keyToolCallArguments, m.capped(string(call.Input))))
 	}
-	ctx, span := m.tracer().Start(ctx, spanName(opExecuteTool, call.Name),
+	ctx, span := m.tracer(ctx).Start(ctx, spanName(opExecuteTool, call.Name),
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attrs...),
 	)

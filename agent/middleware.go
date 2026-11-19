@@ -54,7 +54,8 @@ type Middleware interface {
 //
 // The returned context becomes the run's context for everything that
 // follows: hooks, model and tool wrappers, tool calls and the runs nested in
-// them. It must be derived from ctx; a context that lacks the run's RunInfo
+// them. It must be derived from ctx and keep its cancellation; a context
+// that lacks the run's RunInfo
 // is a programming error, and the run panics naming the middleware.
 //
 // The end function, which may be nil, is called exactly once per run, in

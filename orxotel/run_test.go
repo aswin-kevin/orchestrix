@@ -12,6 +12,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/orxotel"
 	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/tool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -192,4 +193,35 @@ func TestGlobalProviderDefault(t *testing.T) {
 	drain(t, a.Run(context.Background(), prompt("hi")))
 
 	oneSpan(t, rec, "invoke_agent global")
+}
+
+// TestGlobalProviderResolvedPerRun swaps the global provider in the middle
+// of a run: every span of the run still goes to the provider that was
+// global when it started.
+func TestGlobalProviderResolvedPerRun(t *testing.T) {
+	rec1, tp1 := newRecorder(t)
+	rec2, tp2 := newRecorder(t)
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp1)
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	swap := tool.New("swap", "Swaps the global tracer provider.",
+		func(_ context.Context, _ textInput, _ *tool.Call) (tool.Result, error) {
+			otel.SetTracerProvider(tp2)
+			return tool.Text("swapped"), nil
+		}, tool.WithReadOnly())
+	a := newAgent(t, "global", orxotel.Config{}, []llmtest.Turn{
+		{ToolCalls: []llmtest.Call{{ID: "c1", Name: "swap", Input: map[string]any{"text": "x"}}}},
+		{Text: "done"},
+	}, orchestrix.WithTools(swap))
+	drain(t, a.Run(context.Background(), prompt("hi")))
+
+	if got := len(rec2.Ended()); got != 0 {
+		t.Errorf("provider set mid-run got %d spans, want 0", got)
+	}
+	oneSpan(t, rec1, "invoke_agent global")
+	oneSpan(t, rec1, "execute_tool swap")
+	if got := len(spansNamed(rec1, "chat")); got != 2 {
+		t.Errorf("got %d chat spans from the run's provider, want 2", got)
+	}
 }

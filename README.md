@@ -543,7 +543,7 @@ A `Stop` hook's `Continue` is one of the `agent.MaxStopContinuations` (3) contin
 
 The separate module `orxotel` traces agents with OpenTelemetry. It lives in its own module so the core keeps two dependencies; it needs `orchestrix` v0.5.0 or later (`orxotel/v0.1.0` requires it).
 
-```
+```sh
 go get github.com/aswin-kevin/orchestrix/orxotel
 ```
 
@@ -558,9 +558,9 @@ a, err := orchestrix.New(model,
 _, _ = a, err
 ```
 
-Every run (`Run`, `Resume` and `ResumeWith`) produces one trace:
+Every run (`Run`, `Resume` and `ResumeWith`) gets an `invoke_agent` span; with no span in `ctx` it is the root of a new trace. A span already in `ctx` (a host's request span, or the parent's `execute_tool` span for a subagent) becomes its parent, in that trace.
 
-```
+```text
 invoke_agent <agent name>
 ├── chat <model>            one per model call
 ├── execute_tool <tool>     one per tool call, parallel calls included
@@ -571,16 +571,16 @@ invoke_agent <agent name>
 | Span | Kind | Attributes |
 | --- | --- | --- |
 | `invoke_agent <agent>` | Internal | `gen_ai.operation.name`, `gen_ai.agent.name`, `gen_ai.conversation.id` (the thread id, when set), `orchestrix.run.depth`, `orchestrix.run.resumed`; at the end `orchestrix.run.reason`, `orchestrix.run.turns`, `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` (run totals) |
-| `chat <model>` | Client | `gen_ai.operation.name`, `gen_ai.provider.name` (when configured), `gen_ai.request.model`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature` (when set), `gen_ai.response.finish_reasons`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `orchestrix.usage.cache_read_tokens`, `orchestrix.turn` |
+| `chat <model>` | Client | `gen_ai.operation.name`, `gen_ai.provider.name` (when configured), `gen_ai.request.model`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature` (when set), `gen_ai.response.finish_reasons`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `orchestrix.usage.cache_read_tokens`, `orchestrix.turn`, `orchestrix.response.source` (the fallback entry that answered, with a fallback provider) |
 | `execute_tool <tool>` | Internal | `gen_ai.operation.name`, `gen_ai.tool.name`, `gen_ai.tool.call.id`, `orchestrix.tool.via` (when dispatched), `orchestrix.tool.approved`; `orchestrix.tool.is_error` for an error result; `orchestrix.tool.outcome` for an interrupt or stop; `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result` with content capture |
 
 Names follow the OpenTelemetry GenAI semantic conventions, which are in Development status and may change in a later release; attributes the conventions do not define are prefixed `orchestrix.`. They are all declared in one file of the module.
 
-- **Content capture.** Off by default. `Config.CaptureContent` records tool call arguments and results (not prompts or model replies), each capped at `Config.MaxContentBytes` (default 4096) on a character boundary. Go error messages are always exported, as the span's status description and exception event, whether or not capture is on: keep secrets out of the errors your tools and providers return. A tool result with `IsError` sets status Error, with a description only when capture is on.
+- **Content capture.** Off by default. `Config.CaptureContent` records tool call arguments and results (not prompts or model replies), each capped at `Config.MaxContentBytes` (default 4096) on a character boundary. Go error messages are always exported, whether or not capture is on (the run span gets only a status description; `chat` and `execute_tool` spans get a status description and an exception event), so keep secrets out of the errors your tools and providers return. A tool result with `IsError` sets status Error, with a description only when capture is on.
 - **Interrupts and stops are outcomes, not errors.** A tool call that pauses the run for approval, or ends it with `agent.ErrStopRun`, leaves its span status unset and sets `orchestrix.tool.outcome` to `interrupted` or `stopped`. A run ending as `completed`, `max_turns`, `timeout`, `interrupted` or `hook_stopped` is not an error either; every other reason sets status Error. A run resumed after an interrupt is a new trace: `gen_ai.conversation.id` joins the two.
 - **Subagents.** A child that copies the parent's middleware is traced, and its `invoke_agent` span is a child of the parent's `execute_tool` span for the `task` call, in the same trace. A subagent spec that sets its own `Middleware` list is traced only if the list includes the `otel` middleware.
 - **Background subagents.** A run started with `WithAsync` outlives the tool call that started it, so its spans are children of an `execute_tool` span that has already ended. OpenTelemetry allows this and backends show it.
-- **Fallback.** With `WithFallbackConfig`, pass `OnFallback: orxotel.RecordFallback`: each switch is added as an `orchestrix.fallback` event with the attributes `from`, `to` and `error` to the `chat` span that switched.
+- **Fallback.** With `WithFallbackConfig`, pass `OnFallback: orxotel.RecordFallback`: each switch is added as an `orchestrix.fallback` event with the attributes `from`, `to` and `error` to the `chat` span that switched. While a failed entry cools down it is skipped without a switch, so that call has no event; `orchestrix.response.source`, set on each `chat` span a fallback provider answered, names the entry that answered.
 
 ```go
 orchestrix.WithFallbackConfig(llm.FallbackConfig{
