@@ -46,7 +46,12 @@ func fail(op, p string, sentinel error) error {
 	return fmt.Errorf("kv: %s %s: %w", op, p, sentinel)
 }
 
+// wrap adds the operation and path to a store error, naming the package only
+// when the error does not already.
 func wrap(op, p string, err error) error {
+	if strings.HasPrefix(err.Error(), "kv:") {
+		return fmt.Errorf("%s %s: %w", op, p, err)
+	}
 	return fmt.Errorf("kv: %s %s: %w", op, p, err)
 }
 
@@ -71,11 +76,28 @@ func (b *Backend) lookup(ctx context.Context, p string) (item Item, ok bool, err
 	return item, err == nil, err
 }
 
+// stat returns the metadata of the file at p without reading its value; ok is
+// false when there is none.
+func (b *Backend) stat(ctx context.Context, p string) (info ItemInfo, ok bool, err error) {
+	if s, fast := b.store.(stater); fast {
+		info, err = s.stat(ctx, b.namespace, p)
+	} else {
+		var item Item
+		if item, err = b.store.Get(ctx, b.namespace, p); err == nil {
+			info = ItemInfo{Key: p, Size: int64(len(item.Value)), ModTime: item.ModTime}
+		}
+	}
+	if errors.Is(err, backend.ErrNotFound) {
+		return ItemInfo{}, false, nil
+	}
+	return info, err == nil, err
+}
+
 // below lists the files beneath directory dir.
 func (b *Backend) below(ctx context.Context, dir string) ([]ItemInfo, error) {
 	infos, err := b.store.List(ctx, b.namespace, dirPrefix(dir))
-	if errors.Is(err, ErrKeyTooLong) && len(dir) <= MaxKeyBytes {
-		// Only the trailing slash overflowed: no key beneath dir could fit.
+	if errors.Is(err, ErrKeyTooLong) {
+		// No key that long was ever stored, so nothing lies beneath dir.
 		return nil, nil
 	}
 	return infos, err
@@ -91,7 +113,7 @@ const (
 )
 
 func (b *Backend) kindOf(ctx context.Context, p string) (kind, error) {
-	if _, ok, err := b.lookup(ctx, p); err != nil || ok {
+	if _, ok, err := b.stat(ctx, p); err != nil || ok {
 		return isFile, err
 	}
 	if p == rootPath {
@@ -122,7 +144,7 @@ func (b *Backend) requireDir(ctx context.Context, op, p string) error {
 // hasFileAncestor reports whether some proper ancestor of p is a file.
 func (b *Backend) hasFileAncestor(ctx context.Context, p string) (bool, error) {
 	for dir := path.Dir(p); dir != rootPath; dir = path.Dir(dir) {
-		if _, ok, err := b.lookup(ctx, dir); err != nil || ok {
+		if _, ok, err := b.stat(ctx, dir); err != nil || ok {
 			return ok, err
 		}
 	}
@@ -137,7 +159,7 @@ func (b *Backend) Ls(ctx context.Context, p string) ([]backend.FileInfo, error) 
 	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	if _, ok, err := b.lookup(ctx, p); err != nil {
+	if _, ok, err := b.stat(ctx, p); err != nil {
 		return nil, wrap("ls", p, err)
 	} else if ok {
 		return nil, fail("ls", p, backend.ErrNotDir)
@@ -184,7 +206,7 @@ func children(dir string, infos []ItemInfo) []backend.FileInfo {
 // whole content: it fails for a directory, a missing file, or a file over
 // backend.MaxReadFileBytes. Callers must hold b.mu.
 func (b *Backend) load(ctx context.Context, op, p string) (Item, error) {
-	item, ok, err := b.lookup(ctx, p)
+	info, ok, err := b.stat(ctx, p)
 	if err != nil {
 		return Item{}, wrap(op, p, err)
 	}
@@ -198,8 +220,12 @@ func (b *Backend) load(ctx context.Context, op, p string) (Item, error) {
 		}
 		return Item{}, fail(op, p, backend.ErrNotFound)
 	}
-	if err := backend.CheckReadSize(int64(len(item.Value))); err != nil {
+	if err := backend.CheckReadSize(info.Size); err != nil {
 		return Item{}, fail(op, p, err)
+	}
+	item, err := b.store.Get(ctx, b.namespace, p)
+	if err != nil {
+		return Item{}, wrap(op, p, err)
 	}
 	return item, nil
 }
@@ -293,7 +319,7 @@ func (b *Backend) Delete(ctx context.Context, p string) error {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok, err := b.lookup(ctx, p); err != nil {
+	if _, ok, err := b.stat(ctx, p); err != nil {
 		return wrap("delete", p, err)
 	} else if ok {
 		return b.removeKeys(ctx, p, []string{p})
@@ -364,10 +390,10 @@ func (b *Backend) Grep(ctx context.Context, pattern string, opts backend.GrepOpt
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	var candidates []ItemInfo
-	if item, ok, err := b.lookup(ctx, base); err != nil {
+	if info, ok, err := b.stat(ctx, base); err != nil {
 		return nil, wrap("grep", base, err)
 	} else if ok {
-		candidates = []ItemInfo{{Key: base, Size: int64(len(item.Value))}}
+		candidates = []ItemInfo{info}
 	} else if err := b.requireDir(ctx, "grep", base); err != nil {
 		return nil, err
 	} else if candidates, err = b.below(ctx, base); err != nil {

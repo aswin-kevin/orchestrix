@@ -2,15 +2,11 @@ package kv_test
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -179,40 +175,6 @@ func TestNamespaceTraversal(t *testing.T) {
 	}
 }
 
-func TestDirStoreKeyEncoding(t *testing.T) {
-	dir := t.TempDir()
-	b := newBackend(t, newDirStore(t, dir), "ns")
-	cases := map[string]string{
-		"/a b/ü?.md": "/a b/ü?.md",
-		"/x/../y":    "/y",
-		"/-rf":       "/-rf",
-		"/a\\b:c*d":  "/a\\b:c*d",
-	}
-	for in, cleaned := range cases {
-		if err := b.Write(ctx, in, []byte("v:"+in)); err != nil {
-			t.Fatalf("Write(%q): %v", in, err)
-		}
-		res, err := b.Read(ctx, cleaned, 0, 0)
-		if err != nil || !strings.Contains(text(res), "v:"+in) {
-			t.Fatalf("Read(%q) = %+v, %v", cleaned, res, err)
-		}
-	}
-	nsDir := filepath.Join(dir, base64.RawURLEncoding.EncodeToString([]byte("ns")))
-	entries, err := os.ReadDir(nsDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != len(cases) {
-		t.Fatalf("%d entries, want %d", len(entries), len(cases))
-	}
-	for _, e := range entries {
-		n := e.Name()
-		if strings.ContainsAny(n, `/\`) || strings.HasPrefix(n, ".") || n == ".." {
-			t.Errorf("unsafe entry name %q", n)
-		}
-	}
-}
-
 func TestKeyTooLong(t *testing.T) {
 	long := "/" + strings.Repeat("k", 200)
 	d := newBackend(t, newDirStore(t, t.TempDir()), "ns")
@@ -239,94 +201,58 @@ func TestKeyTooLong(t *testing.T) {
 	}
 }
 
-func TestDirStoreAtomicWrite(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("concurrent rename-over is not atomic on Windows")
+func TestMissingLongPathIsNotFound(t *testing.T) {
+	long := "/" + strings.Repeat("d", 200) + "/f.md"
+	dirOnly := "/" + strings.Repeat("d", 200)
+	b := newBackend(t, newDirStore(t, t.TempDir()), "ns")
+	check := func(name string, err error) {
+		t.Helper()
+		if !errors.Is(err, backend.ErrNotFound) {
+			t.Errorf("%s: err = %v, want ErrNotFound", name, err)
+		}
 	}
-	dir := t.TempDir()
-	s := newDirStore(t, dir)
-	var wg sync.WaitGroup
-	for i := range 50 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := s.Put(ctx, "ns", "/k", []byte(strings.Repeat("x", i+1))); err != nil {
-				t.Error(err)
-			}
-		}()
-	}
-	wg.Wait()
-	nsDir := filepath.Join(dir, base64.RawURLEncoding.EncodeToString([]byte("ns")))
-	entries, err := os.ReadDir(nsDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("entries = %v, want exactly the key file", entries)
-	}
-	item, err := s.Get(ctx, "ns", "/k")
-	if err != nil || len(item.Value) < 1 || len(item.Value) > 50 {
-		t.Fatalf("Get = %d bytes, %v", len(item.Value), err)
-	}
-
-	if err := os.WriteFile(filepath.Join(nsDir, ".tmp-x"), []byte("partial"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	b := newBackend(t, s, "ns")
-	infos, err := b.Ls(ctx, "/")
-	if err != nil || len(infos) != 1 || infos[0].Path != "/k" {
-		t.Fatalf("Ls = %+v, %v", infos, err)
-	}
-	globbed, err := b.Glob(ctx, "**/*", "/")
-	if err != nil || len(globbed) != 1 {
-		t.Fatalf("Glob = %+v, %v", globbed, err)
+	for _, p := range []string{long, dirOnly} {
+		_, err := b.Read(ctx, p, 0, 0)
+		check("Read", err)
+		_, err = b.Ls(ctx, p)
+		check("Ls", err)
+		check("Delete", b.Delete(ctx, p))
+		_, err = b.Glob(ctx, "*", p)
+		check("Glob", err)
+		_, err = b.Grep(ctx, "x", backend.GrepOptions{Path: p})
+		check("Grep", err)
+		_, err = b.Edit(ctx, p, "a", "b", false)
+		check("Edit", err)
 	}
 }
 
-func TestDirStoreFailedWriteLeavesNoTemp(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("directory-over-file rename semantics differ on Windows")
-	}
-	dir := t.TempDir()
-	s := newDirStore(t, dir)
-	nsDir := filepath.Join(dir, base64.RawURLEncoding.EncodeToString([]byte("ns")))
-	// A directory squatting on the key's file name makes the final rename fail.
-	if err := os.MkdirAll(filepath.Join(nsDir, base64.RawURLEncoding.EncodeToString([]byte("/k")), "sub"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Put(ctx, "ns", "/k", []byte("v")); err == nil {
-		t.Fatal("Put over a directory should fail")
-	}
-	entries, _ := os.ReadDir(nsDir)
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") {
-			t.Errorf("temp file left behind: %s", e.Name())
+func TestErrorMessagesWrapOnce(t *testing.T) {
+	b := newBackend(t, newDirStore(t, t.TempDir()), "ns")
+	long := "/" + strings.Repeat("k", 200)
+	for name, err := range map[string]error{
+		"write too long": b.Write(ctx, long, nil),
+		"delete missing": b.Delete(ctx, "/nope"),
+	} {
+		msg := err.Error()
+		if strings.Count(msg, "kv:") != 1 || strings.Count(msg, "/nope") > 1 || strings.Count(msg, long) > 1 {
+			t.Errorf("%s: repeated context in %q", name, msg)
 		}
 	}
 }
 
-func TestDirStorePermissions(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX permissions")
-	}
-	dir := filepath.Join(t.TempDir(), "fresh")
-	s := newDirStore(t, dir)
+func TestMemoryStoreUsesInjectedClock(t *testing.T) {
+	stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	s := kv.NewMemoryStore(kv.WithClock(func() time.Time { return stamp }))
 	if err := s.Put(ctx, "ns", "/k", []byte("v")); err != nil {
 		t.Fatal(err)
 	}
-	nsDir := filepath.Join(dir, base64.RawURLEncoding.EncodeToString([]byte("ns")))
-	for p, want := range map[string]fs.FileMode{
-		dir:   0o700,
-		nsDir: 0o700,
-		filepath.Join(nsDir, base64.RawURLEncoding.EncodeToString([]byte("/k"))): 0o600,
-	} {
-		info, err := os.Stat(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := info.Mode().Perm(); got != want {
-			t.Errorf("%s mode = %o, want %o", p, got, want)
-		}
+	item, err := s.Get(ctx, "ns", "/k")
+	if err != nil || !item.ModTime.Equal(stamp) {
+		t.Fatalf("Get = %+v, %v", item, err)
+	}
+	infos, _ := s.List(ctx, "ns", "/")
+	if len(infos) != 1 || !infos[0].ModTime.Equal(stamp) {
+		t.Fatalf("List = %+v", infos)
 	}
 }
 

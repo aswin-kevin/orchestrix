@@ -74,6 +74,12 @@ func newStoreOptions(opts []StoreOption) storeOptions {
 	return o
 }
 
+// stater is implemented by the stores in this package so a Backend can test
+// existence and size without reading a value; other stores fall back to Get.
+type stater interface {
+	stat(ctx context.Context, namespace, key string) (ItemInfo, error)
+}
+
 // checkNamespace rejects a namespace no store can hold safely.
 func checkNamespace(namespace string) error {
 	switch {
@@ -116,9 +122,23 @@ func (s *MemoryStore) Get(ctx context.Context, namespace, key string) (Item, err
 	defer s.mu.RUnlock()
 	e, ok := s.data[namespace][key]
 	if !ok {
-		return Item{}, fmt.Errorf("kv: get %s: %w", key, backend.ErrNotFound)
+		return Item{}, backend.ErrNotFound
 	}
 	return Item{Value: slices.Clone(e.value), ModTime: e.modTime}, nil
+}
+
+// stat returns key's metadata without copying its value.
+func (s *MemoryStore) stat(ctx context.Context, namespace, key string) (ItemInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return ItemInfo{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.data[namespace][key]
+	if !ok {
+		return ItemInfo{}, backend.ErrNotFound
+	}
+	return ItemInfo{Key: key, Size: int64(len(e.value)), ModTime: e.modTime}, nil
 }
 
 // Put stores a copy of value under key.
