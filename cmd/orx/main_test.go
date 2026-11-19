@@ -377,3 +377,24 @@ func TestErrorPathsAreTerminalSafe(t *testing.T) {
 		}
 	})
 }
+
+func TestWarnsWhenWorkspaceHoldsHome(t *testing.T) {
+	parent := t.TempDir()
+	home := filepath.Join(parent, "me")
+	project := filepath.Join(home, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+	for _, tt := range []struct {
+		dir  string
+		warn bool
+	}{{home, true}, {parent, true}, {project, false}} {
+		provider := llmtest.New(llmtest.Turn{Text: "ok"})
+		_, _, stderr := invoke(t, "", provider, "-model", "openai:test", "-dir", tt.dir, "-p", "hi")
+		if got := strings.Contains(stderr, "holds your home folder"); got != tt.warn {
+			t.Errorf("-dir %s: warned = %v, want %v (stderr %q)", tt.dir, got, tt.warn, stderr)
+		}
+	}
+}

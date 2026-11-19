@@ -14,6 +14,7 @@ import (
 	"iter"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -227,6 +228,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		return fail(exitError, "%v", err)
 	}
 
+	warnIfHoldsHome(o.dir, stderr)
 	agentOpts := []orchestrix.Option{
 		orchestrix.WithApprover(ap.decide),
 		orchestrix.WithMaxTurns(o.maxTurns),
@@ -311,6 +313,42 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 }
 
 // effectiveMode resolves -yes and -mode; an explicit -mode wins.
+// warnIfHoldsHome warns when the workspace is the user's home folder or
+// contains it, as when orx runs from ~. Per-user settings live there (git and
+// SSH config, shell startup files), and later commands read them, so an edit
+// the agent makes there, perhaps auto-approved, can change what an allowed
+// command runs. Git config is protected on its own; the rest is not.
+func warnIfHoldsHome(dir string, stderr io.Writer) {
+	home, err := os.UserHomeDir()
+	if err != nil || !holds(dir, home) {
+		return
+	}
+	fmt.Fprintf(stderr, "orx: warning: the workspace %s holds your home folder, where per-user "+
+		"settings (shell, SSH, git) live; the agent's edits there can change what later commands "+
+		"run. Prefer running orx in a project folder or passing -dir.\n", termsafe.String(dir))
+}
+
+// holds reports whether directory dir is path or one of its ancestors, after
+// resolving both to absolute, symlink-free paths. It is false when either
+// cannot be resolved.
+func holds(dir, path string) bool {
+	dir, dirErr := realPath(dir)
+	path, pathErr := realPath(path)
+	if dirErr != nil || pathErr != nil {
+		return false
+	}
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func realPath(p string) (string, error) {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
+}
+
 func effectiveMode(o options, stderr io.Writer) permission.Mode {
 	switch {
 	case o.modeGiven && o.yes:
