@@ -179,6 +179,76 @@ func TestLauncherExtraAlreadyPresentByIdentity(t *testing.T) {
 	if got := len(child.Config().Middleware); got != 1 {
 		t.Errorf("child middleware = %d, want 1 (not appended twice)", got)
 	}
+	_, final := collect(t, context.Background(), child, userInput("go"))
+	if final.Reason != agent.ReasonCompleted || n.Load() != 1 {
+		t.Fatalf("reason = %s, extra BeforeModel calls = %d, want 1", final.Reason, n.Load())
+	}
+}
+
+// sliceMW is a middleware whose value holds a slice, so it is not comparable.
+type sliceMW struct {
+	name string
+	tags []string
+}
+
+func (s sliceMW) Name() string { return s.name }
+
+// wrapped has a comparable static type, but == on it panics when the
+// embedded interface holds a sliceMW.
+type wrapped struct{ agent.Middleware }
+
+func TestLauncherUncomparableExtraDoesNotPanic(t *testing.T) {
+	mk := func() agent.Middleware { return wrapped{sliceMW{name: "extra", tags: []string{"a"}}} }
+	l := NewLauncher(mk())
+	parent, err := agent.New(agent.Config{Provider: llmtest.New(), Middleware: []agent.Middleware{mk()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := Subagent{Name: "w", Description: "d", SystemPrompt: "p"}
+	if _, err := l.Agent(parent, spec); err == nil {
+		t.Fatal("want a clash error for an uncomparable value with the same name")
+	}
+}
+
+func TestLauncherInputNilCall(t *testing.T) {
+	var gotErr error
+	probe := tool.New("probe", "Probes.", func(ctx context.Context, _ struct{}, _ *tool.Call) (tool.Result, error) {
+		_, gotErr = NewLauncher().Input(ctx, nil, researcher(), "x", "id", nil)
+		return tool.Text("ok"), nil
+	}, tool.WithReadOnly())
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "p1", Name: "probe", Input: obj{}}}},
+		llmtest.Turn{Text: "done"},
+	)
+	a, err := agent.New(agent.Config{Provider: p, Tools: []tool.Tool{probe}, PermissionMode: permission.ModeBypass})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, context.Background(), a, userInput("go"))
+	if gotErr == nil {
+		t.Fatal("want an error for a nil call")
+	}
+}
+
+func TestLauncherInputStricterModeWins(t *testing.T) {
+	st := state.New()
+	agent.PermissionModeKey.Set(st, permission.ModeDontAsk)
+	spec := researcher()
+	spec.Skills, spec.PermissionMode = nil, permission.ModeBypass
+	res := probeRun(t, NewLauncher(), spec, st)
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	if mode, _ := agent.PermissionModeKey.Get(res.in.State); mode != permission.ModeDontAsk {
+		t.Errorf("mode = %q, want dontAsk", mode)
+	}
+}
+
+func TestLauncherAgentValidatesSpec(t *testing.T) {
+	parent, _ := agent.New(agent.Config{Provider: llmtest.New()})
+	if _, err := NewLauncher().Agent(parent, Subagent{Name: "w", Description: "d"}); err == nil {
+		t.Fatal("want an error for a spec without SystemPrompt")
+	}
 }
 
 func TestResolveSpecs(t *testing.T) {
@@ -205,6 +275,9 @@ func TestResolveSpecs(t *testing.T) {
 	}
 	if slices.Contains(names(got), Fork) {
 		t.Error("fork must never be included")
+	}
+	if _, err := ResolveSpecs(Config{Subagents: []Subagent{{Name: Fork, Description: "d", SystemPrompt: "p"}}}); err == nil {
+		t.Error("a spec named fork must be rejected")
 	}
 	if _, err := ResolveSpecs(Config{Subagents: []Subagent{{Name: "bad name!", Description: "d", SystemPrompt: "p"}}}); err == nil {
 		t.Error("want an error for an invalid spec")

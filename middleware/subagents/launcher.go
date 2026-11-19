@@ -22,6 +22,13 @@ import (
 // the narrowed skills scope (childScope), the call's backend, Ephemeral. One
 // agent per (parent, spec name) is cached; safe for concurrent use. The zero
 // value is not usable; create one with NewLauncher.
+//
+// The caller owns the checks the task tool makes before launching: it must
+// enforce the nesting depth (agent.RunInfo.Depth against its MaxDepth) and
+// that spec is one it offers, and it must run the child under a context that
+// keeps the call's values (context.WithoutCancel(ctx), not
+// context.Background()), so that the child's Depth is the parent's plus one.
+// Specs should come from ResolveSpecs.
 type Launcher struct {
 	// children maps a childKey to its *agent.Agent. Built subagents are
 	// immutable agents rather than per-run data, so sharing them between
@@ -35,6 +42,8 @@ type Launcher struct {
 // middleware (after the spec's or the inherited list). An extra that is
 // already in that list as the very same value is not appended again; one
 // whose name clashes with a different value in the list makes Agent fail.
+// Identity needs a pointer or otherwise comparable middleware; a value that
+// is not comparable is never "the same" and so clashes by name.
 func NewLauncher(extra ...agent.Middleware) *Launcher {
 	return &Launcher{extra: slices.Clone(extra)}
 }
@@ -48,8 +57,14 @@ type childKey struct {
 
 // Agent returns the agent for spec as started from parent, building it on
 // first use. Agents are immutable and safe for concurrent runs, so one per
-// (parent, subagent) serves every call.
+// (parent, subagent) serves every call. spec is validated like New does
+// (see ResolveSpecs, which supplies ready specs). The child must be started
+// with Input (or the task tool) for the stricter permission mode to apply:
+// running it with another input starts it in its own configured mode.
 func (l *Launcher) Agent(parent *agent.Agent, spec Subagent) (*agent.Agent, error) {
+	if err := validateSpec(spec); err != nil {
+		return nil, err
+	}
 	key := childKey{parent: parent, name: spec.Name}
 	if cached, ok := l.children.Load(key); ok {
 		return cached.(*agent.Agent), nil
@@ -71,7 +86,8 @@ func (l *Launcher) Agent(parent *agent.Agent, spec Subagent) (*agent.Agent, erro
 }
 
 // withExtra returns mws followed by the extra middleware it does not already
-// hold, without modifying mws.
+// hold, without modifying mws. An extra already present by identity keeps its
+// position in mws; it is neither moved nor appended again.
 func (l *Launcher) withExtra(mws []agent.Middleware) ([]agent.Middleware, error) {
 	out := slices.Clone(mws)
 	for _, x := range l.extra {
@@ -89,10 +105,12 @@ func (l *Launcher) withExtra(mws []agent.Middleware) ([]agent.Middleware, error)
 	return out, nil
 }
 
-// sameMiddleware reports whether a and b are the same value; values of an
-// uncomparable type are never the same.
+// sameMiddleware reports whether a and b are the same value; values that are
+// not comparable at run time (checked on the values, not just their types, so
+// an interface field holding a slice-bearing value does not panic) are never
+// the same.
 func sameMiddleware(a, b agent.Middleware) bool {
-	if a == nil || b == nil || !reflect.TypeOf(a).Comparable() || !reflect.TypeOf(b).Comparable() {
+	if a == nil || b == nil || !reflect.ValueOf(a).Comparable() || !reflect.ValueOf(b).Comparable() {
 		return false
 	}
 	return a == b
@@ -101,13 +119,17 @@ func sameMiddleware(a, b agent.Middleware) bool {
 // Input prepares a run of child, the agent Agent built for spec, on
 // description alone, with the parent's shareable state and backend, under
 // the thread id <parent thread>/<spec.Name>/<id>. ctx must belong to a run
-// (agent.Info), else Input returns an error; that run is the parent. c is the
-// tool call starting the child. See childMode for the permission mode the
+// (agent.Info), else Input returns an error; that run is the parent. c must be
+// the current tool call of that run (a nil c is an error); child and spec
+// should come from Agent and ResolveSpecs. See childMode for the permission mode the
 // child starts in and childScope for the skills it is offered.
 func (l *Launcher) Input(ctx context.Context, child *agent.Agent, spec Subagent, description, id string, c *tool.Call) (agent.Input, error) {
 	info, ok := agent.Info(ctx)
 	if !ok {
 		return agent.Input{}, errors.New("subagents: a subagent can only be started inside an agent run")
+	}
+	if c == nil || c.State == nil {
+		return agent.Input{}, errors.New("subagents: Input needs the run's current tool call")
 	}
 	s := c.State.ChildFor()
 	agent.PermissionModeKey.Set(s, childMode(info.Agent, child, c.State))
