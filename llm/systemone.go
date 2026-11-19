@@ -1,11 +1,9 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 )
@@ -94,14 +92,7 @@ func (s *systemOne) Decide(ctx context.Context, req DecisionRequest) (*DecisionR
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.cfg.Do(ctx, func() (*http.Request, error) {
-		httpReq, err := http.NewRequest(http.MethodPost, s.url(), bytes.NewReader(body))
-		if err != nil {
-			return nil, err
-		}
-		s.setHeaders(httpReq)
-		return httpReq, nil
-	})
+	resp, err := postDecision(ctx, s.cfg, s.url(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -127,16 +118,6 @@ func (s *systemOne) url() string {
 		return base + "/systemone"
 	}
 	return base + "/v1/systemone"
-}
-
-func (s *systemOne) setHeaders(r *http.Request) {
-	if s.cfg.APIKey != "" {
-		r.Header.Set("Authorization", "Bearer "+s.cfg.APIKey)
-	}
-	r.Header.Set("content-type", "application/json")
-	for k, v := range s.cfg.Headers {
-		r.Header.Set(k, v)
-	}
 }
 
 func (s *systemOne) buildRequest(req DecisionRequest) (systemOneRequest, error) {
