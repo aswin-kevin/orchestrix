@@ -17,9 +17,7 @@ import (
 
 // threadCount reports how many threads the middleware keeps an entry for.
 func threadCount(m *Middleware) int {
-	m.jobs.mu.Lock()
-	defer m.jobs.mu.Unlock()
-	return len(m.jobs.threads)
+	return m.jobs.ThreadCount()
 }
 
 func TestThreadlessRunHasNoJobs(t *testing.T) {
@@ -158,11 +156,11 @@ func TestNotificationSurvivesCheckpoint(t *testing.T) {
 	if err := json.Unmarshal(data, restored); err != nil {
 		t.Fatal(err)
 	}
-	j := m.jobs.job("t1", "bg_1")
+	j := m.jobs.Get("t1", "bg_1")
 	if j == nil {
 		t.Fatal("job unknown after the run")
 	}
-	<-j.proc.Done()
+	<-j.Handle.Done()
 
 	second := llmtest.New(turn(call("o1", ToolTaskOutput, obj{"task_id": "bg_1"})), llmtest.Turn{Text: "ok"})
 	in := input("t1")

@@ -79,10 +79,17 @@ func (m *Middleware) runSkill(_ context.Context, in ToolInput, c *tool.Call) (to
 // unlockTools unlocks (deferred.Unlock) the tools s names in allowed-tools
 // and every tool of its MCP servers.
 func unlockTools(st *state.State, s Skill) {
-	deferred.Unlock(st, s.AllowedTools...)
+	deferred.Unlock(st, unlockPatterns(s)...)
+}
+
+// unlockPatterns lists the tool name patterns s unlocks: its allowed-tools
+// and a prefix glob for each of its MCP servers.
+func unlockPatterns(s Skill) []string {
+	patterns := slices.Clone(s.AllowedTools)
 	for _, server := range s.MCPServers {
-		deferred.Unlock(st, names.MCPPrefix(server)+"*")
+		patterns = append(patterns, names.MCPPrefix(server)+"*")
 	}
+	return patterns
 }
 
 // offered returns the skill named name when scope offers it.

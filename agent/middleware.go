@@ -78,8 +78,8 @@ type AfterModel interface {
 // output limit is being resumed, nor after MaxStopContinuations
 // continuations in the run.
 //
-// A non-empty prompt is appended to State as a user message and the run takes
-// another turn; an empty one lets the run complete. Hooks run in reverse
+// A non-empty prompt is appended to State as a user message marked
+// InjectedMetaKey (ContinuationMetaValue) and the run takes another turn; an empty one lets the run complete. Hooks run in reverse
 // stack order, like AfterModel, and the first non-empty prompt wins: the
 // hooks after it are not consulted. A returned error ends the run like an
 // AfterModel error.
@@ -89,10 +89,17 @@ type BeforeStop interface {
 
 // MaxStopContinuations is how many times per run BeforeStop hooks may keep
 // the run going; after that they are not consulted and the run completes.
+// The slots are shared by every BeforeStop middleware of the stack: a hook
+// consulted later in reverse stack order (a hooks Stop quality gate, say)
+// does not run at all on a reply that ends the run after the slots were
+// spent by the hooks consulted before it.
 const MaxStopContinuations = 3
 
 // ModelWrapper wraps the model call. See the package documentation for the
-// wrapping semantics.
+// wrapping semantics. The ModelRequest is shared by every layer, and inner
+// wrappers edit it in place (appending system segments, filtering tools): a
+// wrapper that calls next more than once must restore the request it passed
+// first, or each retry carries the inner edits again.
 type ModelWrapper interface {
 	WrapModel(ctx context.Context, req *ModelRequest, next ModelHandler) (*llm.Response, error)
 }
@@ -132,8 +139,18 @@ const SubagentToolName = "task"
 // middleware added to the conversation on its own, such as a background
 // job's notification, a hook's context or a reminder, rather than input from
 // the user. Its value names what added it. Such a message does not start a
-// new user turn: middleware that reasons about turns (summarize) skips it.
+// new user turn: middleware that reasons about turns (summarize, compress,
+// rubric) skips it.
+//
+// The agent core marks its own continuations this way, with the value
+// ContinuationMetaValue: a BeforeStop prompt, the resume after a reply cut
+// off at max tokens, a token-budget nudge and a settlement prompt. Provider
+// requests never carry Meta.
 const InjectedMetaKey = "orchestrix.injected"
+
+// ContinuationMetaValue is the InjectedMetaKey value of a user message the
+// agent core appended to keep the run going (see InjectedMetaKey).
+const ContinuationMetaValue = "stop"
 
 // ModelRequest is everything a model call needs, as seen by ModelWrappers.
 type ModelRequest struct {

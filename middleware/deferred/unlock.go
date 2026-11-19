@@ -13,6 +13,34 @@ import (
 // checkpointed with it; a forked State inherits it.
 var UnlockedKey = state.NewKey[[]string]("deferred.unlocked", state.Private[[]string]())
 
+// searchedKey holds the tool names search_tools unlocked in this run, in the
+// order found. It lets a middleware that takes back its own unlocks (see
+// Lock) leave alone the ones the model found by searching.
+var searchedKey = state.NewKey[[]string]("deferred.searched", state.Private[[]string]())
+
+// Searched returns the tool names search_tools unlocked, without duplicates,
+// in the order found. The set accumulates across every run of the thread
+// (the key is checkpointed with State) and holds exact names, not patterns.
+// A search grant is never relocked: Lock only removes patterns a middleware
+// names. s must not be nil.
+func Searched(s *state.State) []string {
+	names, _ := searchedKey.Get(s)
+	return slices.Clone(names)
+}
+
+// recordSearched adds names to the searched set, skipping those present.
+func recordSearched(s *state.State, names []string) {
+	searchedKey.Update(s, func(current []string) []string {
+		out := slices.Clone(current)
+		for _, n := range names {
+			if !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
+		return out
+	})
+}
+
 // Unlock adds patterns to the run's unlock set, skipping those already in
 // it. Unlocking a name shows a deferred tool's schema to the model and makes
 // a gated tool callable (see Deferrer and Gater). s must not be nil.
@@ -26,6 +54,20 @@ func Unlock(s *state.State, patterns ...string) {
 			}
 		}
 		return unlocked
+	})
+}
+
+// Lock removes each exact pattern from UnlockedKey (no glob matching between
+// patterns); patterns not present are ignored. It is how a middleware takes
+// back an unlock it granted. It removes the pattern whoever granted it: a
+// pattern the host or another middleware also unlocked is removed too. s must
+// not be nil.
+func Lock(s *state.State, patterns ...string) {
+	UnlockedKey.Update(s, func(current []string) []string {
+		// current is the stored slice itself: never modify it in place.
+		return slices.DeleteFunc(slices.Clone(current), func(p string) bool {
+			return slices.Contains(patterns, p)
+		})
 	})
 }
 

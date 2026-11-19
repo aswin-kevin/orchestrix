@@ -10,7 +10,10 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 func assistantText(s string) llm.Message {
@@ -111,7 +114,7 @@ func wrapOnce(t *testing.T, cfg Config, s *state.State) []llm.Message {
 	t.Helper()
 	req := &agent.ModelRequest{
 		State:   s,
-		Request: llm.Request{Messages: agent.View(s.Messages())},
+		Request: llm.Request{Messages: agent.ElidedView(s, 0)},
 		Profile: llm.Profile{ContextWindow: 100_000},
 	}
 	var got []llm.Message
@@ -309,6 +312,46 @@ func TestInjectedUserMessageIsNotATurn(t *testing.T) {
 	for _, i := range []int{4, 7} {
 		if string(got[i].Content[0].Input) != bigInput {
 			t.Fatalf("tool input of message %d, in the current tool loop, was shortened", i)
+		}
+	}
+}
+
+// continuing keeps a run going with one BeforeStop prompt per call.
+type continuing struct{}
+
+func (continuing) Name() string { return "continuing" }
+
+func (continuing) BeforeStop(context.Context, *state.State, *llm.Response) (string, error) {
+	return "check your work", nil
+}
+
+func TestStopContinuationIsNotATurn(t *testing.T) {
+	big := strings.Repeat("x", 5000)
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "w1", Name: "noop", Input: map[string]any{"content": big}}}},
+		llmtest.Turn{Text: "first answer"},
+		llmtest.Turn{Text: "second answer"},
+		llmtest.Turn{Text: "third answer"},
+		llmtest.Turn{Text: "fourth answer"},
+	)
+	a, err := agent.New(agent.Config{
+		Provider:       p,
+		Profile:        &llm.Profile{ContextWindow: 100_000, MaxOutput: 500},
+		Tools:          []tool.Tool{noopTool()},
+		Middleware:     []agent.Middleware{New(Config{}), continuing{}},
+		PermissionMode: permission.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
+	}
+
+	// The call answered the run's input; the continuations after it are
+	// still the same turn, so its input is never shortened.
+	for i, req := range p.Requests[2:] {
+		if in := string(req.Messages[1].Content[0].Input); !strings.Contains(in, big) {
+			t.Fatalf("request %d shortened the current run's tool input to %.80s", i+2, in)
 		}
 	}
 }

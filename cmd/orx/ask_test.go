@@ -19,7 +19,7 @@ var twoQuestions = []askuser.Question{
 
 func TestAskSelectsNumberedOptions(t *testing.T) {
 	out := &promptLog{}
-	ap := newApprover(newLineReader(strings.NewReader("2\n1, 3\n")), out)
+	ap := activeApprover(newLineReader(strings.NewReader("2\n1, 3\n")), out)
 
 	answers, err := ap.ask(context.Background(), twoQuestions)
 
@@ -54,7 +54,7 @@ func TestAskFreeText(t *testing.T) {
 	// user's own words too.
 	for _, line := range []string{"use sqlite instead", "7", "1, x", "1, 2"} {
 		t.Run(line, func(t *testing.T) {
-			ap := newApprover(newLineReader(strings.NewReader(line+"\n")), &promptLog{})
+			ap := activeApprover(newLineReader(strings.NewReader(line+"\n")), &promptLog{})
 
 			answers, err := ap.ask(context.Background(), twoQuestions[:1])
 
@@ -69,7 +69,7 @@ func TestAskFreeText(t *testing.T) {
 }
 
 func TestAskEndOfInputFails(t *testing.T) {
-	ap := newApprover(newLineReader(strings.NewReader("1\n")), &promptLog{})
+	ap := activeApprover(newLineReader(strings.NewReader("1\n")), &promptLog{})
 
 	_, err := ap.ask(context.Background(), twoQuestions)
 
@@ -81,7 +81,7 @@ func TestAskEndOfInputFails(t *testing.T) {
 func TestAskCancelled(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pw.Close()
-	ap := newApprover(newLineReader(pr), &promptLog{})
+	ap := activeApprover(newLineReader(pr), &promptLog{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -92,7 +92,7 @@ func TestAskCancelled(t *testing.T) {
 
 func TestAskEscapesModelText(t *testing.T) {
 	out := &promptLog{}
-	ap := newApprover(newLineReader(strings.NewReader("1\n")), out)
+	ap := activeApprover(newLineReader(strings.NewReader("1\n")), out)
 	qs := []askuser.Question{{
 		Question: "Pick\x1b[2J one",
 		Header:   "H\x1b",
@@ -116,7 +116,7 @@ func TestAskEscapesModelText(t *testing.T) {
 
 func TestAskPromptMatchesQuestionKind(t *testing.T) {
 	out := &promptLog{}
-	ap := newApprover(newLineReader(strings.NewReader("1\n1\n")), out)
+	ap := activeApprover(newLineReader(strings.NewReader("1\n1\n")), out)
 
 	if _, err := ap.ask(context.Background(), twoQuestions); err != nil {
 		t.Fatal(err)
@@ -132,5 +132,19 @@ func TestAskPromptMatchesQuestionKind(t *testing.T) {
 	}
 	if !strings.Contains(multi, multiAnswerPrompt) {
 		t.Errorf("multi-choice prompt = %q, want %q", multi, multiAnswerPrompt)
+	}
+}
+
+func TestQuestionsWhileIdleFailWithoutPrompt(t *testing.T) {
+	out := &promptLog{}
+	ap := newApprover(newLineReader(strings.NewReader("1\n")), out) // no turn runs
+
+	_, err := ap.ask(context.Background(), []askuser.Question{{Question: "Which?", Options: []askuser.Option{{Label: "a"}, {Label: "b"}}}})
+
+	if err == nil || err.Error() != deniedNoTerminal {
+		t.Errorf("err = %v, want %q", err, deniedNoTerminal)
+	}
+	if out.buf.Len() != 0 {
+		t.Errorf("printed %q while idle, want nothing", out.buf.String())
 	}
 }

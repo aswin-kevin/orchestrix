@@ -52,7 +52,7 @@ func (m *middleware) runSearch(ctx context.Context, in SearchInput, c *tool.Call
 	}
 	var candidates []tool.Tool
 	for _, t := range info.Tools() {
-		if m.isDeferred(t) && !gatedLocked(c.State, t) {
+		if m.isDeferred(t) && !gatedLocked(c.State, t) && !agent.ToolHidden(ctx, t.Name()) {
 			candidates = append(candidates, t)
 		}
 	}
@@ -70,6 +70,7 @@ func (m *middleware) runSearch(ctx context.Context, in SearchInput, c *tool.Call
 		names[i] = t.Name()
 	}
 	Unlock(c.State, names...)
+	recordSearched(c.State, names)
 	return tool.Text(strings.Join(entries, "\n\n")), nil
 }
 

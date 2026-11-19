@@ -27,6 +27,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/jobs"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -117,6 +118,13 @@ func outputTail(output string) string {
 // finished reports whether the record describes an ended job.
 func (r JobRecord) finished() bool { return r.Status != StatusRunning }
 
+// Thread implements jobs.Record: it returns the record's ThreadID.
+func (r JobRecord) Thread() string { return r.ThreadID }
+
+// Settled implements jobs.Record: it reports whether the job ended and the
+// model was told so, which makes the record one that may be pruned.
+func (r JobRecord) Settled() bool { return r.finished() && r.Notified }
+
 // JobsKey holds the run's job records, oldest first. It is run-local
 // (state.RunLocal): neither a subagent nor a fork inherits the records, since
 // the jobs belong to the thread that started them.
@@ -172,7 +180,7 @@ func (m *Middleware) Name() string { return "tasks" }
 // most twice backend.DefaultKillGrace. A job still running after that keeps
 // one goroutine waiting for it. Jobs cannot be started afterwards, and the
 // records of the jobs it stopped show them as stopped.
-func (m *Middleware) Shutdown() { m.jobs.shutdown() }
+func (m *Middleware) Shutdown() { m.jobs.Shutdown(stopWait) }
 
 // WrapTool implements agent.ToolWrapper: it offers background execution to
 // every tool call.
@@ -205,16 +213,16 @@ func (s starter) Start(ctx context.Context, c *tool.Call, command string, timeou
 		timeout = s.m.jobTimeout
 	}
 	recorded, _ := JobsKey.Get(c.State)
-	j, err := s.m.jobs.start(ctx, b, c.ThreadID, command, timeout, recorded)
+	j, err := startJob(ctx, s.m.jobs, b, c.ThreadID, command, timeout, recorded)
 	if err != nil {
 		return "", err
 	}
 	JobsKey.Update(c.State, func(records []JobRecord) []JobRecord {
 		return append(slices.Clone(records), JobRecord{
-			ID: j.id, ThreadID: j.threadID, Command: command, Status: StatusRunning, Started: j.started,
+			ID: j.ID, ThreadID: j.ThreadID, Command: command, Status: StatusRunning, Started: j.Started,
 		})
 	})
-	return j.id, nil
+	return j.ID, nil
 }
 
 // BeforeModel implements agent.BeforeModel: every job of the run's thread
@@ -223,13 +231,13 @@ func (s starter) Start(ctx context.Context, c *tool.Call, command string, timeou
 // another thread's notifications.
 //
 // Before that, a thread whose jobs all ended and were announced in earlier
-// turns is released (see manager.release): the model had the turn of each
+// turns is released (see jobs.Manager.Release): the model had the turn of each
 // notification to read the output, and afterwards task_output reports the
 // recorded outcome only.
 func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
 	threadID := runThread(ctx)
 	if threadID != "" {
-		m.jobs.release(threadID)
+		m.jobs.Release(threadID)
 	}
 	var notices []llm.Message
 	m.updateRecords(s, threadID, func(r *JobRecord) {
@@ -252,7 +260,7 @@ func runThread(ctx context.Context) string {
 // ended.
 func (m *Middleware) markNotified(r *JobRecord) {
 	r.Notified = true
-	m.jobs.markNotified(r.ThreadID, []string{r.ID})
+	m.jobs.MarkNotified(r.ThreadID, r.ID)
 }
 
 func notification(r JobRecord) llm.Message {
@@ -281,7 +289,7 @@ func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	m.jobs.stopAndForget(info.ThreadID, ids, func() {
+	m.jobs.StopAndForget(info.ThreadID, ids, stopWait, func() {
 		m.updateRecords(s, info.ThreadID, func(r *JobRecord) {
 			if slices.Contains(ids, r.ID) {
 				m.markNotified(r)
@@ -294,13 +302,7 @@ func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 // threadRecords returns the run's records of threadID, as stored.
 func (m *Middleware) threadRecords(s *state.State, threadID string) []JobRecord {
 	records, _ := JobsKey.Get(s)
-	var out []JobRecord
-	for _, r := range records {
-		if r.ThreadID == threadID {
-			out = append(out, r)
-		}
-	}
-	return out
+	return jobs.ThreadRecords(records, threadID)
 }
 
 // updateRecords brings the run's records of threadID up to date with the
@@ -309,27 +311,12 @@ func (m *Middleware) threadRecords(s *state.State, threadID string) []JobRecord 
 // its outcome; one whose job the middleware does not know is lost. Records
 // of other threads are kept untouched. edit may be nil.
 func (m *Middleware) updateRecords(s *state.State, threadID string, edit func(*JobRecord)) []JobRecord {
-	var out []JobRecord
-	JobsKey.Update(s, func(records []JobRecord) []JobRecord {
-		records = slices.Clone(records)
-		for i := range records {
-			if records[i].ThreadID != threadID {
-				continue
-			}
-			m.refresh(&records[i])
-			if edit != nil {
-				edit(&records[i])
-			}
+	return jobs.UpdateRecords(s, JobsKey, threadID, m.jobs.MaxFinished(), func(r *JobRecord) {
+		m.refresh(r)
+		if edit != nil {
+			edit(r)
 		}
-		records = pruneRecords(records, m.jobs.maxFinished)
-		for _, r := range records {
-			if r.ThreadID == threadID {
-				out = append(out, r)
-			}
-		}
-		return records
 	})
-	return out
 }
 
 // refresh updates a running record from its job.
@@ -337,33 +324,18 @@ func (m *Middleware) refresh(r *JobRecord) {
 	if r.finished() {
 		return
 	}
-	j := m.jobs.job(r.ThreadID, r.ID)
+	j := m.jobs.Get(r.ThreadID, r.ID)
 	if j == nil {
 		r.Status, r.ExitCode, r.Ended = StatusLost, lostExitCode, time.Now()
 		return
 	}
-	if status, exitCode := j.outcome(); status != StatusRunning {
+	if status, exitCode := outcome(j); status != StatusRunning {
 		r.Status, r.ExitCode, r.Ended = status, exitCode, time.Now()
-		res, _ := j.proc.Result()
+		res, _ := j.Handle.Result()
 		r.OutputTail = outputTail(res.Output)
 	}
 }
 
 // pruneRecords drops the oldest records the model has already been told
-// about, keeping at most keep of them, so the records stay bounded.
-func pruneRecords(records []JobRecord, keep int) []JobRecord {
-	settled := 0
-	for _, r := range records {
-		if r.finished() && r.Notified {
-			settled++
-		}
-	}
-	excess := settled - keep
-	return slices.DeleteFunc(records, func(r JobRecord) bool {
-		if excess > 0 && r.finished() && r.Notified {
-			excess--
-			return true
-		}
-		return false
-	})
-}
+// about, keeping at most keep of them (see jobs.PruneRecords).
+func pruneRecords(records []JobRecord, keep int) []JobRecord { return jobs.PruneRecords(records, keep) }

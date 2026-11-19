@@ -13,7 +13,10 @@ import (
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/mcp"
+	"github.com/aswin-kevin/orchestrix/middleware/async"
+	"github.com/aswin-kevin/orchestrix/middleware/compress"
 	"github.com/aswin-kevin/orchestrix/middleware/memory"
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/web"
@@ -111,7 +114,7 @@ func skillsOption(dirs []string, stderr io.Writer) (orchestrix.Option, error) {
 		return nil, err
 	}
 	for _, w := range warnings {
-		fmt.Fprintln(stderr, "orx: warning: skipped skill:", termSafe(w.Error()))
+		fmt.Fprintln(stderr, "orx: warning: skipped skill:", termsafe.String(w.Error()))
 	}
 	return orchestrix.WithSkills(skills.Config{Skills: loaded}), nil
 }
@@ -134,7 +137,7 @@ func connectMCP(ctx context.Context, file string, stderr io.Writer) (*mcp.Middle
 	}
 	for _, st := range m.Status() {
 		if !st.Connected && st.Err != nil {
-			fmt.Fprintln(stderr, "orx: warning:", termSafe(st.Err.Error()))
+			fmt.Fprintln(stderr, "orx: warning:", termsafe.String(st.Err.Error()))
 		}
 	}
 	return m, exitOK, nil
@@ -177,4 +180,22 @@ func apiKey(env, search string) (string, error) {
 		return "", fmt.Errorf("-search %s needs an API key in $%s", search, env)
 	}
 	return key, nil
+}
+
+// scaleOptions returns the options of -async and -compress. stop shuts down
+// the background subagents of -async and must be called on every exit path,
+// like the other cleanups; it is a no-op without -async.
+func scaleOptions(o options) (opts []orchestrix.Option, stop func(), err error) {
+	stop = func() {}
+	if o.async {
+		m, err := async.New(async.Config{})
+		if err != nil {
+			return nil, nil, err
+		}
+		opts, stop = append(opts, orchestrix.WithAsync(m)), m.Shutdown
+	}
+	if o.compress {
+		opts = append(opts, orchestrix.WithCompress(compress.Config{}))
+	}
+	return opts, stop, nil
 }

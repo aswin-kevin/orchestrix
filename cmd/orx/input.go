@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 )
 
@@ -66,4 +67,30 @@ func trimNewline(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// idleWatching is called once readIdle watches for Ctrl-C; tests replace it.
+var idleWatching = func() {}
+
+// readIdle prints the idle prompt to out and reads the next line, holding
+// the approver's terminal so that a question still on screen is done first.
+// Ctrl-C there cancels the read, so the REPL returns and the deferred
+// shutdown runs; the default handler would kill the process and orphan
+// background jobs. Ctrl-C is watched before the terminal is taken, and the
+// wait for it ends with ctx, so neither a signal nor a cancelled run can be
+// held up by a question.
+func readIdle(ctx context.Context, in *lineReader, ap *approver, out io.Writer) (string, error) {
+	ctx, stop := notifyInterrupt(ctx)
+	defer stop()
+	idleWatching()
+	if err := ap.lockPrompt(ctx); err != nil {
+		return "", err
+	}
+	defer ap.unlockPrompt()
+	fmt.Fprint(out, replPrompt)
+	line, err := in.next(ctx)
+	if err == nil {
+		interrupted.Store(false) // the user has moved on
+	}
+	return line, err
 }

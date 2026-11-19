@@ -122,3 +122,89 @@ func TestRenderEscapesStreamedTextPerDelta(t *testing.T) {
 		t.Errorf("stdout = %q, want %q", out.String(), want)
 	}
 }
+
+func TestSplitIncompleteRune(t *testing.T) {
+	tests := []struct {
+		name, in, complete, pending string
+	}{
+		{"lead byte held", "a\xc3", "a", "\xc3"},
+		{"three of four bytes held", "\xf0\x9f\x98", "", "\xf0\x9f\x98"},
+		{"whole rune passes", "é", "é", ""},
+		{"invalid byte is not held", "\xff", "\xff", ""},
+		{"empty", "", "", ""},
+		{"ascii", "abc", "abc", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			complete, pending := splitIncompleteRune(tc.in)
+			if complete != tc.complete || pending != tc.pending {
+				t.Errorf("splitIncompleteRune(%q) = (%q, %q), want (%q, %q)", tc.in, complete, pending, tc.complete, tc.pending)
+			}
+		})
+	}
+}
+
+// renderDeltas streams the deltas as text of the top-level agent.
+func renderDeltas(r *renderer, deltas ...string) {
+	for _, d := range deltas {
+		r.render(agent.Event{Kind: agent.KindText, Agent: agent.DefaultAgentName, Text: d})
+	}
+}
+
+func TestRuneSplitAcrossDeltas(t *testing.T) {
+	var out, errOut bytes.Buffer
+	r := newRenderer(&out, &errOut)
+
+	renderDeltas(r, "caf\xc3", "\xa9!")
+
+	if out.String() != "café!" {
+		t.Errorf("stdout = %q, want %q", out.String(), "café!")
+	}
+}
+
+func TestEmojiAcrossThreeDeltas(t *testing.T) {
+	var out, errOut bytes.Buffer
+	r := newRenderer(&out, &errOut)
+
+	renderDeltas(r, "x\xf0\x9f", "\x98", "\x80y")
+
+	if out.String() != "x😀y" {
+		t.Errorf("stdout = %q, want %q", out.String(), "x😀y")
+	}
+}
+
+func TestDanglingBytesFlushedEscaped(t *testing.T) {
+	var out, errOut bytes.Buffer
+	r := newRenderer(&out, &errOut)
+
+	renderDeltas(r, "x\xc3")
+	r.render(agent.Event{Kind: agent.KindFinal, Final: &agent.Final{Reason: agent.ReasonCompleted}})
+
+	if want := `x\xc3` + "\n"; out.String() != want {
+		t.Errorf("stdout = %q, want %q", out.String(), want)
+	}
+}
+
+func TestPendingNotMixedAcrossAgents(t *testing.T) {
+	var out, errOut bytes.Buffer
+	r := newRenderer(&out, &errOut)
+
+	renderDeltas(r, "\xc3")
+	r.render(agent.Event{Kind: agent.KindText, Agent: "researcher", Text: "\xa9 sub\n"})
+
+	if want := `\xc3` + "\n  [researcher] " + `\xa9` + " sub\n"; out.String() != want {
+		t.Errorf("stdout = %q, want %q", out.String(), want)
+	}
+}
+
+func TestPromptFlushesPendingBytes(t *testing.T) {
+	var out, errOut bytes.Buffer
+	r := newRenderer(&out, &errOut)
+	renderDeltas(r, "ok\xe2\x82")
+
+	fmt.Fprint(r.prompts(), "Allow x? ")
+
+	if want := `ok\xe2\x82` + "\n"; out.String() != want {
+		t.Errorf("stdout = %q, want %q", out.String(), want)
+	}
+}

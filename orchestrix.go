@@ -17,16 +17,22 @@ import (
 // context management (summarize), prompt caching, file tools, planning
 // (write_todos) and subagents (the task tool). Options adjust the result.
 //
-// The stack order is fixed, outermost first: summarize, cache, hooks (with
-// WithHooks), hitl (with WithInterruptOn or WithInterruptConfig), memory
-// (WithMemory), skills (WithSkills), planmode (WithPlanMode), filesystem,
-// planning, subagents, deferred, mcp (WithMCP), web (WithWeb), askuser
-// (WithAskUser), tasks (WithTasks). deferred is present with
-// WithDeferredTools, and otherwise added with a zero deferred.Config when
-// WithSkills has Tools or WithMCP has a deferred or gated server. summarize
-// must stay first: it rebuilds the request from State. WithMiddleware
-// replaces a middleware of the same name in place and appends the others;
-// WithoutMiddleware removes by name.
+// The stack order is fixed, outermost first: summarize, compress
+// (WithCompress), cache, hooks (WithHooks), hitl (WithInterruptOn or
+// WithInterruptConfig), rubric (WithRubric), memory (WithMemory), skills
+// (WithSkills), planmode (WithPlanMode), filesystem, planning, subagents,
+// async (WithAsync), deferred, mcp (WithMCP), web (WithWeb), askuser
+// (WithAskUser), tasks (WithTasks), profiles (WithProfiles). deferred is
+// present with WithDeferredTools, and otherwise added with a zero
+// deferred.Config when WithSkills has Tools or WithMCP has a deferred or gated
+// server. summarize must stay first: it rebuilds the request from State.
+// rubric sits early because BeforeStop hooks run in reverse order: the async
+// reminder about running tasks is consulted before the answer is graded, and
+// hooks' Stop hooks after it. They share agent.MaxStopContinuations (see
+// WithRubric). profiles is last, so its prompt
+// suffix is the last segment and its overrides see the final tool list.
+// WithMiddleware replaces a middleware of the same name in place and appends
+// the others after profiles; WithoutMiddleware removes by name.
 //
 // model is either a spec string such as "anthropic:claude-sonnet-4-5" or
 // "openai:gpt-4.1" (credentials and base URL come from the environment, see
@@ -35,7 +41,9 @@ import (
 //
 // Without WithBackend, WithBackendFactory or WithShell, each thread gets its
 // own in-memory workspace; it lives as long as the agent and, with
-// WithCheckpointer, is saved with the thread. New never panics on bad
+// WithCheckpointer, is saved with the thread. WithMount routes path prefixes
+// to other backends on top of any of these, for example memory.DefaultDir to a
+// kv backend so memories outlive the thread. New never panics on bad
 // options: every problem is returned, joined, as one error.
 func New(model any, opts ...Option) (*agent.Agent, error) {
 	s := &settings{}
@@ -95,13 +103,16 @@ func (s *settings) validate() {
 func (s *settings) build() agent.Config {
 	cfg := s.cfg
 	cfg.CacheBoundary = len(cfg.System)
+	mount := s.mountWrapper()
 	switch {
 	case s.shell != nil:
 		s.useShell(&cfg)
 	case cfg.Backend == nil && cfg.BackendFactory == nil:
-		cfg.BackendFactory = newThreadMemoryFactory()
+		cfg.BackendFactory = newThreadMemoryFactory(mount)
 		cfg.SyncWorkspace = true
+		mount = nil // the factory already mounts each thread's backend
 	}
+	applyMounts(&cfg, mount)
 
 	stack, err := agent.Compose(s.baseStack(), cfg.Middleware, s.exclude)
 	if err != nil {
@@ -118,9 +129,11 @@ func (s *settings) build() agent.Config {
 
 // newThreadMemoryFactory returns a factory that gives every thread id its own
 // in-memory backend and hands the same one back on later calls, so files
-// survive across runs of a thread. Backends are never evicted; hosts with many
-// long-lived threads should supply their own factory via WithBackendFactory.
-func newThreadMemoryFactory() func(threadID string) backend.Backend {
+// survive across runs of a thread. A non-nil mount puts the WithMount routes
+// over each one; a checkpoint still snapshots only the in-memory part.
+// Backends are never evicted; hosts with many long-lived threads should
+// supply their own factory via WithBackendFactory.
+func newThreadMemoryFactory(mount func(backend.Backend) backend.Backend) func(threadID string) backend.Backend {
 	var mu sync.Mutex
 	backends := make(map[string]backend.Backend)
 	return func(threadID string) backend.Backend {
@@ -129,6 +142,9 @@ func newThreadMemoryFactory() func(threadID string) backend.Backend {
 		b, ok := backends[threadID]
 		if !ok {
 			b = memory.New()
+			if mount != nil {
+				b = mount(b)
+			}
 			backends[threadID] = b
 		}
 		return b

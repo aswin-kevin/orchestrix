@@ -71,6 +71,26 @@ type Subagent struct {
 	OutputSchema map[string]any
 }
 
+// ResolveSpecs validates cfg's subagents like New and returns them with the
+// built-in general-purpose one (unless disabled or replaced by a spec of that
+// name), in the order the task tool lists them. The fork subagent is never
+// included.
+func ResolveSpecs(cfg Config) ([]Subagent, error) {
+	generalPrompt := cfg.GeneralPurposePrompt
+	if generalPrompt == "" {
+		generalPrompt = DefaultGeneralPurposePrompt
+	}
+	specs, order, err := validateSpecs(cfg, generalPrompt)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Subagent, len(order))
+	for i, name := range order {
+		out[i] = specs[name]
+	}
+	return out, nil
+}
+
 // validateSpecs checks the configured subagents and returns them keyed by
 // name, with the built-in general-purpose subagent added unless disabled or
 // replaced, together with the names in the order the model sees them.
@@ -193,76 +213,6 @@ func hasSpec(specs []Subagent, name string) bool {
 		}
 	}
 	return false
-}
-
-// childKey identifies a built subagent: specs are fixed at New, but the
-// configuration they inherit comes from the agent that delegates.
-type childKey struct {
-	parent *agent.Agent
-	name   string
-}
-
-// child returns the agent for spec as started from parent, building it on
-// first use. Agents are immutable and safe for concurrent runs, so one per
-// (parent, subagent) serves every task call.
-func (m *middleware) child(parent *agent.Agent, spec Subagent) (*agent.Agent, error) {
-	key := childKey{parent: parent, name: spec.Name}
-	if cached, ok := m.children.Load(key); ok {
-		return cached.(*agent.Agent), nil
-	}
-	cfg, err := childConfig(parent.Config(), spec)
-	if err != nil {
-		return nil, err
-	}
-	built, err := agent.New(cfg)
-	if err != nil {
-		return nil, err
-	}
-	// Two parallel first calls may both build; keep whichever won.
-	actual, _ := m.children.LoadOrStore(key, built)
-	return actual.(*agent.Agent), nil
-}
-
-// childConfig derives a subagent's configuration from its parent's. The
-// subagent never checkpoints or syncs a workspace of its own: it runs inside
-// the parent's thread and shares the parent's backend.
-func childConfig(cfg agent.Config, spec Subagent) (agent.Config, error) {
-	system, err := childSystem(spec)
-	if err != nil {
-		return agent.Config{}, err
-	}
-	cfg.Name = spec.Name
-	cfg.System = system
-	cfg.CacheBoundary = 1
-	cfg.Checkpointer = nil
-	cfg.SyncWorkspace = false
-	if spec.Tools != nil {
-		cfg.Tools = spec.Tools
-	}
-	if spec.Middleware != nil {
-		cfg.Middleware = spec.Middleware
-	}
-	if err := checkSkills(spec, cfg.Middleware); err != nil {
-		return agent.Config{}, err
-	}
-	if spec.Provider != nil {
-		cfg.Provider = spec.Provider
-	}
-	if spec.Model != "" {
-		cfg.Model = spec.Model
-		// The parent's profile was looked up for the parent's model.
-		cfg.Profile = nil
-	}
-	if spec.PermissionMode != "" {
-		cfg.PermissionMode = spec.PermissionMode
-	}
-	if spec.Rules != nil {
-		cfg.Rules = *spec.Rules
-	}
-	if spec.MaxTurns > 0 {
-		cfg.MaxTurns = spec.MaxTurns
-	}
-	return cfg, nil
 }
 
 // childSystem is the subagent's system prompt, followed by the required

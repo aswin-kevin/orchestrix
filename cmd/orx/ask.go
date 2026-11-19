@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 )
 
@@ -24,18 +26,29 @@ const (
 // number (comma-separated numbers for a multi-choice question) selects
 // options, anything else is the user's own answer. It shares the approver's input and prompt lock, so its
 // questions never interleave with approval prompts. End of input or
-// cancellation fails the call, which the model sees as a tool error.
+// cancellation fails the call, which the model sees as a tool error, and so
+// does a question asked while no turn runs or still open when it ends (see
+// approver).
 //
 // askuser already strips control characters from the questions; the text is
-// still passed through termSafe, since it is written by the model.
+// still passed through termsafe.String, since it is written by the model.
 func (a *approver) ask(ctx context.Context, questions []askuser.Question) ([]askuser.Answer, error) {
-	a.prompt.Lock()
-	defer a.prompt.Unlock()
+	tctx, release, err := a.takeTerminal(ctx)
+	if errors.Is(err, errTurnEnded) {
+		return nil, err
+	}
+	if err != nil {
+		return nil, fmt.Errorf("no answer from the user: %w", err)
+	}
+	defer release()
 	label := askerLabel(agent.Info(ctx))
 	answers := make([]askuser.Answer, 0, len(questions))
 	for _, q := range questions {
 		fmt.Fprint(a.out, formatQuestion(label, q))
-		line, err := a.in.next(ctx)
+		line, err := a.readAnswer(ctx, tctx)
+		if errors.Is(err, errTurnEnded) {
+			return nil, err
+		}
 		if err != nil {
 			return nil, fmt.Errorf("no answer from the user: %w", err)
 		}
@@ -50,17 +63,17 @@ func formatQuestion(label string, q askuser.Question) string {
 	var sb strings.Builder
 	sb.WriteString(label)
 	if q.Header != "" {
-		sb.WriteString("[" + termSafe(q.Header) + "] ")
+		sb.WriteString("[" + termsafe.String(q.Header) + "] ")
 	}
-	sb.WriteString(termSafe(q.Question))
+	sb.WriteString(termsafe.String(q.Question))
 	if q.MultiSelect {
 		sb.WriteString(multiMarker)
 	}
 	sb.WriteString("\n")
 	for i, o := range q.Options {
-		fmt.Fprintf(&sb, "  %d. %s", i+1, termSafe(o.Label))
+		fmt.Fprintf(&sb, "  %d. %s", i+1, termsafe.String(o.Label))
 		if o.Description != "" {
-			sb.WriteString(" - " + termSafe(o.Description))
+			sb.WriteString(" - " + termsafe.String(o.Description))
 		}
 		sb.WriteString("\n")
 	}

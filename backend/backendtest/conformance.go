@@ -31,6 +31,12 @@ var pngHeader = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 0, 0, 0, 0}
 // Each subtest receives a fresh, empty backend.
 func Run(t *testing.T, newBackend func(t *testing.T) backend.Backend) {
 	t.Helper()
+	run(t, newBackend, mtimeGap)
+}
+
+// run executes the suite; gap spaces writes whose mtimes must differ.
+func run(t *testing.T, newBackend func(t *testing.T) backend.Backend, gap time.Duration) {
+	t.Helper()
 	cases := []struct {
 		name string
 		fn   func(t *testing.T, b backend.Backend)
@@ -50,7 +56,7 @@ func Run(t *testing.T, newBackend func(t *testing.T) backend.Backend) {
 		{"Delete", testDelete},
 		{"Ls", testLs},
 		{"Glob", testGlob},
-		{"GlobOrderAndBase", testGlobOrderAndBase},
+		{"GlobOrderAndBase", func(t *testing.T, b backend.Backend) { testGlobOrderAndBase(t, b, gap) }},
 		{"GrepModes", testGrepModes},
 		{"GrepOptions", testGrepOptions},
 		{"GrepSkipsBinaryAndLimits", testGrepSkipsBinaryAndLimits},
@@ -363,12 +369,12 @@ func testGlob(t *testing.T, b backend.Backend) {
 	}
 }
 
-func testGlobOrderAndBase(t *testing.T, b backend.Backend) {
+func testGlobOrderAndBase(t *testing.T, b backend.Backend, gap time.Duration) {
 	ctx := context.Background()
 	write(t, b, "/old.txt", "1")
-	time.Sleep(mtimeGap)
+	time.Sleep(gap)
 	write(t, b, "/mid.txt", "2")
-	time.Sleep(mtimeGap)
+	time.Sleep(gap)
 	write(t, b, "/new.txt", "3")
 
 	got, err := b.Glob(ctx, "*.txt", "")

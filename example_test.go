@@ -10,17 +10,25 @@ import (
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/kv"
+	"github.com/aswin-kevin/orchestrix/backend/sandbox"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/checkpoint/file"
+	"github.com/aswin-kevin/orchestrix/coordinator"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/mcp"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
+	"github.com/aswin-kevin/orchestrix/middleware/async"
+	"github.com/aswin-kevin/orchestrix/middleware/compress"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/middleware/hitl"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
 	"github.com/aswin-kevin/orchestrix/middleware/memory"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
+	"github.com/aswin-kevin/orchestrix/middleware/profiles"
+	"github.com/aswin-kevin/orchestrix/middleware/rubric"
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
@@ -308,4 +316,132 @@ func ExampleWithAskUser() {
 	for ev, err := range a.Resume(ctx, "setup", final.State, decisions) {
 		_, _ = ev, err // the same event stream as Run
 	}
+}
+
+func ExampleWithMount() {
+	store, err := kv.NewDirStore("./memories") // survives restarts
+	if err != nil {
+		log.Fatal(err)
+	}
+	memories, err := kv.New(store, "memories")
+	if err != nil {
+		log.Fatal(err)
+	}
+	a, err := orchestrix.New(model,
+		orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}),
+		orchestrix.WithMount(memory.DefaultDir, memories), // shared by every thread
+	)
+	_, _ = a, err
+}
+
+// remote stands for a backend.Executor that runs commands in a container.
+var remote backend.Executor
+
+func ExampleWithBackend_sandbox() {
+	sb, err := sandbox.New(remote, sandbox.Options{Root: "/workspace"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	a, err := orchestrix.New(model, orchestrix.WithBackend(sb))
+	_, _ = a, err
+}
+
+func ExampleWithAsync() {
+	tasks, err := async.New(async.Config{MaxRunning: 3})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer tasks.Shutdown() // stops background subagents still running
+
+	a, err := orchestrix.New(model, orchestrix.WithAsync(tasks))
+	_, _ = a, err
+}
+
+func Example_coordinator() {
+	ctx := context.Background()
+	c, err := coordinator.New(model, coordinator.Config{
+		Workers: []subagents.Subagent{
+			{Name: "researcher", Description: "Finds facts on a topic and lists their sources.",
+				SystemPrompt: "You research a topic and report facts with sources."},
+			{Name: "writer", Description: "Turns notes into clear prose.",
+				SystemPrompt: "You write clear prose from the notes you are given."},
+		},
+		MaxConcurrency: 3,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer c.Shutdown() // stops background workers still running
+
+	in := orchestrix.Text("Write a one-page brief on home battery storage.")
+	in.ThreadID = "battery-brief" // start_task needs a thread
+	for ev, err := range c.Run(ctx, in) {
+		if err != nil {
+			log.Fatal(err)
+		}
+		if ev.Kind == agent.KindFinal {
+			fmt.Println(ev.Final.Text)
+		}
+	}
+}
+
+func Example_runParallel() {
+	ctx := context.Background()
+	a, err := orchestrix.New(model, orchestrix.WithPermissionMode(permission.ModePlan))
+	if err != nil {
+		log.Fatal(err)
+	}
+	files := []string{"a.go", "b.go", "c.go"}
+	jobs := make([]coordinator.Job, len(files))
+	for i, f := range files {
+		in := orchestrix.Text("Summarize " + f + ".")
+		in.ThreadID = "summary-" + f // each job its own thread and workspace
+		jobs[i] = coordinator.Job{Agent: a, Input: in}
+	}
+	for i, r := range coordinator.RunParallel(ctx, jobs, coordinator.ParallelOptions{MaxConcurrency: 2}) {
+		if r.Err != nil {
+			fmt.Println(files[i], "failed:", r.Err)
+			continue
+		}
+		fmt.Println(files[i], r.Final.Text)
+	}
+}
+
+func ExampleWithRubric() {
+	a, err := orchestrix.New(model,
+		orchestrix.WithRubric(rubric.Config{
+			Criteria: []string{
+				"Answers every part of the question.",
+				"Names a file and line for each claim about the code.",
+			},
+			Grader:        rubric.ModelGrader{Model: "small-model"}, // grade with a cheaper model
+			MaxIterations: 1,                                        // at most one revision
+		}),
+	)
+	_, _ = a, err
+}
+
+func ExampleWithProfiles() {
+	llm.RegisterProfile("small-", llm.Profile{ContextWindow: 32_000, MaxOutput: 4_096}) // what it can do
+
+	a, err := orchestrix.New(model,
+		orchestrix.WithProfiles(profiles.Config{Adjustments: []profiles.Adjustment{{
+			Models:            []string{"small-*", "*-mini"}, // how this agent treats it
+			PromptSuffix:      "Take one small step at a time and call one tool per turn.",
+			ToolDescriptions:  map[string]string{"grep": "Search file contents for a regular expression."},
+			ExcludeTools:      []string{"web_*"},
+			ExcludeMiddleware: []string{"subagents"},
+		}}}),
+	)
+	_, _ = a, err
+}
+
+func ExampleWithCompress() {
+	a, err := orchestrix.New(model,
+		orchestrix.WithCompress(compress.Config{
+			TriggerFraction: 0.5, // propose a range once half the window is used
+			KeepTurns:       4,   // never touch the newest four user turns
+		}),
+	)
+	_, _ = a, err
 }

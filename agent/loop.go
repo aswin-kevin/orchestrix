@@ -234,7 +234,7 @@ func (r *run) callModel() (*llm.Response, error) {
 }
 
 // modelRequest builds the request for the next turn. Its messages are the
-// View of State, so wrappers may rewrite them freely.
+// ElidedView of State, so wrappers may rewrite them freely.
 func (r *run) modelRequest() *ModelRequest {
 	cfg := r.agent.cfg
 	return &ModelRequest{
@@ -243,7 +243,7 @@ func (r *run) modelRequest() *ModelRequest {
 			Model:         cfg.Model,
 			System:        slices.Clone(cfg.System),
 			CacheBoundary: cfg.CacheBoundary,
-			Messages:      View(r.state.Messages()),
+			Messages:      ElidedView(r.state, 0),
 			Tools:         r.toolSchemas(),
 			MaxTokens:     r.maxTokens(),
 			Temperature:   clonePtr(cfg.Temperature),

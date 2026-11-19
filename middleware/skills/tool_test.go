@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	filecp "github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
@@ -464,5 +465,201 @@ func TestSkillLoadThroughCallToolCountsAsShown(t *testing.T) {
 	}
 	if out := m.standing(s, Scope{}, msgs); strings.Contains(out[0].Text(), StandingHeader) {
 		t.Fatal("a skill loaded through call_tool is still shown; it must not be re-injected")
+	}
+}
+
+// pinRun runs one turn of thread "t" on a fresh agent over the checkpoint dir:
+// a skills middleware (pinned as given) beside deferred, with the gated
+// pdf_tool and a deferred weather tool. It returns the provider and the
+// final event.
+func pinRun(t *testing.T, ckptDir string, pinned []string, turns ...llmtest.Turn) (*llmtest.Scripted, *agent.Final) {
+	t.Helper()
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"pdf/SKILL.md": "---\nname: pdf\ndescription: Work with PDFs.\nallowed-tools: [pdf_tool, weather]\n---\nbody\n",
+	})
+	m, err := New(Config{Sources: []Source{DirSource(root)}, Pinned: pinned})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := filecp.New(ckptDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	echo := func(name string) tool.Tool {
+		return tool.New(name, "Tool "+name+".",
+			func(_ context.Context, in struct{}, _ *tool.Call) (tool.Result, error) { return tool.Text(name), nil },
+			tool.WithReadOnly())
+	}
+	p := llmtest.New(turns...)
+	a, err := agent.New(agent.Config{
+		Provider:     p,
+		Tools:        []tool.Tool{deferred.Gate(echo("pdf_tool")), echo("weather")},
+		Middleware:   []agent.Middleware{deferred.New(deferred.Config{Tools: []string{"weather"}}), m},
+		Checkpointer: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	th, err := a.Thread(context.Background(), "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final *agent.Final
+	for ev, err := range th.Prompt(context.Background(), "go") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.Kind == agent.KindFinal {
+			final = ev.Final
+		}
+	}
+	if final == nil {
+		t.Fatal("no final event")
+	}
+	return p, final
+}
+
+func offers(req llm.Request, name string) bool {
+	for _, s := range req.Tools {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRemovedPinRelocksOnResume(t *testing.T) {
+	dir := t.TempDir()
+	pinRun(t, dir, []string{"pdf"}, llmtest.Turn{Text: "one"})
+
+	p, final := pinRun(t, dir, nil,
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "d", Name: "pdf_tool", Input: map[string]any{}}}},
+		llmtest.Turn{Text: "two"})
+	if offers(p.Requests[0], "pdf_tool") {
+		t.Fatal("pdf_tool is still offered after its pin was removed")
+	}
+	var found bool
+	for _, b := range final.State.Messages() {
+		for _, c := range b.Content {
+			if c.Type == llm.BlockToolResult && c.IsError && resultTextBlock(c) == fmt.Sprintf(deferred.LockedText, "pdf_tool") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the direct call to pdf_tool was not refused with deferred.LockedText")
+	}
+}
+
+func resultTextBlock(b llm.Block) string {
+	var sb strings.Builder
+	for _, c := range b.Content {
+		sb.WriteString(c.Text)
+	}
+	return sb.String()
+}
+
+// A guard written to pass from the start: it fails if the relock ever drops
+// a loaded skill's tools from the keep set.
+func TestLoadedSkillKeepsUnlockWhenPinRemoved(t *testing.T) {
+	dir := t.TempDir()
+	pinRun(t, dir, []string{"pdf"},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "s", Name: ToolSkill, Input: map[string]any{"name": "pdf"}}}},
+		llmtest.Turn{Text: "one"})
+
+	p, _ := pinRun(t, dir, nil, llmtest.Turn{Text: "two"})
+	if !offers(p.Requests[0], "pdf_tool") {
+		t.Fatal("pdf_tool was relocked although the skill is loaded")
+	}
+}
+
+func TestSearchUnlockKeptWhenPinRemoved(t *testing.T) {
+	dir := t.TempDir()
+	pinRun(t, dir, []string{"pdf"},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "q", Name: deferred.ToolSearch, Input: map[string]any{"query": "select:weather"}}}},
+		llmtest.Turn{Text: "one"})
+
+	p, _ := pinRun(t, dir, nil, llmtest.Turn{Text: "two"})
+	if !offers(p.Requests[0], "weather") {
+		t.Fatal("weather, unlocked by search_tools, was relocked when the pin went away")
+	}
+	if offers(p.Requests[0], "pdf_tool") {
+		t.Fatal("pdf_tool must be relocked: only the pin unlocked it")
+	}
+}
+
+// relockMiddleware has skills a (tools shared, only_a), b (tool shared) and
+// m (MCP server x).
+func relockMiddleware(t *testing.T) *Middleware {
+	t.Helper()
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"a/SKILL.md": "---\nname: a\ndescription: A.\nallowed-tools: [shared, only_a]\n---\nbody\n",
+		"b/SKILL.md": "---\nname: b\ndescription: B.\nallowed-tools: [shared]\n---\nbody\n",
+		"m/SKILL.md": "---\nname: m\ndescription: M.\nmcp-servers: [x]\n---\nbody\n",
+	})
+	m, err := New(Config{Sources: []Source{DirSource(root)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// beginRun runs BeforeAgent on s with the run's pins.
+func beginRun(t *testing.T, m *Middleware, s *state.State, pins ...string) {
+	t.Helper()
+	ScopeKey.Set(s, Scope{Pinned: pins})
+	if err := m.BeforeAgent(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The relock tests below are guards: they document edge cases of the relock
+// and passed on first run.
+
+func TestSharedPatternStaysWhileAnotherPinHoldsIt(t *testing.T) {
+	m, s := relockMiddleware(t), state.New()
+	beginRun(t, m, s, "a", "b")
+	beginRun(t, m, s, "b")
+	if !deferred.Unlocked(s, "shared") || deferred.Unlocked(s, "only_a") {
+		t.Fatal("shared must stay (pin b holds it) and only_a must be relocked")
+	}
+}
+
+func TestRemovedScopePinRelocks(t *testing.T) {
+	m, s := relockMiddleware(t), state.New()
+	beginRun(t, m, s, "a")
+	if !deferred.Unlocked(s, "only_a") {
+		t.Fatal("scope pin did not unlock")
+	}
+	beginRun(t, m, s)
+	if deferred.Unlocked(s, "only_a") || deferred.Unlocked(s, "shared") {
+		t.Fatal("a removed Scope.Pinned entry must relock its tools")
+	}
+}
+
+func TestSearchGrantUnderRemovedGlobPinStays(t *testing.T) {
+	m, s := relockMiddleware(t), state.New()
+	beginRun(t, m, s, "m")
+	// An exact-name grant made outside the pin, which the relock does not
+	// record (search_tools would also add it to Searched): Lock removes only
+	// the pin's own pattern, so it stays.
+	deferred.Unlock(s, "mcp__x__y")
+	beginRun(t, m, s)
+	if deferred.Unlocked(s, "mcp__x__z") {
+		t.Fatal("the pin's glob must be relocked")
+	}
+	if !deferred.Unlocked(s, "mcp__x__y") {
+		t.Fatal("an exact-name grant under the removed glob must stay unlocked")
+	}
+}
+
+func TestLegacyStateRelocksNothing(t *testing.T) {
+	m, s := relockMiddleware(t), state.New()
+	deferred.Unlock(s, "only_a", "mcp__x__*") // saved before pinned_unlocks existed
+	beginRun(t, m, s)
+	if !deferred.Unlocked(s, "only_a") || !deferred.Unlocked(s, "mcp__x__q") {
+		t.Fatal("a State without the pinned_unlocks key must keep its unlocks")
 	}
 }

@@ -57,10 +57,13 @@ func NewGrepper(pattern string, opts GrepOptions, base string) (*Grepper, error)
 	if limit <= 0 {
 		limit = DefaultMaxResults
 	}
-	return &Grepper{re: re, mode: mode, max: limit, glob: anchorGlob(opts.Glob, base)}, nil
+	return &Grepper{re: re, mode: mode, max: limit, glob: AnchorGlob(opts.Glob, base)}, nil
 }
 
-func anchorGlob(glob, base string) string {
+// AnchorGlob resolves a Grep file filter against the searched base: absolute
+// and empty globs are unchanged, a name-only glob matches at any depth, and
+// one containing a slash is joined to base.
+func AnchorGlob(glob, base string) string {
 	switch {
 	case glob == "", strings.HasPrefix(glob, "/"):
 		return glob

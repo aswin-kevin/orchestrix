@@ -761,3 +761,36 @@ func TestCallToolDenyIsCheckedBeforeTheTarget(t *testing.T) {
 		t.Fatalf("result = %q, want the call_tool deny, not a panic of the target", got)
 	}
 }
+
+func TestLockRemovesExactPattern(t *testing.T) {
+	s := state.New()
+	Unlock(s, "a", "mcp__x__*")
+	Lock(s, "mcp__x__*")
+	if Unlocked(s, "mcp__x__y") || !Unlocked(s, "a") {
+		t.Fatal("Lock must remove exactly the named pattern")
+	}
+	Lock(s, "missing")
+	if got, _ := UnlockedKey.Get(s); !slices.Equal(got, []string{"a"}) {
+		t.Fatalf("UnlockedKey = %v, want [a]", got)
+	}
+}
+
+func TestSearchedRecordsSearchUnlocksOnly(t *testing.T) {
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{call("s", ToolSearch, obj{"query": "select:echo"})}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{call("u", "unlock", obj{"names": []string{"other"}})}},
+		llmtest.Turn{Text: "done"},
+	)
+	a := mustNew(t, agent.Config{
+		Provider:   p,
+		Tools:      []tool.Tool{readOnlyTool("echo", "Echo."), unlockTool()},
+		Middleware: []agent.Middleware{New(Config{Tools: []string{"echo"}})},
+	})
+	final := run(t, a.Run(context.Background(), userInput(nil)))
+	if got := Searched(final.State); !slices.Equal(got, []string{"echo"}) {
+		t.Fatalf("Searched = %v, want [echo]", got)
+	}
+	if !Unlocked(final.State, "other") {
+		t.Fatal("the direct unlock is missing")
+	}
+}

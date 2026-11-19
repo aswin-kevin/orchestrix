@@ -8,6 +8,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/state"
 )
 
@@ -19,13 +20,38 @@ var neutralizeTags = promptsafe.NewTagNeutralizer("available_skills", "skill")
 // and the run's Scope.Pinned) is in effect from the first turn, so the
 // tools it names in allowed-tools and the tools of its MCP servers are
 // unlocked as if it had been loaded.
+//
+// A pin that is gone since the thread's last run (the host dropped it from
+// Config.Pinned or Scope.Pinned) is taken back: its unlock patterns are
+// locked again, except those a current pin, a loaded skill or search_tools
+// also unlocked. A State saved before this bookkeeping existed has no record
+// of earlier pins, so nothing is locked again for it.
+//
+// Lock removes a pattern whoever granted it: a pattern the host unlocked
+// directly is locked again when a pin that also listed it is removed. A host
+// that needs it to persist should unlock it again in a BeforeAgent placed
+// after skills in the stack.
 func (m *Middleware) BeforeAgent(_ context.Context, s *state.State) error {
 	scope, _ := ScopeKey.Get(s)
+	var want []string
 	for _, name := range slices.Concat(m.pinned, scope.Pinned) {
 		if sk, ok := m.byName[name]; ok {
-			unlockTools(s, sk)
+			want = append(want, unlockPatterns(sk)...)
 		}
 	}
+	keep := slices.Concat(want, deferred.Searched(s))
+	loaded, _ := LoadedKey.Get(s)
+	for _, name := range loaded {
+		if sk, ok := m.byName[name]; ok {
+			keep = append(keep, unlockPatterns(sk)...)
+		}
+	}
+	previous, _ := pinnedUnlocksKey.Get(s)
+	deferred.Lock(s, slices.DeleteFunc(slices.Clone(previous), func(p string) bool {
+		return slices.Contains(keep, p)
+	})...)
+	deferred.Unlock(s, want...)
+	pinnedUnlocksKey.Set(s, slices.Compact(slices.Sorted(slices.Values(want))))
 	return nil
 }
 

@@ -6,13 +6,18 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/composite"
 	"github.com/aswin-kevin/orchestrix/mcp"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
+	"github.com/aswin-kevin/orchestrix/middleware/async"
+	"github.com/aswin-kevin/orchestrix/middleware/compress"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/middleware/hitl"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
 	"github.com/aswin-kevin/orchestrix/middleware/memory"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
+	"github.com/aswin-kevin/orchestrix/middleware/profiles"
+	"github.com/aswin-kevin/orchestrix/middleware/rubric"
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
@@ -37,6 +42,9 @@ type settings struct {
 	interruptOn    map[string]hitl.InterruptConfig
 	shell          *shellSpec
 	tasks          *tasks.Middleware
+	async          *async.Middleware
+	// mounts are the WithMount routes, put over the agent's backend.
+	mounts []composite.Route
 
 	// Optional middleware; nil leaves it out of the stack (see baseStack).
 	memory   *memory.Config
@@ -46,6 +54,9 @@ type settings struct {
 	mcp      *mcp.Middleware
 	web      *web.Config
 	askUser  *askuser.Config
+	compress *compress.Config
+	rubric   *rubric.Config
+	profiles *profiles.Config
 	// skillsFailed records that WithSkills' middleware could not be built.
 	skillsFailed bool
 }

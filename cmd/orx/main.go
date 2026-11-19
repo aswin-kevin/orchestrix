@@ -23,6 +23,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/disk"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/checkpoint/file"
+	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
@@ -88,6 +89,9 @@ type options struct {
 	// web adds the web tools, with the search backend named by search.
 	web    bool
 	search string
+	// async adds background subagents; compress adds model-directed
+	// context compression.
+	async, compress bool
 }
 
 // run is the testable core of the program. It returns the process exit code.
@@ -98,7 +102,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case errors.Is(err, flag.ErrHelp):
 		return exitOK
 	case err != nil:
-		fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
+		fmt.Fprintln(stderr, "orx:", termsafe.String(err.Error()))
 		return exitUsage
 	}
 
@@ -113,26 +117,29 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	// not consulted: the turn and the idle prompt handle Ctrl-C themselves
 	// (see conversation.turn and readIdle), and a Ctrl-C between them is
 	// ignored.
-	setupCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt)
+	interrupted.Store(false)
+	setupCtx, stopSignals := notifyInterrupt(ctx)
 	defer stopSignals()
 
 	in := newLineReader(stdin)
 	rend := newRenderer(stdout, stderr)
 	stderr = rend.stderr // the shared, locked writer
-	ag, shutdown, code := buildAgent(setupCtx, opts, newApprover(in, rend.prompts()), newProvider, stderr)
+	ap := newApprover(in, rend.prompts())
+	ag, shutdown, code := buildAgent(setupCtx, opts, ap, newProvider, stderr)
 	if ag == nil {
 		return code
 	}
-	defer shutdown()
+	defer shutdownOnExit(shutdown, stderr)
 
 	conv, err := newConversation(setupCtx, ag, opts, abort)
 	if err == nil && setupCtx.Err() != nil {
 		err = errors.New("interrupted")
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
+		fmt.Fprintln(stderr, "orx:", termsafe.String(err.Error()))
 		return exitError
 	}
+	conv.ap = ap
 	if opts.prompt != "" {
 		if !conv.turn(ctx, opts.prompt, rend, stderr) {
 			return exitError
@@ -166,6 +173,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.mcpFile, "mcp", "", "MCP server configuration file")
 	fs.BoolVar(&o.web, "web", false, "add the web_fetch and web_search tools")
 	fs.StringVar(&o.search, "search", defaultSearch, "web search backend: "+strings.Join(searchBackends, ", "))
+	fs.BoolVar(&o.async, "async", false, "let the model run subagents in the background (start_task)")
+	fs.BoolVar(&o.compress, "compress", false, "let the model compress older parts of the conversation")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -202,7 +211,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 	fail := func(code int, format string, args ...any) (*agent.Agent, func(), int) {
 		shutdown()
 		// Errors can quote file names and server text: escape them.
-		fmt.Fprintln(stderr, "orx:", termSafe(fmt.Sprintf(format, args...)))
+		fmt.Fprintln(stderr, "orx:", termsafe.String(fmt.Sprintf(format, args...)))
 		return nil, nil, code
 	}
 	cfg, err := llm.ParseModel(o.model)
@@ -280,11 +289,19 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		}
 		cleanups = append(cleanups, func() {
 			if err := m.Close(); err != nil {
-				fmt.Fprintln(stderr, "orx: mcp:", termSafe(err.Error()))
+				fmt.Fprintln(stderr, "orx: mcp:", termsafe.String(err.Error()))
 			}
 		})
 		agentOpts = append(agentOpts, orchestrix.WithMCP(m))
 	}
+	// Last, so background subagents stop before the MCP servers and jobs
+	// they may use.
+	scale, stopScale, err := scaleOptions(o)
+	if err != nil {
+		return fail(exitError, "%v", err)
+	}
+	cleanups = append(cleanups, stopScale)
+	agentOpts = append(agentOpts, scale...)
 
 	ag, err = orchestrix.New(provider, agentOpts...)
 	if err != nil {
@@ -313,8 +330,7 @@ func effectiveMode(o options, stderr io.Writer) permission.Mode {
 func repl(ctx context.Context, conv *conversation, in *lineReader, rend *renderer, stderr io.Writer) int {
 	code := exitOK
 	for {
-		fmt.Fprint(stderr, replPrompt)
-		line, err := readIdle(ctx, in)
+		line, err := readIdle(ctx, in, conv.ap, stderr)
 		prompt := strings.TrimSpace(line)
 		if prompt == exitCommand {
 			return code
@@ -328,15 +344,6 @@ func repl(ctx context.Context, conv *conversation, in *lineReader, rend *rendere
 	}
 }
 
-// readIdle reads the next line at the idle prompt. Ctrl-C there cancels the
-// read, so the REPL returns and the deferred shutdown runs; the default
-// handler would kill the process and orphan background jobs.
-func readIdle(ctx context.Context, in *lineReader) (string, error) {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	defer stop()
-	return in.next(ctx)
-}
-
 // conversation is the exchange a CLI session holds with the agent: a saved
 // thread with -store, else a State carried through the prompts in memory.
 type conversation struct {
@@ -347,6 +354,8 @@ type conversation struct {
 	st *state.State
 	// abort ends the whole run; a second Ctrl-C during a turn calls it.
 	abort context.CancelFunc
+	// ap owns the terminal for background questions while a turn runs.
+	ap *approver
 }
 
 // newConversation opens the conversation o asks for: the thread o.thread of
@@ -383,11 +392,15 @@ func (c *conversation) turn(ctx context.Context, prompt string, rend *renderer, 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer c.cancelOnInterrupt(cancel)()
+	_, endTurn := c.ap.beginTurn()
+	defer endTurn()
+	defer rend.flush()
 
 	ok := true
 	for ev, err := range c.run(ctx, prompt) {
 		if err != nil {
-			fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
+			rend.flush()
+			fmt.Fprintln(stderr, "orx:", termsafe.String(err.Error()))
 			return false
 		}
 		rend.render(ev)
@@ -411,6 +424,7 @@ func (c *conversation) cancelOnInterrupt(cancelTurn context.CancelFunc) (stop fu
 		for _, cancel := range []context.CancelFunc{cancelTurn, c.abort} {
 			select {
 			case <-sigs:
+				interrupted.Store(true)
 				cancel()
 			case <-done:
 				return

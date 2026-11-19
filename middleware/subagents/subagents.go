@@ -59,7 +59,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"sync"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -125,8 +124,8 @@ type middleware struct {
 	// fork reports whether the fork subagent is offered.
 	fork bool
 	task tool.Tool
-	// children maps a childKey to its *agent.Agent.
-	children sync.Map
+	// launcher builds and starts the isolated subagents.
+	launcher *Launcher
 }
 
 // New returns the subagents middleware. It fails for an invalid subagent
@@ -136,15 +135,16 @@ func New(cfg Config) (agent.Middleware, error) {
 	if cfg.MaxDepth < 0 {
 		return nil, errors.New("subagents: MaxDepth must not be negative")
 	}
-	generalPrompt := cfg.GeneralPurposePrompt
-	if generalPrompt == "" {
-		generalPrompt = DefaultGeneralPurposePrompt
-	}
-	specs, order, err := validateSpecs(cfg, generalPrompt)
+	list, err := ResolveSpecs(cfg)
 	if err != nil {
 		return nil, err
 	}
-	m := &middleware{specs: specs, maxDepth: DefaultMaxDepth, prompt: DefaultPrompt, fork: !cfg.DisableFork}
+	specs := make(map[string]Subagent, len(list))
+	order := make([]string, len(list), len(list)+1)
+	for i, s := range list {
+		specs[s.Name], order[i] = s, s.Name
+	}
+	m := &middleware{specs: specs, maxDepth: DefaultMaxDepth, prompt: DefaultPrompt, fork: !cfg.DisableFork, launcher: NewLauncher()}
 	if m.fork {
 		order = append(order, Fork)
 	}

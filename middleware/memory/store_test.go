@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -362,8 +363,8 @@ func TestRecordRefusesSlugCollision(t *testing.T) {
 	env.record("C++ tips", "Notes on C++", TypeReference, "prefer RAII")
 
 	res := env.record("C tips", "Notes on C", TypeReference, "check malloc")
-	if res.IsError {
-		t.Fatalf("collision result is an error: %q; want a plain result the model can act on", res.Flatten())
+	if !res.IsError {
+		t.Fatalf("collision result = %q, want an error result", res.Flatten())
 	}
 	if got := res.Flatten(); !strings.Contains(got, "Not saved") || !strings.Contains(got, `"C++ tips"`) || !strings.Contains(got, "c-tips.md") {
 		t.Fatalf("collision result = %q, want it to name the existing memory and its file", got)
@@ -407,5 +408,53 @@ func TestStoreNoteSurvivesEmptyPrompt(t *testing.T) {
 	}
 	if strings.Contains(seg, "edit_file") {
 		t.Fatalf("an empty Prompt kept the invitation to edit files:\n%s", seg)
+	}
+}
+
+func TestRecordRefusesMalformedFile(t *testing.T) {
+	for name, content := range map[string]string{
+		"binary":         "a\x00b",
+		"no frontmatter": "just text\n",
+		"malformed yaml": "---\nname: [unclosed\n---\nbody\n",
+		"empty name":     "---\nname: \"\"\ndescription: d\n---\nbody\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newStoreEnv(t, StoreConfig{})
+			if err := env.b.Write(context.Background(), "/memories/foo-bar.md", []byte(content)); err != nil {
+				t.Fatal(err)
+			}
+			res := env.record("Foo Bar", "d", TypeUser, "new")
+			if !res.IsError || !strings.Contains(res.Flatten(), "exists but is not a readable memory") {
+				t.Fatalf("result = %+v, want a refusal naming the unreadable file", res)
+			}
+			if res, err := env.b.Read(context.Background(), "/memories/foo-bar.md", 0, 0); err != nil {
+				t.Fatal(err)
+			} else if res.Binary {
+				if name != "binary" {
+					t.Fatalf("file became binary")
+				}
+			} else if got := strings.Join(res.Lines, "\n"); got != strings.TrimSuffix(content, "\n") {
+				t.Fatalf("file = %q, want it unchanged", got)
+			}
+		})
+	}
+}
+
+// failingRead is a backend whose Read fails with a fixed error.
+type failingRead struct{ backend.Backend }
+
+func (failingRead) Read(context.Context, string, int, int) (backend.ReadResult, error) {
+	return backend.ReadResult{}, errors.New("disk on fire")
+}
+
+func TestRecordReadErrorReported(t *testing.T) {
+	env := newStoreEnv(t, StoreConfig{})
+	env.b = failingRead{env.b}
+	res := env.record("Foo Bar", "d", TypeUser, "x")
+	if !res.IsError || !strings.Contains(res.Flatten(), "record failed") {
+		t.Fatalf("result = %+v, want a record failed error", res)
+	}
+	if _, err := env.b.Ls(context.Background(), "/memories"); err == nil {
+		t.Fatal("nothing may be written after a read error")
 	}
 }

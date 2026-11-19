@@ -172,6 +172,9 @@ var (
 	ScopeKey = state.NewKey[Scope]("skills.scope", state.Private[Scope]())
 	// LoadedKey holds the names of the skills loaded in the run, in load order.
 	LoadedKey = state.NewKey[[]string]("skills.loaded", state.Private[[]string]())
+	// pinnedUnlocksKey records the unlock patterns BeforeAgent granted for
+	// pinned skills, so a later run can take back those of pins that are gone.
+	pinnedUnlocksKey = state.NewKey[[]string]("skills.pinned_unlocks", state.Private[[]string]())
 )
 
 // Loaded returns the names of the skills loaded in the run, in load order.
