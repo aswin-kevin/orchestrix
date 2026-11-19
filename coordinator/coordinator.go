@@ -56,6 +56,10 @@ type Coordinator struct {
 // worker spec, when opts replace or remove the async middleware (with
 // orchestrix.WithAsync, orchestrix.WithMiddleware or
 // orchestrix.WithoutMiddleware), or for anything orchestrix.New rejects.
+// The check reads the configured middleware, so it cannot see a profiles
+// adjustment (orchestrix.WithProfiles) whose ExcludeMiddleware names "async":
+// that removes start_task for the matching models when the agent is built, and
+// the coordinator is then left with the task tool only.
 func New(model any, cfg Config, opts ...orchestrix.Option) (*Coordinator, error) {
 	if len(cfg.Workers) == 0 {
 		return nil, errors.New("coordinator: at least one worker is required")

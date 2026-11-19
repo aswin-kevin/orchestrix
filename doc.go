@@ -27,8 +27,13 @@
 // restarts), WithSubagents, WithSummarize, WithHooks, WithInterruptOn (human
 // approval for chosen tools), WithShell and WithTasks (commands and background
 // jobs), WithMemory (standing instructions and a memory store), WithSkills,
-// WithMCP (tools of MCP servers), WithPlanMode, WithDeferredTools, WithWeb and
-// WithAskUser. The middleware stack order is fixed and documented on New.
+// WithMCP (tools of MCP servers), WithPlanMode, WithDeferredTools, WithWeb,
+// WithAskUser, WithAsync (background subagents), WithCompress (model-directed
+// context compression), WithRubric (self-grading), WithProfiles (per-model
+// adjustments) and WithMount (backends mounted at a path prefix, such as a
+// persistent memory store). The middleware stack order is fixed and
+// documented on New. The coordinator package builds a coordinator agent on
+// this preset and runs many agent runs at once with RunParallel.
 //
 // Everything New configures can be inspected and overridden: the options cover
 // the common cases and WithConfig exposes the full agent.Config. For custom

@@ -13,6 +13,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/mcp"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 	"github.com/aswin-kevin/orchestrix/middleware/cache"
+	"github.com/aswin-kevin/orchestrix/middleware/compress"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
 	"github.com/aswin-kevin/orchestrix/middleware/hitl"
@@ -20,6 +21,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/memory"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/planning"
+	"github.com/aswin-kevin/orchestrix/middleware/profiles"
+	"github.com/aswin-kevin/orchestrix/middleware/rubric"
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
@@ -150,19 +153,25 @@ func (s *settings) useShell(cfg *agent.Config) {
 	cfg.Backend = b
 }
 
-// baseStack returns the preset's middleware in its fixed order. summarize
-// comes first because it rebuilds the request messages from State, which
-// would discard the rewrites of any model wrapper before it.
+// baseStack returns the preset's middleware in its fixed order (see New).
+// summarize comes first because it rebuilds the request messages from State,
+// which would discard the rewrites of any model wrapper before it.
 func (s *settings) baseStack() []agent.Middleware {
-	stack := []agent.Middleware{
-		summarize.New(s.summarize),
-		cache.New(cache.Config{}),
+	stack := []agent.Middleware{summarize.New(s.summarize)}
+	if s.compress != nil {
+		stack = append(stack, compress.New(*s.compress))
 	}
+	stack = append(stack, cache.New(cache.Config{}))
 	if s.hooks != nil {
 		stack = append(stack, hooks.New(*s.hooks))
 	}
 	if len(s.interruptOn) > 0 {
 		stack = append(stack, hitl.New(hitl.Config{InterruptOn: maps.Clone(s.interruptOn)}))
+	}
+	if s.rubric != nil {
+		// Early, so that BeforeStop (reverse order) consults the async
+		// reminder before grading.
+		stack = s.appendBuilt(stack, "WithRubric", func() (agent.Middleware, error) { return rubric.New(*s.rubric) })
 	}
 	if s.memory != nil {
 		stack = s.appendBuilt(stack, "WithMemory", func() (agent.Middleware, error) { return memory.New(*s.memory) })
@@ -204,6 +213,11 @@ func (s *settings) baseStack() []agent.Middleware {
 	}
 	if s.tasks != nil {
 		stack = append(stack, s.tasks)
+	}
+	if s.profiles != nil {
+		// Last, so that its suffix is the last segment and its overrides see
+		// the final tool list.
+		stack = s.appendBuilt(stack, "WithProfiles", func() (agent.Middleware, error) { return profiles.New(*s.profiles) })
 	}
 	return stack
 }
