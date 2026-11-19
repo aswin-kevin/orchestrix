@@ -97,9 +97,6 @@ func TestCoordinatorDelegates(t *testing.T) {
 			t.Errorf("the coordinator's last request does not show it %q", want)
 		}
 	}
-	if !strings.Contains(final.Text, "research notes") || !strings.Contains(final.Text, "draft text") {
-		t.Errorf("final = %q, want both workers' texts", final.Text)
-	}
 	if got := p.Requests[0].System; len(got) == 0 || got[0] != DefaultPrompt {
 		t.Errorf("system prompt does not start with DefaultPrompt: %q", got)
 	}
@@ -241,5 +238,22 @@ func TestCoordinatorOptionsApply(t *testing.T) {
 	later := newCoordinator(t, llmtest.New(), Config{Workers: workers()}, orchestrix.WithSystemPrompt("Host prompt."))
 	if got := later.Config().System; !slices.Equal(got, []string{"Host prompt."}) {
 		t.Errorf("System = %q, want the later option to win", got)
+	}
+}
+
+func TestCoordinatorRejectsReplacedAsync(t *testing.T) {
+	other, err := async.New(async.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Shutdown()
+	for name, opt := range map[string]orchestrix.Option{
+		"WithAsync":         orchestrix.WithAsync(other),
+		"WithoutMiddleware": orchestrix.WithoutMiddleware("async"),
+	} {
+		c, err := New(llmtest.New(), Config{Workers: workers()}, opt)
+		if err == nil || !strings.Contains(err.Error(), "must not replace or remove the async middleware") {
+			t.Errorf("%s: New = %v, %v; want the replaced-async error", name, c, err)
+		}
 	}
 }

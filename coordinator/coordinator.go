@@ -47,10 +47,15 @@ type Coordinator struct {
 // Workers (MaxRunning = MaxConcurrency), then opts (later options win).
 // model is what orchestrix.New accepts. A worker leaving Middleware nil
 // inherits the coordinator's stack, as with the task tool. Specs given with
-// orchestrix.WithSubagents join the task tool only, not start_task.
+// orchestrix.WithSubagents join the task tool only, not start_task. A host
+// passing its own orchestrix.WithSubagentConfig replaces the coordinator's,
+// so it must re-pass Workers (as Subagents), DisableGeneralPurpose and
+// DisableFork to keep the task tool limited to the workers.
 //
 // New fails without Workers, for a negative MaxConcurrency, an invalid
-// worker spec, or anything orchestrix.New rejects.
+// worker spec, when opts replace or remove the async middleware (with
+// orchestrix.WithAsync, orchestrix.WithMiddleware or
+// orchestrix.WithoutMiddleware), or for anything orchestrix.New rejects.
 func New(model any, cfg Config, opts ...orchestrix.Option) (*Coordinator, error) {
 	if len(cfg.Workers) == 0 {
 		return nil, errors.New("coordinator: at least one worker is required")
@@ -84,11 +89,29 @@ func New(model any, cfg Config, opts ...orchestrix.Option) (*Coordinator, error)
 		orchestrix.WithAsync(tasks),
 	}
 	a, err := orchestrix.New(model, append(base, opts...)...)
+	if err == nil && !owns(a, tasks) {
+		err = errReplacedAsync
+	}
 	if err != nil {
 		tasks.Shutdown()
 		return nil, fmt.Errorf("coordinator: %w", err)
 	}
 	return &Coordinator{Agent: a, tasks: tasks}, nil
+}
+
+// errReplacedAsync reports opts that took the Coordinator's async middleware
+// out of the stack: start_task would then not run the workers, or would run
+// tasks Shutdown does not stop.
+var errReplacedAsync = errors.New("opts must not replace or remove the async middleware (configure workers with Config)")
+
+// owns reports whether the middleware named "async" in a's stack is tasks.
+func owns(a *agent.Agent, tasks *async.Middleware) bool {
+	for _, m := range a.Config().Middleware {
+		if m.Name() == tasks.Name() {
+			return m == agent.Middleware(tasks)
+		}
+	}
+	return false
 }
 
 // Shutdown stops every background worker still running and waits for them

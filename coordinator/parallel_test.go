@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -264,5 +266,51 @@ func TestRunParallelNilAgent(t *testing.T) {
 func TestRunParallelNoJobs(t *testing.T) {
 	if res := RunParallel(context.Background(), nil, ParallelOptions{}); len(res) != 0 {
 		t.Errorf("got %d results for no jobs", len(res))
+	}
+}
+
+func TestRunParallelOnEventPanicSurfaces(t *testing.T) {
+	p := newEcho()
+	p.block = true // the other jobs only end when RunParallel cancels them
+	jobs := jobsFor(newAgent(t, p), 3)
+	jobs[0].Agent = newAgent(t, newEcho())
+	before := runtime.NumGoroutine()
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		RunParallel(context.Background(), jobs, ParallelOptions{OnEvent: func(i int, ev agent.Event) {
+			if i == 0 {
+				panic("boom in OnEvent")
+			}
+		}})
+	}()
+	if recovered == nil || !strings.Contains(fmt.Sprint(recovered), "boom in OnEvent") {
+		t.Fatalf("recovered %v, want the OnEvent panic on the caller", recovered)
+	}
+	if !strings.Contains(fmt.Sprint(recovered), "goroutine") {
+		t.Errorf("recovered %v, want the job goroutine's stack", recovered)
+	}
+	if running, _ := p.stats(); running != 0 {
+		t.Errorf("%d model calls still running after the panic surfaced", running)
+	}
+	deadline := time.Now().Add(testTimeout)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := runtime.NumGoroutine(); n > before {
+		t.Errorf("%d goroutines left running (%d before)", n-before, before)
+	}
+}
+
+func TestRunParallelPanicUnwrapsError(t *testing.T) {
+	sentinel := errors.New("sentinel")
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		RunParallel(context.Background(), jobsFor(newAgent(t, newEcho()), 1), ParallelOptions{OnEvent: func(int, agent.Event) { panic(sentinel) }})
+	}()
+	err, ok := recovered.(error)
+	if !ok || !errors.Is(err, sentinel) {
+		t.Errorf("recovered %v, want an error wrapping the panic value", recovered)
 	}
 }

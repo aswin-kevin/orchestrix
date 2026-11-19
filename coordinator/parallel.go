@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -24,8 +25,9 @@ type Result struct {
 	// one.
 	Final *agent.Final
 	// Err is Final.Err, or an error for a nil Agent, a missing Final or a
-	// job not started because ctx ended (then ctx.Err()); nil for a run
-	// that succeeded.
+	// job not started because ctx ended (then ctx.Err()). It is nil when
+	// Final carries no error; check Final.Reason for completion (max_turns
+	// and interrupted end with a nil Err).
 	Err error
 }
 
@@ -44,8 +46,18 @@ type ParallelOptions struct {
 // RunParallel runs every job, at most MaxConcurrency at once, and returns one
 // Result per job in input order. Cancelling ctx stops the running jobs and
 // fails the ones not started with ctx.Err(). It returns once every run's
-// stream has ended.
+// stream has ended, so a job whose agent ignores ctx keeps it from
+// returning.
+//
+// One failing job does not stop or cancel the others. A panic in OnEvent is
+// the exception: it cancels every job, and once they have ended RunParallel
+// panics on the caller's goroutine with the first such panic, whose message
+// carries the job goroutine's stack (errors.Unwrap gives back the original
+// value when it was an error).
 func RunParallel(ctx context.Context, jobs []Job, opts ParallelOptions) []Result {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var crash firstPanic
 	results := make([]Result, len(jobs))
 	limit := opts.MaxConcurrency
 	if limit <= 0 {
@@ -67,10 +79,12 @@ func RunParallel(ctx context.Context, jobs []Job, opts ParallelOptions) []Result
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
+			defer crash.capture(cancel)
 			results[i] = runJob(ctx, i, job, emit)
 		}()
 	}
 	wg.Wait()
+	crash.rethrow()
 	return results
 }
 
@@ -116,4 +130,52 @@ func serialize(onEvent func(int, agent.Event)) func(int, agent.Event) {
 		defer mu.Unlock()
 		onEvent(index, ev)
 	}
+}
+
+// firstPanic keeps the first panic of the job goroutines, to be raised again
+// on the caller's goroutine.
+type firstPanic struct {
+	mu  sync.Mutex
+	err *jobPanic
+}
+
+// capture, deferred on a job goroutine, recovers a panic, keeps it if it is
+// the first, and cancels the other jobs.
+func (f *firstPanic) capture(cancel context.CancelFunc) {
+	v := recover()
+	if v == nil {
+		return
+	}
+	f.mu.Lock()
+	if f.err == nil {
+		f.err = &jobPanic{value: v, stack: debug.Stack()}
+	}
+	f.mu.Unlock()
+	cancel()
+}
+
+// rethrow panics with the kept panic, if any; call it once every job ended.
+func (f *firstPanic) rethrow() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		panic(f.err)
+	}
+}
+
+// jobPanic is a panic recovered on a job goroutine, with that goroutine's
+// stack.
+type jobPanic struct {
+	value any
+	stack []byte
+}
+
+func (p *jobPanic) Error() string {
+	return fmt.Sprintf("coordinator: panic in a RunParallel job: %v\n\n%s", p.value, p.stack)
+}
+
+// Unwrap returns the original panic value when it is an error.
+func (p *jobPanic) Unwrap() error {
+	err, _ := p.value.(error)
+	return err
 }
