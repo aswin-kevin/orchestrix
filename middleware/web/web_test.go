@@ -124,8 +124,9 @@ func TestNewWithSearchOnly(t *testing.T) {
 	if mw.Name() != "web" {
 		t.Fatalf("name = %q", mw.Name())
 	}
-	if tools := mw.(agent.ToolProvider).Tools(); len(tools) != 0 {
-		t.Fatalf("tools = %d, want none (search tools come from the search task)", len(tools))
+	tools := mw.(agent.ToolProvider).Tools()
+	if len(tools) != 1 || tools[0].Name() != ToolSearch {
+		t.Fatalf("tools = %v, want only %s", tools, ToolSearch)
 	}
 }
 

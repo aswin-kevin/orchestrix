@@ -148,11 +148,17 @@ func New(cfg Config) (agent.Middleware, error) {
 		return nil, err
 	}
 	m := &middleware{prompt: DefaultPrompt}
+	if cfg.Search != nil {
+		m.prompt += searchPrompt
+	}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
 	}
 	if !cfg.DisableFetch {
 		m.tools = append(m.tools, newFetcher(client, cfg).tool(cfg.ReadOnly))
+	}
+	if cfg.Search != nil {
+		m.tools = append(m.tools, searchTool(cfg.Search, cfg.ReadOnly))
 	}
 	return m, nil
 }
