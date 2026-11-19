@@ -12,8 +12,12 @@ import (
 // its argument that could open or end one of the named elements, so content
 // cannot break out of its frame. Matching ignores case and allows whitespace
 // inside the tag; the escaped tag name is lowercased. Names are matched as
-// whole words and must be plain identifiers.
+// whole words and must be plain identifiers. It panics without a name,
+// which would otherwise match, and escape, every tag.
 func NewTagNeutralizer(tagNames ...string) func(string) string {
+	if len(tagNames) == 0 {
+		panic("promptsafe: NewTagNeutralizer needs at least one tag name")
+	}
 	quoted := make([]string, len(tagNames))
 	for i, n := range tagNames {
 		quoted[i] = regexp.QuoteMeta(n)

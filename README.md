@@ -439,13 +439,13 @@ Convert the file with pdf_render first, then read reference.md for the table lay
 | --- | --- |
 | `name` | Required. Lowercase letters, digits and single hyphens, at most 64 characters; it must match the directory name. |
 | `description` | Required. What the skill does and when to use it. |
-| `allowed-tools` | Tools the skill unlocks once loaded: a space-separated string or a list. |
+| `allowed-tools` | Tools the skill unlocks once loaded: a space-separated string or a list of names or glob patterns. A pattern made only of `*` and `?` is rejected; a broad prefix such as `mcp__*` unlocks every tool it matches. |
 | `mcp-servers` | MCP servers whose tools the skill unlocks. |
 | `license`, `compatibility`, `metadata` | Optional free text, and a map of extra keys. |
 
-The system prompt lists each skill's name and description. When a task matches one, the model loads it with the `skill` tool, and its instructions stay in effect after the conversation is summarized. A pinned skill's instructions are in the system prompt for every run. `skills.Config.Tools` are tools that belong to skills: they are hidden and refused until a loaded skill's `allowed-tools` names them, and the preset adds the deferred middleware so their schemas stay out of the request until then.
+The system prompt lists each skill's name and description. When a task matches one, the model loads it with the `skill` tool, and its instructions stay in effect after the conversation is summarized. A pinned skill's instructions are in the system prompt for every run, and the tools its `allowed-tools` and `mcp-servers` name are unlocked from the start. `skills.Config.Tools` are tools that belong to skills: they are hidden and refused until a loaded skill's `allowed-tools` names them, and the preset adds the deferred middleware so their schemas stay out of the request until then.
 
-A subagent's `Skills` field limits the skills it is offered (never more than its parent's), and `PinnedSkills` pins skills for it. Both must name skills that `WithSkills` defines, or `New` fails.
+A subagent's `Skills` field limits the skills it is offered (never more than its parent's), and `PinnedSkills` pins skills for it (pinning does not offer a skill, so the subagent cannot read a pinned skill's files unless `Skills` offers it too). Both must name skills that `WithSkills` defines, or `New` fails.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -560,7 +560,7 @@ a, err := orchestrix.New(model,
 _, _ = a, err
 ```
 
-Permissions still apply in full: a call through `call_tool` is checked against the target tool's own name with the same rules, mode, approvals, interrupts and hooks as a direct call, and a rule on `call_tool` itself applies as well. Gated tools (skill tools and gated MCP servers) are not searchable and stay refused until unlocked. Without `WithDeferredTools`, the preset adds this middleware with its defaults when skills have `Tools` or an MCP server is deferred or gated.
+Permissions still apply in full: a call through `call_tool` is checked against the target tool's own name with the same rules, mode, approvals, interrupts and hooks as a direct call, and a rule on `call_tool` itself applies as well. Gated tools (skill tools and gated MCP servers) are not searchable and stay refused until unlocked. Without `WithDeferredTools`, the preset adds this middleware with its defaults when skills have `Tools`, an MCP server is deferred or gated, or a `WithTools` tool is wrapped with `deferred.Defer` or `deferred.Gate`.
 
 ## Web
 
@@ -581,9 +581,9 @@ _, _ = a, err
 ```
 
 - **Network guard.** By default every `web_fetch` connection to a loopback, private, link-local or otherwise non-public address is refused when it is made, for each redirect hop and each DNS answer, so a page cannot lead the agent into your internal network. `AllowPrivateNetworks` turns this off.
-- **Proxy and certificates.** `ProxyURL` sends `web_fetch` requests through an http or https proxy (the proxy environment variables are ignored), and `CACertFiles` adds root certificates for them. A bad proxy URL or an unreadable CA file makes `New` fail. These settings, like the network guard, cover `web_fetch` only (see below for search).
+- **Proxy and certificates.** `ProxyURL` sends `web_fetch` requests through an http or https proxy (the proxy environment variables are ignored), and `CACertFiles` adds root certificates for them. A bad proxy URL or an unreadable CA file makes `New` fail. These settings, like the network guard, cover `web_fetch` only (see below for search). Through a proxy, the agent connects only to the proxy, so the guard resolves each target host itself and refuses a blocked answer before sending the request; the proxy then resolves the host again for its own connection,, so a DNS answer that changes in between is not caught.
 - **Permissions.** The tools need an allow rule or an approval, unless `ReadOnly` is set, which allows them without one. `web_fetch(pattern)` rules match the URL in a canonical form: lowercase scheme and host, no default port, `.` and `..` segments resolved, escaped unreserved characters decoded, no fragment. URLs with a user name or password are refused. Rules see only the URL the model asked for: redirects are followed without checking the rules again, though the network guard checks every hop.
-- **Search backends.** `web.DuckDuckGo` (no key), `web.Brave` and `web.Tavily` (API key required). Each constructor returns `(SearchBackend, error)` and takes an optional `Client`; pass one from `web.NewHTTPClient` to search through a proxy or with extra certificates. Search requests never follow redirects. Implement `web.SearchBackend` for any other service.
+- **Search backends.** `web.DuckDuckGo` (no key), `web.Brave` and `web.Tavily` (API key required; an empty key fails with an error wrapping `web.ErrNoAPIKey`). Each constructor returns `(SearchBackend, error)` and takes an optional `Client`; pass one from `web.NewHTTPClient` to search through a proxy or with extra certificates. Search requests never follow redirects. Implement `web.SearchBackend` for any other service.
 
 A search backend sends its requests with its own `Client`. Without one it uses a plain client: no proxy, no extra certificates, and private addresses allowed, since the endpoint is fixed by you and not chosen by the model. To send search through the same proxy as `web_fetch`, build its client from the same settings:
 

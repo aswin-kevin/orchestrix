@@ -247,9 +247,10 @@ const noAnswer = "(no answer)"
 
 // formatAnswers renders answers for the model, whoever produced them. One
 // answer belongs to each question by position and extras are dropped; a
-// question without an answer reads "(no answer)". All text is cleaned and
-// capped, and its newlines are indented so no answer can start a line that
-// looks like another bullet or the title.
+// question without an answer reads "(no answer)", and an Other that repeats
+// a selected label is dropped. All text is cleaned and capped, and its
+// newlines are indented so no answer can start a line that looks like
+// another bullet or the title.
 func formatAnswers(qs []Question, answers []Answer) string {
 	var sb strings.Builder
 	sb.WriteString(answersTitle)
@@ -276,8 +277,8 @@ func formatAnswers(qs []Question, answers []Answer) string {
 				other = append(other, label)
 			}
 		}
-		if o := inline(a.Other, MaxAnswerRunes); o != "" {
-			other = append(other, o)
+		if o := inline(a.Other, MaxAnswerRunes); o != "" && !seen[o] {
+			other = append(other, o) // unless it repeats a selected label
 		}
 		fmt.Fprintf(&sb, "\n- %s: ", text)
 		switch {

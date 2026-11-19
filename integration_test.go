@@ -458,6 +458,11 @@ func TestLiveMCPInProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
 
 	a, err := orchestrix.New(spec,
 		orchestrix.WithBackend(membackend.New()),
@@ -475,9 +480,6 @@ func TestLiveMCPInProcess(t *testing.T) {
 		t.Error("no mcp__test__lookup_code tool use was observed")
 	}
 	requireTextContains(t, final.Text, "MCP-OK-7781")
-	if err := m.Close(); err != nil {
-		t.Errorf("Close: %v", err)
-	}
 }
 
 func TestLiveWebFetch(t *testing.T) {

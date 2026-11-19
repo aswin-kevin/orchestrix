@@ -11,6 +11,10 @@ func TestTagNeutralizer(t *testing.T) {
 		"<skills>":             "<skills>",
 		"plain <b> text":       "plain <b> text",
 		"a <skill name=x> b":   "a &lt;skill name=x> b",
+		// An unterminated tag still opens the element in a lenient reader.
+		"tail </skill":   "tail &lt;/skill",
+		"tail <skill":    "tail &lt;skill",
+		"<skill\nname=x": "&lt;skill\nname=x",
 	}
 	for in, want := range cases {
 		if got := n(in); got != want {
@@ -26,4 +30,13 @@ func TestCapBytes(t *testing.T) {
 	if got, cut := CapBytes("abc", 3); got != "abc" || cut {
 		t.Fatalf("CapBytes = %q, %v", got, cut)
 	}
+}
+
+func TestTagNeutralizerNeedsNames(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewTagNeutralizer() with no names did not panic; it would escape every tag")
+		}
+	}()
+	NewTagNeutralizer()
 }

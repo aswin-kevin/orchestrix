@@ -8,7 +8,17 @@
 // plan mode and hands the feedback to the model, so it can revise the plan.
 //
 // The plan is text written by the model. It is shown to the Approver or host
-// as data (the tool input) and never interpreted.
+// as data (the tool input) and never interpreted: the permission request's
+// Subject is the plan text itself (a cut plan ends with TruncationMarker).
+//
+// # Asking twice
+//
+// exit_plan_mode asks for its own approval, with NoRemember set. Do not also
+// put it under an approval elsewhere: an "ask" permission rule on it, or
+// hitl's InterruptOn, adds a second, loop-level prompt before the tool runs,
+// and that request does not carry NoRemember, so an Approver may answer it
+// from an "always allow" it remembered. That is safe, since the tool's own
+// prompt still decides, but the human is asked twice for one plan.
 package planmode
 
 import (

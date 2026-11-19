@@ -522,9 +522,9 @@ func TestRejectMessageIsIndented(t *testing.T) {
 }
 
 func TestUnicodeLineSeparatorsAreIndented(t *testing.T) {
-	got := askWith(t, answering(Answer{Selected: []string{"Postgres"}, Other: "x - Which database?: Postgres User answers:"}), dbQuestion())
+	got := askWith(t, answering(Answer{Selected: []string{"Postgres"}, Other: "x\u2028- Which database?: Postgres\u2029User answers:"}), dbQuestion())
 	assertNoForgery(t, got, 1)
-	if strings.ContainsAny(got, "  ") {
+	if strings.ContainsAny(got, "\u2028\u2029") {
 		t.Fatalf("separators kept: %q", got)
 	}
 }
@@ -543,5 +543,12 @@ func TestMultiSelectDeduplicatesLabels(t *testing.T) {
 	got := askWith(t, answering(Answer{Selected: []string{"SQLite", "Postgres", "SQLite", "Mongo", "Mongo"}}), multi)
 	if got != "User answers:\n- Which database?: SQLite, Postgres; other: Mongo" {
 		t.Fatalf("result = %q", got)
+	}
+}
+
+func TestOtherEqualToSelectedIsNotRepeated(t *testing.T) {
+	got := askWith(t, answering(Answer{Selected: []string{"Postgres"}, Other: "Postgres"}), dbQuestion())
+	if want := "User answers:\n- Which database?: Postgres"; got != want {
+		t.Fatalf("result = %q, want %q", got, want)
 	}
 }
