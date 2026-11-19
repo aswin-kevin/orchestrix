@@ -1,12 +1,8 @@
 package subagents
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -24,9 +20,9 @@ func structuredOutput(ctx context.Context, child *agent.Agent, in agent.Input, f
 		if final.Reason != agent.ReasonCompleted || ctx.Err() != nil {
 			return final, nil
 		}
-		answer, err := parseAnswer(schema, final.Text)
+		answer, err := tool.ParseObject(schema, final.Text)
 		if err == nil {
-			res := tool.Text(answer)
+			res := tool.Text(string(answer))
 			return final, &res
 		}
 		if retry == DefaultOutputRetries {
@@ -37,24 +33,4 @@ func structuredOutput(ctx context.Context, child *agent.Agent, in agent.Input, f
 		in.Messages = []llm.Message{llm.UserText(fmt.Sprintf(invalidOutputPrompt, err))}
 		final = runChild(ctx, child, in)
 	}
-}
-
-// parseAnswer validates text, with any surrounding code fence removed, as a
-// JSON object against schema and returns it compacted.
-func parseAnswer(schema map[string]any, text string) (string, error) {
-	raw, fenced := tool.StripCodeFence(text)
-	if !fenced {
-		raw = strings.TrimSpace(text)
-	}
-	if !strings.HasPrefix(raw, "{") {
-		return "", errors.New("the answer must be a JSON object")
-	}
-	if err := tool.Validate(schema, json.RawMessage(raw)); err != nil {
-		return "", err
-	}
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, []byte(raw)); err != nil {
-		return "", err
-	}
-	return compact.String(), nil
 }
