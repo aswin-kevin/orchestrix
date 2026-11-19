@@ -28,6 +28,9 @@ var opaqueCommands = map[string]bool{
 	"strace": true, "ltrace": true, "busybox": true, "unbuffer": true,
 	"parallel": true, "script": true, "su": true, "runuser": true,
 	"nsenter": true, "unshare": true,
+	// Editors run commands from options (-c, +cmd), scripts and vimrc files.
+	"vim": true, "vi": true, "nvim": true, "ex": true, "view": true,
+	"gvim": true, "gview": true, "vimdiff": true, "evim": true,
 }
 
 // interpreters run a program written in their arguments or read from a file,
@@ -187,7 +190,8 @@ func normalizeSegment(words []word) (segments []string, ok bool) {
 	if opaqueCommands[name] {
 		guesses = append(guesses, guessSegments(commandTail(name, words[1:]))...)
 	}
-	ok = ok && vouchableName(name) && !changesShellState(name, words[1:])
+	ok = ok && vouchableName(name) && !changesShellState(name, words[1:]) &&
+		!runsCommandThroughOptions(name, words[1:])
 	texts := []string{name}
 	for _, w := range words[1:] {
 		texts = append(texts, w.text)

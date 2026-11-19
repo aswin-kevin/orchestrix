@@ -442,3 +442,122 @@ func TestSelfDenyBeatsBypass(t *testing.T) {
 		t.Fatalf("deny rule must still come first: got %+v", got)
 	}
 }
+
+// TestHiddenCommandOptions covers ordinary commands that run a command named
+// in an option or script: an allow rule for the command must not approve it.
+func TestHiddenCommandOptions(t *testing.T) {
+	shell := func(cmd string) Request { return Request{Tool: "execute", Subject: cmd, Shell: true} }
+	for _, tt := range []struct{ rule, cmd string }{
+		{"execute(sed:*)", `sed 's/a/rm x/e' file`},
+		{"execute(tar:*)", `tar --to-command='rm x' -xf a.tar`},
+		{"execute(vim:*)", `vim -c '!rm x'`},
+		{"execute(git:*)", `git -c core.fsmonitor='rm x' status`},
+	} {
+		pc := Context{Rules: Rules{Allow: []Rule{mustRule(t, tt.rule)}}}
+		if got := Evaluate(shell(tt.cmd), pc); got.Behavior != Ask {
+			t.Errorf("Evaluate(%q) with allow %s = %s, want ask", tt.cmd, tt.rule, got.Behavior)
+		}
+	}
+}
+
+func TestSplitCommandHiddenCommandOptions(t *testing.T) {
+	for _, tt := range []struct {
+		cmd    string
+		wantOK bool
+	}{
+		// sed: the e command, the e flag of s, and scripts the parser cannot see.
+		{`sed 's/a/rm x/e' file`, false},
+		{`sed 's|a|b|ge' file`, false},
+		{`sed '1e rm x' file`, false},
+		{`sed -n '/x/e rm x' file`, false},
+		{`sed 's/a/b/;e rm x' file`, false},
+		{`sed -e '/re/{e rm x' -e '}' file`, false},
+		{"sed '# note\\\ne rm x' file", false}, // a comment does not continue
+		{"sed 'w out\\\ne rm x' file", false},
+		{`sed -e '/x/a\' -e 'e rm x' file`, true}, // the second script is the text of a
+		{`sed -e 's/a/b/' -e 's/c/d/e' file`, false},
+		{`sed --expression='s/a/b/e' file`, false},
+		{`sed --expr 's/a/b/e' file`, false},
+		{`sed -nes/a/b/e file`, false},
+		{`sed -f script.sed file`, false},
+		{`sed --file=script.sed file`, false},
+		{`sed -X 's/a/b/' file`, false},
+		{`sed 's/a/b' file`, false},
+		{`sed`, false},
+		{`gsed 's/a/rm x/e' file`, false},
+		{`sed 's/hello/world/g' file`, true},
+		{`sed -n '1,10p' file`, true},
+		{`sed -i.bak -E 's/(a|e)+/x/2' file`, true},
+		{`sed 's/a\/e/b/' file`, true}, // an escaped delimiter
+		{`sed 's/a/b/w out.txt' file`, true},
+		{`sed '$!N; /^\(.*\)\n\1$/!P; D' file`, true},
+		{`sed '/start/,/end/d' file`, true},
+		{`sed -e 's/a/b/' -e '/x/a\' -e 'text' file`, true},
+		{`sed 'a e rm x' file`, true},
+		{`sed ':top; s/a/b/; t top' file`, true},
+		{`sed 's/x/y/' -i file`, true},
+
+		// tar: options that name a program.
+		{`tar --to-command='rm x' -xf a.tar`, false},
+		{`tar --to-com='rm x' -xf a.tar`, false},
+		{`tar -I 'rm x' -xf a.tar`, false},
+		{`tar -xIf prog a.tar`, false},
+		{`tar xIf prog a.tar`, false},
+		{`tar --use-compress-program=prog -cf a.tar dir`, false},
+		{`tar --checkpoint-action=exec='rm x' -cf a.tar dir`, false},
+		{`tar -F script -xf a.tar`, false},
+		{`tar --info-script=script -xf a.tar`, false},
+		{`tar --rsh-command=prog -xf host:a.tar`, false},
+		{`tar -xzf a.tar.gz -C out`, true},
+		{`tar czf a.tar.gz --exclude=x dir`, true},
+		{`tar -tf a.tar -- -I`, true},
+
+		// vim and its relatives run commands from options and scripts.
+		{`vim -c '!rm x'`, false},
+		{`vi +'!rm x' file`, false},
+		{`nvim file`, false},
+		{`ex -s file`, false},
+
+		// git: configuration and options that run a command.
+		{`git -c core.fsmonitor='rm x' status`, false},
+		{`git -C repo -c alias.st='!rm x' st`, false},
+		{`git --config-env=core.pager=CMD log`, false},
+		{`git --exec-path=/tmp/evil status`, false},
+		{`git rebase -x 'rm x' main`, false},
+		{`git rebase --exec='rm x' main`, false},
+		{`git rebase --exe 'rm x' main`, false},
+		{`git rebase -ix 'rm x' main`, false},
+		{`git bisect run rm x`, false},
+		{`git submodule --quiet foreach 'rm x'`, false},
+		{`git filter-branch --tree-filter 'rm x'`, false},
+		{`git difftool --extcmd='rm x'`, false},
+		{`git grep -O'rm x' foo`, false},
+		{`git fetch --upload-pack='rm x' origin`, false},
+		{`git push --receive-pack='rm x' origin`, false},
+		{`git clone -u 'rm x' url`, false},
+		{`git clone --template=dir url`, false},
+		{`git init --template=dir`, false},
+		{`git config core.fsmonitor 'rm x'`, false},
+		{`git config --global alias.x '!rm x'`, false},
+		{`git status`, true},
+		{`git --no-pager log -n 5`, true},
+		{`git -C repo status`, true},
+		{`git --git-dir .git --work-tree . diff`, true},
+		{`git --exec-path`, true},
+		{`git commit -c HEAD`, true},
+		{`git rebase -i main`, true},
+		{`git log -- -x`, true},
+		{`git bisect start`, true},
+		{`git submodule update --init`, true},
+		{`git config --get user.name`, true},
+		{`git config --list`, true},
+		{`git config get user.name`, true},
+		{`git fetch origin`, true},
+	} {
+		t.Run(tt.cmd, func(t *testing.T) {
+			if _, ok := SplitCommand(tt.cmd); ok != tt.wantOK {
+				t.Fatalf("SplitCommand(%q) ok = %v, want %v", tt.cmd, ok, tt.wantOK)
+			}
+		})
+	}
+}
