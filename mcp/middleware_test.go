@@ -237,7 +237,7 @@ func TestListResourcesReportsFailedServer(t *testing.T) {
 func TestReadResourceImagesFollowProfile(t *testing.T) {
 	s := NewServer(Implementation{Name: "s", Version: "1"}, "")
 	s.AddResource(Resource{URI: "file:///pic.png", Name: "pic"}, func(context.Context) ([]ResourceContent, error) {
-		return []ResourceContent{{URI: "file:///pic.png", MimeType: "image/png", Blob: "aW1n"}}, nil
+		return []ResourceContent{{URI: "file:///pic.png", MimeType: "image/png", Blob: pngData}}, nil
 	})
 	m := connectMiddleware(t, inProcessServer("srv", s))
 	read := m.Tools()[1]

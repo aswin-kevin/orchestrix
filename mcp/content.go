@@ -2,8 +2,11 @@ package mcp
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -12,7 +15,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-// imageMediaTypes are the image types passed to the model as images.
+// imageMediaTypes are the image types passed to the model as images, as
+// http.DetectContentType names them.
 var imageMediaTypes = []string{"image/png", "image/jpeg", "image/gif", "image/webp"}
 
 // toolResult maps a tool call's result to the agent's: one block per content
@@ -66,19 +70,36 @@ func resourceBlock(r ResourceContent, profile llm.Profile) llm.Block {
 }
 
 // imageBlock returns base64 image data as an image block when the model
-// takes images, the media type is in imageMediaTypes and the decoded size is
-// at most filesystem.MaxMediaBytes; otherwise a note saying it was omitted.
+// takes images, the data is valid base64 (padded or not), the decoded bytes
+// are at most filesystem.MaxMediaBytes and http.DetectContentType finds one
+// of imageMediaTypes in them. The block carries the sniffed type, which wins
+// over a declared mediaType that disagrees, and the data re-encoded as
+// padded base64. Anything else becomes an "[image omitted: …]" note, so one
+// bad block never reaches the provider and poisons the thread.
 func imageBlock(mediaType, data string, profile llm.Profile) llm.Block {
-	size := decodedLen(data)
-	if !profile.Images || !slices.Contains(imageMediaTypes, mediaType) || size > filesystem.MaxMediaBytes {
-		return llm.TextBlock(fmt.Sprintf("[image omitted: %s, %d bytes]", mediaType, size))
+	omitted := func(reason string) llm.Block {
+		return llm.TextBlock(fmt.Sprintf("[image omitted: %s; %s]", mediaType, reason))
 	}
-	return llm.Block{Type: llm.BlockImage, Source: &llm.Source{Type: "base64", MediaType: mediaType, Data: data}}
-}
-
-// decodedLen is the size of the bytes the padded base64 text data encodes.
-func decodedLen(data string) int {
-	return len(data)/4*3 - (len(data) - len(strings.TrimRight(data, "=")))
+	if !profile.Images {
+		return omitted("the model does not take images")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(data)
+	}
+	if err != nil {
+		return omitted("the data is not valid base64")
+	}
+	if len(decoded) > filesystem.MaxMediaBytes {
+		return omitted(fmt.Sprintf("%d bytes, over the %d-byte limit", len(decoded), filesystem.MaxMediaBytes))
+	}
+	sniffed, _, _ := mime.ParseMediaType(http.DetectContentType(decoded))
+	if !slices.Contains(imageMediaTypes, sniffed) {
+		return omitted(fmt.Sprintf("the data is %s, not a PNG, JPEG, GIF or WebP image", sniffed))
+	}
+	return llm.Block{Type: llm.BlockImage, Source: &llm.Source{
+		Type: "base64", MediaType: sniffed, Data: base64.StdEncoding.EncodeToString(decoded),
+	}}
 }
 
 // compactJSON returns raw without insignificant space, or raw as is when it

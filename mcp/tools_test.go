@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -77,7 +78,7 @@ func TestToolAdapterSchemaAndDescription(t *testing.T) {
 }
 
 func TestContentMapping(t *testing.T) {
-	image := llm.Block{Type: llm.BlockImage, Source: &llm.Source{Type: "base64", MediaType: "image/png", Data: "aW1n"}}
+	image := llm.Block{Type: llm.BlockImage, Source: &llm.Source{Type: "base64", MediaType: "image/png", Data: pngData}}
 	for _, tc := range []struct {
 		name string
 		in   CallToolResult
@@ -85,13 +86,13 @@ func TestContentMapping(t *testing.T) {
 	}{
 		{"text", CallToolResult{Content: []Content{{Type: "text", Text: "hello"}}},
 			tool.Text("hello")},
-		{"image", CallToolResult{Content: []Content{{Type: "image", Data: "aW1n", MimeType: "image/png"}}},
+		{"image", CallToolResult{Content: []Content{{Type: "image", Data: pngData, MimeType: "image/png"}}},
 			tool.Result{Content: []llm.Block{image}}},
 		{"audio", CallToolResult{Content: []Content{{Type: "audio", Data: "YXU=", MimeType: "audio/wav"}}},
 			tool.Text("[audio content omitted: audio/wav]")},
 		{"resource text", CallToolResult{Content: []Content{{Type: "resource", Resource: &ResourceContent{URI: "file:///a", Text: "body"}}}},
 			tool.Text("Resource file:///a:\nbody")},
-		{"resource blob image", CallToolResult{Content: []Content{{Type: "resource", Resource: &ResourceContent{URI: "file:///i", MimeType: "image/png", Blob: "aW1n"}}}},
+		{"resource blob image", CallToolResult{Content: []Content{{Type: "resource", Resource: &ResourceContent{URI: "file:///i", MimeType: "image/png", Blob: pngData}}}},
 			tool.Result{Content: []llm.Block{image}}},
 		{"resource blob other", CallToolResult{Content: []Content{{Type: "resource", Resource: &ResourceContent{URI: "file:///z", MimeType: "application/zip", Blob: "eg=="}}}},
 			tool.Text("[binary resource file:///z omitted: application/zip]")},
@@ -112,25 +113,45 @@ func TestContentMapping(t *testing.T) {
 	}
 }
 
+// Small payloads with the magic bytes http.DetectContentType recognises.
+var (
+	pngBytes  = "\x89PNG\r\n\x1a\n" + "\x00\x00\x00\rIHDR"
+	webpBytes = "RIFF\x00\x00\x00\x00WEBPVP8 "
+	pngData   = base64.StdEncoding.EncodeToString([]byte(pngBytes))
+)
+
 func TestImageGating(t *testing.T) {
-	bigGroups := filesystem.MaxMediaBytes/3 + 1 // base64 groups of 3 bytes, just over the cap
-	big := strings.Repeat("A", bigGroups*4)
-	image := llm.Block{Type: llm.BlockImage, Source: &llm.Source{Type: "base64", MediaType: "image/webp", Data: "aW1n"}}
+	big := base64.StdEncoding.EncodeToString([]byte(pngBytes + strings.Repeat("\x00", filesystem.MaxMediaBytes)))
+	bigSize := len(pngBytes) + filesystem.MaxMediaBytes
+	unpadded := base64.RawStdEncoding.EncodeToString([]byte(pngBytes + "x"))
+	image := func(mediaType, raw string) llm.Block {
+		return llm.Block{Type: llm.BlockImage, Source: &llm.Source{Type: "base64", MediaType: mediaType,
+			Data: base64.StdEncoding.EncodeToString([]byte(raw))}}
+	}
 	for _, tc := range []struct {
 		name    string
 		profile llm.Profile
 		content Content
 		want    llm.Block
 	}{
-		{"allowed", imagesOK, Content{Type: "image", MimeType: "image/webp", Data: "aW1n"}, image},
-		{"model without images", llm.Profile{}, Content{Type: "image", MimeType: "image/png", Data: "aW1n"},
-			llm.TextBlock("[image omitted: image/png, 3 bytes]")},
-		{"media type not allowed", imagesOK, Content{Type: "image", MimeType: "image/svg+xml", Data: "PHN2Zz4="},
-			llm.TextBlock("[image omitted: image/svg+xml, 5 bytes]")},
+		{"allowed", imagesOK, Content{Type: "image", MimeType: "image/webp", Data: base64.StdEncoding.EncodeToString([]byte(webpBytes))},
+			image("image/webp", webpBytes)},
+		{"unpadded base64", imagesOK, Content{Type: "image", MimeType: "image/png", Data: unpadded},
+			image("image/png", pngBytes+"x")},
+		{"declared type disagrees: sniffed type wins", imagesOK, Content{Type: "image", MimeType: "image/jpeg", Data: pngData},
+			image("image/png", pngBytes)},
+		{"model without images", llm.Profile{}, Content{Type: "image", MimeType: "image/png", Data: pngData},
+			llm.TextBlock("[image omitted: image/png; the model does not take images]")},
+		{"invalid base64", imagesOK, Content{Type: "image", MimeType: "image/png", Data: "not base64!!"},
+			llm.TextBlock("[image omitted: image/png; the data is not valid base64]")},
+		{"not an image", imagesOK, Content{Type: "image", MimeType: "image/png", Data: base64.StdEncoding.EncodeToString([]byte("hello, world"))},
+			llm.TextBlock("[image omitted: image/png; the data is text/plain, not a PNG, JPEG, GIF or WebP image]")},
+		{"svg is not passed", imagesOK, Content{Type: "image", MimeType: "image/svg+xml", Data: "PHN2Zz48L3N2Zz4="},
+			llm.TextBlock("[image omitted: image/svg+xml; the data is text/plain, not a PNG, JPEG, GIF or WebP image]")},
 		{"too large", imagesOK, Content{Type: "image", MimeType: "image/png", Data: big},
-			llm.TextBlock(fmt.Sprintf("[image omitted: image/png, %d bytes]", bigGroups*3))},
-		{"resource blob without images", llm.Profile{}, Content{Type: "resource", Resource: &ResourceContent{URI: "file:///i", MimeType: "image/png", Blob: "aW1n"}},
-			llm.TextBlock("[image omitted: image/png, 3 bytes]")},
+			llm.TextBlock(fmt.Sprintf("[image omitted: image/png; %d bytes, over the %d-byte limit]", bigSize, filesystem.MaxMediaBytes))},
+		{"resource blob without images", llm.Profile{}, Content{Type: "resource", Resource: &ResourceContent{URI: "file:///i", MimeType: "image/png", Blob: pngData}},
+			llm.TextBlock("[image omitted: image/png; the model does not take images]")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := toolResult(&CallToolResult{Content: []Content{tc.content}}, tc.profile)
@@ -141,10 +162,21 @@ func TestImageGating(t *testing.T) {
 	}
 }
 
+func TestBadImageDoesNotPoisonOtherBlocks(t *testing.T) {
+	got := toolResult(&CallToolResult{Content: []Content{
+		{Type: "text", Text: "before"},
+		{Type: "image", MimeType: "image/png", Data: "%%%"},
+		{Type: "image", MimeType: "image/png", Data: pngData},
+	}}, imagesOK)
+	if len(got.Content) != 3 || got.Content[0].Text != "before" || got.Content[1].Type != llm.BlockText || got.Content[2].Type != llm.BlockImage {
+		t.Fatalf("content = %+v, want the text, a note and the valid image", got.Content)
+	}
+}
+
 func TestImagesFollowCallProfile(t *testing.T) {
 	s := NewServer(Implementation{Name: "s", Version: "1"}, "")
 	s.AddTool(ToolInfo{Name: "pic"}, func(context.Context, json.RawMessage) (*CallToolResult, error) {
-		return &CallToolResult{Content: []Content{{Type: "image", MimeType: "image/png", Data: "aW1n"}}}, nil
+		return &CallToolResult{Content: []Content{{Type: "image", MimeType: "image/png", Data: pngData}}}, nil
 	})
 	m := connectMiddleware(t, inProcessServer("srv", s))
 	pic := findTool(t, m.DynamicTools(), "mcp__srv__pic")
