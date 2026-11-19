@@ -194,12 +194,14 @@ func storedNotifications(s *state.State) []llm.Message {
 	return out
 }
 
-// waitEnded waits until the task id of thread "t" ended.
+// waitEnded waits until the task id of thread "t", already started, ended.
+// A task the Manager no longer knows has ended: its thread was released once
+// every task there ended and was announced.
 func waitEnded(t *testing.T, m *Middleware, id string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if j := m.jobs.Get("t", id); j != nil && j.Ended() {
+		if j := m.jobs.Get("t", id); j == nil || j.Ended() {
 			return
 		}
 		if time.Now().After(deadline) {

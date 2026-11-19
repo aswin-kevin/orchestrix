@@ -290,26 +290,43 @@ func (m *Middleware) BeforeStop(ctx context.Context, s *state.State, _ *llm.Resp
 // AfterAgent implements agent.AfterAgent: a nested run's tasks are stopped
 // and forgotten when it ends, so a subagent's background tasks never outlive
 // it; their records end cancelled, and as seen, since nobody is left to be
-// told. A top-level run's tasks keep running for later runs of the thread.
-// Only tasks of the run's own thread are stopped.
+// told, and so do the records of its tasks that ended unannounced. A
+// top-level run's tasks keep running for later runs of the thread. Only
+// tasks of the run's own thread are stopped.
+//
+// At every depth the thread's entry is then released once no task runs
+// there and every ended one was announced (see jobs.Manager.Release), so
+// idle threads and finished nested ones hold no memory.
 func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 	info, ok := agent.Info(ctx)
-	if !ok || info.Depth == 0 {
+	if !ok || info.ThreadID == "" {
 		return nil
 	}
-	records, _ := TasksKey.Get(s)
-	ids := runningIDs(jobs.ThreadRecords(records, info.ThreadID))
-	if len(ids) == 0 {
-		return nil
+	if info.Depth > 0 {
+		m.endNested(s, info.ThreadID)
 	}
-	m.jobs.StopAndForget(info.ThreadID, ids, DefaultStopWait, func() {
-		m.updateRecords(s, info.ThreadID, func(r *TaskRecord) {
-			if slices.Contains(ids, r.ID) {
-				m.markNotified(r)
-			}
-		})
-	})
+	m.jobs.Release(info.ThreadID)
 	return nil
+}
+
+// endNested stops the running tasks of a nested run's thread and marks every
+// ended task of it as seen.
+func (m *Middleware) endNested(s *state.State, threadID string) {
+	records, _ := TasksKey.Get(s)
+	if ids := runningIDs(jobs.ThreadRecords(records, threadID)); len(ids) > 0 {
+		m.jobs.StopAndForget(threadID, ids, DefaultStopWait, func() {
+			m.updateRecords(s, threadID, func(r *TaskRecord) {
+				if slices.Contains(ids, r.ID) {
+					m.markNotified(r)
+				}
+			})
+		})
+	}
+	m.updateRecords(s, threadID, func(r *TaskRecord) {
+		if r.finished() && !r.Notified {
+			m.markNotified(r)
+		}
+	})
 }
 
 // runningIDs returns the ids of the running records.
