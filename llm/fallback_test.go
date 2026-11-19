@@ -32,7 +32,7 @@ func TestNewFallbackValidates(t *testing.T) {
 		"none":      nil,
 		"one":       {{Provider: ok}},
 		"nil":       {{Provider: ok}, {Provider: nil}},
-		"duplicate": {{Provider: ok, Model: "m"}, {Provider: ok, Model: "m"}},
+		"duplicate": {{Provider: ok, Name: "m"}, {Provider: ok, Name: "m"}},
 	}
 	for name, entries := range cases {
 		if _, err := llm.NewFallback(llm.FallbackConfig{Entries: entries}); err == nil {

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -29,6 +30,17 @@ var overflowMarkers = []string{
 	"context window",
 	"too many tokens",
 	"input is too long",
+}
+
+// transientStreamErrors are the error types and codes that mean a provider
+// is out of capacity or failing on its side when it reports the error inside
+// a stream that started with a 200.
+var transientStreamErrors = map[string]bool{
+	"overloaded_error":    true, // Anthropic
+	"rate_limit_error":    true, // Anthropic
+	"api_error":           true, // Anthropic
+	"server_error":        true, // OpenAI chat and Responses
+	"rate_limit_exceeded": true, // OpenAI Responses
 }
 
 // APIError is a non-2xx reply from a provider.
@@ -72,6 +84,46 @@ func IsContextOverflow(err error) bool {
 	for _, marker := range overflowMarkers {
 		if strings.Contains(body, marker) {
 			return true
+		}
+	}
+	return false
+}
+
+// isTransientStreamError reports whether err is an error reported inside a
+// stream (an *APIError with Status 0) whose body names a transient error type
+// or code (see transientStreamErrors). Only the "type" and "code" fields of
+// the JSON body count, at any depth, so a message that merely mentions such
+// a name does not.
+func isTransientStreamError(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != 0 {
+		return false
+	}
+	var body any
+	if json.Unmarshal([]byte(apiErr.Body), &body) != nil {
+		return false
+	}
+	return hasTransientType(body)
+}
+
+// hasTransientType walks a decoded JSON value looking for a "type" or "code"
+// field that names a transient error.
+func hasTransientType(v any) bool {
+	switch v := v.(type) {
+	case map[string]any:
+		for k, field := range v {
+			if s, ok := field.(string); ok && (k == "type" || k == "code") && transientStreamErrors[s] {
+				return true
+			}
+			if hasTransientType(field) {
+				return true
+			}
+		}
+	case []any:
+		for _, field := range v {
+			if hasTransientType(field) {
+				return true
+			}
 		}
 	}
 	return false

@@ -45,6 +45,9 @@ func newResponses(cfg Config) (*responsesProvider, error) {
 	return &responsesProvider{cfg: &cfg}, nil
 }
 
+// configuredModel implements modelReporter.
+func (p *responsesProvider) configuredModel() string { return p.cfg.Model }
+
 // Complete implements Provider by draining a stream.
 func (p *responsesProvider) Complete(ctx context.Context, req Request) (*Response, error) {
 	return Collect(ctx, p, req)

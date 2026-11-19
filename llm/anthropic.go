@@ -41,6 +41,9 @@ func newAnthropic(cfg Config) (*anthropicProvider, error) {
 	return &anthropicProvider{cfg: &cfg}, nil
 }
 
+// configuredModel implements modelReporter.
+func (p *anthropicProvider) configuredModel() string { return p.cfg.Model }
+
 // Wire types. They mirror the Messages API closely and exist only so that
 // local-only fields (ProviderData, Meta) can never reach the network.
 

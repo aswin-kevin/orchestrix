@@ -51,6 +51,9 @@ func newOpenAI(cfg Config) (*openAIProvider, error) {
 	return &openAIProvider{cfg: &cfg}, nil
 }
 
+// configuredModel implements modelReporter.
+func (p *openAIProvider) configuredModel() string { return p.cfg.Model }
+
 // Wire types. They exist so that local-only fields (ProviderData, Meta) can
 // never reach the network.
 

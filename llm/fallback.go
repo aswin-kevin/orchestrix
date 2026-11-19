@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"sync"
@@ -21,12 +22,15 @@ type FallbackEntry struct {
 	Provider Provider
 	// Model is the model this provider answers with. When it matches a
 	// registered profile, MaxTokens is lowered to that profile's MaxOutput;
-	// a model matching no profile leaves MaxTokens unchanged. Optional.
+	// a model matching no profile leaves MaxTokens unchanged. Optional: for
+	// a backup built by New it defaults to the configured model. A custom
+	// Provider without Model is never clamped.
 	Model string
 	// Name identifies the entry in events and in the "orchestrix.source"
-	// stamp on its replies; it must be unique within the chain and stay the
-	// same across runs that share a conversation. Default: Model, else
-	// "fallback-<index>".
+	// stamp on its replies; it must stay the same across runs that share a
+	// conversation. Explicit names must be unique. Default: Model, else
+	// "fallback-<index>", with "-<index>" appended when that name is
+	// already taken.
 	Name string
 }
 
@@ -56,16 +60,25 @@ type FallbackConfig struct {
 
 // DefaultShouldFallback reports whether err means the provider cannot serve
 // right now: a retryable failure (408, 409, 429, 5xx, 529 or a network
-// error) that is not a context overflow. A cancelled context never qualifies.
+// error), or an error reported inside a stream (an *APIError with Status 0)
+// whose JSON body has a "type" or "code" of overloaded_error,
+// rate_limit_error, api_error, server_error or rate_limit_exceeded. A context
+// overflow and a cancelled or expired context never qualify.
 func DefaultShouldFallback(err error) bool {
-	return IsRetryable(err) && !IsContextOverflow(err)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || IsContextOverflow(err) {
+		return false
+	}
+	return IsRetryable(err) || isTransientStreamError(err)
 }
 
 // NewFallback returns a Provider that tries cfg.Entries in order, moving to
 // the next entry only when ShouldFallback accepts the error. An entry that
 // failed that way is skipped for the cool-down period unless every entry is
 // cooling down. Backups get the request with Model cleared, so they answer
-// with the model they were built with.
+// with the model they were built with. When the call's context is done, the
+// error is returned as is: no switch, no OnFallback and no cool-down. When
+// every entry fails, the last entry's error is returned wrapped (errors.Is
+// and errors.As still reach it).
 //
 // Every block of a reply is stamped with ProviderData["orchestrix.source"]
 // set to the answering entry's name. Before a request goes to an entry,
@@ -80,22 +93,40 @@ func NewFallback(cfg FallbackConfig) (Provider, error) {
 		return nil, fmt.Errorf("llm: fallback needs at least 2 entries, got %d", len(cfg.Entries))
 	}
 	entries := make([]FallbackEntry, len(cfg.Entries))
-	seen := make(map[string]bool, len(entries))
+	taken := make(map[string]bool, len(entries))
 	for i, e := range cfg.Entries {
 		if e.Provider == nil {
 			return nil, fmt.Errorf("llm: fallback entry %d has no provider", i)
 		}
-		if e.Name == "" {
-			e.Name = e.Model
+		if e.Name != "" {
+			if taken[e.Name] {
+				return nil, fmt.Errorf("llm: fallback entry name %q is used twice", e.Name)
+			}
+			taken[e.Name] = true
 		}
-		if e.Name == "" {
-			e.Name = fmt.Sprintf("fallback-%d", i)
+		// A backup answers with the model it was built with; the primary
+		// keeps the request's model, which may differ, so it is not filled.
+		if r, ok := e.Provider.(modelReporter); ok && e.Model == "" && i > 0 {
+			e.Model = r.configuredModel()
 		}
-		if seen[e.Name] {
-			return nil, fmt.Errorf("llm: fallback entry name %q is used twice", e.Name)
-		}
-		seen[e.Name] = true
 		entries[i] = e
+	}
+	for i := range entries {
+		if entries[i].Name != "" {
+			continue
+		}
+		name := entries[i].Model
+		if name == "" {
+			name = fmt.Sprintf("fallback-%d", i)
+		}
+		if taken[name] {
+			name = fmt.Sprintf("%s-%d", name, i)
+		}
+		if taken[name] {
+			return nil, fmt.Errorf("llm: fallback entry %d: default name %q is already used", i, name)
+		}
+		taken[name] = true
+		entries[i].Name = name
 	}
 	f := &fallback{
 		entries:  entries,
@@ -112,6 +143,12 @@ func NewFallback(cfg FallbackConfig) (Provider, error) {
 		f.should = DefaultShouldFallback
 	}
 	return f, nil
+}
+
+// modelReporter is implemented by the providers New builds, so NewFallback
+// can fill a backup's FallbackEntry.Model.
+type modelReporter interface {
+	configuredModel() string
 }
 
 // fallback is the Provider returned by NewFallback.
@@ -211,7 +248,9 @@ func (f *fallback) Complete(ctx context.Context, req Request) (*Response, error)
 			stamp(resp, f.entries[i].Name)
 			return resp, nil
 		}
-		if !f.should(err) {
+		if !f.should(err) || ctx.Err() != nil {
+			// A call whose context is done stops here: no switch and no
+			// cool-down, since the entry may be healthy.
 			return nil, err
 		}
 		last = err

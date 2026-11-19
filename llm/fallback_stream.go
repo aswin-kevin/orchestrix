@@ -11,7 +11,8 @@ import (
 // A fallback error before the commit drops the held events and moves to the
 // next entry; any other error is returned. After the commit every error ends
 // the stream as is, so text already yielded is never repeated or mixed with
-// another model's. An attempt that ends without content is committed when it
+// another model's; OnFallback is not called then, but a fallback error still
+// starts the entry's cool-down so the next call begins elsewhere. An attempt that ends without content is committed when it
 // ends. The first event of each new block is followed by an EvProviderData
 // event stamping the block with the entry's name.
 func (f *fallback) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
@@ -21,6 +22,11 @@ func (f *fallback) Stream(ctx context.Context, req Request) iter.Seq2[StreamEven
 		for k, i := range order {
 			switched, err := f.streamEntry(ctx, i, req, yield)
 			if !switched {
+				return
+			}
+			if ctx.Err() != nil {
+				// The call's context is done: no switch and no cool-down.
+				yield(StreamEvent{}, err)
 				return
 			}
 			last = err
