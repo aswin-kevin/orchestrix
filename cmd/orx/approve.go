@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
@@ -147,7 +148,7 @@ func (a *approver) decidePlan(ctx context.Context, req permission.Request) permi
 		fmt.Fprintf(a.out, "%sorx: warning: the plan was cut before it could be shown, so it is rejected unseen\n", askerLabel(agent.Info(ctx)))
 		return permission.Denied(deniedPlanTooLong)
 	}
-	fmt.Fprintf(a.out, "%sPlan for approval:\n%s\n%s", askerLabel(agent.Info(ctx)), termSafe(req.Subject), planPrompt)
+	fmt.Fprintf(a.out, "%sPlan for approval:\n%s\n%s", askerLabel(agent.Info(ctx)), termsafe.String(req.Subject), planPrompt)
 	answer, err := a.readAnswer(ctx, tctx)
 	switch {
 	case errors.Is(err, errTurnEnded) || ctx.Err() != nil:
@@ -279,13 +280,13 @@ func askerLabel(info agent.RunInfo, inRun bool) string {
 // describe names the call in a prompt: the tool plus its subject, or its
 // first path when it has no subject. Every part may be written by the model
 // (a command, a URL, a path, an MCP tool name), so it is passed through
-// termSafe.
+// termsafe.String.
 func describe(req permission.Request) string {
 	switch {
 	case req.Subject != "":
-		return termSafe(req.Tool + " " + req.Subject)
+		return termsafe.String(req.Tool + " " + req.Subject)
 	case len(req.Paths) > 0:
-		return termSafe(req.Tool + " " + req.Paths[0].Path)
+		return termsafe.String(req.Tool + " " + req.Paths[0].Path)
 	}
-	return termSafe(req.Tool)
+	return termsafe.String(req.Tool)
 }

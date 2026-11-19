@@ -23,6 +23,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/disk"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/checkpoint/file"
+	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
@@ -101,7 +102,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	case errors.Is(err, flag.ErrHelp):
 		return exitOK
 	case err != nil:
-		fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
+		fmt.Fprintln(stderr, "orx:", termsafe.String(err.Error()))
 		return exitUsage
 	}
 
@@ -135,7 +136,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		err = errors.New("interrupted")
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
+		fmt.Fprintln(stderr, "orx:", termsafe.String(err.Error()))
 		return exitError
 	}
 	conv.ap = ap
@@ -210,7 +211,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 	fail := func(code int, format string, args ...any) (*agent.Agent, func(), int) {
 		shutdown()
 		// Errors can quote file names and server text: escape them.
-		fmt.Fprintln(stderr, "orx:", termSafe(fmt.Sprintf(format, args...)))
+		fmt.Fprintln(stderr, "orx:", termsafe.String(fmt.Sprintf(format, args...)))
 		return nil, nil, code
 	}
 	cfg, err := llm.ParseModel(o.model)
@@ -288,7 +289,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		}
 		cleanups = append(cleanups, func() {
 			if err := m.Close(); err != nil {
-				fmt.Fprintln(stderr, "orx: mcp:", termSafe(err.Error()))
+				fmt.Fprintln(stderr, "orx: mcp:", termsafe.String(err.Error()))
 			}
 		})
 		agentOpts = append(agentOpts, orchestrix.WithMCP(m))
@@ -399,7 +400,7 @@ func (c *conversation) turn(ctx context.Context, prompt string, rend *renderer, 
 	for ev, err := range c.run(ctx, prompt) {
 		if err != nil {
 			rend.flush()
-			fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
+			fmt.Fprintln(stderr, "orx:", termsafe.String(err.Error()))
 			return false
 		}
 		rend.render(ev)

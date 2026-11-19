@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 )
 
@@ -30,7 +31,7 @@ const (
 // approver).
 //
 // askuser already strips control characters from the questions; the text is
-// still passed through termSafe, since it is written by the model.
+// still passed through termsafe.String, since it is written by the model.
 func (a *approver) ask(ctx context.Context, questions []askuser.Question) ([]askuser.Answer, error) {
 	tctx, release, err := a.takeTerminal(ctx)
 	if errors.Is(err, errTurnEnded) {
@@ -62,17 +63,17 @@ func formatQuestion(label string, q askuser.Question) string {
 	var sb strings.Builder
 	sb.WriteString(label)
 	if q.Header != "" {
-		sb.WriteString("[" + termSafe(q.Header) + "] ")
+		sb.WriteString("[" + termsafe.String(q.Header) + "] ")
 	}
-	sb.WriteString(termSafe(q.Question))
+	sb.WriteString(termsafe.String(q.Question))
 	if q.MultiSelect {
 		sb.WriteString(multiMarker)
 	}
 	sb.WriteString("\n")
 	for i, o := range q.Options {
-		fmt.Fprintf(&sb, "  %d. %s", i+1, termSafe(o.Label))
+		fmt.Fprintf(&sb, "  %d. %s", i+1, termsafe.String(o.Label))
 		if o.Description != "" {
-			sb.WriteString(" - " + termSafe(o.Description))
+			sb.WriteString(" - " + termsafe.String(o.Description))
 		}
 		sb.WriteString("\n")
 	}
