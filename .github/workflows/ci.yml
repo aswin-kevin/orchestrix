@@ -27,3 +27,17 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race ./...
+
+  vulncheck:
+    name: Vulnerability check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # The newest patch release, so standard-library findings reflect a
+          # toolchain users can actually install.
+          go-version: stable
+          check-latest: true
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...

@@ -60,7 +60,7 @@ Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and 
 go get github.com/aswin-kevin/orchestrix
 ```
 
-Requires Go 1.24 or newer.
+Requires Go 1.26 or newer.
 
 ## Quick start
 
