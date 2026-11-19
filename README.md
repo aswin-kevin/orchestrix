@@ -214,7 +214,7 @@ if err != nil {
 	log.Fatal(err)
 }
 resp, err := d.Decide(ctx, llm.DecisionRequest{
-	Input: []llm.Block{llm.Text("Please refund my order, it never arrived.")},
+	Input: []llm.Block{llm.TextBlock("Please refund my order, it never arrived.")},
 	Questions: []llm.Question{
 		{Name: "angry", Type: llm.YesNo, Instructions: "Is the customer angry?"},
 		{Name: "topic", Type: llm.Choice, Instructions: "What is this about?",
