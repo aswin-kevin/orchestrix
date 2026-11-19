@@ -77,9 +77,9 @@ func waitLimit(seconds int) time.Duration {
 // the run's record of it. Records are refreshed first.
 func (m *Middleware) lookup(c *tool.Call, id string) (*job, JobRecord, bool) {
 	records := m.updateRecords(c.State, c.ThreadID, nil)
-	if j := m.jobs.job(c.ThreadID, id); j != nil {
-		status, exitCode := j.outcome()
-		return j, JobRecord{ID: id, ThreadID: c.ThreadID, Command: j.command, Status: status, ExitCode: exitCode, Started: j.started}, true
+	if j := m.jobs.Get(c.ThreadID, id); j != nil {
+		status, exitCode := outcome(j)
+		return j, JobRecord{ID: id, ThreadID: c.ThreadID, Command: j.Handle.command, Status: status, ExitCode: exitCode, Started: j.Started}, true
 	}
 	for _, r := range records {
 		if r.ID == id {
@@ -107,13 +107,13 @@ func (m *Middleware) taskOutput(ctx context.Context, in taskOutputInput, c *tool
 		return tool.Text(sb.String()), nil
 	}
 	sb.WriteString("\n")
-	if res, done := j.proc.Result(); done {
+	if res, done := j.Handle.Result(); done {
 		sb.WriteString(res.Output)
 		if res.Truncated {
 			sb.WriteString("\n[output truncated]")
 		}
 	} else {
-		sb.WriteString(j.proc.Output())
+		sb.WriteString(j.Handle.Output())
 	}
 	return tool.Text(sb.String()), nil
 }
@@ -131,7 +131,7 @@ func waitDone(ctx context.Context, j *job, limit time.Duration) error {
 	timer := time.NewTimer(limit)
 	defer timer.Stop()
 	select {
-	case <-j.proc.Done():
+	case <-j.Handle.Done():
 	case <-timer.C:
 	case <-ctx.Done():
 		return ctx.Err()
@@ -184,7 +184,7 @@ func (m *Middleware) sleep(ctx context.Context, in sleepInput, c *tool.Call) (to
 		return tool.Errorf("seconds must be positive"), nil
 	}
 	limit := waitLimit(in.Seconds)
-	changed, lastFinished := m.jobs.changed(c.ThreadID)
+	changed, lastFinished := m.jobs.Changed(c.ThreadID)
 	timer := time.NewTimer(limit)
 	defer timer.Stop()
 	select {
@@ -217,18 +217,18 @@ func (m *Middleware) monitor(ctx context.Context, in monitorInput, c *tool.Call)
 	for {
 		// The outcome is read before the output, so a job that ended is
 		// never reported as ended without its final output being searched.
-		status, exitCode := j.outcome()
-		if line, found := matchingLine(re, j.proc.Output()); found {
-			return tool.Text(fmt.Sprintf("Pattern matched in task %s (%s):\n%s", j.id, statusText(status, exitCode), line)), nil
+		status, exitCode := outcome(j)
+		if line, found := matchingLine(re, j.Handle.Output()); found {
+			return tool.Text(fmt.Sprintf("Pattern matched in task %s (%s):\n%s", j.ID, statusText(status, exitCode), line)), nil
 		}
 		if status != StatusRunning {
-			return tool.Text(fmt.Sprintf("Task %s ended without a match: %s.", j.id, statusText(status, exitCode))), nil
+			return tool.Text(fmt.Sprintf("Task %s ended without a match: %s.", j.ID, statusText(status, exitCode))), nil
 		}
 		select {
 		case <-poll.C:
-		case <-j.proc.Done():
+		case <-j.Handle.Done():
 		case <-deadline.C:
-			return tool.Text(fmt.Sprintf("No match in task %s within %s; it is still running.", j.id, limit)), nil
+			return tool.Text(fmt.Sprintf("No match in task %s within %s; it is still running.", j.ID, limit)), nil
 		case <-ctx.Done():
 			return tool.Result{}, ctx.Err()
 		}

@@ -1,0 +1,242 @@
+package jobs
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fake is a Handle: Stop closes done unless hang is set.
+type fake struct {
+	done chan struct{}
+	hang bool
+	once sync.Once
+}
+
+func newFake() *fake { return &fake{done: make(chan struct{})} }
+
+func (f *fake) Done() <-chan struct{} { return f.done }
+func (f *fake) end()                  { f.once.Do(func() { close(f.done) }) }
+func (f *fake) Stop() error {
+	if !f.hang {
+		f.end()
+	}
+	return nil
+}
+
+func startFake(t *testing.T, m *Manager[*fake], thread string, recorded ...string) (*Job[*fake], *fake) {
+	t.Helper()
+	f := newFake()
+	j, err := m.Start(thread, recorded, func() (*fake, error) { return f, nil })
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	return j, f
+}
+
+func waitFor(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out")
+	}
+}
+
+func eventually(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestStartNumbersAfterRecorded(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	j, f := startFake(t, m, "t", "x_7", "junk")
+	if j.ID != "x_8" || j.ThreadID != "t" || j.Started.IsZero() {
+		t.Fatalf("job = %+v", j)
+	}
+	f.end()
+	m.MarkNotified("t", j.ID)
+	eventually(t, func() bool { m.Release("t"); return m.ThreadCount() == 0 })
+	j2, _ := startFake(t, m, "t", "x_8")
+	if j2.ID != "x_9" {
+		t.Fatalf("after release id = %s", j2.ID)
+	}
+}
+
+func TestStartErrorLeavesNoJob(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 1, MaxFinished: 1})
+	boom := errors.New("boom")
+	if _, err := m.Start("t", nil, func() (*fake, error) { return nil, boom }); !errors.Is(err, boom) {
+		t.Fatalf("err = %v", err)
+	}
+	if j, _ := startFake(t, m, "t"); j.ID != "x_1" {
+		t.Fatalf("id = %s", j.ID)
+	}
+}
+
+func TestRunningLimit(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 1, MaxFinished: 3})
+	_, f := startFake(t, m, "t")
+	_, err := m.Start("t", nil, func() (*fake, error) { return newFake(), nil })
+	var le *LimitError
+	if !errors.As(err, &le) || le.Limit != 1 {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := m.Start("other", nil, func() (*fake, error) { return newFake(), nil }); err != nil {
+		t.Fatalf("other thread: %v", err)
+	}
+	f.end()
+	if _, err := m.Start("t", nil, func() (*fake, error) { return newFake(), nil }); err != nil {
+		t.Fatalf("after end: %v", err)
+	}
+}
+
+func TestEvictionPrefersNotified(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 2})
+	var ids []string
+	for range 2 {
+		j, f := startFake(t, m, "t")
+		f.end()
+		ids = append(ids, j.ID)
+	}
+	eventually(t, func() bool { return m.Get("t", ids[1]).Ended() })
+	m.MarkNotified("t", ids[1])
+	j3, f3 := startFake(t, m, "t")
+	f3.end()
+	eventually(t, func() bool { return m.Get("t", ids[1]) == nil })
+	if m.Get("t", ids[0]) == nil || m.Get("t", j3.ID) == nil {
+		t.Fatal("an unannounced job was evicted before the announced one")
+	}
+	// Without announced jobs the oldest goes.
+	j4, f4 := startFake(t, m, "t")
+	f4.end()
+	eventually(t, func() bool { return m.Get("t", ids[0]) == nil })
+	if m.Get("t", j3.ID) == nil || m.Get("t", j4.ID) == nil {
+		t.Fatal("wrong job evicted")
+	}
+}
+
+func TestChangedFiresOnEnd(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	if ch, last := m.Changed("none"); ch != nil || last() != "" {
+		t.Fatal("unknown thread should give a nil channel")
+	}
+	j, f := startFake(t, m, "t")
+	ch, last := m.Changed("t")
+	select {
+	case <-ch:
+		t.Fatal("fired early")
+	default:
+	}
+	f.end()
+	waitFor(t, ch)
+	if last() != j.ID {
+		t.Fatalf("last = %q", last())
+	}
+}
+
+func TestReleaseOnlyWhenSettled(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	j, f := startFake(t, m, "t")
+	m.Release("t")
+	if m.ThreadCount() != 1 {
+		t.Fatal("released a running thread")
+	}
+	f.end()
+	ch, _ := m.Changed("t")
+	waitFor(t, ch)
+	m.Release("t")
+	if m.ThreadCount() != 1 {
+		t.Fatal("released a thread with an unannounced job")
+	}
+	m.MarkNotified("t", j.ID, "missing")
+	m.Release("t")
+	if m.ThreadCount() != 0 {
+		t.Fatal("settled thread kept")
+	}
+}
+
+func TestStopAndForgetRefreshBeforeDrop(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	j, _ := startFake(t, m, "t")
+	var sawEnded, sawKnown bool
+	m.StopAndForget("t", []string{j.ID, "missing"}, time.Second, func() {
+		got := m.Get("t", j.ID)
+		sawKnown, sawEnded = got != nil, got != nil && got.Ended()
+	})
+	if !sawKnown || !sawEnded {
+		t.Fatalf("refresh saw known=%v ended=%v", sawKnown, sawEnded)
+	}
+	if m.Get("t", j.ID) != nil || m.ThreadCount() != 0 {
+		t.Fatal("job or thread kept")
+	}
+}
+
+func TestShutdownStopsAllAndRefuses(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	a, _ := startFake(t, m, "t1")
+	b, _ := startFake(t, m, "t2")
+	m.Shutdown(time.Second)
+	for _, j := range []*Job[*fake]{m.Get("t1", a.ID), m.Get("t2", b.ID)} {
+		if j == nil || !j.Ended() {
+			t.Fatalf("job not stopped and kept: %+v", j)
+		}
+		if !j.Stopped() {
+			t.Fatal("job not marked stopped")
+		}
+	}
+	if _, err := m.Start("t1", nil, func() (*fake, error) { return newFake(), nil }); !errors.Is(err, ErrShutdown) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestShutdownBoundedWithHungHandle(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	f := newFake()
+	f.hang = true
+	if _, err := m.Start("t", nil, func() (*fake, error) { return f, nil }); err != nil {
+		t.Fatal(err)
+	}
+	const wait = 100 * time.Millisecond
+	begin := time.Now()
+	m.Shutdown(wait)
+	if d := time.Since(begin); d > wait+100*time.Millisecond {
+		t.Fatalf("Shutdown took %s", d)
+	}
+	f.end() // let the watcher goroutine go
+}
+
+func TestRequestStopAndStop(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	j, f := startFake(t, m, "t")
+	if err := Stop(context.Background(), j, time.Second); err != nil || !j.Stopped() {
+		t.Fatalf("Stop = %v, stopped %v", err, j.Stopped())
+	}
+	if running, err := RequestStop(j); running || err != nil {
+		t.Fatalf("RequestStop on ended = %v, %v", running, err)
+	}
+	_ = f
+
+	h, hf := startFake(t, m, "t2")
+	hf.hang = true
+	if err := Stop(context.Background(), h, 50*time.Millisecond); err == nil {
+		t.Fatal("Stop of a hung handle returned nil")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := Stop(ctx, h, time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stop with canceled ctx = %v", err)
+	}
+	if err := Stop[*fake](context.Background(), nil, time.Second); err == nil {
+		t.Fatal("Stop accepted a nil job")
+	}
+	hf.end()
+}

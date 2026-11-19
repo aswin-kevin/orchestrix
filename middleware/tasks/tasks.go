@@ -172,7 +172,7 @@ func (m *Middleware) Name() string { return "tasks" }
 // most twice backend.DefaultKillGrace. A job still running after that keeps
 // one goroutine waiting for it. Jobs cannot be started afterwards, and the
 // records of the jobs it stopped show them as stopped.
-func (m *Middleware) Shutdown() { m.jobs.shutdown() }
+func (m *Middleware) Shutdown() { m.jobs.Shutdown(stopWait) }
 
 // WrapTool implements agent.ToolWrapper: it offers background execution to
 // every tool call.
@@ -205,16 +205,16 @@ func (s starter) Start(ctx context.Context, c *tool.Call, command string, timeou
 		timeout = s.m.jobTimeout
 	}
 	recorded, _ := JobsKey.Get(c.State)
-	j, err := s.m.jobs.start(ctx, b, c.ThreadID, command, timeout, recorded)
+	j, err := startJob(ctx, s.m.jobs, b, c.ThreadID, command, timeout, recorded)
 	if err != nil {
 		return "", err
 	}
 	JobsKey.Update(c.State, func(records []JobRecord) []JobRecord {
 		return append(slices.Clone(records), JobRecord{
-			ID: j.id, ThreadID: j.threadID, Command: command, Status: StatusRunning, Started: j.started,
+			ID: j.ID, ThreadID: j.ThreadID, Command: command, Status: StatusRunning, Started: j.Started,
 		})
 	})
-	return j.id, nil
+	return j.ID, nil
 }
 
 // BeforeModel implements agent.BeforeModel: every job of the run's thread
@@ -223,13 +223,13 @@ func (s starter) Start(ctx context.Context, c *tool.Call, command string, timeou
 // another thread's notifications.
 //
 // Before that, a thread whose jobs all ended and were announced in earlier
-// turns is released (see manager.release): the model had the turn of each
+// turns is released (see jobs.Manager.Release): the model had the turn of each
 // notification to read the output, and afterwards task_output reports the
 // recorded outcome only.
 func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
 	threadID := runThread(ctx)
 	if threadID != "" {
-		m.jobs.release(threadID)
+		m.jobs.Release(threadID)
 	}
 	var notices []llm.Message
 	m.updateRecords(s, threadID, func(r *JobRecord) {
@@ -252,7 +252,7 @@ func runThread(ctx context.Context) string {
 // ended.
 func (m *Middleware) markNotified(r *JobRecord) {
 	r.Notified = true
-	m.jobs.markNotified(r.ThreadID, []string{r.ID})
+	m.jobs.MarkNotified(r.ThreadID, r.ID)
 }
 
 func notification(r JobRecord) llm.Message {
@@ -281,7 +281,7 @@ func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	m.jobs.stopAndForget(info.ThreadID, ids, func() {
+	m.jobs.StopAndForget(info.ThreadID, ids, stopWait, func() {
 		m.updateRecords(s, info.ThreadID, func(r *JobRecord) {
 			if slices.Contains(ids, r.ID) {
 				m.markNotified(r)
@@ -321,7 +321,7 @@ func (m *Middleware) updateRecords(s *state.State, threadID string, edit func(*J
 				edit(&records[i])
 			}
 		}
-		records = pruneRecords(records, m.jobs.maxFinished)
+		records = pruneRecords(records, m.jobs.MaxFinished())
 		for _, r := range records {
 			if r.ThreadID == threadID {
 				out = append(out, r)
@@ -337,14 +337,14 @@ func (m *Middleware) refresh(r *JobRecord) {
 	if r.finished() {
 		return
 	}
-	j := m.jobs.job(r.ThreadID, r.ID)
+	j := m.jobs.Get(r.ThreadID, r.ID)
 	if j == nil {
 		r.Status, r.ExitCode, r.Ended = StatusLost, lostExitCode, time.Now()
 		return
 	}
-	if status, exitCode := j.outcome(); status != StatusRunning {
+	if status, exitCode := outcome(j); status != StatusRunning {
 		r.Status, r.ExitCode, r.Ended = status, exitCode, time.Now()
-		res, _ := j.proc.Result()
+		res, _ := j.Handle.Result()
 		r.OutputTail = outputTail(res.Output)
 	}
 }
