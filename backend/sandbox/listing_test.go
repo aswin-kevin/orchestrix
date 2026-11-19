@@ -76,6 +76,27 @@ func TestSandboxListingToolFailureIsLoud(t *testing.T) {
 	})
 }
 
+func TestSandboxListingWithoutTailIsLoud(t *testing.T) {
+	e := newLocalExec(t)
+	// A tail that does not work: without it a listing's stderr has no
+	// reader, so a tool failure could go unreported. A guard: the listing
+	// already failed before the preflight checked tail, and must keep doing
+	// so.
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "tail"), []byte("#!/bin/sh\necho 'tail: not found' >&2\nexit 127\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.env = append(e.env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	root := t.TempDir()
+	mustWriteHost(t, filepath.Join(root, "a.txt"), "x")
+	b := newSandbox(t, e, root)
+	for op, err := range listAll(b) {
+		if err == nil {
+			t.Errorf("%s: no error although tail is missing", op)
+		}
+	}
+}
+
 func mustWriteHost(t *testing.T, p, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
