@@ -212,7 +212,7 @@ orchestrix.New(model,
 
 Rule grammar: `Tool` matches a tool by name, `Tool(pattern)` narrows it by the call's main string (such as a shell command; `git:*` matches `git` followed by arguments), and `read(glob)` / `write(glob)` match file paths. A malformed rule makes `New` return an error. Calls that need approval go to the `WithApprover` callback, or interrupt the run when there is none (see below).
 
-Rules are matched lexically, so know their limits. Path rules are case-sensitive and do not resolve symlinks (the disk backend still refuses paths that resolve outside its root). Command prefix rules do not parse shell syntax: `execute(git:*)` also matches `git status && rm -rf x`. Permissions decide which calls the agent makes; they are not a sandbox.
+Rules are matched lexically, so know their limits. Path rules are case-sensitive and do not resolve symlinks (the disk backend still refuses paths that resolve outside its root). Command rules are matched against each command of a shell line: an allow rule must cover every command, so `execute(git:*)` does not approve `git status && rm -rf x`, while a deny or ask rule applies if any one command matches. A line the parser cannot fully analyze (command substitution, redirection to a file, `sh -c`, script interpreters such as `awk` or `python`, and the like) is never approved by an allow rule, and needs a human whenever deny or ask rules name commands for its tool. Permissions decide which calls the agent makes; they are not a sandbox.
 
 ## Backends
 
