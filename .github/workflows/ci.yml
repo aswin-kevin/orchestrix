@@ -27,6 +27,12 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race ./...
+      - name: Vet (orxotel)
+        working-directory: orxotel
+        run: go vet ./...
+      - name: Test (orxotel)
+        working-directory: orxotel
+        run: go test -race ./...
 
   vulncheck:
     name: Vulnerability check
@@ -40,4 +46,7 @@ jobs:
           go-version: stable
           check-latest: true
       - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+      - name: govulncheck (orxotel)
+        working-directory: orxotel
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
