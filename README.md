@@ -881,7 +881,7 @@ A service that embeds an agent usually wants data back, not prose. `WithOutputTy
 type Triage struct {
 	Severity string   `json:"severity" enum:"low,medium,high"`
 	Summary  string   `json:"summary"`
-	Files    []string `json:"files,omitempty"`
+	Files    []string `json:"files"`
 }
 
 a, err := orchestrix.New(model, orchestrix.WithOutputType[Triage]())

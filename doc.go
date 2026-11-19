@@ -46,7 +46,8 @@
 // stacks, build an agent.Config yourself and call agent.New directly.
 //
 // Runnable programs for the main features (a typed tool, human approval,
-// persistent memory, background subagents, the coordinator, self-grading and structured output)
-// live in the examples directory of the repository; each runs offline with
-// go run ./examples/<name>, or against a real model when ORX_MODEL is set.
+// persistent memory, background subagents, the coordinator, self-grading and
+// structured output) live in the examples directory of the repository; each
+// runs offline with go run ./examples/<name>, or against a real model when
+// ORX_MODEL is set.
 package orchestrix

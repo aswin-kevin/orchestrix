@@ -50,7 +50,8 @@ func run(ctx context.Context, w io.Writer) error {
 		llmtest.Turn{Text: `{"severity":"high","summary":"The loop may not stop at the turn limit.","files":["agent/loop.go","agent/budget.go"]}`},
 	)
 	a, err := orchestrix.New(model,
-		orchestrix.WithSystemPrompt("You triage bug reports."),
+		orchestrix.WithSystemPrompt("You triage bug reports. Answer from the report alone; you have no files or tools to look at."),
+		orchestrix.WithoutMiddleware("filesystem", "planning", "subagents"), // nothing to explore: answer from the report
 		orchestrix.WithOutputType[Triage](),
 		orchestrix.WithMaxTurns(5),
 	)
