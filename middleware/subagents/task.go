@@ -10,6 +10,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -138,7 +139,7 @@ func (m *middleware) start(info agent.RunInfo, in TaskInput, c *tool.Call) (chil
 	if in.SubagentType == Fork {
 		run.in, err = forkInput(info.ThreadID, in.Description, c)
 	} else {
-		run.in = childInput(info, child, in, c)
+		run.in = childInput(info, child, m.specs[in.SubagentType], in, c)
 	}
 	return run, err
 }
@@ -182,13 +183,19 @@ func childThread(parentThread, typ, toolUseID string) string {
 	return parentThread + "/" + typ + "/" + toolUseID
 }
 
-// childInput starts an isolated run of child, the subagent in selects, on
-// the task description alone, with the parent's shareable state and backend,
-// under a thread id unique to the call. info is the parent's run; see
-// childMode for the permission mode the child starts in.
-func childInput(info agent.RunInfo, child *agent.Agent, in TaskInput, c *tool.Call) agent.Input {
+// childInput starts an isolated run of child, the subagent spec that in
+// selects, on the task description alone, with the parent's shareable state
+// and backend, under a thread id unique to the call. info is the parent's
+// run; see childMode for the permission mode the child starts in and
+// childScope for the skills it is offered.
+func childInput(info agent.RunInfo, child *agent.Agent, spec Subagent, in TaskInput, c *tool.Call) agent.Input {
 	s := c.State.ChildFor()
 	agent.PermissionModeKey.Set(s, childMode(info.Agent, child, c.State))
+	// skills.ScopeKey is private, so ChildFor dropped it: without this a
+	// subagent (or its own subagents) would see skills its parent may not.
+	if parent, ok := skills.ScopeKey.Get(c.State); ok || spec.Skills != nil || spec.PinnedSkills != nil {
+		skills.ScopeKey.Set(s, childScope(parent, spec))
+	}
 	return agent.Input{
 		ThreadID:  childThread(info.ThreadID, in.SubagentType, c.ToolUseID),
 		State:     s,

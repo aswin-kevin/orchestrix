@@ -44,6 +44,12 @@
 // subagent. A fork continues the parent's State (State.Fork copies
 // agent.PermissionModeKey), so it runs in the parent's current mode.
 //
+// Skills: an isolated subagent is offered the skills its parent's run is
+// offered (skills.ScopeKey), narrowed to Subagent.Skills when set, with
+// Subagent.PinnedSkills injected into its prompt when set; its own subagents
+// inherit that scope in turn. A fork continues the parent's State, so it keeps
+// the parent's scope and loaded skills.
+//
 // Token usage: a subagent's model calls are reported as forwarded KindUsage
 // events (with ParentToolID set) and are not included in the parent's
 // Final.Usage.

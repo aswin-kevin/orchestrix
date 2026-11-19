@@ -16,12 +16,14 @@ var neutralizeTags = promptsafe.NewTagNeutralizer("available_skills", "skill")
 
 // WrapModel implements agent.ModelWrapper: it appends the catalog segment,
 // after the host's own segments, listing the skills the run is offered and the
-// body of each pinned skill.
+// body of each pinned skill. Then it re-injects the instructions of loaded
+// skills the request messages no longer show (see StandingHeader).
 func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	scope, _ := ScopeKey.Get(req.State)
 	if seg := m.segment(scope); seg != "" {
 		req.Request.System = append(slices.Clone(req.Request.System), seg)
 	}
+	req.Request.Messages = m.standing(req.State, scope, req.Request.Messages)
 	return next(ctx, req)
 }
 
@@ -39,8 +41,7 @@ func (m *Middleware) segment(scope Scope) string {
 			continue
 		}
 		seen[name] = true
-		body, _ := promptsafe.CapBytes(neutralizeTags(s.Body), DefaultMaxBodyBytes)
-		parts = append(parts, "<skill name=\""+s.Name+"\">\n"+body+"\n</skill>")
+		parts = append(parts, frame(s))
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -49,7 +50,7 @@ func (m *Middleware) segment(scope Scope) string {
 func (m *Middleware) catalog(scope Scope) string {
 	var list strings.Builder
 	for _, s := range m.skills {
-		if scope.Restrict && !slices.Contains(scope.Allowed, s.Name) {
+		if _, ok := m.offered(scope, s.Name); !ok {
 			continue
 		}
 		list.WriteString("- " + s.Name + ": " + oneLine(s.Description) + "\n")

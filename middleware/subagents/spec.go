@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/names"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -46,6 +48,18 @@ type Subagent struct {
 	Rules *permission.Rules
 	// MaxTurns bounds the subagent's run; 0 means the parent's MaxTurns.
 	MaxTurns int
+	// Skills limits the skills offered to the subagent (see
+	// skills.Scope) to these names, within those the delegating run is
+	// offered itself; nil offers the delegating run's skills, so a
+	// subagent never sees more skills than the run that started it. Each
+	// name must be defined by the skills middleware in the subagent's
+	// stack.
+	Skills []string
+	// PinnedSkills are skills whose instructions are injected into the
+	// subagent's prompt, whether or not they are offered; nil keeps the
+	// delegating run's scope-pinned skills. Each name must be defined by
+	// the skills middleware in the subagent's stack.
+	PinnedSkills []string
 	// OutputSchema, when non-nil, is the JSON schema the subagent's final
 	// answer must satisfy; the answer must be a JSON object. An invalid
 	// answer is sent back for correction up to DefaultOutputRetries times;
@@ -101,7 +115,56 @@ func validateSpec(s Subagent) error {
 	if _, err := childSystem(s); err != nil {
 		return fmt.Errorf("subagents: subagent %q: %w", s.Name, err)
 	}
+	// A subagent inheriting the parent's middleware is checked when it is
+	// built (see childConfig).
+	if s.Middleware != nil {
+		if err := checkSkills(s, s.Middleware); err != nil {
+			return fmt.Errorf("subagents: subagent %q: %w", s.Name, err)
+		}
+	}
 	return nil
+}
+
+// checkSkills reports a skill named by spec.Skills or spec.PinnedSkills that
+// the skills middleware among mws, the subagent's stack, does not define.
+func checkSkills(spec Subagent, mws []agent.Middleware) error {
+	wanted := slices.Concat(spec.Skills, spec.PinnedSkills)
+	if len(wanted) == 0 {
+		return nil
+	}
+	var sk *skills.Middleware
+	for _, mw := range mws {
+		if found, ok := mw.(*skills.Middleware); ok {
+			sk = found
+		}
+	}
+	if sk == nil {
+		return errors.New("Skills and PinnedSkills need a skills middleware in the subagent's stack")
+	}
+	for _, name := range wanted {
+		if !sk.Has(name) {
+			return fmt.Errorf("skill %q is not defined", name)
+		}
+	}
+	return nil
+}
+
+// childScope is the skills scope of a subagent spec started by a run whose
+// scope is parent: the parent's scope narrowed to spec.Skills when set, with
+// spec.PinnedSkills replacing the pinned skills when set.
+func childScope(parent skills.Scope, spec Subagent) skills.Scope {
+	scope := skills.Scope{Restrict: parent.Restrict, Allowed: slices.Clone(parent.Allowed), Pinned: slices.Clone(parent.Pinned)}
+	if spec.Skills != nil {
+		allowed := slices.Clone(spec.Skills)
+		if parent.Restrict {
+			allowed = slices.DeleteFunc(allowed, func(name string) bool { return !slices.Contains(parent.Allowed, name) })
+		}
+		scope.Restrict, scope.Allowed = true, allowed
+	}
+	if spec.PinnedSkills != nil {
+		scope.Pinned = slices.Clone(spec.PinnedSkills)
+	}
+	return scope
 }
 
 func hasSpec(specs []Subagent, name string) bool {
@@ -159,6 +222,9 @@ func childConfig(cfg agent.Config, spec Subagent) (agent.Config, error) {
 	}
 	if spec.Middleware != nil {
 		cfg.Middleware = spec.Middleware
+	}
+	if err := checkSkills(spec, cfg.Middleware); err != nil {
+		return agent.Config{}, err
 	}
 	if spec.Provider != nil {
 		cfg.Provider = spec.Provider

@@ -2,6 +2,21 @@
 // catalog of names and descriptions in the system prompt, plus the full body
 // of pinned skills.
 //
+// The model loads a skill with the skill tool, which returns the skill's
+// instructions framed by Marker and closing tag, and can read the skill's
+// other files through the tool's file parameter. Loading a skill records it
+// in LoadedKey and unlocks (deferred.Unlock) the tools its allowed-tools
+// names and the tools of its MCP servers (names.MCPPrefix(server) + "*").
+// Config.Tools are offered gated (deferred.Gate), so they stay refused until
+// a loaded skill unlocks them; add the deferred middleware to also keep their
+// schemas out of the request until then.
+//
+// Loaded instructions stay in effect after compaction: every request whose
+// messages no longer show a loaded skill's full tool result gets those
+// instructions back under StandingHeader at the start of the conversation.
+// This only edits the request view, never State. The summarize middleware
+// rebuilds the view from State, so put this middleware after it.
+//
 // # Trust
 //
 // A skill's name, description and body come from files and are written into
@@ -20,6 +35,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
+	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -157,8 +173,8 @@ type Config struct {
 	// Pinned names skills whose body is injected for every run. Each must
 	// exist.
 	Pinned []string
-	// Tools are skill-scoped tools, hidden until a loaded skill's
-	// allowed-tools names them.
+	// Tools are skill-scoped tools, offered gated (deferred.Gate): they are
+	// refused until a loaded skill's allowed-tools names them.
 	Tools []tool.Tool
 	// Prompt is the guidance placed before the catalog. nil uses
 	// DefaultPrompt; a pointer to "" lists the catalog without guidance.
@@ -172,11 +188,15 @@ type Middleware struct {
 	byName   map[string]Skill
 	warnings []error
 	pinned   []string
-	tools    []tool.Tool
+	tools    []tool.Tool // the skill tool, then each Config.Tools entry gated
 	prompt   string
 }
 
-var _ agent.Middleware = (*Middleware)(nil)
+var (
+	_ agent.Middleware   = (*Middleware)(nil)
+	_ agent.ToolProvider = (*Middleware)(nil)
+	_ agent.ModelWrapper = (*Middleware)(nil)
+)
 
 // New loads the sources and returns the middleware. It fails when a source is
 // unreadable, a programmatic skill is invalid, or a pinned name is unknown;
@@ -206,8 +226,11 @@ func New(cfg Config) (*Middleware, error) {
 		byName:   byName,
 		warnings: warnings,
 		pinned:   slices.Clone(cfg.Pinned),
-		tools:    slices.Clone(cfg.Tools),
 		prompt:   DefaultPrompt,
+	}
+	m.tools = []tool.Tool{m.skillTool()}
+	for _, t := range cfg.Tools {
+		m.tools = append(m.tools, deferred.Gate(t))
 	}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
@@ -221,6 +244,16 @@ func New(cfg Config) (*Middleware, error) {
 
 // Name implements agent.Middleware.
 func (m *Middleware) Name() string { return "skills" }
+
+// Tools implements agent.ToolProvider: the skill tool, then every
+// Config.Tools entry wrapped by deferred.Gate.
+func (m *Middleware) Tools() []tool.Tool { return slices.Clone(m.tools) }
+
+// Has reports whether the middleware defines a skill named name.
+func (m *Middleware) Has(name string) bool {
+	_, ok := m.byName[name]
+	return ok
+}
 
 // Skills returns the skills the middleware knows, sorted by name.
 func (m *Middleware) Skills() []Skill { return slices.Clone(m.skills) }
