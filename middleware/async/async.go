@@ -21,9 +21,12 @@
 // Tasks belong to a thread, not to a run: a top-level run may end while its
 // tasks keep running, and a later run on the thread is told when they end.
 // A run about to end while its tasks run is reminded of them once
-// (Config.DisableStopReminder). A nested run's tasks are stopped when it
-// ends, so a subagent's own tasks never outlive it. Shutdown stops every
-// task; call it before the program exits.
+// (Config.DisableStopReminder). The reminder is a BeforeStop continuation:
+// it uses one of the run's agent.MaxStopContinuations slots, shared with
+// every other BeforeStop middleware (rubric, hooks Stop hooks), and, placed
+// after them in the stack, it is consulted before them. A nested run's
+// tasks are stopped when it ends, so a subagent's own tasks never outlive
+// it. Shutdown stops every task; call it before the program exits.
 //
 // Task records live in the run's State (TasksKey); a run only reads,
 // announces and cancels the tasks of its own thread. While tasks run, the

@@ -89,6 +89,10 @@ type BeforeStop interface {
 
 // MaxStopContinuations is how many times per run BeforeStop hooks may keep
 // the run going; after that they are not consulted and the run completes.
+// The slots are shared by every BeforeStop middleware of the stack: a hook
+// consulted later in reverse stack order (a hooks Stop quality gate, say)
+// does not run at all on a reply that ends the run after the slots were
+// spent by the hooks consulted before it.
 const MaxStopContinuations = 3
 
 // ModelWrapper wraps the model call. See the package documentation for the

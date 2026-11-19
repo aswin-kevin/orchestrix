@@ -56,10 +56,16 @@ func WithProfiles(cfg profiles.Config) Option {
 // run with its feedback (see the rubric package). Grading fails open. Missing
 // criteria or an out-of-range MaxIterations make New fail.
 //
-// The continuations rubric asks for share agent.MaxStopContinuations with
-// every other BeforeStop middleware. The preset consults the async reminder
-// first, so grading sees the answer given after background tasks are dealt
-// with.
+// The continuations rubric asks for share agent.MaxStopContinuations (3)
+// with every other BeforeStop middleware. BeforeStop middleware are
+// consulted in reverse stack order and the first non-empty prompt wins: in
+// the preset, middleware added with WithMiddleware first (and the async
+// inbox of a background child), then the async reminder, then rubric, then
+// the WithHooks Stop hooks. So grading sees the answer given after
+// background tasks are dealt with, and a Stop hook runs only on an answer
+// rubric passed. Once the slots are spent, no BeforeStop middleware is
+// consulted again: the final answer then skips later Stop hooks, a hooks
+// Stop quality gate included.
 func WithRubric(cfg rubric.Config) Option {
 	return func(s *settings) { s.rubric = &cfg }
 }

@@ -28,7 +28,8 @@ import (
 // server. summarize must stay first: it rebuilds the request from State.
 // rubric sits early because BeforeStop hooks run in reverse order: the async
 // reminder about running tasks is consulted before the answer is graded, and
-// both share agent.MaxStopContinuations. profiles is last, so its prompt
+// hooks' Stop hooks after it. They share agent.MaxStopContinuations (see
+// WithRubric). profiles is last, so its prompt
 // suffix is the last segment and its overrides see the final tool list.
 // WithMiddleware replaces a middleware of the same name in place and appends
 // the others after profiles; WithoutMiddleware removes by name.

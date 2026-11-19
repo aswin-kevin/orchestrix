@@ -170,7 +170,7 @@ func (s *settings) baseStack() []agent.Middleware {
 	}
 	if s.rubric != nil {
 		// Early, so that BeforeStop (reverse order) consults the async
-		// reminder before grading.
+		// reminder before grading, and hooks after grading.
 		stack = s.appendBuilt(stack, "WithRubric", func() (agent.Middleware, error) { return rubric.New(*s.rubric) })
 	}
 	if s.memory != nil {

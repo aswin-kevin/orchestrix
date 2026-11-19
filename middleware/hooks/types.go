@@ -152,7 +152,8 @@ type StopInput struct {
 type StopOutput struct {
 	// Continue, when non-empty, is appended to State as a user message and
 	// the run takes another turn. The first non-empty Continue wins; the run
-	// can be kept going at most agent.MaxStopContinuations times.
+	// can be kept going at most agent.MaxStopContinuations times in all,
+	// counting the continuations of other BeforeStop middleware.
 	Continue string
 }
 
@@ -244,7 +245,13 @@ type Config struct {
 	// consumer stopped reading the run's events before the end (broke out of
 	// the range loop): then the run stops without running it.
 	SessionEnd []func(context.Context, SessionInput) error
-	// Stop runs when the model's reply would complete the run.
+	// Stop runs when the model's reply would complete the run, unless a
+	// BeforeStop middleware consulted before hooks kept the run going, or
+	// the run has used its agent.MaxStopContinuations continuations: those
+	// slots are shared by every BeforeStop middleware, and the preset
+	// consults hooks last (after the async inbox and reminder and rubric),
+	// so a Stop hook used as a quality gate is not guaranteed to see the
+	// answer the run returns.
 	Stop []func(context.Context, StopInput) (StopOutput, error)
 	// SubagentStart runs before the SubagentToolName tool is called, and
 	// again for a call resumed after an interrupt (see PreToolUse).

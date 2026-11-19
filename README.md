@@ -154,7 +154,7 @@ Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. 
 
 A middleware is any value with a `Name() string` method plus whichever hook interfaces it needs: `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeStop`, `ModelWrapper`, `ToolWrapper` and `ToolProvider`. Wrappers nest like an onion: the first middleware in the stack is the outermost, and a wrapper may call `next` zero, one or several times.
 
-The stack order is fixed, outermost first: `summarize`, `compress` (with `WithCompress`), `cache`, `hooks` (with `WithHooks`), `hitl` (with `WithInterruptOn`), `rubric` (with `WithRubric`), `memory` (with `WithMemory`), `skills` (with `WithSkills`), `planmode` (with `WithPlanMode`), `filesystem`, `planning`, `subagents`, `async` (with `WithAsync`), `deferred` (see "Deferred tools"), `mcp` (with `WithMCP`), `web` (with `WithWeb`), `askuser` (with `WithAskUser`), `tasks` (with `WithTasks`), `profiles` (with `WithProfiles`). By default that is `summarize`, `cache`, `filesystem`, `planning` and `subagents`. Adding a middleware with a default's name replaces it; other added middleware runs after `profiles`; `WithoutMiddleware("subagents", "summarize")` removes them. `summarize` rebuilds each request from state, so it must stay first. `BeforeStop` hooks run in reverse order, so `async`'s reminder about running tasks is consulted before `rubric` grades the answer. `profiles` is last so its prompt suffix is the last segment and its overrides see the final tool list.
+The stack order is fixed, outermost first: `summarize`, `compress` (with `WithCompress`), `cache`, `hooks` (with `WithHooks`), `hitl` (with `WithInterruptOn`), `rubric` (with `WithRubric`), `memory` (with `WithMemory`), `skills` (with `WithSkills`), `planmode` (with `WithPlanMode`), `filesystem`, `planning`, `subagents`, `async` (with `WithAsync`), `deferred` (see "Deferred tools"), `mcp` (with `WithMCP`), `web` (with `WithWeb`), `askuser` (with `WithAskUser`), `tasks` (with `WithTasks`), `profiles` (with `WithProfiles`). By default that is `summarize`, `cache`, `filesystem`, `planning` and `subagents`. Adding a middleware with a default's name replaces it; other added middleware runs after `profiles`; `WithoutMiddleware("subagents", "summarize")` removes them. `summarize` rebuilds each request from state, so it must stay first. `BeforeStop` hooks run in reverse order, so `async`'s reminder about running tasks is consulted before `rubric` grades the answer, and `hooks`' `Stop` hooks are consulted after it (see "Self-grading"). `profiles` is last so its prompt suffix is the last segment and its overrides see the final tool list.
 
 A custom middleware that logs every tool call (imports omitted):
 
@@ -337,7 +337,7 @@ Approvals: with a `WithApprover`, subagents inherit it and ask it directly. With
 
 ## Background subagents
 
-`WithAsync` lets the model start subagents in the background and keep working while they run. It adds five tools: `start_task` starts a subagent (the same specs as the `task` tool), `check_task` shows a task's progress or waits for it, `update_task` sends a running task new instructions, `cancel_task` stops one and `list_tasks` lists the tasks of the conversation. When a task ends, the next turn of the thread starts with a message announcing it with an excerpt of its result, so the model does not have to poll. A run about to end while its tasks still run is reminded of them once.
+`WithAsync` lets the model start subagents in the background and keep working while they run. It adds five tools: `start_task` starts a subagent (the same specs as the `task` tool), `check_task` shows a task's progress or waits for it, `update_task` sends a running task new instructions, `cancel_task` stops one and `list_tasks` lists the tasks of the conversation. When a task ends, the next turn of the thread starts with a message announcing it with an excerpt of its result, so the model does not have to poll. A run about to end while its tasks still run is reminded of them once; that reminder is one of the run's `agent.MaxStopContinuations` (3) continuations, shared with `rubric` and `Stop` hooks, and is consulted before them (see "Self-grading").
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -479,6 +479,8 @@ _, _ = a, err
 ```
 
 Hooks for concurrency-safe tool calls of one turn may run concurrently, so synchronize any shared data.
+
+A `Stop` hook's `Continue` is one of the `agent.MaxStopContinuations` (3) continuations a run may get from all its `BeforeStop` middleware together. In the preset, `hooks` is consulted last, after the background-task inbox and reminder (`WithAsync`) and `rubric` (`WithRubric`), and the first non-empty prompt wins. So a `Stop` hook does not run on a reply another middleware already continued, and once the three slots are spent it does not run at all: the run then returns its last answer without it. A `Stop` hook used as a quality gate is therefore not guaranteed to see the final answer when it shares the run with those middleware.
 
 ## Checkpoints and threads
 
@@ -851,7 +853,7 @@ a, err := orchestrix.New(model,
 _, _ = a, err
 ```
 
-Only top-level runs are graded; subagents that inherit the stack are not. Grading is advisory and fails open: when the grader returns an error, the run completes and the error is recorded with the grades. Every continuation that keeps a run going after the model wanted to stop, rubric feedback and the background-task reminder alike, counts against `agent.MaxStopContinuations` (3) per run, so `MaxIterations` cannot exceed it. The preset places `rubric` so that it is consulted last among those hooks: the answer it grades is the one given after background tasks were dealt with.
+Only top-level runs are graded; subagents that inherit the stack are not. Grading is advisory and fails open: when the grader returns an error, the run completes and the error is recorded with the grades. Every continuation that keeps a run going after the model wanted to stop, rubric feedback, the background-task reminder and `Stop` hooks alike, counts against `agent.MaxStopContinuations` (3) per run, so `MaxIterations` cannot exceed it. `BeforeStop` middleware are consulted in reverse stack order and the first non-empty prompt wins: middleware added with `WithMiddleware` (and, in a background task, its inbox of updates), then the background-task reminder, then `rubric`, then `hooks`' `Stop` hooks. So the answer `rubric` grades is the one given after background tasks were dealt with, and a `Stop` hook sees only an answer `rubric` passed. Once the three slots are spent, nothing is consulted any more and the run returns its last answer, ungraded and without running later `Stop` hooks.
 
 ## Model profiles
 

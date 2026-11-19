@@ -9,6 +9,13 @@
 // Grades. The answer is model output and may be untrusted, so it is framed
 // and neutralized (internal/promptsafe) before a ModelGrader sees it, and the
 // grader's feedback is framed as <rubric_feedback> when sent back.
+//
+// Feedback is a BeforeStop continuation, so it shares the run's
+// agent.MaxStopContinuations slots with every other BeforeStop middleware;
+// BeforeStop middleware later in the stack (the async reminder) are
+// consulted first, earlier ones (hooks Stop hooks) only when rubric lets the
+// answer through. Once the slots are spent, the run ends without grading
+// its last answer.
 package rubric
 
 import (
