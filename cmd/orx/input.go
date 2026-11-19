@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
+	"sync"
 )
 
 // lineResult is one line read from the input, or the error that ended it.
@@ -66,4 +68,26 @@ func trimNewline(s string) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// idleWatching is called once readIdle watches for Ctrl-C; tests replace it.
+var idleWatching = func() {}
+
+// readIdle prints the idle prompt to out and reads the next line, holding
+// the approver's prompt lock so that a question still being asked is
+// answered first. Ctrl-C there cancels the read, so the REPL returns and the
+// deferred shutdown runs; the default handler would kill the process and
+// orphan background jobs.
+func readIdle(ctx context.Context, in *lineReader, prompt *sync.Mutex, out io.Writer) (string, error) {
+	prompt.Lock()
+	defer prompt.Unlock()
+	fmt.Fprint(out, replPrompt)
+	ctx, stop := notifyInterrupt(ctx)
+	defer stop()
+	idleWatching()
+	line, err := in.next(ctx)
+	if err == nil {
+		interrupted.Store(false) // the user has moved on
+	}
+	return line, err
 }

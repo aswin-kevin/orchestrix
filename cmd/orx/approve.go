@@ -21,6 +21,10 @@ const deniedCancelled = "cancelled"
 // deniedPlanTooLong is the message when a plan reached the approver cut.
 const deniedPlanTooLong = "plan too long to review"
 
+// deniedNoTerminal is the message, and the ask_user error, for a request
+// made while no turn runs: a background task asking after its turn ended.
+const deniedNoTerminal = "no one is at the terminal to answer; the background task cannot ask now"
+
 // The prompts of the plan approval.
 const (
 	planPrompt     = "Approve plan? [y/N] "
@@ -35,6 +39,12 @@ const (
 // the same time. Waiting also ends when the context is cancelled (Ctrl-C), so
 // a turn cannot get stuck at a prompt.
 //
+// Only a running turn owns the terminal (see beginTurn). A background task
+// that asks while no turn runs is denied at once, without a prompt: at the
+// idle prompt the user's next line is their next message, not an answer.
+// The REPL takes prompt while it reads that line, so a question already
+// being asked is answered before the idle prompt is printed.
+//
 // The agent may call decide concurrently: parallel subagents share the
 // approver. A prompt and the answer typed to it must stay paired, so prompt
 // is held from printing a question until its answer is read, and a prompt
@@ -47,9 +57,11 @@ type approver struct {
 	// waiting for input.
 	prompt sync.Mutex
 
-	mu sync.Mutex // guards always only, never held while waiting for input
+	mu sync.Mutex // guards always and inTurn, never held while waiting for input
 	// always holds the tools the user allowed for the rest of the session.
 	always map[string]bool
+	// inTurn is set while a turn runs and owns the terminal.
+	inTurn bool
 }
 
 func newApprover(in *lineReader, out io.Writer) *approver {
@@ -60,6 +72,9 @@ func newApprover(in *lineReader, out io.Writer) *approver {
 // including end of input, denies the call; cancellation denies it as
 // "cancelled". exit_plan_mode gets its own prompt: see decidePlan.
 func (a *approver) decide(ctx context.Context, req permission.Request, _ string) permission.Decision {
+	if !a.turnActive() {
+		return permission.Denied(deniedNoTerminal)
+	}
 	if req.Tool == planmode.ToolExit {
 		return a.decidePlan(ctx, req)
 	}
@@ -69,6 +84,10 @@ func (a *approver) decide(ctx context.Context, req permission.Request, _ string)
 	}
 	a.prompt.Lock()
 	defer a.prompt.Unlock()
+	// The turn may have ended while this call waited for the terminal.
+	if !a.turnActive() {
+		return permission.Denied(deniedNoTerminal)
+	}
 	// The question answered while this call waited may have been "a" for
 	// the same tool.
 	if remember && a.isAlways(req.Tool) {
@@ -110,6 +129,9 @@ func (a *approver) decide(ctx context.Context, req permission.Request, _ string)
 func (a *approver) decidePlan(ctx context.Context, req permission.Request) permission.Decision {
 	a.prompt.Lock()
 	defer a.prompt.Unlock()
+	if !a.turnActive() {
+		return permission.Denied(deniedNoTerminal)
+	}
 	if strings.HasSuffix(req.Subject, planmode.TruncationMarker) {
 		fmt.Fprintf(a.out, "%sorx: warning: the plan was cut before it could be shown, so it is rejected unseen\n", askerLabel(agent.Info(ctx)))
 		return permission.Denied(deniedPlanTooLong)
@@ -133,6 +155,26 @@ func (a *approver) decidePlan(ctx context.Context, req permission.Request) permi
 		return permission.Denied(deniedByUser)
 	}
 	return permission.Denied(feedback)
+}
+
+// beginTurn marks the terminal as owned by a running turn until end is
+// called.
+func (a *approver) beginTurn() (end func()) {
+	a.setTurn(true)
+	return func() { a.setTurn(false) }
+}
+
+func (a *approver) setTurn(on bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.inTurn = on
+}
+
+// turnActive reports whether a turn owns the terminal.
+func (a *approver) turnActive() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.inTurn
 }
 
 func (a *approver) isAlways(tool string) bool {

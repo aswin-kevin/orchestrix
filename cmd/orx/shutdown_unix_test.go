@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"os"
@@ -17,27 +16,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 )
 
-// syncBuffer is a bytes.Buffer safe for a writer and a reader goroutine.
-type syncBuffer struct {
-	lw  lockedWriter
-	buf bytes.Buffer
-}
-
-func newSyncBuffer() *syncBuffer {
-	b := &syncBuffer{}
-	b.lw.w = &b.buf
-	return b
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) { return b.lw.Write(p) }
-
-func (b *syncBuffer) String() string {
-	b.lw.mu.Lock()
-	defer b.lw.mu.Unlock()
-	return b.buf.String()
-}
-
 func TestCtrlCDuringShutdownForcesExit(t *testing.T) {
+	setInterrupted(t, true)
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt)
 	defer signal.Stop(sigs)
@@ -74,28 +54,18 @@ func TestCtrlCDuringShutdownForcesExit(t *testing.T) {
 	}
 }
 
-func TestShutdownCompletesWithoutSignal(t *testing.T) {
-	sigs := make(chan os.Signal, 1)
-	var stderr bytes.Buffer
-	ran, exitCalled := false, false
-
-	shutdownWithForce(func() { ran = true }, sigs, &stderr, func(int) { exitCalled = true })
-
-	if !ran {
-		t.Error("shutdown did not run")
-	}
-	if exitCalled {
-		t.Error("exit called without an interrupt")
-	}
-	if stderr.Len() != 0 {
-		t.Errorf("stderr = %q, want no hint for a fast shutdown", stderr.String())
-	}
-}
-
 func TestFirstCtrlCAtIdleDoesNotForceExit(t *testing.T) {
 	exited := make(chan int, 1)
 	osExit = func(code int) { exited <- code }
 	t.Cleanup(func() { osExit = os.Exit })
+	watching := make(chan struct{}, 1)
+	idleWatching = func() {
+		select {
+		case watching <- struct{}{}:
+		default:
+		}
+	}
+	t.Cleanup(func() { idleWatching = func() {} })
 	// The pipe stays open, so the REPL waits at the idle prompt.
 	pr, pw := io.Pipe()
 	defer pw.Close()
@@ -106,12 +76,11 @@ func TestFirstCtrlCAtIdleDoesNotForceExit(t *testing.T) {
 		done <- run(context.Background(), []string{"-model", "openai:test", "-dir", t.TempDir(), "-async"},
 			pr, io.Discard, stderr, newProvider)
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for !strings.Contains(stderr.String(), replPrompt) && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-watching:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the REPL never reached the idle prompt")
 	}
-	// Give readIdle time to register its handler after printing the prompt.
-	time.Sleep(50 * time.Millisecond)
 
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatal(err)
@@ -126,5 +95,47 @@ func TestFirstCtrlCAtIdleDoesNotForceExit(t *testing.T) {
 	case code := <-exited:
 		t.Errorf("forced exit %d on the first Ctrl-C", code)
 	default:
+	}
+}
+
+func TestSIGTERMDuringShutdownForcesExit(t *testing.T) {
+	// Keep SIGTERM from killing the test binary should shutdownOnExit not
+	// handle it.
+	guard := make(chan os.Signal, 1)
+	signal.Notify(guard, syscall.SIGTERM)
+	defer signal.Stop(guard)
+	setInterrupted(t, false)
+	exited := make(chan int, 1)
+	osExit = func(code int) { exited <- code }
+	t.Cleanup(func() { osExit = os.Exit })
+	release := make(chan struct{})
+	defer close(release)
+	stderr := newSyncBuffer()
+	returned := make(chan struct{})
+
+	go func() {
+		defer close(returned)
+		shutdownOnExit(func() { <-release }, stderr)
+	}()
+	// The hint is printed once shutdownOnExit is watching for signals.
+	deadline := time.Now().Add(2 * shutdownNotice)
+	for !strings.Contains(stderr.String(), "force quit") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case code := <-exited:
+		if code != exitTerminated {
+			t.Errorf("exit code = %d, want %d", code, exitTerminated)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("exit not called within 2s of SIGTERM")
+	}
+	<-returned
+	if got := stderr.String(); !strings.Contains(got, "orx: shutting down; press Ctrl-C to force quit") {
+		t.Errorf("stderr = %q, want the hint without \"again\"", got)
 	}
 }

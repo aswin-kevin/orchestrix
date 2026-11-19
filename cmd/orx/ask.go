@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -24,13 +25,20 @@ const (
 // number (comma-separated numbers for a multi-choice question) selects
 // options, anything else is the user's own answer. It shares the approver's input and prompt lock, so its
 // questions never interleave with approval prompts. End of input or
-// cancellation fails the call, which the model sees as a tool error.
+// cancellation fails the call, which the model sees as a tool error, and so
+// does a question asked while no turn runs (see approver).
 //
 // askuser already strips control characters from the questions; the text is
 // still passed through termSafe, since it is written by the model.
 func (a *approver) ask(ctx context.Context, questions []askuser.Question) ([]askuser.Answer, error) {
+	if !a.turnActive() {
+		return nil, errors.New(deniedNoTerminal)
+	}
 	a.prompt.Lock()
 	defer a.prompt.Unlock()
+	if !a.turnActive() {
+		return nil, errors.New(deniedNoTerminal)
+	}
 	label := askerLabel(agent.Info(ctx))
 	answers := make([]askuser.Answer, 0, len(questions))
 	for _, q := range questions {

@@ -877,10 +877,10 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 | `-mcp` | MCP server configuration file (`{"mcpServers": {...}}`). Servers are connected at start; an optional server that fails is reported as a warning. Their tools ask for approval unless `-yes` is given. |
 | `-web` | Add `web_fetch` and `web_search`. They ask for approval unless `-yes` is given. |
 | `-search` | Search backend for `-web`: `ddg` (default), `brave` (key in `$BRAVE_SEARCH_API_KEY`) or `tavily` (key in `$TAVILY_API_KEY`). |
-| `-async` | Let the model run subagents in the background (`start_task`, `check_task`, `update_task`, `cancel_task`, `list_tasks`) and keep working while they run. Running tasks are stopped when `orx` exits. |
+| `-async` | Let the model run subagents in the background (`start_task`, `check_task`, `update_task`, `cancel_task`, `list_tasks`) and keep working while they run. A task can ask for approval or ask a question only while a prompt runs; between prompts the request is denied without asking. Running tasks are stopped when `orx` exits. |
 | `-compress` | Let the model compress older parts of the conversation into summaries (`compress_context`) and bring them back (`restore_context`) when the context grows large. |
 
-`orx` exits with status 1 when a prompt does not complete (a model error, a limit such as `-max-turns`, or Ctrl-C) and 2 for usage errors. On exit it stops background jobs and tasks and closes MCP servers; if that takes a while, Ctrl-C again quits at once with status 130.
+`orx` exits with status 1 when a prompt does not complete (a model error, a limit such as `-max-turns`, or Ctrl-C) and 2 for usage errors. On exit it stops background jobs and tasks and closes MCP servers; if that takes a while, Ctrl-C quits at once with status 130 (SIGTERM with 143).
 
 ## Roadmap
 

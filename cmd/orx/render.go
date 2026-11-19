@@ -193,6 +193,14 @@ func (r *renderer) endText() {
 	}
 }
 
+// flush ends a streamed text line, printing any held bytes; a turn calls it
+// on every exit, so they are neither lost nor joined to the next turn.
+func (r *renderer) flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.endText()
+}
+
 // status prints one line of tool activity to stderr, dimmed on a terminal.
 func (r *renderer) status(line string) {
 	r.endText()

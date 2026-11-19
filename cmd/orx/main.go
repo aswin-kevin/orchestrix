@@ -116,13 +116,15 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	// not consulted: the turn and the idle prompt handle Ctrl-C themselves
 	// (see conversation.turn and readIdle), and a Ctrl-C between them is
 	// ignored.
-	setupCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt)
+	interrupted.Store(false)
+	setupCtx, stopSignals := notifyInterrupt(ctx)
 	defer stopSignals()
 
 	in := newLineReader(stdin)
 	rend := newRenderer(stdout, stderr)
 	stderr = rend.stderr // the shared, locked writer
-	ag, shutdown, code := buildAgent(setupCtx, opts, newApprover(in, rend.prompts()), newProvider, stderr)
+	ap := newApprover(in, rend.prompts())
+	ag, shutdown, code := buildAgent(setupCtx, opts, ap, newProvider, stderr)
 	if ag == nil {
 		return code
 	}
@@ -136,6 +138,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
 		return exitError
 	}
+	conv.ap = ap
 	if opts.prompt != "" {
 		if !conv.turn(ctx, opts.prompt, rend, stderr) {
 			return exitError
@@ -326,8 +329,7 @@ func effectiveMode(o options, stderr io.Writer) permission.Mode {
 func repl(ctx context.Context, conv *conversation, in *lineReader, rend *renderer, stderr io.Writer) int {
 	code := exitOK
 	for {
-		fmt.Fprint(stderr, replPrompt)
-		line, err := readIdle(ctx, in)
+		line, err := readIdle(ctx, in, &conv.ap.prompt, stderr)
 		prompt := strings.TrimSpace(line)
 		if prompt == exitCommand {
 			return code
@@ -341,15 +343,6 @@ func repl(ctx context.Context, conv *conversation, in *lineReader, rend *rendere
 	}
 }
 
-// readIdle reads the next line at the idle prompt. Ctrl-C there cancels the
-// read, so the REPL returns and the deferred shutdown runs; the default
-// handler would kill the process and orphan background jobs.
-func readIdle(ctx context.Context, in *lineReader) (string, error) {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	defer stop()
-	return in.next(ctx)
-}
-
 // conversation is the exchange a CLI session holds with the agent: a saved
 // thread with -store, else a State carried through the prompts in memory.
 type conversation struct {
@@ -360,6 +353,8 @@ type conversation struct {
 	st *state.State
 	// abort ends the whole run; a second Ctrl-C during a turn calls it.
 	abort context.CancelFunc
+	// ap owns the terminal for background questions while a turn runs.
+	ap *approver
 }
 
 // newConversation opens the conversation o asks for: the thread o.thread of
@@ -396,10 +391,13 @@ func (c *conversation) turn(ctx context.Context, prompt string, rend *renderer, 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer c.cancelOnInterrupt(cancel)()
+	defer c.ap.beginTurn()()
+	defer rend.flush()
 
 	ok := true
 	for ev, err := range c.run(ctx, prompt) {
 		if err != nil {
+			rend.flush()
 			fmt.Fprintln(stderr, "orx:", termSafe(err.Error()))
 			return false
 		}
@@ -424,6 +422,7 @@ func (c *conversation) cancelOnInterrupt(cancelTurn context.CancelFunc) (stop fu
 		for _, cancel := range []context.CancelFunc{cancelTurn, c.abort} {
 			select {
 			case <-sigs:
+				interrupted.Store(true)
 				cancel()
 			case <-done:
 				return
