@@ -17,8 +17,9 @@ import (
 // fakeDate installs a `date` on the executor's PATH that logs its arguments
 // to the returned file and then runs the real date, except that it fails
 // when its arguments match the shell case pattern failOn ("" never fails),
-// after writing noise bytes of extra stderr.
-func fakeDate(t *testing.T, e *localExec, failOn string, noise int) (logFile string) {
+// after writing noise bytes of extra stderr and then msg ("" means
+// "date: injected failure").
+func fakeDate(t *testing.T, e *localExec, failOn string, noise int, msg string) (logFile string) {
 	t.Helper()
 	real, err := exec.LookPath("date")
 	if err != nil {
@@ -26,10 +27,13 @@ func fakeDate(t *testing.T, e *localExec, failOn string, noise int) (logFile str
 	}
 	bin := t.TempDir()
 	logFile = filepath.Join(t.TempDir(), "date.log")
+	if msg == "" {
+		msg = "date: injected failure"
+	}
 	fail := ""
 	if failOn != "" {
 		fail = fmt.Sprintf("case \"$*\" in %s) head -c %d /dev/zero | tr '\\000' x >&2; "+
-			"echo 'date: injected failure' >&2; exit 1;; esac\n", failOn, noise)
+			"printf '%%s\\n' '%s' >&2; exit 1;; esac\n", failOn, noise, msg)
 	}
 	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$*\" >> '%s'\n%sexec '%s' \"$@\"\n", logFile, fail, real)
 	if err := os.WriteFile(filepath.Join(bin, "date"), []byte(script), 0o755); err != nil {
@@ -51,7 +55,7 @@ func listAll(b backend.Backend) map[string]error {
 func TestSandboxListingToolFailureIsLoud(t *testing.T) {
 	t.Run("always", func(t *testing.T) {
 		e := newLocalExec(t)
-		fakeDate(t, e, "*", 0)
+		fakeDate(t, e, "*", 0, "")
 		root := t.TempDir()
 		mustWriteHost(t, filepath.Join(root, "a.txt"), "x")
 		b := newSandbox(t, e, root)
@@ -63,7 +67,7 @@ func TestSandboxListingToolFailureIsLoud(t *testing.T) {
 	})
 	t.Run("one entry", func(t *testing.T) {
 		e := newLocalExec(t)
-		fakeDate(t, e, "*victim*", 0)
+		fakeDate(t, e, "*victim*", 0, "")
 		root := t.TempDir()
 		mustWriteHost(t, filepath.Join(root, "ok.txt"), "x")
 		mustWriteHost(t, filepath.Join(root, "victim.txt"), "x")
@@ -74,6 +78,37 @@ func TestSandboxListingToolFailureIsLoud(t *testing.T) {
 			}
 		}
 	})
+}
+
+// utf8RejectionMsg is what the Rust coreutils print for a non-UTF-8
+// argument.
+const utf8RejectionMsg = "error: invalid UTF-8 was detected in one or more arguments"
+
+// TestSandboxNonUTF8RejectionIsClear simulates a userland whose date refuses
+// a name: every operation that needs date -r on it reports the clear error
+// with the virtual path, and other files still work.
+func TestSandboxNonUTF8RejectionIsClear(t *testing.T) {
+	e := newLocalExec(t)
+	fakeDate(t, e, "*victim*", 0, utf8RejectionMsg)
+	root := t.TempDir()
+	mustWriteHost(t, filepath.Join(root, "ok.txt"), "x")
+	mustWriteHost(t, filepath.Join(root, "victim.txt"), "x")
+	b := newSandbox(t, e, root)
+	const want = `sandbox: this userland cannot handle non-UTF-8 file names: "/victim.txt"`
+	if _, err := b.Read(ctx, "/victim.txt", 0, 0); err == nil || err.Error() != want {
+		t.Errorf("Read error = %v, want %s", err, want)
+	}
+	if _, err := b.Edit(ctx, "/victim.txt", "x", "y", false); err == nil || err.Error() != want {
+		t.Errorf("Edit error = %v, want %s", err, want)
+	}
+	for op, err := range listAll(b) {
+		if err == nil || err.Error() != want {
+			t.Errorf("%s error = %v, want %s", op, err, want)
+		}
+	}
+	if got := string(readBytes(t, b, "/ok.txt")); got != "x" {
+		t.Errorf("Read(/ok.txt) = %q", got)
+	}
 }
 
 func TestSandboxListingWithoutTailIsLoud(t *testing.T) {
@@ -109,7 +144,7 @@ func mustWriteHost(t *testing.T, p, content string) {
 
 func TestSandboxGrepPrunesSkippedDirs(t *testing.T) {
 	e := newLocalExec(t)
-	logFile := fakeDate(t, e, "", 0)
+	logFile := fakeDate(t, e, "", 0, "")
 	root := t.TempDir()
 	for i := range 50 {
 		mustWriteHost(t, filepath.Join(root, "node_modules", fmt.Sprintf("pkg%d", i), "index.js"), "needle")
@@ -225,7 +260,7 @@ func (m *outputMeter) Execute(ctx context.Context, cmd string, opts backend.Exec
 
 func TestSandboxListingStderrBounded(t *testing.T) {
 	e := newLocalExec(t)
-	fakeDate(t, e, "*victim*", 256<<10)
+	fakeDate(t, e, "*victim*", 256<<10, "")
 	root := t.TempDir()
 	mustWriteHost(t, filepath.Join(root, "victim.txt"), "x")
 	m := &outputMeter{Executor: e}

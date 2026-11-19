@@ -35,6 +35,15 @@
 // A listing whose tools fail (an unsupported find flag, date -r erroring on
 // an existing entry) is an error, never a silently empty result.
 //
+// Non-UTF-8 names: sizes and contents are read through shell redirection,
+// which takes any bytes, but modification times need date -r FILE, which
+// takes the name as an argument, and there is no portable way around that.
+// Some userlands (the Rust coreutils that recent Ubuntu ships by default)
+// refuse arguments that are not valid UTF-8. There, reading or listing such
+// a name fails with "sandbox: this userland cannot handle non-UTF-8 file
+// names: <path>" rather than with a raw tool error; GNU coreutils, busybox
+// and the BSD tools handle any bytes.
+//
 // Local implementation: wrapping a backend/shell Backend gives a sandbox on
 // the host, useful for development and tests:
 //
@@ -81,7 +90,9 @@ type Options struct {
 // find (with -H, -mindepth, -maxdepth and -exec ... {} +) and date -r FILE.
 // GNU coreutils and findutils, busybox,
 // macOS and FreeBSD provide them; OpenBSD and NetBSD, whose date -r takes
-// only seconds, are not supported.
+// only seconds, are not supported. With a userland that refuses non-UTF-8
+// arguments, names that are not valid UTF-8 cannot be read or listed (see
+// the package documentation).
 type Backend struct {
 	exec    backend.Executor
 	root    string
@@ -171,6 +182,9 @@ func (b *Backend) run(ctx context.Context, op, p, script string, maxOutput int) 
 		return "", fmt.Errorf("sandbox: %s %s: %w", op, p, err)
 	}
 	if err := exitError(res); err != nil {
+		if !res.TimedOut && res.ExitCode == exitFailed && rejectsNonUTF8(res.Output) {
+			return "", nonUTF8Error(p)
+		}
 		return "", fmt.Errorf("sandbox: %s %s: %w", op, p, err)
 	}
 	if res.Truncated {

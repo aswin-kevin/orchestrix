@@ -91,6 +91,24 @@ func exitError(res backend.ExecResult) error {
 	return fmt.Errorf("exit status %d: %q", res.ExitCode, tail(res.Output))
 }
 
+// utf8Rejection is what a userland whose tools refuse non-UTF-8 arguments
+// (the Rust coreutils some Linux distributions ship by default) writes to
+// stderr for such an argument.
+const utf8Rejection = "invalid UTF-8"
+
+// rejectsNonUTF8 reports whether a failed command's output shows that a tool
+// refused a non-UTF-8 argument.
+func rejectsNonUTF8(output string) bool {
+	return strings.Contains(output, utf8Rejection)
+}
+
+// nonUTF8Error reports that the userland cannot handle the name p, which a
+// script had to pass to a tool as an argument (date -r has no argv-free
+// form).
+func nonUTF8Error(p string) error {
+	return fmt.Errorf("sandbox: this userland cannot handle non-UTF-8 file names: %q", p)
+}
+
 // tail returns the last errTailBytes of s.
 func tail(s string) string {
 	if len(s) > errTailBytes {

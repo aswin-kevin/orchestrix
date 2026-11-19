@@ -15,8 +15,8 @@ const (
 	// stderrKeepBytes is how much of a listing's stderr the shell keeps (the
 	// tail), so a noisy tool cannot inflate the output.
 	stderrKeepBytes = 2 << 10
-	// recordFailed is the record kind a listing prints when date fails on an
-	// entry that still exists.
+	// recordFailed is the record kind a listing prints, followed by a tab and
+	// the entry's path, when date fails on an entry that still exists.
 	recordFailed = "E"
 	// stderrMarker starts the final section of a listing's output, which
 	// holds everything the listing tools wrote to stderr.
@@ -42,10 +42,12 @@ var listPreflight = `wc -c < /dev/null >/dev/null` + orFail +
 // a dangling symlink is an "f" of size 0 and mtime 0; a file the sandbox user
 // cannot read is an "f" of size 0 with its real mtime (date -r needs no read
 // permission). An entry that vanished mid-listing is skipped; when date fails
-// on an entry that still exists, it prints a recordFailed record and exits
-// non-zero (the tool's own message is on stderr). It is passed to find -exec
-// as a fixed, quoted sh -c program.
-var recordScript = `fail() { printf '` + recordFailed + `\000'; exit 1; }
+// on an entry that still exists, it prints "E\t<path>\0" (recordFailed) and
+// exits non-zero (the tool's own message is on stderr). It is passed to find
+// -exec as a fixed, quoted sh -c program. Sizes come from wc reading stdin,
+// which works for any name; date -r is the one tool that needs the name as
+// an argument.
+var recordScript = `fail() { printf '` + recordFailed + `\t%s\000' "$f"; exit 1; }
 for f do
 if [ -d "$f" ]; then k=d; s=0
 elif [ -e "$f" ]; then k=f; s=0
@@ -88,8 +90,15 @@ type record struct {
 	path    string // path inside the sandbox
 }
 
+// nonUTF8Entry is the error parseRecords returns when a listing tool refused
+// the non-UTF-8 name of the entry at path (inside the sandbox).
+type nonUTF8Entry struct{ path string }
+
+func (e *nonUTF8Entry) Error() string { return nonUTF8Error(e.path).Error() }
+
 // parseRecords splits the output of a captureStderr listing. A recordFailed
-// record turns into an error quoting the captured stderr.
+// record turns into an error quoting the captured stderr, or a *nonUTF8Entry
+// when that stderr shows the tool refused a non-UTF-8 name.
 func parseRecords(out string) ([]record, error) {
 	i := strings.LastIndex(out, stderrMarker)
 	if i < 0 {
@@ -101,7 +110,10 @@ func parseRecords(out string) ([]record, error) {
 		if line == "" {
 			continue
 		}
-		if line == recordFailed {
+		if failed, ok := strings.CutPrefix(line, recordFailed+"\t"); ok {
+			if rejectsNonUTF8(stderr) {
+				return nil, &nonUTF8Entry{path: failed}
+			}
 			if len(stderr) > stderrTailBytes {
 				stderr = "…" + stderr[len(stderr)-stderrTailBytes:]
 			}

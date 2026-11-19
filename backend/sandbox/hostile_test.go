@@ -2,9 +2,11 @@ package sandbox_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -35,6 +37,30 @@ var hostileNames = []string{
 // nonUTF8Name is a name with bytes that are not valid UTF-8; some file
 // systems (APFS) refuse it.
 const nonUTF8Name = "/bad-\xff\xfe.txt"
+
+// probeNonUTF8 creates a file with a non-UTF-8 name and runs, with that name
+// as an argument, the tools the sandbox passes names to. fsOK is false when
+// the file system refuses the name (APFS); otherwise err reports whether the
+// tools failed, with their output.
+func probeNonUTF8(t *testing.T) (fsOK bool, out string, err error) {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), nonUTF8Name[1:])
+	if os.WriteFile(f, []byte("x"), 0o644) != nil {
+		return false, "", nil
+	}
+	const script = `f=$1
+wc -c < "$f" >/dev/null || exit 1
+date -r "$f" +%s >/dev/null || exit 1
+find -H "$f" -mindepth 0 -maxdepth 0 -exec true {} + || exit 1
+mkdir -p -- "$f.d" || exit 1
+mv -f -- "$f" "$f.d/x" || exit 1
+rm -rf -- "$f.d" || exit 1
+`
+	c := exec.Command("/bin/sh", "-c", script, "sh", f)
+	c.Env = append(os.Environ(), "LC_ALL=C")
+	b, err := c.CombinedOutput()
+	return true, string(b), err
+}
 
 // requireNoPwned fails if any file named "pwned" exists under dir.
 func requireNoPwned(t *testing.T, dir string) {
@@ -67,10 +93,28 @@ func TestSandboxQuotesHostilePaths(t *testing.T) {
 	})
 	b := newSandbox(t, e, root)
 	names := slices.Clone(hostileNames)
-	if os.WriteFile(filepath.Join(t.TempDir(), nonUTF8Name[1:]), nil, 0o644) == nil {
-		names = append(names, nonUTF8Name)
-	} else {
+	switch fsOK, out, err := probeNonUTF8(t); {
+	case !fsOK:
 		t.Log("file system rejects non-UTF-8 names; skipping that case")
+	case err == nil:
+		names = append(names, nonUTF8Name)
+	case strings.Contains(out, "invalid UTF-8"):
+		t.Run("non-UTF-8 name", func(t *testing.T) {
+			// The sandbox must say why, not fail with a raw tool error.
+			err := b.Write(ctx, nonUTF8Name, []byte("x"))
+			if err == nil {
+				_, err = b.Read(ctx, nonUTF8Name, 0, 0)
+			}
+			if rmErr := os.Remove(filepath.Join(root, nonUTF8Name[1:])); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+				t.Fatal(rmErr)
+			}
+			if err == nil || !strings.Contains(err.Error(), "this userland cannot handle non-UTF-8 file names") {
+				t.Fatalf("Write/Read(%q) error = %v, want the non-UTF-8 userland error", nonUTF8Name, err)
+			}
+			t.Skipf("this userland's tools reject non-UTF-8 arguments, so the sandbox cannot serve such names: %q", strings.TrimSpace(out))
+		})
+	default:
+		t.Fatalf("non-UTF-8 probe failed: %v: %q", err, out)
 	}
 
 	for i, name := range names {

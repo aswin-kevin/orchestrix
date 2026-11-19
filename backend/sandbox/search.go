@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -156,6 +157,13 @@ func (b *Backend) list(ctx context.Context, op, clean, check, listing string) ([
 		return nil, err
 	}
 	recs, err := parseRecords(out)
+	var bad *nonUTF8Entry
+	if errors.As(err, &bad) {
+		if v, ok := b.virtual(bad.path); ok {
+			return nil, nonUTF8Error(v)
+		}
+		return nil, nonUTF8Error(bad.path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: %s %s: %w", op, clean, err)
 	}
