@@ -153,17 +153,41 @@ func TestRetryDelay(t *testing.T) {
 	rateLimited := &APIError{Status: 429, RetryAfter: 3 * time.Second, hasRetryAfter: true}
 	plain := &APIError{Status: 500}
 
-	if got := cfg.retryDelay(0, rateLimited); got != 3*time.Second {
-		t.Errorf("Retry-After delay = %v", got)
+	// Retry-After is honoured and only ever lengthened, by at most a tenth.
+	for range 100 {
+		if got := cfg.retryDelay(0, rateLimited); got < 3*time.Second || got > 3300*time.Millisecond {
+			t.Fatalf("Retry-After delay = %v, want within [3s, 3.3s]", got)
+		}
 	}
-	for attempt, want := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second, 8 * time.Second} {
-		if got := cfg.retryDelay(attempt, plain); got != want {
-			t.Errorf("backoff(%d) = %v, want %v", attempt, got, want)
+	for attempt, ceiling := range []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second, 8 * time.Second} {
+		if got := backoff(attempt); got != ceiling {
+			t.Errorf("backoff(%d) = %v, want %v", attempt, got, ceiling)
+		}
+		for range 100 {
+			if got := cfg.retryDelay(attempt, plain); got < ceiling/2 || got > ceiling {
+				t.Fatalf("retryDelay(%d) = %v, want within [%v, %v]", attempt, got, ceiling/2, ceiling)
+			}
 		}
 	}
 	cfg.RetryInterval = 40 * time.Millisecond
 	if got := cfg.retryDelay(5, plain); got != 40*time.Millisecond {
 		t.Errorf("fixed interval delay = %v", got)
+	}
+}
+
+// TestRetryDelaySpreadsCallers checks that callers failing together do not
+// all wait the same time before retrying.
+func TestRetryDelaySpreadsCallers(t *testing.T) {
+	cfg := &Config{}
+	rateLimited := &APIError{Status: 429, RetryAfter: 3 * time.Second, hasRetryAfter: true}
+	for _, err := range []error{&APIError{Status: 500}, rateLimited} {
+		seen := make(map[time.Duration]bool)
+		for range 20 {
+			seen[cfg.retryDelay(2, err)] = true
+		}
+		if len(seen) < 2 {
+			t.Errorf("retryDelay(2, %v) returned the same delay 20 times", err)
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"time"
 )
@@ -15,6 +16,10 @@ const (
 
 	initialBackoff = 500 * time.Millisecond
 	maxBackoff     = 8 * time.Second
+
+	// retryAfterJitterDivisor bounds the jitter added to a server's
+	// Retry-After: at most a tenth of the requested wait.
+	retryAfterJitterDivisor = 10
 )
 
 // do sends the request produced by build, honouring the rate limit and
@@ -84,18 +89,41 @@ func (c *Config) maxRetries() int {
 }
 
 // retryDelay prefers the server's Retry-After, then the fixed interval, then
-// exponential backoff.
+// exponential backoff. The Retry-After and backoff delays are jittered so
+// that callers sharing a rate limit, such as parallel subagents, spread their
+// retries out instead of all retrying at the same moment. A Retry-After is
+// only ever lengthened, never shortened; a fixed interval is used as given.
 func (c *Config) retryDelay(attempt int, err error) time.Duration {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) && apiErr.hasRetryAfter {
-		return apiErr.RetryAfter
+		return apiErr.RetryAfter + randomUpTo(apiErr.RetryAfter/retryAfterJitterDivisor)
 	}
 	if c.RetryInterval > 0 {
 		return c.RetryInterval
 	}
+	return equalJitter(backoff(attempt))
+}
+
+// backoff is the exponential backoff ceiling for a zero-based attempt.
+func backoff(attempt int) time.Duration {
 	delay := initialBackoff
 	for i := 0; i < attempt && delay < maxBackoff; i++ {
 		delay *= 2
 	}
 	return min(delay, maxBackoff)
+}
+
+// equalJitter returns a random delay between d/2 and d, keeping half of the
+// backoff as a floor so retries still slow down as attempts mount.
+func equalJitter(d time.Duration) time.Duration {
+	half := d / 2
+	return half + randomUpTo(d-half)
+}
+
+// randomUpTo returns a uniformly random duration in [0, d].
+func randomUpTo(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return rand.N(d + 1)
 }

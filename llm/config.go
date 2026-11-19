@@ -60,7 +60,7 @@ type Config struct {
 	// DefaultMaxRetries and a negative value disables retries.
 	MaxRetries int
 	// RetryInterval is a fixed wait between retries; zero selects
-	// exponential backoff.
+	// exponential backoff with jitter.
 	RetryInterval time.Duration
 	// EmptyResponseRetries applies to OpenAI chat only: 0 selects
 	// DefaultEmptyResponseRetries and a negative value disables the retry.
