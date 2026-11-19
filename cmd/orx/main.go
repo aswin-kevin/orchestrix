@@ -14,6 +14,7 @@ import (
 	"iter"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -23,6 +24,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/middleware/askuser"
+	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -73,6 +76,18 @@ type options struct {
 	// Permissions: mode is only meaningful when modeGiven is set.
 	yes, modeGiven bool
 	mode           string
+	// skillDirs are the -skills directories.
+	skillDirs stringList
+	// memoryPaths are the -memory workspace paths, loaded after
+	// memory.DefaultFiles; noMemory loads no memory at all, memoryStore adds
+	// the structured store.
+	memoryPaths           stringList
+	noMemory, memoryStore bool
+	// mcpFile is the MCP server configuration file; empty connects none.
+	mcpFile string
+	// web adds the web tools, with the search backend named by search.
+	web    bool
+	search string
 }
 
 // run is the testable core of the program. It returns the process exit code.
@@ -94,7 +109,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	in := newLineReader(stdin)
 	rend := newRenderer(stdout, stderr)
 	stderr = rend.stderr // the shared, locked writer
-	ag, shutdown, code := buildAgent(opts, newApprover(in, rend.prompts()), newProvider, stderr)
+	ag, shutdown, code := buildAgent(ctx, opts, newApprover(in, rend.prompts()), newProvider, stderr)
 	if ag == nil {
 		return code
 	}
@@ -131,16 +146,27 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.thinking, "thinking", "", "thinking setting passed to the provider")
 	fs.StringVar(&o.effort, "effort", "", "reasoning effort passed to the provider")
 	fs.StringVar(&o.baseURL, "base-url", "", "override the provider base URL")
+	fs.Var(&o.skillDirs, "skills", "directory of skills, one subdirectory per skill (repeatable)")
+	fs.Var(&o.memoryPaths, "memory", "workspace path of an extra memory file, relative to -dir (repeatable)")
+	fs.BoolVar(&o.noMemory, "no-memory", false, "load no memory files (AGENTS.md is loaded by default)")
+	fs.BoolVar(&o.memoryStore, "memory-store", false, "give the model a long-term memory store in the workspace")
+	fs.StringVar(&o.mcpFile, "mcp", "", "MCP server configuration file")
+	fs.BoolVar(&o.web, "web", false, "add the web_fetch and web_search tools")
+	fs.StringVar(&o.search, "search", defaultSearch, "web search backend: "+strings.Join(searchBackends, ", "))
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
-	threadGiven := false
+	threadGiven, searchGiven := false, false
 	fs.Visit(func(f *flag.Flag) {
 		o.modeGiven = o.modeGiven || f.Name == "mode"
 		threadGiven = threadGiven || f.Name == "thread"
+		searchGiven = searchGiven || f.Name == "search"
 	})
 	if threadGiven && o.store == "" {
 		return options{}, errors.New("-thread needs -store")
+	}
+	if err := checkFeatureFlags(o, searchGiven); err != nil {
+		return options{}, err
 	}
 	if o.model == "" {
 		return options{}, fmt.Errorf("no model: pass -model or set %s", modelEnv)
@@ -150,10 +176,18 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 
 // buildAgent assembles the agent. It returns a nil agent and an exit code
 // when setup fails; otherwise the returned shutdown func must be called when
-// the agent is no longer used, to stop its background tasks.
-func buildAgent(o options, ap *approver, newProvider func(llm.Config) (llm.Provider, error),
+// the agent is no longer used, to stop its background tasks and MCP servers.
+func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(llm.Config) (llm.Provider, error),
 	stderr io.Writer) (ag *agent.Agent, shutdown func(), code int) {
+	// cleanups release what setup has started, in reverse order.
+	var cleanups []func()
+	shutdown = func() {
+		for _, f := range slices.Backward(cleanups) {
+			f()
+		}
+	}
 	fail := func(code int, format string, args ...any) (*agent.Agent, func(), int) {
+		shutdown()
 		fmt.Fprintf(stderr, "orx: "+format+"\n", args...)
 		return nil, nil, code
 	}
@@ -174,8 +208,9 @@ func buildAgent(o options, ap *approver, newProvider func(llm.Config) (llm.Provi
 		orchestrix.WithApprover(ap.decide),
 		orchestrix.WithMaxTurns(o.maxTurns),
 		orchestrix.WithConfig(func(c *agent.Config) { c.Model = cfg.Model }),
+		orchestrix.WithPlanMode(planmode.Config{}),
+		orchestrix.WithAskUser(askuser.Config{Ask: ap.ask}),
 	}
-	shutdown = func() {}
 	if o.noShell {
 		ws, err := disk.New(o.dir)
 		if err != nil {
@@ -186,14 +221,13 @@ func buildAgent(o options, ap *approver, newProvider func(llm.Config) (llm.Provi
 		// The tasks middleware keeps background jobs alive beyond a single
 		// call, so the caller must stop them on every exit path.
 		jobs := tasks.New(tasks.Config{})
-		shutdown = jobs.Shutdown
+		cleanups = append(cleanups, jobs.Shutdown)
 		agentOpts = append(agentOpts,
 			orchestrix.WithShell(o.dir, shell.Options{}), orchestrix.WithTasks(jobs))
 	}
 	if o.store != "" {
 		cp, err := file.New(o.store)
 		if err != nil {
-			shutdown()
 			return fail(exitError, "open store: %v", err)
 		}
 		agentOpts = append(agentOpts, orchestrix.WithCheckpointer(cp))
@@ -204,15 +238,42 @@ func buildAgent(o options, ap *approver, newProvider func(llm.Config) (llm.Provi
 	if o.systemFile != "" {
 		text, err := os.ReadFile(o.systemFile)
 		if err != nil {
-			shutdown()
 			return fail(exitUsage, "read system prompt: %v", err)
 		}
 		agentOpts = append(agentOpts, orchestrix.WithSystemPrompt(string(text)))
 	}
+	if opt, ok := memoryOption(o); ok {
+		agentOpts = append(agentOpts, opt)
+	}
+	if len(o.skillDirs) > 0 {
+		opt, err := skillsOption(o.skillDirs, stderr)
+		if err != nil {
+			return fail(exitUsage, "skills: %v", err)
+		}
+		agentOpts = append(agentOpts, opt)
+	}
+	if o.web {
+		opt, err := webOption(o.search)
+		if err != nil {
+			return fail(exitUsage, "web: %v", err)
+		}
+		agentOpts = append(agentOpts, opt)
+	}
+	if o.mcpFile != "" {
+		m, code, err := connectMCP(ctx, o.mcpFile, stderr)
+		if err != nil {
+			return fail(code, "mcp: %v", termSafe(err.Error()))
+		}
+		cleanups = append(cleanups, func() {
+			if err := m.Close(); err != nil {
+				fmt.Fprintln(stderr, "orx: mcp:", termSafe(err.Error()))
+			}
+		})
+		agentOpts = append(agentOpts, orchestrix.WithMCP(m))
+	}
 
 	ag, err = orchestrix.New(provider, agentOpts...)
 	if err != nil {
-		shutdown()
 		return fail(exitUsage, "%v", err)
 	}
 	return ag, shutdown, exitOK

@@ -127,7 +127,8 @@ func TestPromptNamesSubagent(t *testing.T) {
 func TestApproverNeverRemembersNoRememberRequests(t *testing.T) {
 	out := &promptLog{}
 	ap := newApprover(newLineReader(strings.NewReader("y\ny\na\n")), out)
-	req := permission.Request{Tool: "exit_plan_mode", NoRemember: true}
+	// A tool other than exit_plan_mode, which has a prompt of its own.
+	req := permission.Request{Tool: "deploy", NoRemember: true}
 
 	if d := ap.decide(context.Background(), req, ""); d.Behavior != permission.Allow {
 		t.Fatalf("first = %+v, want allow", d)
@@ -144,7 +145,7 @@ func TestApproverNeverRemembersNoRememberRequests(t *testing.T) {
 	if strings.Contains(out.buf.String(), "/a]") {
 		t.Fatalf("prompt offers always for a NoRemember request: %q", out.buf.String())
 	}
-	if ap.isAlways("exit_plan_mode") {
+	if ap.isAlways("deploy") {
 		t.Fatal("always recorded")
 	}
 }
@@ -166,5 +167,95 @@ func TestApproverIgnoresEarlierAlwaysForNoRemember(t *testing.T) {
 	d := ap.decide(context.Background(), permission.Request{Tool: "exit_plan_mode", NoRemember: true}, "")
 	if d.Behavior != permission.Deny {
 		t.Fatalf("decision = %+v, want the prompt to run and deny", d)
+	}
+}
+
+func TestTermSafe(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{"plain text", "ls -la", "ls -la"},
+		{"newline and tab kept", "a\n\tb", "a\n\tb"},
+		{"escape sequence", "\x1b[31mred", `\x1b[31mred`},
+		{"carriage return", "safe\rrm -rf /", `safe\rrm -rf /`},
+		{"bell and delete", "a\x07b\x7f", `a\x07b\x7f`},
+		{"C1 control", "a\u009b31m", `a\u009b31m`},
+		{"bidi override", "a\u202eb", `a\u202eb`},
+		{"unicode text kept", "héllo ✓", "héllo ✓"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := termSafe(tc.in); got != tc.want {
+				t.Errorf("termSafe(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestApproverEscapesSubject(t *testing.T) {
+	out := &promptLog{}
+	ap := newApprover(newLineReader(strings.NewReader("n\n")), out)
+
+	ap.decide(context.Background(), permission.Request{Tool: "execute", Subject: "ls\x1b[2K\rrm -rf /"}, "")
+
+	got := out.buf.String()
+	if strings.ContainsAny(got, "\x1b\r") {
+		t.Errorf("prompt contains raw control characters: %q", got)
+	}
+	if want := `Allow execute ls\x1b[2K\rrm -rf /? [y/N/a] `; !strings.Contains(got, want) {
+		t.Errorf("prompt = %q, want it to contain %q", got, want)
+	}
+}
+
+// planRequest is the request planmode sends for exit_plan_mode.
+func planRequest(plan string) permission.Request {
+	return permission.Request{Tool: "exit_plan_mode", Subject: plan, NoRemember: true}
+}
+
+func TestPlanPromptShowsFullPlan(t *testing.T) {
+	out := &promptLog{}
+	ap := newApprover(newLineReader(strings.NewReader("y\n")), out)
+
+	d := ap.decide(context.Background(), planRequest("1. read\n\t2. write\x1b]0;owned\x07"), "")
+
+	if d.Behavior != permission.Allow {
+		t.Fatalf("decision = %+v, want allow", d)
+	}
+	got := out.buf.String()
+	if want := "1. read\n\t2. write\\x1b]0;owned\\x07\n"; !strings.Contains(got, want) {
+		t.Errorf("output = %q, want the escaped plan %q", got, want)
+	}
+	if !strings.HasSuffix(got, "Approve plan? [y/N] ") {
+		t.Errorf("output = %q, want it to end with the plan prompt", got)
+	}
+	if strings.Contains(got, "Allow ") {
+		t.Errorf("output = %q, want the plan prompt instead of the generic one", got)
+	}
+}
+
+func TestPlanPromptRejectionReadsFeedback(t *testing.T) {
+	tests := []struct {
+		name, input, want string
+	}{
+		{"feedback", "n\nsplit step two\n", "split step two"},
+		{"blank feedback", "n\n\n", deniedByUser},
+		{"end of input", "n\n", deniedByUser},
+		{"always is not offered", "a\nno\n", "no"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := &promptLog{}
+			ap := newApprover(newLineReader(strings.NewReader(tc.input)), out)
+
+			d := ap.decide(context.Background(), planRequest("step"), "")
+
+			if d.Behavior != permission.Deny || d.Message != tc.want {
+				t.Errorf("decision = %+v, want deny %q", d, tc.want)
+			}
+			if !strings.Contains(out.buf.String(), "Feedback") {
+				t.Errorf("output = %q, want a feedback prompt", out.buf.String())
+			}
+			if ap.isAlways("exit_plan_mode") {
+				t.Error("always recorded for the plan")
+			}
+		})
 	}
 }

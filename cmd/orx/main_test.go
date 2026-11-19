@@ -3,15 +3,59 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/mcp"
 )
+
+// Environment of the helper process: with testMCPEnv set to "1" the test
+// binary serves testMCPServer over stdio instead of running tests, and
+// writes its pid to the file testMCPPIDEnv names, if any.
+const (
+	testMCPEnv    = "ORX_TEST_MCP"
+	testMCPPIDEnv = "ORX_TEST_MCP_PID"
+)
+
+func TestMain(m *testing.M) {
+	if os.Getenv(testMCPEnv) == "1" {
+		os.Exit(serveTestMCP())
+	}
+	os.Exit(m.Run())
+}
+
+// serveTestMCP serves an MCP server with one echo tool on stdin and stdout
+// until stdin ends. It returns the process exit code.
+func serveTestMCP() int {
+	if path := os.Getenv(testMCPPIDEnv); path != "" {
+		if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+			return 1
+		}
+	}
+	s := mcp.NewServer(mcp.Implementation{Name: "orx-test", Version: "1"}, "")
+	s.AddTool(mcp.ToolInfo{
+		Name:        "echo",
+		Description: "Echoes text.",
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"text": map[string]any{"type": "string"}}},
+	}, func(_ context.Context, args json.RawMessage) (*mcp.CallToolResult, error) {
+		var in struct{ Text string }
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return mcp.TextResult(in.Text), nil
+	})
+	if err := s.ServeStdio(context.Background(), os.Stdin, os.Stdout); err != nil {
+		return 1
+	}
+	return 0
+}
 
 // invoke runs the CLI with a scripted provider and returns its exit code and
 // captured output.

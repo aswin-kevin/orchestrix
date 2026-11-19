@@ -4,10 +4,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -66,5 +68,31 @@ func TestCancelAtIdlePromptStopsBackgroundJobs(t *testing.T) {
 	if err := syscall.Kill(pid, 0); err == nil {
 		syscall.Kill(pid, syscall.SIGKILL)
 		t.Error("background job still running after run returned")
+	}
+}
+
+func TestMCPConfigFlag(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "mcp.pid")
+	provider := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "m1", Name: "mcp__test__echo", Input: map[string]string{"text": "ping"}}}},
+		llmtest.Turn{Text: "done"},
+	)
+
+	code, _, stderr := invoke(t, "", provider, "-model", "openai:test", "-dir", t.TempDir(),
+		"-mcp", mcpConfig(t, pidFile), "-yes", "-p", "echo")
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
+	}
+	if names := toolNames(provider.Requests[0]); !slices.Contains(names, "mcp__test__echo") {
+		t.Errorf("tools = %v, want mcp__test__echo", names)
+	}
+	if text, isErr := toolResult(t, provider, "m1"); isErr || text != "ping" {
+		t.Errorf("echo result = %q (error %v), want ping", text, isErr)
+	}
+	pid := pidOf(t, pidFile)
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Errorf("MCP server process %d still exists after run returned (kill 0: %v)", pid, err)
 	}
 }

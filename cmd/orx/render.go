@@ -194,3 +194,47 @@ func truncate(s string, limit int) string {
 	}
 	return string(runes[:limit-1]) + "…"
 }
+
+// termSafe makes model-written text safe to print on a terminal: control
+// characters other than newline and tab (C0, DEL, C1, which includes ESC and
+// so every ANSI escape sequence) and the Unicode format controls that can
+// reorder or hide text are shown as Go-style escapes such as \x1b and
+// \u202e instead of being sent raw, so the text cannot move the cursor,
+// recolor, retitle the window or overwrite what is shown before it.
+func termSafe(s string) string {
+	if !strings.ContainsFunc(s, isUnsafeRune) {
+		return s
+	}
+	var sb strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\r':
+			sb.WriteString(`\r`)
+		case r < 0x80 && isUnsafeRune(r):
+			fmt.Fprintf(&sb, `\x%02x`, r)
+		case isUnsafeRune(r):
+			fmt.Fprintf(&sb, `\u%04x`, r)
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
+// isUnsafeRune reports whether r is a control character termSafe escapes:
+// any C0 control but newline and tab, DEL, any C1 control, and the
+// bidirectional and line-separator format characters.
+func isUnsafeRune(r rune) bool {
+	switch {
+	case r == '\n' || r == '\t':
+		return false
+	case r < 0x20, r >= 0x7f && r <= 0x9f:
+		return true
+	case r == '\u2028', r == '\u2029', // line and paragraph separators
+		r >= '\u200e' && r <= '\u200f', // left-to-right and right-to-left marks
+		r >= '\u202a' && r <= '\u202e', // bidi embeddings and overrides
+		r >= '\u2066' && r <= '\u2069': // bidi isolates
+		return true
+	}
+	return false
+}
