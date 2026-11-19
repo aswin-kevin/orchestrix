@@ -88,7 +88,7 @@ func TestUpdateContinuesStoppingTask(t *testing.T) {
 	if last := msgs[len(msgs)-1]; last.Role != llm.RoleUser || last.Text() != wantUpdate {
 		t.Fatalf("continuation = %+v", last)
 	}
-	if out, _, _ := h.m.jobs.Get("t", "async_1").Handle.outcome(); out.Text != "revised" {
+	if out := outcomeOf(t, h.m, h.st, "async_1"); out.Text != "revised" {
 		t.Fatalf("outcome = %+v", out)
 	}
 }
@@ -109,7 +109,7 @@ func TestUpdateAfterChildEndedIsReported(t *testing.T) {
 		[]agent.Middleware{late}, start("s1", "researcher", "x"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "noted"})
 	h.run(t, context.Background(), "go", nil)
 	waitEnded(t, h.m, "async_1")
-	out, _, _ := h.m.jobs.Get("t", "async_1").Handle.outcome()
+	out := outcomeOf(t, h.m, h.st, "async_1")
 	if out.Status != StatusCompleted || out.Error != "1 update(s) arrived after the task finished" {
 		t.Fatalf("outcome = %+v", out)
 	}
@@ -147,7 +147,7 @@ func TestBackgroundChildStartsTask(t *testing.T) {
 		start("s1", "researcher", "outer"), llmtest.Turn{Text: "started"})
 	h.run(t, context.Background(), "go", nil)
 	waitEnded(t, h.m, "async_1")
-	if out, _, _ := h.m.jobs.Get("t", "async_1").Handle.outcome(); out.Status != StatusCompleted {
+	if out := outcomeOf(t, h.m, h.st, "async_1"); out.Status != StatusCompleted {
 		t.Fatalf("outcome = %+v", out)
 	}
 	if got := requestText(child.Requests[1]); !strings.Contains(got, "Started background task async_1 (helper)") {
@@ -283,7 +283,7 @@ func TestNestedRunStopsItsTasks(t *testing.T) {
 	if h.m.jobs.Get("t/researcher/async_1", "async_1") != nil {
 		t.Fatal("the child's task was not forgotten")
 	}
-	if out, _, _ := h.m.jobs.Get("t", "async_1").Handle.outcome(); out.Status != StatusCompleted {
+	if out := outcomeOf(t, h.m, h.st, "async_1"); out.Status != StatusCompleted {
 		t.Fatalf("child outcome = %+v", out)
 	}
 }

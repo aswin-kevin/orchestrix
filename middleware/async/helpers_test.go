@@ -224,6 +224,25 @@ func record(t *testing.T, s *state.State, id string) TaskRecord {
 	return TaskRecord{}
 }
 
+// outcomeOf returns how task id of thread "t" ended. It reads the live job
+// when the Manager still holds it and otherwise the task's record in s, the
+// state of the last run: the job is released once its thread has nothing
+// running and every ended task was announced, and that announcement is
+// recorded, so a released task always has a final record.
+func outcomeOf(t *testing.T, m *Middleware, s *state.State, id string) Outcome {
+	t.Helper()
+	if j := m.jobs.Get("t", id); j != nil {
+		if out, _, ok := j.Handle.outcome(); ok {
+			return out
+		}
+	}
+	r := record(t, s, id)
+	if !r.finished() {
+		t.Fatalf("task %s has no live job and its record is not final: %+v", id, r)
+	}
+	return Outcome{Status: r.Status, Text: r.Result, Error: r.Error}
+}
+
 // fakeRunner records its requests and returns handles that ended with out.
 type fakeRunner struct {
 	mu   sync.Mutex

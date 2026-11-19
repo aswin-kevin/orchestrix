@@ -67,7 +67,7 @@ func TestTaskSurvivesCallReturn(t *testing.T) {
 	g.waitEntered(t, 1)
 	g.release()
 	waitEnded(t, h.m, "async_1")
-	out, _, _ := h.m.jobs.Get("t", "async_1").Handle.outcome()
+	out := outcomeOf(t, h.m, h.st, "async_1")
 	if out.Status != StatusCompleted || out.Text != "late answer" || g.cancelled.Load() {
 		t.Fatalf("outcome = %+v, cancelled %v", out, g.cancelled.Load())
 	}
