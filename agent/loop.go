@@ -44,9 +44,9 @@ type run struct {
 	// emits to this run.
 	model ModelHandler
 	// tools is the tool set of the current turn, the snapshot its schemas
-	// were built from and its calls resolve against (see tools.go). Only
-	// the loop goroutine touches it.
-	tools *tool.Registry
+	// were built from and its calls resolve against (see tools.go). The
+	// loop goroutine stores it; RunInfo.Tools reads it from any goroutine.
+	tools atomic.Pointer[tool.Registry]
 	// budget tracks the run limits; see budget.go.
 	budget *budget
 	// resume, when set, is the interrupted turn this run finishes before
@@ -109,6 +109,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 		gone:      make(chan struct{}),
 		budget:    newBudget(ctx, a.cfg.MaxDuration),
 	}
+	info.run = r
 	innermost := r.streamModel
 	if a.cfg.NonStreaming {
 		innermost = r.completeModel

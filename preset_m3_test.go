@@ -149,6 +149,31 @@ func TestMCPHiddenToolsAddsDeferred(t *testing.T) {
 	}
 }
 
+func TestHiddenWithToolsAddsDeferred(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tool tool.Tool
+	}{
+		{"gated", deferred.Gate(noopTool("secret"))},
+		{"deferred", deferred.Defer(noopTool("secret"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := llmtest.New(llmtest.Turn{Text: "ok"})
+			a, err := orchestrix.New(p, orchestrix.WithTools(tc.tool))
+			if err != nil {
+				t.Fatal(err)
+			}
+			finalOf(t, a, orchestrix.Text("hi"))
+			if names := toolNames(p); slices.Contains(names, "secret") {
+				t.Errorf("tools %v show the %s tool's schema", names, tc.name)
+			}
+			if !slices.Contains(stackNames(a), "deferred") {
+				t.Errorf("stack %v lacks deferred", stackNames(a))
+			}
+		})
+	}
+}
+
 func TestExplicitDeferredConfigKept(t *testing.T) {
 	cfg := testSkills()
 	cfg.Tools = []tool.Tool{noopTool("pdf_render")}

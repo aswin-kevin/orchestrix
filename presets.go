@@ -25,6 +25,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
 	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/middleware/web"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // shellSpec is what WithShell asks for; the backend is built by New.
@@ -217,15 +218,26 @@ func (s *settings) appendBuilt(stack []agent.Middleware, option string, build fu
 
 // deferredConfig returns the deferred middleware's configuration and whether
 // the stack needs it: when WithDeferredTools asked for it, or when skill
-// tools or MCP servers would otherwise show schemas meant to stay hidden.
+// tools, MCP servers or WithTools tools marked with deferred.Gate or
+// deferred.Defer would otherwise show schemas meant to stay hidden.
 func (s *settings) deferredConfig() (deferred.Config, bool) {
 	switch {
 	case s.deferred != nil:
 		return *s.deferred, true
-	case s.skills != nil && len(s.skills.Tools) > 0, s.mcp != nil && s.mcp.HasHiddenTools():
+	case s.skills != nil && len(s.skills.Tools) > 0, s.mcp != nil && s.mcp.HasHiddenTools(),
+		slices.ContainsFunc(s.cfg.Tools, hidden):
 		return deferred.Config{}, true
 	}
 	return deferred.Config{}, false
+}
+
+// hidden reports whether t is marked gated or deferred.
+func hidden(t tool.Tool) bool {
+	if g, ok := t.(deferred.Gater); ok && g.Gated() {
+		return true
+	}
+	d, ok := t.(deferred.Deferrer)
+	return ok && d.Deferred()
 }
 
 // checkSubagentSkills records the skills that subagents inheriting the
@@ -309,8 +321,9 @@ func WithPlanMode(cfg planmode.Config) Option {
 // WithDeferredTools adds search_tools and call_tool and withholds the schemas
 // of deferred tools (those matching cfg.Tools, and tools marked with
 // deferred.Defer) until the model searches for them. Without it, the preset
-// adds the middleware with a zero Config when WithSkills has Tools or WithMCP
-// has a deferred or gated server.
+// adds the middleware with a zero Config when WithSkills has Tools, WithMCP
+// has a deferred or gated server, or a WithTools tool is marked with
+// deferred.Gate or deferred.Defer.
 func WithDeferredTools(cfg deferred.Config) Option {
 	return func(s *settings) { s.deferred = &cfg }
 }

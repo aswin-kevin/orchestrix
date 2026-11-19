@@ -29,6 +29,8 @@ type RunInfo struct {
 	// ParentToolID is the tool_use id of the call whose context started this
 	// nested run; empty for a top-level run.
 	ParentToolID string
+
+	run *run // the run described, for Tools; nil in the zero RunInfo
 }
 
 // runInfoKey keys the *RunInfo of a run in its context.

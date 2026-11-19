@@ -51,7 +51,7 @@ func (m *middleware) runSearch(ctx context.Context, in SearchInput, c *tool.Call
 		return tool.Errorf("%s can only run inside an agent run", ToolSearch), nil
 	}
 	var candidates []tool.Tool
-	for _, t := range info.Agent.Tools() {
+	for _, t := range info.Tools() {
 		if m.isDeferred(t) && !gatedLocked(c.State, t) {
 			candidates = append(candidates, t)
 		}
@@ -117,8 +117,9 @@ func selectNames(candidates []tool.Tool, list string) []tool.Tool {
 	var found []tool.Tool
 	for _, name := range strings.Split(list, ",") {
 		name = strings.TrimSpace(name)
-		i := slices.IndexFunc(candidates, func(t tool.Tool) bool { return t.Name() == name })
-		if i >= 0 && !slices.Contains(found, candidates[i]) {
+		named := func(t tool.Tool) bool { return t.Name() == name }
+		// Compared by name: tool values need not be comparable.
+		if i := slices.IndexFunc(candidates, named); i >= 0 && !slices.ContainsFunc(found, named) {
 			found = append(found, candidates[i])
 		}
 	}

@@ -40,8 +40,7 @@ func (r *run) start(c *toolCall) (res *tool.Result) {
 // admit checks the permission of a new call: see start for the outcomes. An
 // input rewrite carried by an Allow decision is applied to c.
 func (r *run) admit(c *toolCall) *tool.Result {
-	req := r.permissionRequest(c)
-	decision := r.evaluate(c, req)
+	decision, req := r.evaluate(c)
 	if decision.Behavior == permission.Ask {
 		if r.agent.cfg.Approver == nil {
 			c.interrupt = askInterrupt(c, decision.Message)
@@ -59,7 +58,7 @@ func (r *run) admit(c *toolCall) *tool.Result {
 // a Deny still refuses the call.
 func (r *run) recheck(c *toolCall) *tool.Result {
 	c.approved = true
-	decision := r.evaluate(c, r.permissionRequest(c))
+	decision, _ := r.evaluate(c)
 	if decision.Behavior == permission.Ask {
 		decision = permission.Allowed()
 	}
@@ -80,27 +79,30 @@ func (r *run) applyPermission(c *toolCall, decision permission.Decision) *tool.R
 	return validateInput(c.tool, c.input)
 }
 
-// evaluate runs the permission pipeline on c, whose request (the one an
-// Approver is asked about) is req. A dispatched call is evaluated on its
-// dispatcher first, with the dispatcher's own input, so that rules naming
-// the dispatcher apply: its deny refuses the call, and its ask makes the
-// call need approval even where the target alone would be allowed.
-// Otherwise the target's decision stands. An input rewrite in the
-// dispatcher's allow is ignored: its input has already been dispatched.
-func (r *run) evaluate(c *toolCall, req permission.Request) permission.Decision {
+// evaluate runs the permission pipeline on c and returns its decision and
+// c's permission request (the one an Approver is asked about). A dispatched
+// call is evaluated on its dispatcher first, with the dispatcher's own
+// input, so that rules naming the dispatcher apply: its deny refuses the
+// call before the target's request is even built (the request is then
+// zero), and its ask makes the call need approval even where the target
+// alone would be allowed. Otherwise the target's decision stands. An input
+// rewrite in the dispatcher's allow is ignored: its input has already been
+// dispatched.
+func (r *run) evaluate(c *toolCall) (permission.Decision, permission.Request) {
 	pc := r.permissionContext()
 	own := permission.Allowed()
 	if c.dispatcher != nil {
 		own = permission.Evaluate(r.agent.permissionRequest(r.ctx, r.state, c.via, c.dispatcher, c.dispatchInput), pc)
 	}
 	if own.Behavior == permission.Deny {
-		return own
+		return own, permission.Request{}
 	}
+	req := r.permissionRequest(c)
 	decision := permission.Evaluate(req, pc)
 	if own.Behavior == permission.Ask && decision.Behavior == permission.Allow {
-		return permission.AskUser(own.Message)
+		return permission.AskUser(own.Message), req
 	}
-	return decision
+	return decision, req
 }
 
 // permissionRequest describes c for permission.Evaluate, under the run's
@@ -122,10 +124,11 @@ func (r *run) permissionContext() permission.Context {
 // PermissionMode); a nil State means Config.PermissionMode. It never
 // consults the Approver: an Ask is returned as is, for the caller to
 // resolve, which lets a ToolWrapper ask a human itself. call.Tool is used
-// when set, else the agent's tool named call.Name; a name the agent does not
-// know is denied. A panic in the tool's methods propagates to the caller.
+// when set, else the tool named call.Name (from the current turn's tools
+// when ctx belongs to a run of a); a name the agent does not know is
+// denied. A panic in the tool's methods propagates to the caller.
 func (a *Agent) CheckPermission(ctx context.Context, call *ToolCall) permission.Decision {
-	t, ok := a.toolFor(call)
+	t, ok := a.toolFor(ctx, call)
 	if !ok {
 		return permission.Denied(fmt.Sprintf("unknown tool %q", call.Name))
 	}
@@ -133,11 +136,15 @@ func (a *Agent) CheckPermission(ctx context.Context, call *ToolCall) permission.
 }
 
 // toolFor resolves the tool a ToolCall built outside the loop refers to:
-// call.Tool when set, else the agent's tool named call.Name (see Tool). ok
-// is false for a name the agent does not know.
-func (a *Agent) toolFor(call *ToolCall) (t tool.Tool, ok bool) {
+// call.Tool when set, else the tool named call.Name of the current turn
+// when ctx belongs to a run of a (see RunInfo.Tool), else the agent's tool
+// of that name (see Tool). ok is false for a name the agent does not know.
+func (a *Agent) toolFor(ctx context.Context, call *ToolCall) (t tool.Tool, ok bool) {
 	if call.Tool != nil {
 		return call.Tool, true
+	}
+	if info, inRun := Info(ctx); inRun && info.Agent == a {
+		return info.Tool(call.Name)
 	}
 	return a.Tool(call.Name)
 }
@@ -198,5 +205,6 @@ func (r *run) heldDecision(c *toolCall) (decision permission.Decision, ok bool) 
 			ok = false
 		}
 	}()
-	return r.evaluate(c, r.permissionRequest(c)), true
+	decision, _ = r.evaluate(c)
+	return decision, true
 }

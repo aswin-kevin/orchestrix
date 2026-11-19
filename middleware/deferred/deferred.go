@@ -32,7 +32,9 @@ const (
 	// ToolSearch is the tool that finds deferred tools and loads their
 	// schemas.
 	ToolSearch = "search_tools"
-	// ToolCall is the tool that calls another tool by name.
+	// ToolCall is the name of the tool that calls another tool by name. It
+	// is a tool name, like ToolSearch and the other packages' Tool…
+	// constants, not a type; the call of a tool in a run is agent.ToolCall.
 	ToolCall = "call_tool"
 	// DefaultMaxResults is how many tools search_tools returns when neither
 	// the model nor Config.MaxResults says otherwise.
@@ -101,7 +103,7 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 		return next(ctx, req)
 	}
 	tools := make(map[string]tool.Tool)
-	for _, t := range info.Agent.Tools() {
+	for _, t := range info.Tools() {
 		tools[t.Name()] = t
 	}
 	var shown []llm.ToolSchema

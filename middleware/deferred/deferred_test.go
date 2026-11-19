@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -677,3 +678,86 @@ var (
 	_ agent.ModelWrapper = (*middleware)(nil)
 	_ tool.Dispatcher    = dispatcher{}
 )
+
+// countingProvider is a DynamicToolProvider that counts its calls.
+type countingProvider struct {
+	calls atomic.Int32
+	tools []tool.Tool
+}
+
+func (*countingProvider) Name() string { return "counting" }
+
+func (p *countingProvider) DynamicTools() []tool.Tool {
+	p.calls.Add(1)
+	return p.tools
+}
+
+func TestDynamicToolsTakenOncePerTurn(t *testing.T) {
+	dyn := &countingProvider{tools: []tool.Tool{Defer(readOnlyTool("remote", "A remote tool."))}}
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{call("s", ToolSearch, obj{"query": "remote"})}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{call("r", "remote", obj{"text": "x"})}},
+		llmtest.Turn{Text: "done"},
+	)
+	a := mustNew(t, agent.Config{Provider: p, Middleware: []agent.Middleware{New(Config{}), dyn}})
+	final := run(t, a.Run(context.Background(), userInput(state.New())))
+	if got := resultText(results(final, 1)[0]); got != "remote:x" {
+		t.Fatalf("remote result = %q, want the call to have run", got)
+	}
+	if got, want := dyn.calls.Load(), int32(len(p.Requests)); got != want {
+		t.Errorf("DynamicTools called %d times over %d turns, want once per turn: middleware must use the turn's snapshot", got, want)
+	}
+}
+
+// valueTool is a tool held by value whose fields make it incomparable.
+type valueTool struct {
+	tool.Tool
+	tags []string
+}
+
+func TestSelectNamesWithIncomparableTools(t *testing.T) {
+	a := valueTool{Tool: readOnlyTool("a", "A."), tags: []string{"x"}}
+	b := valueTool{Tool: readOnlyTool("b", "B."), tags: []string{"y"}}
+	var found []tool.Tool
+	func() {
+		defer func() {
+			if v := recover(); v != nil {
+				t.Fatalf("selectNames panicked: %v", v)
+			}
+		}()
+		found = selectNames([]tool.Tool{a, b}, "a, b, a")
+	}()
+	if names := toolNames(found); !slices.Equal(names, []string{"a", "b"}) {
+		t.Fatalf("selected %v, want [a b] without the duplicate", names)
+	}
+}
+
+func toolNames(tools []tool.Tool) []string {
+	var names []string
+	for _, t := range tools {
+		names = append(names, t.Name())
+	}
+	return names
+}
+
+// panickyTool panics when asked whether a call is read-only.
+type panickyTool struct{ tool.Tool }
+
+func (panickyTool) ReadOnly(json.RawMessage) bool { panic("ReadOnly exploded") }
+
+func TestCallToolDenyIsCheckedBeforeTheTarget(t *testing.T) {
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{viaCallTool("c", "fragile", obj{"text": "x"})}},
+		llmtest.Turn{Text: "done"},
+	)
+	a := mustNew(t, agent.Config{
+		Provider:   p,
+		Tools:      []tool.Tool{panickyTool{readOnlyTool("fragile", "Fragile.")}},
+		Middleware: []agent.Middleware{New(Config{})},
+		Rules:      permission.Rules{Deny: []permission.Rule{{Tool: ToolCall}}},
+	})
+	final := run(t, a.Run(context.Background(), userInput(state.New())))
+	if got := resultText(results(final, 0)[0]); got != "Permission denied: denied by rule call_tool" {
+		t.Fatalf("result = %q, want the call_tool deny, not a panic of the target", got)
+	}
+}

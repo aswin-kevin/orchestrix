@@ -17,8 +17,9 @@ import (
 
 // Tools returns the tools the agent's next turn offers: the static ones in
 // registration order, then the dynamic ones in stack order. It calls every
-// DynamicToolProvider. During settlement a run still withholds the disabled
-// ones from its model.
+// DynamicToolProvider and builds a new set each time; inside a run,
+// RunInfo.Tools returns the turn's snapshot instead. During settlement a run
+// still withholds the disabled ones from its model.
 func (a *Agent) Tools() []tool.Tool {
 	return a.toolSet().Tools()
 }
@@ -65,7 +66,7 @@ func dynamicProviders(stack []Middleware) []DynamicToolProvider {
 // DynamicToolProvider fails the run like a failing hook.
 func (r *run) refreshTools() error {
 	err := guard(func() error {
-		r.tools = r.agent.toolSet()
+		r.tools.Store(r.agent.toolSet())
 		return nil
 	})
 	if err != nil {
@@ -78,10 +79,44 @@ func (r *run) refreshTools() error {
 // A resumed run finishes its interrupted turn before its first model call,
 // so that turn takes its snapshot here.
 func (r *run) turnTools() *tool.Registry {
-	if r.tools == nil {
-		r.tools = r.agent.toolSet()
+	if set := r.tools.Load(); set != nil {
+		return set
 	}
-	return r.tools
+	r.tools.CompareAndSwap(nil, r.agent.toolSet())
+	return r.tools.Load()
+}
+
+// Tools returns the tools of the run's current turn: the snapshot its
+// request's schemas were built from and its calls resolve against, taken
+// once per turn (see Agent.Tools). Unlike Agent.Tools it calls no
+// DynamicToolProvider, so middleware should prefer it inside a run. Before
+// the first snapshot it is Agent.Tools; for the zero RunInfo it is nil.
+func (i RunInfo) Tools() []tool.Tool {
+	if set := i.toolSet(); set != nil {
+		return set.Tools()
+	}
+	return nil
+}
+
+// Tool returns the tool named name among RunInfo.Tools.
+func (i RunInfo) Tool(name string) (tool.Tool, bool) {
+	if set := i.toolSet(); set != nil {
+		return set.Get(name)
+	}
+	return nil, false
+}
+
+// toolSet returns the run's current snapshot, else the agent's tool set.
+func (i RunInfo) toolSet() *tool.Registry {
+	if i.run != nil {
+		if set := i.run.tools.Load(); set != nil {
+			return set
+		}
+	}
+	if i.Agent != nil {
+		return i.Agent.toolSet()
+	}
+	return nil
 }
 
 // prepare resolves the tool named by use against the turn's tool set and

@@ -15,7 +15,7 @@ var UnlockedKey = state.NewKey[[]string]("deferred.unlocked", state.Private[[]st
 
 // Unlock adds patterns to the run's unlock set, skipping those already in
 // it. Unlocking a name shows a deferred tool's schema to the model and makes
-// a gated tool callable (see Deferrer and Gater).
+// a gated tool callable (see Deferrer and Gater). s must not be nil.
 func Unlock(s *state.State, patterns ...string) {
 	UnlockedKey.Update(s, func(current []string) []string {
 		// current is the stored slice itself: never append to it in place.

@@ -27,7 +27,9 @@ type Deferrer interface {
 // Gater marks a tool that is hidden, unsearchable and uncallable until
 // Unlock names it, such as a tool a skill unlocks when it is loaded or a
 // tool of a gated MCP server. A Gater must refuse its own calls while
-// locked (as Gate does), so it stays locked without this middleware.
+// locked (as Gate does), so it stays locked without this middleware, and
+// must implement tool.Availability reporting the lock, so the agent refuses
+// a locked call before showing it to an Approver. Gate does both.
 //
 // Policy for such a tool, once unlocked, belongs in permission rules: rules,
 // hitl and hook matchers see the tool's own name, also when it is called

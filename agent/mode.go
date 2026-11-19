@@ -67,12 +67,12 @@ func SetPermissionMode(s *state.State, m permission.Mode) error {
 // PermissionRequest describes call for permission.Evaluate and Approvers
 // exactly as the loop does: ReadOnly, Edit, Subject, Shell, Paths and the
 // tool's own SelfCheck, made under the mode of call.State (see
-// PermissionMode). call.Tool is used when set, else the agent's tool named
-// call.Name; for a name the agent does not know, only Tool and Input are
-// set. ctx is passed to the tool's own CheckPermission, and a panic in the
+// PermissionMode). call.Tool is used when set, else the tool named
+// call.Name (from the current turn's tools when ctx belongs to a run of a);
+// for a name the agent does not know, only Tool and Input are set. ctx is passed to the tool's own CheckPermission, and a panic in the
 // tool's methods propagates to the caller.
 func (a *Agent) PermissionRequest(ctx context.Context, call *ToolCall) permission.Request {
-	t, ok := a.toolFor(call)
+	t, ok := a.toolFor(ctx, call)
 	if !ok {
 		return permission.Request{Tool: call.Name, Input: call.Input}
 	}
