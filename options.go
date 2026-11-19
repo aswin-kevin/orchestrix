@@ -8,6 +8,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/mcp"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
+	"github.com/aswin-kevin/orchestrix/middleware/async"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/middleware/hitl"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
@@ -37,6 +38,7 @@ type settings struct {
 	interruptOn    map[string]hitl.InterruptConfig
 	shell          *shellSpec
 	tasks          *tasks.Middleware
+	async          *async.Middleware
 
 	// Optional middleware; nil leaves it out of the stack (see baseStack).
 	memory   *memory.Config

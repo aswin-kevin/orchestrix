@@ -187,6 +187,9 @@ func (s *settings) baseStack() []agent.Middleware {
 	if sub := s.subagentsMiddleware(); sub != nil {
 		stack = append(stack, sub)
 	}
+	if s.async != nil {
+		stack = append(stack, s.async)
+	}
 	if cfg, ok := s.deferredConfig(); ok {
 		stack = append(stack, deferred.New(cfg))
 	}
