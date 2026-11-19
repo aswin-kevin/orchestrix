@@ -123,12 +123,13 @@ func TestAcceptEditsAsksForGitMetadata(t *testing.T) {
 		"/.GIT/config", "/.git./config", "/.git /config", "/git~1/config",
 		"/repo.git/config", "/evil/HEAD", "/head", "/HEAD.",
 		"/.gitconfig", "/home/me/.GitConfig", "/etc/gitconfig", "/.config/git/config", "/xdg/git/config",
+		"/.gitconfig.local", "/.gitconfig-work", "/.GITCONFIG.inc", "/.config/git/local.inc", "/.config/git/attributes",
 	} {
 		if got := Evaluate(write(p), pc); got.Behavior != Ask || !strings.Contains(got.Message, "git metadata") {
 			t.Errorf("acceptEdits write %s = %+v, want ask about git metadata", p, got)
 		}
 	}
-	for _, p := range []string{"/src/main.go", "/.gitignore", "/.github/workflows/ci.yml", "/docs/git.md", "/heads/x", "/gitops/a", "/config", "/app/config", "/.config/gitui/config", "/git/config.yaml"} {
+	for _, p := range []string{"/src/main.go", "/.gitignore", "/.github/workflows/ci.yml", "/docs/git.md", "/heads/x", "/gitops/a", "/config", "/app/config", "/.config/gitui/config", "/git/config.yaml", "/src/git/main.go", "/gitconfig.md"} {
 		if got := Evaluate(write(p), pc); got.Behavior != Allow {
 			t.Errorf("acceptEdits write %s = %+v, want allow", p, got)
 		}

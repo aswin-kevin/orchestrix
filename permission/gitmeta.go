@@ -11,10 +11,12 @@ import "strings"
 //     named like a bare repository (repo.git), or
 //   - it is a HEAD file, without which no directory is a repository, so a
 //     new one cannot be planted anywhere, under any name, or
-//   - it is a config file git reads for every repository: the global
-//     .gitconfig, the system gitconfig, or a git/config file, as in
-//     ~/.config/git/config or any $XDG_CONFIG_HOME/git/config. These matter
-//     when the workspace holds a home folder.
+//   - it is a config file git reads for every repository, or one such files
+//     commonly include: the global .gitconfig and files named like it
+//     (.gitconfig.local, .gitconfig-work), the system gitconfig, anything in
+//     a .config/git folder, or a git/config file, as in any
+//     $XDG_CONFIG_HOME/git/config. These matter when the workspace holds a
+//     home folder. A file included under some other name is not covered.
 //
 // Names are compared as a case-insensitive file system sees them, ignoring
 // the trailing dots and spaces and the short name (git~1) Windows accepts.
@@ -35,11 +37,18 @@ func isGitMetadata(p string) bool {
 			return true
 		}
 	}
-	switch base := components[len(components)-1]; base {
-	case "head", ".gitconfig", "gitconfig":
+	base := components[len(components)-1]
+	parent := func(n int) string { // the nth folder up from the file, or ""
+		if i := len(components) - 1 - n; i >= 0 {
+			return components[i]
+		}
+		return ""
+	}
+	switch {
+	case base == "head", base == "gitconfig", strings.HasPrefix(base, ".gitconfig"):
 		return true
-	case "config":
-		return len(components) > 1 && components[len(components)-2] == "git"
+	case parent(1) == "git" && (base == "config" || parent(2) == ".config"):
+		return true
 	}
 	return false
 }

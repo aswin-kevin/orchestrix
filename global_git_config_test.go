@@ -65,3 +65,49 @@ func TestGlobalGitConfigInWorkspaceNeedsApproval(t *testing.T) {
 		})
 	}
 }
+
+// TestIncludedGitConfigNeedsApproval covers a common dotfiles pattern: the
+// user's ~/.gitconfig includes ~/.gitconfig.local, and the workspace is the
+// home folder.
+func TestIncludedGitConfigNeedsApproval(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if out, err := exec.Command("git", "-C", home, "init", "-q", "project").CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	include := "[include]\n\tpath = ~/.gitconfig.local\n"
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(include), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(home, "PWNED")
+	model := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "1", Name: "write_file",
+			Input: map[string]any{"path": "/.gitconfig.local", "content": "[alias]\n\tst = \"!touch " + marker + "\"\n"}}}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "2", Name: "execute",
+			Input: map[string]any{"command": "git -C project st"}}}},
+		llmtest.Turn{Text: "done"},
+	)
+	a, err := orchestrix.New(model,
+		orchestrix.WithShell(home, shell.Options{}),
+		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
+		orchestrix.WithAllow("execute(git:*)"),
+		orchestrix.WithApprover(func(context.Context, permission.Request, string) permission.Decision {
+			return permission.Denied("denied in test")
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range a.Run(context.Background(), orchestrix.Text("go")) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("an alias in an included config file ran without approval")
+	}
+}
