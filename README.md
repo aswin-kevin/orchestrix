@@ -51,7 +51,7 @@ Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and 
 - **Knowledge.** `AGENTS.md`-style memory files, a long-term memory store, skills that unlock tools, MCP servers over stdio or HTTP, and web fetch and search.
 - **Long conversations.** Automatic summarization, model-directed compression with restore, prompt caching, deferred tools for large tool sets, and checkpointed threads.
 - **Workspaces.** In-memory, disk, shell with background jobs, key/value, remote sandbox, and composite mounts (for example, memories that persist across threads).
-- **Quality.** A self-grading rubric that sends the model back to revise, structured questions to the user, and per-model profiles.
+- **Quality.** A self-grading rubric that sends the model back to revise, a validated typed final answer, structured questions to the user, and per-model profiles.
 - **Extensible.** Every behavior is a middleware; write your own or replace any built-in one.
 
 ## Install
@@ -105,7 +105,7 @@ func main() {
 }
 ```
 
-`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTokens`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithProfiles`, `WithMount`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
+`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTokens`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithOutputType`/`WithOutputSchema`, `WithProfiles`, `WithMount`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
 
 ## Examples
 
@@ -119,6 +119,7 @@ The [`examples`](examples) directory holds small, runnable programs, one per fea
 | [`background-tasks`](examples/background-tasks) | `WithAsync`: the model starts a researcher subagent in the background, checks on it with `check_task` and ends its turn; on the next prompt of the thread a task notification brings the result, and the model answers from it. |
 | [`coordinator`](examples/coordinator) | `coordinator.New` delegating to a researcher and a writer, then `coordinator.RunParallel` answering three questions at once. |
 | [`self-check`](examples/self-check) | `WithRubric`: the first answer fails the rubric, the revision passes, and the grades are printed. |
+| [`structured-output`](examples/structured-output) | `WithOutputType` and `RunTyped`: the first answer is prose, one automatic correction later the final answer decodes into a Go struct. |
 
 ```sh
 go run ./examples/quickstart
@@ -127,6 +128,7 @@ go run ./examples/persistent-memory
 go run ./examples/background-tasks
 go run ./examples/coordinator
 go run ./examples/self-check
+go run ./examples/structured-output
 ```
 
 Set `ORX_MODEL` (the variable `orx` reads) to run the same programs against a real model, with the API key from the provider's usual variable:
@@ -869,6 +871,59 @@ _, _ = a, err
 ```
 
 Only top-level runs are graded; subagents that inherit the stack are not. Grading is advisory and fails open: when the grader returns an error (or a `ModelGrader` call outlives its `Timeout`, default 2 minutes), the run completes and the error is recorded with the grades. Only the reply that would end the run is graded, not earlier assistant messages. A grader's tokens are its own: they are not in `Final.Usage` and do not count towards the token budget. `MaxIterations` counts per run, so a run resumed after an interrupt may revise that many times again. Every continuation that keeps a run going after the model wanted to stop, rubric feedback, the background-task reminder and `Stop` hooks alike, counts against `agent.MaxStopContinuations` (3) per run, so `MaxIterations` cannot exceed it. `BeforeStop` middleware are consulted in reverse stack order and the first non-empty prompt wins: middleware added with `WithMiddleware` (and, in a background task, its inbox of updates), then the background-task reminder, then `rubric`, then `hooks`' `Stop` hooks. So the answer `rubric` grades is the one given after background tasks were dealt with, and a `Stop` hook sees only an answer `rubric` passed. Once the three slots are spent, nothing is consulted any more and the run returns its last answer, ungraded and without running later `Stop` hooks.
+
+## Structured output
+
+A service that embeds an agent usually wants data back, not prose. `WithOutputType[T]` declares the final answer as a Go struct (the schema comes from `tool.SchemaFor`: `json`, `desc` and `enum` tags, with `omitempty` and pointer fields optional), and `WithOutputSchema` takes a JSON schema directly. The agent tells the model to end with only a JSON object valid against the schema, checks the reply that would end the run, and asks again when it does not match. `RunTyped[T]` runs to completion and returns the decoded value:
+
+```go
+// Imports omitted; model comes from surrounding code.
+type Triage struct {
+	Severity string   `json:"severity" enum:"low,medium,high"`
+	Summary  string   `json:"summary"`
+	Files    []string `json:"files,omitempty"`
+}
+
+a, err := orchestrix.New(model, orchestrix.WithOutputType[Triage]())
+if err != nil {
+	log.Fatal(err)
+}
+t, final, err := orchestrix.RunTyped[Triage](ctx, a, orchestrix.Text("Triage: the build fails on Windows."))
+if err != nil {
+	log.Fatal(err) // errors.Is(err, agent.ErrInvalidOutput) when the model never produced a valid object
+}
+fmt.Println(t.Severity, t.Summary, final.Usage)
+```
+
+The result is also on the run's final event: `Final.Output` holds the normalized, compact JSON. `orchestrix.Decode[T](final)` decodes it, strictly (unknown fields are refused), from any `*agent.Final`, so it works on a `Thread` stream and on `coordinator.RunParallel` results too:
+
+```go
+// th is an *agent.Thread opened with a.Thread; the agent has WithOutputType[Triage].
+for ev, err := range th.Prompt(ctx, "Triage: the build fails on Windows.") {
+	if err != nil {
+		log.Fatal(err)
+	}
+	if ev.Kind == agent.KindFinal {
+		t, err := orchestrix.Decode[Triage](ev.Final)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(t.Severity)
+	}
+}
+```
+
+How it behaves:
+
+- **Checking.** A reply may be wrapped in one code fence. It is checked against the schema and normalized (`1e2` becomes `100` for an integer field, optional properties that are `null` are dropped).
+- **Corrections.** An invalid reply goes back to the model with the validation error, up to `agent.OutputRetries` (2) times per run. These corrections do not use the `agent.MaxStopContinuations` slots. A run resumed after an interrupt gets the full allowance again.
+- **Failure.** When the corrections are spent, the run ends with reason `invalid_output` (`agent.ReasonInvalidOutput`). `Final.Err` wraps `agent.ErrInvalidOutput` with the last validation error, `Final.Text` keeps the raw reply and `Final.Output` is nil. `Output` is non-nil exactly when the run completed; `Decode` returns an error naming any other reason.
+- **Top-level only.** Only top-level runs are held to the schema. Forks and subagents answer in free text; a subagent that should return an object has its own `Subagent.OutputSchema`.
+- **With rubric and hooks.** The reply is validated before `rubric` grades it and before `Stop` hooks and the background-task reminder are consulted, so a malformed answer is never graded. If one of them continues the run, the revised answer is validated again and `Output` is the last answer. Validation still runs when the three continuation slots are spent.
+- **Tools.** Tools stay available during the run; only the final answer is constrained. The mechanism is the same for every provider (it is a prompt and a check, not a provider feature), so a model that wraps its answer in prose fails more often than one that follows the instruction, and the failure is explicit.
+- **Persistence.** `Output` lives on the `Final` only; it is not stored in checkpoints.
+
+The `orx` CLI has no flag for this yet. See [`structured-output`](examples/structured-output) for a runnable example.
 
 ## Model profiles
 

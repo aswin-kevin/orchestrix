@@ -35,12 +35,18 @@
 // documented on New. The coordinator package builds a coordinator agent on
 // this preset and runs many agent runs at once with RunParallel.
 //
+// WithOutputType and WithOutputSchema make the final answer a validated JSON
+// object: the agent asks for it, checks the reply and asks again (up to
+// agent.OutputRetries times) when it does not match. RunTyped runs an agent to
+// completion and returns the answer decoded into a Go struct, and Decode does
+// the same for any agent.Final, such as the one ending a Thread stream.
+//
 // Everything New configures can be inspected and overridden: the options cover
 // the common cases and WithConfig exposes the full agent.Config. For custom
 // stacks, build an agent.Config yourself and call agent.New directly.
 //
 // Runnable programs for the main features (a typed tool, human approval,
-// persistent memory, background subagents, the coordinator and self-grading)
+// persistent memory, background subagents, the coordinator, self-grading and structured output)
 // live in the examples directory of the repository; each runs offline with
 // go run ./examples/<name>, or against a real model when ORX_MODEL is set.
 package orchestrix
