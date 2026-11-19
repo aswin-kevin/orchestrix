@@ -16,9 +16,9 @@
 // returns without it. Use an OS-level sandbox when commands must not escape.
 //
 // Commands get no stdin, a small allowlisted environment plus
-// NonInteractiveEnv (the host environment, which may hold API keys, is not
-// inherited unless Options.InheritEnv is set), and output capped at a head and
-// a tail so memory stays bounded.
+// NonInteractiveEnv and SafeGitEnv (the host environment, which may hold API
+// keys, is not inherited unless Options.InheritEnv is set), and output capped
+// at a head and a tail so memory stays bounded.
 //
 // On platforms without POSIX process groups (Windows) execution is
 // best-effort: only the shell process is killed, and the memory limit is
@@ -62,6 +62,18 @@ const (
 var NonInteractiveEnv = []string{"PAGER=cat", "GIT_PAGER=cat", "MANPAGER=cat", "GIT_TERMINAL_PROMPT=0",
 	"DEBIAN_FRONTEND=noninteractive", "NO_COLOR=1", "TERM=dumb"}
 
+// SafeGitEnv sets safe.bareRepository=explicit, so git uses a bare
+// repository only when one is named with --git-dir or GIT_DIR, never one it
+// merely finds: a directory with HEAD, config, objects and refs, which an
+// agent could write with file tools, would otherwise let its config run
+// commands (an alias, core.fsmonitor) from any git call made inside it.
+// Configuration set through the environment overrides the repository's, and
+// git 2.38 and later honour this setting. It replaces any GIT_CONFIG_COUNT
+// settings an inherited environment carries; Options.Env can restore them.
+var SafeGitEnv = []string{
+	"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.bareRepository", "GIT_CONFIG_VALUE_0=explicit",
+}
+
 // InheritedEnv names the host variables passed to commands by default: enough
 // for tools to find binaries, a home and a locale, and nothing secret. MCP
 // stdio servers get the same list.
@@ -70,7 +82,7 @@ var InheritedEnv = hostenv.DefaultNames
 // Options configures a Backend. The zero value is ready to use.
 type Options struct {
 	// Env is added to every command's environment after the inherited
-	// variables and NonInteractiveEnv, so it wins over both;
+	// variables, NonInteractiveEnv and SafeGitEnv, so it wins over them;
 	// ExecOptions.Env wins over it. nil adds nothing.
 	Env map[string]string
 	// InheritEnv passes the whole host environment instead of only
@@ -176,6 +188,7 @@ func (b *Backend) workDir(dir string) (string, error) {
 func (b *Backend) environ(extra []string) []string {
 	env := hostenv.Inherited(InheritedEnv, b.opts.InheritEnv)
 	env = append(env, NonInteractiveEnv...)
+	env = append(env, SafeGitEnv...)
 	env = append(env, hostenv.Pairs(b.opts.Env)...)
 	return append(env, extra...)
 }

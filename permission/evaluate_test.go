@@ -112,3 +112,33 @@ func TestModeValid(t *testing.T) {
 		t.Error("Modes returns the package's own slice")
 	}
 }
+
+func TestAcceptEditsAsksForGitMetadata(t *testing.T) {
+	write := func(p string) Request {
+		return Request{Tool: "write_file", Edit: true, Paths: []PathAccess{{p, OpWrite}}}
+	}
+	pc := Context{Mode: ModeAcceptEdits}
+	for _, p := range []string{
+		"/.git/config", "/.git/hooks/pre-commit", "/sub/.git/config", "/sub/.git",
+		"/.GIT/config", "/.git./config", "/.git /config", "/git~1/config",
+		"/repo.git/config", "/evil/HEAD", "/head", "/HEAD.",
+	} {
+		if got := Evaluate(write(p), pc); got.Behavior != Ask || !strings.Contains(got.Message, "git metadata") {
+			t.Errorf("acceptEdits write %s = %+v, want ask about git metadata", p, got)
+		}
+	}
+	for _, p := range []string{"/src/main.go", "/.gitignore", "/.github/workflows/ci.yml", "/docs/git.md", "/heads/x", "/gitops/a"} {
+		if got := Evaluate(write(p), pc); got.Behavior != Allow {
+			t.Errorf("acceptEdits write %s = %+v, want allow", p, got)
+		}
+	}
+	read := Request{Tool: "read_file", ReadOnly: true, Paths: []PathAccess{{"/.git/config", OpRead}}}
+	if got := Evaluate(read, pc); got.Behavior != Allow {
+		t.Errorf("acceptEdits read of .git/config = %+v, want allow", got)
+	}
+	// An explicit allow rule is the host's own decision.
+	allowGit := Context{Mode: ModeAcceptEdits, Rules: Rules{Allow: []Rule{mustRule(t, "write(/.git/**)")}}}
+	if got := Evaluate(write("/.git/config"), allowGit); got.Behavior != Allow {
+		t.Errorf("write with explicit allow rule = %+v, want allow", got)
+	}
+}

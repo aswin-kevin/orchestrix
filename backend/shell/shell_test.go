@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -165,6 +166,35 @@ func TestEnvAllowlistAndInjection(t *testing.T) {
 	inherit, _ := newShell(t, shell.Options{InheritEnv: true})
 	if res := execute(t, inherit, "env", backend.ExecOptions{}); !containsLine(strings.Split(res.Output, "\n"), "ORX_SECRET_TEST=leaked") {
 		t.Errorf("InheritEnv must pass the host env:\n%s", res.Output)
+	}
+}
+
+// TestGitIgnoresImplicitBareRepository plants a bare repository whose config
+// defines an alias that runs a command, and checks that git, run inside it,
+// does not use it.
+func TestGitIgnoresImplicitBareRepository(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	b, root := newShell(t, shell.Options{})
+	marker := filepath.Join(root, "ran")
+	files := map[string]string{
+		"evil/HEAD":   "ref: refs/heads/main\n",
+		"evil/config": "[core]\n\tbare = true\n[alias]\n\tst = \"!touch " + marker + "\"\n",
+	}
+	for _, dir := range []string{"evil/objects", "evil/refs/heads"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	execute(t, b, "git -C evil st", backend.ExecOptions{})
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("git used a bare repository it only discovered, and ran its alias")
 	}
 }
 

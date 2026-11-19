@@ -191,7 +191,7 @@ Every tool call is checked before it runs. Choose a mode with `WithPermissionMod
 | Mode | Behavior |
 | --- | --- |
 | `default` | Read-only calls run; anything else asks. |
-| `acceptEdits` | Also allows file-modifying tools. |
+| `acceptEdits` | Also allows file-modifying tools, except writes to git metadata, which ask. |
 | `bypassPermissions` | Allows everything except what a deny rule forbids. |
 | `plan` | Denies everything that is not read-only. |
 | `dontAsk` | Never asks; denies whatever is not explicitly allowed. |
@@ -213,6 +213,8 @@ orchestrix.New(model,
 Rule grammar: `Tool` matches a tool by name, `Tool(pattern)` narrows it by the call's main string (such as a shell command; `git:*` matches `git` followed by arguments), and `read(glob)` / `write(glob)` match file paths. A malformed rule makes `New` return an error. Calls that need approval go to the `WithApprover` callback, or interrupt the run when there is none (see below).
 
 Rules are matched lexically, so know their limits. Path rules are case-sensitive and do not resolve symlinks (the disk backend still refuses paths that resolve outside its root). Command rules are matched against each command of a shell line: an allow rule must cover every command, so `execute(git:*)` does not approve `git status && rm -rf x`, while a deny or ask rule applies if any one command matches. A line the parser cannot fully analyze (command substitution, redirection to a file, `sh -c`, script interpreters such as `awk` or `python`, editors such as `vim`, options that make a command run another, such as `git -c`, sed's `e` or `tar --to-command`, and the like) is never approved by an allow rule, and needs a human whenever deny or ask rules name commands for its tool. Permissions decide which calls the agent makes; they are not a sandbox.
+
+Git runs commands named in a repository's config (`core.fsmonitor`, aliases, hooks), so `acceptEdits` does not auto-approve writes to git metadata: any path inside a `.git` folder or file, a folder named like a bare repository (`repo.git`), or a file named `HEAD`, without which no folder is a repository. An explicit allow rule such as `write(/.git/**)` still allows them. Git options that pick a repository or its config (`-c`, `--git-dir`, `--work-tree`) also need approval, and the shell backend runs commands with `safe.bareRepository=explicit` (`shell.SafeGitEnv`), so git never uses a bare repository it merely finds. The same risk is wider than git: with edits auto-approved, any allowed command that runs project-controlled code can run anything, such as `npm test` after an edit to `package.json`, `make` after an edit to the `Makefile`, or `go test` after an edit to a test. Allow such commands only when you would also approve the edits that could precede them.
 
 ## Backends
 

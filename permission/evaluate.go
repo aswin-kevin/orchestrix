@@ -17,7 +17,8 @@ import (
 //  6. a matching ask rule asks
 //  7. the tool's own allow verdict allows (not in dontAsk mode)
 //  8. a matching allow rule allows
-//  9. acceptEdits mode allows file edits
+//  9. acceptEdits mode allows file edits, except writes to git metadata,
+//     which ask (see gitMetadataWrite)
 //  10. read-only calls are allowed
 //  11. dontAsk and auto modes deny; every other mode asks
 //
@@ -68,6 +69,9 @@ func Evaluate(req Request, pc Context) Decision {
 	}
 	// Step 9.
 	if pc.Mode == ModeAcceptEdits && req.Edit {
+		if p, ok := gitMetadataWrite(req.Paths); ok {
+			return AskUser(fmt.Sprintf("%s writes git metadata (%s), where git config can name commands that git runs", req.Tool, p))
+		}
 		return Allowed()
 	}
 	// Step 10.

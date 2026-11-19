@@ -75,11 +75,16 @@ func tarRunsCommand(args []word) bool {
 	return hasAnyOption(args, tarCommandOptions)
 }
 
-// gitValueOptions are git's global options whose value may be the next word
-// (-c and --config-env are refused before their value matters).
-var gitValueOptions = map[string]bool{
-	"-C": true, "--git-dir": true, "--work-tree": true, "--namespace": true,
-}
+// gitValueOptions are git's global options whose value may be the next word.
+// Those that choose the configuration (-c, --config-env, --git-dir,
+// --work-tree) are refused before their value matters.
+var gitValueOptions = map[string]bool{"-C": true, "--namespace": true}
+
+// gitConfigOptions are git's global options that choose configuration git
+// reads: set directly (-c, --config-env), or taken from a repository that
+// may be any directory (--git-dir, --work-tree), so protecting directories
+// named .git does not cover it.
+var gitConfigOptions = []string{"-c", "--config-env", "--git-dir", "--work-tree"}
 
 // gitCommandOptions are, per subcommand, the options whose value is a command
 // git runs, or that install hooks or configuration that later run one.
@@ -109,15 +114,14 @@ var gitCommandActions = map[string]string{"bisect": "run", "submodule": "foreach
 var gitConfigReads = []string{"--get", "--get-all", "--get-regexp", "--list", "-l", "get", "list"}
 
 // gitRunsCommand reports whether git's arguments make it run a command of
-// the caller's choosing: global configuration (-c, --config-env), a
-// replacement for its own programs (--exec-path=), or a subcommand option or
-// action that runs or installs one.
+// the caller's choosing: configuration it would not otherwise read (see
+// gitConfigOptions), a replacement for its own programs (--exec-path=), or a
+// subcommand option or action that runs or installs one.
 func gitRunsCommand(args []word) bool {
 	for i := 0; i < len(args); i++ {
 		arg := args[i].text
 		switch {
-		case strings.HasPrefix(arg, "-c") || strings.HasPrefix(arg, "--config-env") ||
-			strings.HasPrefix(arg, "--exec-path="):
+		case startsWithAny(arg, gitConfigOptions) || strings.HasPrefix(arg, "--exec-path="):
 			return true
 		case gitValueOptions[arg]:
 			i++
@@ -152,6 +156,16 @@ func hasAnyWord(args []word, words []string) bool {
 			if a.text == w {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// startsWithAny reports whether s starts with any of prefixes.
+func startsWithAny(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
 		}
 	}
 	return false
