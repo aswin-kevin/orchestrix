@@ -45,7 +45,7 @@ type openAIProvider struct {
 // newOpenAI returns an adapter for cfg. It keeps its own copy of the
 // configuration, so later changes to the caller's value have no effect.
 func newOpenAI(cfg Config) (*openAIProvider, error) {
-	if err := cfg.prepare(); err != nil {
+	if err := cfg.Prepare(); err != nil {
 		return nil, err
 	}
 	return &openAIProvider{cfg: &cfg}, nil
@@ -403,7 +403,7 @@ func (s *openAIStreamState) stopReason() string {
 
 // send issues the HTTP request, returning the 2xx response.
 func (p *openAIProvider) send(ctx context.Context, body []byte) (*http.Response, error) {
-	return p.cfg.do(ctx, func() (*http.Request, error) {
+	return p.cfg.Do(ctx, func() (*http.Request, error) {
 		httpReq, err := http.NewRequest(http.MethodPost, p.completionsURL(), bytes.NewReader(body))
 		if err != nil {
 			return nil, err

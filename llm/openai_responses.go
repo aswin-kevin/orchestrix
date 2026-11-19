@@ -39,7 +39,7 @@ type responsesProvider struct {
 // newResponses returns an adapter for cfg. It keeps its own copy of the
 // configuration, so later changes to the caller's value have no effect.
 func newResponses(cfg Config) (*responsesProvider, error) {
-	if err := cfg.prepare(); err != nil {
+	if err := cfg.Prepare(); err != nil {
 		return nil, err
 	}
 	return &responsesProvider{cfg: &cfg}, nil
@@ -78,7 +78,7 @@ func (p *responsesProvider) Stream(ctx context.Context, req Request) iter.Seq2[S
 }
 
 func (p *responsesProvider) send(ctx context.Context, body []byte) (*http.Response, error) {
-	return p.cfg.do(ctx, func() (*http.Request, error) {
+	return p.cfg.Do(ctx, func() (*http.Request, error) {
 		url := strings.TrimRight(p.cfg.BaseURL, "/") + "/responses"
 		httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {

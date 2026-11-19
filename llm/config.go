@@ -39,7 +39,7 @@ const (
 
 // Config configures a provider adapter.
 //
-// An adapter calls prepare once in its constructor and then shares the
+// An adapter calls Prepare once in its constructor and then shares the
 // resulting HTTP client and rate limiter, so a Config must not be copied
 // after that point; adapters keep it by pointer.
 type Config struct {
@@ -116,9 +116,10 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-// prepare builds the HTTP client and rate limiter. Adapters call it once
-// from their constructor; it is not safe to call concurrently with do.
-func (c *Config) prepare() error {
+// Prepare builds the HTTP client and rate limiter. Call it once before Do
+// (adapters do so from their constructor); it is not safe to call
+// concurrently with Do.
+func (c *Config) Prepare() error {
 	client, err := c.newHTTPClient()
 	if err != nil {
 		return err
@@ -128,7 +129,7 @@ func (c *Config) prepare() error {
 	return nil
 }
 
-// httpClient returns the client built by prepare.
+// httpClient returns the client built by Prepare.
 func (c *Config) httpClient() *http.Client {
 	return c.client
 }

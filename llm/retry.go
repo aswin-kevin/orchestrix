@@ -26,18 +26,21 @@ const (
 	maxRetryAfter = 60 * time.Second
 )
 
-// do sends the request produced by build, honouring the rate limit and
+// Do sends the request produced by build, honouring the rate limit and
 // retrying transient failures, and returns the first 2xx response; the caller
 // closes its body. build runs once per attempt so every retry gets a fresh
 // request body. Retries cover only establishing the response, never reading
 // it. Context errors are returned as-is and never retried.
+//
+// Adapters outside this package use it to get the same retries, Retry-After
+// handling and rate limiting. Call Prepare first.
 //
 // A retryable error is returned at once, without waiting, when a fallback
 // provider will switch to another entry for it (see withHandoff), or when
 // the wait before the next attempt would end after ctx's deadline: the
 // caller gets the provider's error while ctx is still live, rather than a
 // deadline error once the wait has used up the time left.
-func (c *Config) do(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
+func (c *Config) Do(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
 	maxRetries := c.maxRetries()
 	for attempt := 0; ; attempt++ {
 		resp, err := c.attempt(ctx, build)

@@ -35,7 +35,7 @@ type anthropicProvider struct {
 // newAnthropic returns an adapter for cfg. It keeps its own copy of the
 // configuration, so later changes to the caller's value have no effect.
 func newAnthropic(cfg Config) (*anthropicProvider, error) {
-	if err := cfg.prepare(); err != nil {
+	if err := cfg.Prepare(); err != nil {
 		return nil, err
 	}
 	return &anthropicProvider{cfg: &cfg}, nil
@@ -335,7 +335,7 @@ func (p *anthropicProvider) send(ctx context.Context, req Request, stream bool) 
 	if err != nil {
 		return nil, fmt.Errorf("llm: encode anthropic request: %w", err)
 	}
-	return p.cfg.do(ctx, func() (*http.Request, error) {
+	return p.cfg.Do(ctx, func() (*http.Request, error) {
 		httpReq, err := http.NewRequest(http.MethodPost, p.messagesURL(), bytes.NewReader(body))
 		if err != nil {
 			return nil, err
