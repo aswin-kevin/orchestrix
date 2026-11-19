@@ -67,7 +67,7 @@ func TestSystemOneRequestAndAnswers(t *testing.T) {
 	want := `{"model":"decide:1","state":"first\n\nsecond","questions":{
 	 "refund":{"type":"noul","instructions":"Is the customer asking for a refund?"},
 	 "team":{"type":"choice","instructions":"Which team?","criteria":{"payments":"billing, refunds","mobile":"app bugs"}},
-	 "urgency":{"type":"score","instructions":"How urgent?","criteria":[{"label":"low","description":"cosmetic"},{"label":"high","description":"outage"}]}}}`
+	 "urgency":{"type":"score","instructions":"How urgent?","criteria":["low: cosmetic","high: outage"]}}}`
 	assertJSONEq(t, gotBody, want)
 
 	if a := resp.Answers["refund"]; a.Type != YesNo || a.Yes != 0.9923 {

@@ -56,11 +56,6 @@ type systemOneQuestion struct {
 	Criteria     any    `json:"criteria,omitempty"`
 }
 
-type systemOneLevel struct {
-	Label       string `json:"label"`
-	Description string `json:"description,omitempty"`
-}
-
 type systemOneReply struct {
 	Model   string                     `json:"model"`
 	Answers map[string]systemOneAnswer `json:"answers"`
@@ -146,16 +141,26 @@ func toSystemOneQuestion(q Question) systemOneQuestion {
 		wq.Type = systemOneYesNo
 	case Choice:
 		wq.Type = systemOneChoice
-		criteria := make(map[string]string, len(q.Options))
+		// An option without a description is sent as null (a bare label).
+		criteria := make(map[string]*string, len(q.Options))
 		for _, o := range q.Options {
-			criteria[o.Value] = o.Description
+			if o.Description != "" {
+				criteria[o.Value] = &o.Description
+			} else {
+				criteria[o.Value] = nil
+			}
 		}
 		wq.Criteria = criteria
 	case Score:
 		wq.Type = systemOneScore
-		levels := make([]systemOneLevel, len(q.Options))
+		// Levels are plain strings, lowest first; answers refer to them by
+		// index, which toResponse maps back to Option.Value.
+		levels := make([]string, len(q.Options))
 		for i, o := range q.Options {
-			levels[i] = systemOneLevel{Label: o.Value, Description: o.Description}
+			levels[i] = o.Value
+			if o.Description != "" {
+				levels[i] += ": " + o.Description
+			}
 		}
 		wq.Criteria = levels
 	}
