@@ -83,8 +83,12 @@ func TestCheckTaskWait(t *testing.T) {
 		llmtest.Turn{Text: "again"},
 	)
 	begin := time.Now()
+	// The task is let finish only once the model has asked for c2. Released
+	// earlier, at c1's result, it could end before the turn that asks for c2,
+	// whose BeforeModel would then rightly announce it before check_task
+	// shows the result.
 	evs, _ := h.run(t, context.Background(), "go", func(ev agent.Event) {
-		if ev.Kind == agent.KindToolResult && ev.ToolID == "c1" {
+		if ev.Kind == agent.KindToolUse && ev.ToolID == "c2" {
 			g.release()
 		}
 	})
