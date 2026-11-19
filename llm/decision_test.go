@@ -70,11 +70,11 @@ func TestDecisionRequestValidate(t *testing.T) {
 func TestCheckAnswered(t *testing.T) {
 	qs := []Question{{Name: "ok", Type: YesNo}, {Name: "team", Type: Choice}}
 	resp := &DecisionResponse{Answers: map[string]Answer{"ok": {Type: YesNo, Yes: 0.9}}}
-	if err := resp.checkAnswered(qs); err == nil || !strings.Contains(err.Error(), `"team"`) {
+	if err := resp.checkAnswered(qs); err == nil || err.Error() != `llm: decision reply has no answer for question "team"` {
 		t.Fatalf("missing answer: %v", err)
 	}
 	resp.Answers["team"] = Answer{Type: Score}
-	if err := resp.checkAnswered(qs); err == nil || !strings.Contains(err.Error(), "team") {
+	if err := resp.checkAnswered(qs); err == nil || err.Error() != `llm: decision reply has a "score" answer for question "team", want "choice"` {
 		t.Fatalf("wrong type: %v", err)
 	}
 	resp.Answers["team"] = Answer{Type: Score, Refused: true}

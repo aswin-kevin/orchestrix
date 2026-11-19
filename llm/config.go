@@ -19,7 +19,8 @@ const (
 	FormatOpenAI          Format = "openai"
 	FormatOpenAIResponses Format = "openai-responses"
 	// FormatSystemOne and FormatOpenAIDecisions are decision formats: build
-	// them with NewDecider, not New.
+	// them with NewDecider, not New. A systemone BaseURL may end with /v1 or
+	// not; the adapter adds /v1 when it is missing.
 	FormatSystemOne       Format = "systemone"
 	FormatOpenAIDecisions Format = "openai-decisions"
 )

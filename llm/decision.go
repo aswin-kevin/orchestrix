@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -68,10 +69,10 @@ var questionName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 // the kinds of the input blocks; adapters do that.
 func (r DecisionRequest) Validate() error {
 	if len(r.Questions) == 0 {
-		return fmt.Errorf("llm: decision request has no questions")
+		return errors.New("llm: decision request has no questions")
 	}
 	if len(r.Input) == 0 {
-		return fmt.Errorf("llm: decision request has no input")
+		return errors.New("llm: decision request has no input")
 	}
 	seen := make(map[string]bool, len(r.Questions))
 	for _, q := range r.Questions {
@@ -128,8 +129,11 @@ func (q Question) validate() error {
 func (r *DecisionResponse) checkAnswered(qs []Question) error {
 	for _, q := range qs {
 		a, ok := r.Answers[q.Name]
-		if !ok || (!a.Refused && a.Type != q.Type) {
+		switch {
+		case !ok:
 			return fmt.Errorf("llm: decision reply has no answer for question %q", q.Name)
+		case !a.Refused && a.Type != q.Type:
+			return fmt.Errorf("llm: decision reply has a %q answer for question %q, want %q", a.Type, q.Name, q.Type)
 		}
 	}
 	return nil
