@@ -9,10 +9,7 @@ import (
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/llm"
-	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/permission"
-	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -112,7 +109,7 @@ func (m *middleware) runTask(ctx context.Context, raw json.RawMessage, c *tool.C
 	if info.Depth >= m.maxDepth {
 		return tool.Errorf("cannot start subagent %s: the maximum nesting depth of %d is reached; do the task yourself", in.SubagentType, m.maxDepth), nil
 	}
-	run, err := m.start(info, in, c)
+	run, err := m.start(ctx, info, in, c)
 	if err != nil {
 		return tool.Errorf("cannot start subagent %s: %v", in.SubagentType, err), nil
 	}
@@ -130,7 +127,7 @@ func (m *middleware) offers(typ string) bool {
 }
 
 // start prepares a fresh run of the subagent in selects.
-func (m *middleware) start(info agent.RunInfo, in TaskInput, c *tool.Call) (childRun, error) {
+func (m *middleware) start(ctx context.Context, info agent.RunInfo, in TaskInput, c *tool.Call) (childRun, error) {
 	child, schema, err := m.subagent(info.Agent, in.SubagentType)
 	if err != nil {
 		return childRun{}, err
@@ -139,7 +136,7 @@ func (m *middleware) start(info agent.RunInfo, in TaskInput, c *tool.Call) (chil
 	if in.SubagentType == Fork {
 		run.in, err = forkInput(info.ThreadID, in.Description, c)
 	} else {
-		run.in = childInput(info, child, m.specs[in.SubagentType], in, c)
+		run.in, err = m.launcher.Input(ctx, child, m.specs[in.SubagentType], in.Description, c.ToolUseID, c)
 	}
 	return run, err
 }
@@ -154,7 +151,7 @@ func (m *middleware) subagent(parent *agent.Agent, typ string) (*agent.Agent, ma
 		return parent, nil, nil
 	}
 	spec := m.specs[typ]
-	child, err := m.child(parent, spec)
+	child, err := m.launcher.Agent(parent, spec)
 	return child, spec.OutputSchema, err
 }
 
@@ -176,45 +173,6 @@ func (m *middleware) settle(ctx context.Context, c *tool.Call, run childRun, fin
 		return *structured, nil
 	}
 	return outcome(ctx, run.typ, final)
-}
-
-// childThread is the thread id of the subagent a task call starts.
-func childThread(parentThread, typ, toolUseID string) string {
-	return parentThread + "/" + typ + "/" + toolUseID
-}
-
-// childInput starts an isolated run of child, the subagent spec that in
-// selects, on the task description alone, with the parent's shareable state
-// and backend, under a thread id unique to the call. info is the parent's
-// run; see childMode for the permission mode the child starts in and
-// childScope for the skills it is offered.
-func childInput(info agent.RunInfo, child *agent.Agent, spec Subagent, in TaskInput, c *tool.Call) agent.Input {
-	s := c.State.ChildFor()
-	agent.PermissionModeKey.Set(s, childMode(info.Agent, child, c.State))
-	// skills.ScopeKey is private, so ChildFor dropped it: without this a
-	// subagent (or its own subagents) would see skills its parent may not.
-	if parent, ok := skills.ScopeKey.Get(c.State); ok || spec.Skills != nil || spec.PinnedSkills != nil {
-		skills.ScopeKey.Set(s, childScope(parent, spec))
-	}
-	return agent.Input{
-		ThreadID:  childThread(info.ThreadID, in.SubagentType, c.ToolUseID),
-		State:     s,
-		Messages:  []llm.Message{llm.UserText(in.Description)},
-		Backend:   c.Backend,
-		AgentName: in.SubagentType,
-		// The parent's thread is the one that is saved.
-		Ephemeral: true,
-	}
-}
-
-// childMode is the permission mode child, an isolated subagent started by
-// parent's run with State s, starts in: the stricter (permission.Stricter)
-// of the parent's current mode and the child's configured one
-// (Subagent.PermissionMode, else the parent's Config.PermissionMode). A
-// subagent therefore never acts more freely than the run that started it,
-// nor more freely than it was configured to.
-func childMode(parent, child *agent.Agent, s *state.State) permission.Mode {
-	return permission.Stricter(parent.PermissionMode(s), child.PermissionMode(nil))
 }
 
 // runChild runs child to its end and returns its Final (see drain).
