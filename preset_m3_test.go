@@ -91,12 +91,45 @@ func TestMCPWithoutHiddenToolsAddsNoDeferred(t *testing.T) {
 func TestSkillsWithToolsAddsDeferred(t *testing.T) {
 	cfg := testSkills()
 	cfg.Tools = []tool.Tool{noopTool("pdf_render")}
-	a, err := orchestrix.New(llmtest.New(), orchestrix.WithSkills(cfg))
+	p := llmtest.New(llmtest.Turn{Text: "ok"})
+	a, err := orchestrix.New(p,
+		orchestrix.WithSkills(cfg),
+		orchestrix.WithMCP(connectMCP(t, false)),
+		orchestrix.WithWeb(web.Config{}),
+		orchestrix.WithAskUser(askuser.Config{}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(stackNames(a), "deferred") {
-		t.Errorf("stack %v lacks deferred, so gated skill tools would show their schemas", stackNames(a))
+	finalOf(t, a, orchestrix.Text("hi"))
+	names := toolNames(p)
+	if slices.Contains(names, "pdf_render") {
+		t.Errorf("tools %v show the gated skill tool pdf_render", names)
+	}
+	if !slices.Contains(names, deferred.ToolSearch) {
+		t.Errorf("tools %v lack %s", names, deferred.ToolSearch)
+	}
+	want := []string{"summarize", "cache", "skills", "filesystem", "planning", "subagents", "deferred", "mcp", "web", "askuser"}
+	if got := stackNames(a); !slices.Equal(got, want) {
+		t.Errorf("stack = %v, want %v (auto-added deferred after subagents)", got, want)
+	}
+}
+
+func TestFailedSkillsDoNotCascadeToSubagents(t *testing.T) {
+	cfg := testSkills()
+	cfg.Pinned = []string{"nope"}
+	_, err := orchestrix.New(llmtest.New(),
+		orchestrix.WithSkills(cfg),
+		orchestrix.WithSubagents(subagents.Subagent{
+			Name: "pdf-helper", Description: "Handles PDFs.", SystemPrompt: "You handle PDFs.",
+			Skills: []string{"pdf"},
+		}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("err = %v, want the unknown pinned skill reported", err)
+	}
+	if strings.Contains(err.Error(), "skills middleware") {
+		t.Errorf("err = %v also blames a missing skills middleware; the WithSkills error is the cause", err)
 	}
 }
 

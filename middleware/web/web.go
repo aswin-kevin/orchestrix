@@ -82,23 +82,28 @@ type Config struct {
 	// MaxChars is how many characters of text one web_fetch call returns
 	// at most, whatever the model asks for; ≤ 0 means DefaultMaxChars.
 	MaxChars int
-	// Timeout bounds each request, body included; ≤ 0 means
+	// The HTTP settings below apply to web_fetch only. A search backend
+	// sends its requests with the Client of its own config; to give it the
+	// same policy, build that client with NewHTTPClient(cfg.ClientConfig()).
+
+	// Timeout bounds each web_fetch request, body included; ≤ 0 means
 	// DefaultTimeout.
 	Timeout time.Duration
-	// MaxRedirects is how many redirects a request follows; ≤ 0 means
-	// DefaultMaxRedirects.
+	// MaxRedirects is how many redirects a web_fetch request follows; ≤ 0
+	// means DefaultMaxRedirects.
 	MaxRedirects int
 
-	// AllowPrivateNetworks permits loopback, private, link-local, CGNAT and
-	// other non-public addresses. False refuses them.
+	// AllowPrivateNetworks lets web_fetch reach loopback, private,
+	// link-local, CGNAT and other non-public addresses. False refuses them.
 	AllowPrivateNetworks bool
-	// ProxyURL is the http or https proxy for fetch and search. Empty means
-	// no proxy; the proxy environment variables are always ignored.
+	// ProxyURL is the http or https proxy web_fetch goes through. Empty
+	// means no proxy; the proxy environment variables are always ignored.
 	ProxyURL string
-	// CACertFiles are PEM files of extra root certificates, added to the
-	// system pool. Nil trusts the system pool only.
+	// CACertFiles are PEM files of extra root certificates web_fetch
+	// trusts, added to the system pool. Nil trusts the system pool only.
 	CACertFiles []string
-	// UserAgent is sent with every request; empty means DefaultUserAgent.
+	// UserAgent is sent with every web_fetch request that sets none; empty
+	// means DefaultUserAgent.
 	UserAgent string
 
 	// ReadOnly reports the web tools as read-only, so permission checks

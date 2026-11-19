@@ -576,10 +576,27 @@ a, err := orchestrix.New(model,
 _, _ = a, err
 ```
 
-- **Network guard.** By default every connection to a loopback, private, link-local or otherwise non-public address is refused when it is made, for each redirect hop and each DNS answer, so a page cannot lead the agent into your internal network. `AllowPrivateNetworks` turns this off.
-- **Proxy and certificates.** `ProxyURL` sends every request through an http or https proxy (the proxy environment variables are ignored), and `CACertFiles` adds root certificates. A bad proxy URL or an unreadable CA file makes `New` fail.
+- **Network guard.** By default every `web_fetch` connection to a loopback, private, link-local or otherwise non-public address is refused when it is made, for each redirect hop and each DNS answer, so a page cannot lead the agent into your internal network. `AllowPrivateNetworks` turns this off.
+- **Proxy and certificates.** `ProxyURL` sends `web_fetch` requests through an http or https proxy (the proxy environment variables are ignored), and `CACertFiles` adds root certificates for them. A bad proxy URL or an unreadable CA file makes `New` fail. These settings, like the network guard, cover `web_fetch` only (see below for search).
 - **Permissions.** The tools need an allow rule or an approval, unless `ReadOnly` is set, which allows them without one. `web_fetch(pattern)` rules match the URL in a canonical form: lowercase scheme and host, no default port, `.` and `..` segments resolved, escaped unreserved characters decoded, no fragment. URLs with a user name or password are refused. Rules see only the URL the model asked for: redirects are followed without checking the rules again, though the network guard checks every hop.
 - **Search backends.** `web.DuckDuckGo` (no key), `web.Brave` and `web.Tavily` (API key required). Each constructor returns `(SearchBackend, error)` and takes an optional `Client`; pass one from `web.NewHTTPClient` to search through a proxy or with extra certificates. Search requests never follow redirects. Implement `web.SearchBackend` for any other service.
+
+A search backend sends its requests with its own `Client`. Without one it uses a plain client: no proxy, no extra certificates, and private addresses allowed, since the endpoint is fixed by you and not chosen by the model. To send search through the same proxy as `web_fetch`, build its client from the same settings:
+
+```go
+// Imports omitted; model comes from surrounding code.
+cfg := web.Config{ProxyURL: "http://proxy.internal:3128"}
+client, err := web.NewHTTPClient(cfg.ClientConfig()) // web_fetch's proxy and network policy
+if err != nil {
+	log.Fatal(err)
+}
+cfg.Search, err = web.DuckDuckGo(web.DuckDuckGoConfig{Client: client})
+if err != nil {
+	log.Fatal(err)
+}
+a, err := orchestrix.New(model, orchestrix.WithWeb(cfg))
+_, _ = a, err
+```
 
 Page content and search results are untrusted text written by third parties; the default prompt tells the model never to follow instructions found in them.
 
@@ -673,7 +690,7 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 
 Milestone 1 (core) shipped the three providers, the agent loop with middleware, events and budgets, permissions, memory and disk backends, file and planning tools, the preset and a minimal CLI. Milestone 2 (depth) added subagents (isolated and forked), summarization, prompt caching, hooks, checkpointed threads and resume, a human-approval middleware, the shell backend and background tasks. Milestone 3 (knowledge and reach) added memory files and a memory store, skills, MCP servers, plan mode, deferred tools, web fetch and search, and questions to the user. Next:
 
-- **Milestone 4, scale:** async subagents, a coordinator, rubric evaluation, model profiles, key-value, composite and sandbox backends, model-directed context compression, and examples.
+- **Milestone 4, scale:** async subagents, a coordinator, rubric evaluation, model profiles, key-value, composite and sandbox backends, model-directed context compression, and examples and docs.
 
 ## Contributing
 

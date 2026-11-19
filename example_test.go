@@ -246,6 +246,20 @@ func ExampleWithWeb() {
 	_, _ = a, err
 }
 
+func ExampleWithWeb_searchProxy() {
+	cfg := web.Config{ProxyURL: "http://proxy.internal:3128"}
+	client, err := web.NewHTTPClient(cfg.ClientConfig()) // web_fetch's proxy and network policy
+	if err != nil {
+		log.Fatal(err)
+	}
+	cfg.Search, err = web.DuckDuckGo(web.DuckDuckGoConfig{Client: client})
+	if err != nil {
+		log.Fatal(err)
+	}
+	a, err := orchestrix.New(model, orchestrix.WithWeb(cfg))
+	_, _ = a, err
+}
+
 func ExampleWithAskUser() {
 	ctx := context.Background()
 	a, err := orchestrix.New(model, orchestrix.WithAskUser(askuser.Config{}))

@@ -46,6 +46,8 @@ type settings struct {
 	mcp      *mcp.Middleware
 	web      *web.Config
 	askUser  *askuser.Config
+	// skillsFailed records that WithSkills' middleware could not be built.
+	skillsFailed bool
 }
 
 // Option customizes the agent built by New.

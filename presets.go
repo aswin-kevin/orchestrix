@@ -167,7 +167,12 @@ func (s *settings) baseStack() []agent.Middleware {
 		stack = s.appendBuilt(stack, "WithMemory", func() (agent.Middleware, error) { return memory.New(*s.memory) })
 	}
 	if s.skills != nil {
-		stack = s.appendBuilt(stack, "WithSkills", func() (agent.Middleware, error) { return skills.New(*s.skills) })
+		if sk, err := skills.New(*s.skills); err != nil {
+			s.errs = append(s.errs, fmt.Errorf("WithSkills: %w", err))
+			s.skillsFailed = true
+		} else {
+			stack = append(stack, sk)
+		}
 	}
 	if s.planMode != nil {
 		stack = append(stack, planmode.New(*s.planMode))
@@ -226,8 +231,14 @@ func (s *settings) deferredConfig() (deferred.Config, bool) {
 // checkSubagentSkills records the skills that subagents inheriting the
 // agent's middleware ask for but stack, the agent's final middleware, does
 // not define. subagents.New checks only the specs with their own Middleware;
-// without this, the rest would fail at their first task call.
+// without this, the rest would fail at their first task call. Like every
+// other spec check, it runs even when WithoutMiddleware or WithMiddleware
+// removed or replaced the subagents middleware. It is skipped when WithSkills
+// failed, whose error already explains the missing skills middleware.
 func (s *settings) checkSubagentSkills(stack []agent.Middleware) {
+	if s.skillsFailed {
+		return
+	}
 	for _, spec := range s.subagentSpecs() {
 		if spec.Middleware != nil {
 			continue
@@ -304,10 +315,11 @@ func WithDeferredTools(cfg deferred.Config) Option {
 	return func(s *settings) { s.deferred = &cfg }
 }
 
-// WithWeb adds web_fetch and, with cfg.Search, web_search. Requests to
-// private and loopback addresses are refused unless cfg.AllowPrivateNetworks
-// is set. A bad proxy URL, an unreadable CA file or a search backend that
-// fails validation makes New fail.
+// WithWeb adds web_fetch and, with cfg.Search, web_search. web_fetch refuses
+// private and loopback addresses unless cfg.AllowPrivateNetworks is set, and
+// uses cfg's proxy and CA settings; a search backend uses the Client of its
+// own config instead (see web.Config). A bad proxy URL, an unreadable CA file
+// or a search backend that fails validation makes New fail.
 func WithWeb(cfg web.Config) Option {
 	return func(s *settings) { s.web = &cfg }
 }
