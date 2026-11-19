@@ -59,6 +59,10 @@ type Input struct {
 // missing Provider, an unknown non-empty PermissionMode, an invalid middleware
 // stack (see Compose), or tools with clashing or illegal names across
 // Config.Tools and every ToolProvider.
+//
+// The composed stack is then filtered by every MiddlewareExcluder for
+// Config.Model. Only the stack is filtered: Config().Middleware stays
+// unfiltered, so a child built from it re-filters for its own model.
 func New(cfg Config) (*Agent, error) {
 	if cfg.Provider == nil {
 		return nil, errors.New("agent: Config.Provider is required")
@@ -71,6 +75,7 @@ func New(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	stack = filterExcluded(stack, cfg.Model)
 	registry, err := buildRegistry(cfg.Tools, stack)
 	if err != nil {
 		return nil, err

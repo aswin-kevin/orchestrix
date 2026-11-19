@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // named is a middleware with a configurable name and an id to tell
@@ -80,5 +84,92 @@ func TestComposeErrors(t *testing.T) {
 func TestComposeNilBaseEntry(t *testing.T) {
 	if _, err := Compose([]Middleware{nil}, nil, nil); err == nil {
 		t.Fatal("expected error for nil base middleware")
+	}
+}
+
+// excluder removes the named middleware for models matching only.
+type excluder struct {
+	name   string
+	only   string
+	remove []string
+}
+
+func (e excluder) Name() string { return e.name }
+
+func (e excluder) ExcludeMiddleware(model string) []string {
+	if e.only != "" && e.only != model {
+		return nil
+	}
+	return e.remove
+}
+
+// ownerStub is a middleware contributing one tool of the same name.
+type ownerStub struct{ id string }
+
+func (o ownerStub) Name() string { return o.id }
+
+func (o ownerStub) Tools() []tool.Tool {
+	return []tool.Tool{tool.New(o.id+"_tool", "A tool.",
+		func(context.Context, struct{}, *tool.Call) (tool.Result, error) { return tool.Text("ok"), nil })}
+}
+
+func newExcluded(t *testing.T, model string, mws ...Middleware) *Agent {
+	t.Helper()
+	a, err := New(Config{Provider: llmtest.New(llmtest.Turn{Text: "x"}), Model: model, Middleware: mws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func exToolNames(a *Agent) []string {
+	var out []string
+	for _, tl := range a.Tools() {
+		out = append(out, tl.Name())
+	}
+	return out
+}
+
+func TestExcluderRemovesNamed(t *testing.T) {
+	a := newExcluded(t, "small-1", excluder{name: "ex", remove: []string{"planning"}}, ownerStub{id: "planning"}, ownerStub{id: "other"})
+	if got := exToolNames(a); !reflect.DeepEqual(got, []string{"other_tool"}) {
+		t.Fatalf("tools = %v, want only other_tool", got)
+	}
+	if got := names(a.stack); !reflect.DeepEqual(got, []string{"ex", "other"}) {
+		t.Fatalf("stack = %v", got)
+	}
+}
+
+func TestExcluderNeverRemovesItself(t *testing.T) {
+	a := newExcluded(t, "small-1", excluder{name: "ex", remove: []string{"ex", "planning"}}, ownerStub{id: "planning"})
+	if got := names(a.stack); !reflect.DeepEqual(got, []string{"ex"}) {
+		t.Fatalf("stack = %v, want the excluder alone", got)
+	}
+}
+
+func TestExcluderUnknownNamesIgnored(t *testing.T) {
+	a := newExcluded(t, "small-1", excluder{name: "ex", remove: []string{"nope"}}, ownerStub{id: "planning"})
+	if got := names(a.stack); !reflect.DeepEqual(got, []string{"ex", "planning"}) {
+		t.Fatalf("stack = %v, want unchanged", got)
+	}
+}
+
+func TestExcluderFiltersOnlyComposedStack(t *testing.T) {
+	ex := excluder{name: "ex", only: "small-1", remove: []string{"planning"}}
+	parent := newExcluded(t, "small-1", ex, ownerStub{id: "planning"})
+	if got := exToolNames(parent); len(got) != 0 {
+		t.Fatalf("parent tools = %v, want none", got)
+	}
+	cfg := parent.Config()
+	if got := names(cfg.Middleware); !reflect.DeepEqual(got, []string{"ex", "planning"}) {
+		t.Fatalf("Config().Middleware = %v, want unfiltered", got)
+	}
+	cfg.Model = "big-1"
+	child, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := exToolNames(child); !reflect.DeepEqual(got, []string{"planning_tool"}) {
+		t.Fatalf("child tools = %v, want planning_tool", got)
 	}
 }
