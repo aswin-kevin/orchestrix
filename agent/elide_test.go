@@ -425,3 +425,24 @@ func TestElisionShiftedWhenResumeInserts(t *testing.T) {
 		t.Fatalf("message after the tool_use = %+v, want w's real result", sent[2])
 	}
 }
+
+func TestCheckElision(t *testing.T) {
+	msgs := []llm.Message{
+		llm.UserText("go"),
+		{Role: llm.RoleAssistant, Content: []llm.Block{{Type: llm.BlockToolUse, ID: "a", Name: "echo"}}},
+		{Role: llm.RoleUser, Content: []llm.Block{llm.ToolResultText("a", "ok", false)}},
+	}
+	if err := CheckElision(msgs, Elision{ID: "e", Text: "t", From: 0, To: 3}); err != nil {
+		t.Fatalf("self-contained range refused: %v", err)
+	}
+	for name, e := range map[string]Elision{
+		"unanswered call": {ID: "e", Text: "t", From: 0, To: 2},
+		"orphan result":   {ID: "e", Text: "t", From: 2, To: 3},
+		"empty id":        {Text: "t", From: 0, To: 1},
+		"out of range":    {ID: "e", Text: "t", From: 0, To: 4},
+	} {
+		if err := CheckElision(msgs, e); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

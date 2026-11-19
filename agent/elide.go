@@ -39,7 +39,11 @@ type Elision struct {
 // shifted by the number of messages inserted. A host that replaces State's
 // messages should clear the key. ElidedView re-checks every elision against
 // the current messages and skips one that no longer fits, so a stale key can
-// make the view less compact but never invalid.
+// make the view less compact but never invalid. It cannot tell, though, when
+// a range still fits but now holds different messages (a host rewound or
+// rewrote State and kept the key): the view then shows that elision's Text
+// in place of messages it does not describe. Clearing the key whenever State
+// is replaced is what prevents this.
 var ElisionsKey = state.NewKey[[]Elision]("agent.elisions", state.Private[[]Elision]())
 
 // ErrInvalidElision is wrapped by the error AddElision returns for an
@@ -58,7 +62,7 @@ var elisionsMu sync.Mutex
 func AddElision(s *state.State, e Elision) error {
 	elisionsMu.Lock()
 	defer elisionsMu.Unlock()
-	if err := checkElision(s.Messages(), e); err != nil {
+	if err := CheckElision(s.Messages(), e); err != nil {
 		return fmt.Errorf("%w %q: %v", ErrInvalidElision, e.ID, err)
 	}
 	current, _ := ElisionsKey.Get(s)
@@ -141,7 +145,7 @@ func appliedElisions(s *state.State, msgs []llm.Message, from int) []Elision {
 	slices.SortStableFunc(sorted, byFrom)
 	var applied []Elision
 	for _, e := range sorted {
-		if e.From < from || checkElision(msgs, e) != nil {
+		if e.From < from || CheckElision(msgs, e) != nil {
 			continue
 		}
 		if len(applied) > 0 && overlaps(applied[len(applied)-1], e) {
@@ -174,10 +178,11 @@ func shiftElisions(s *state.State, at, n int) {
 	ElisionsKey.Set(s, updated)
 }
 
-// checkElision reports why e does not fit msgs, or nil when it does; see
-// AddElision. Uniqueness and overlap with other elisions are checked by the
-// callers.
-func checkElision(msgs []llm.Message, e Elision) error {
+// CheckElision reports why e does not fit msgs, or nil when it does: the
+// checks of AddElision on ID, Text, range and self-containment. It does not
+// check e against other elisions (uniqueness, overlap). Middleware that
+// chooses ranges to elide uses it to propose only ranges AddElision accepts.
+func CheckElision(msgs []llm.Message, e Elision) error {
 	switch {
 	case e.ID == "":
 		return errors.New("empty id")

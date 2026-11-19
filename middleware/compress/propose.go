@@ -63,7 +63,7 @@ func (m *middleware) selectRange(s *state.State) (span, bool) {
 			if chars[end]-chars[start] < minChars {
 				break // shorter ends are smaller still
 			}
-			if selfContained(msgs[start:end]) {
+			if fits(msgs, start, end) {
 				return span{From: start, To: end}, true
 			}
 		}
@@ -113,25 +113,12 @@ func prefixChars(msgs []llm.Message) []int {
 	return out
 }
 
-// selfContained reports whether every tool_use in msgs is answered within
-// them and every tool_result in them answers a call within them, which
-// agent.AddElision requires.
-func selfContained(msgs []llm.Message) bool {
-	open := make(map[string]bool)
-	for _, m := range msgs {
-		for _, b := range m.Content {
-			switch b.Type {
-			case llm.BlockToolUse:
-				open[b.ID] = true
-			case llm.BlockToolResult:
-				if !open[b.ToolUseID] {
-					return false
-				}
-				delete(open, b.ToolUseID)
-			}
-		}
-	}
-	return len(open) == 0
+// fits reports whether agent.AddElision would accept [start, end) of msgs:
+// the range is self-contained (no call left unanswered inside it, no result
+// answering a call outside it).
+func fits(msgs []llm.Message, start, end int) bool {
+	// ID and Text are placeholders: only the range is in question here.
+	return agent.CheckElision(msgs, agent.Elision{ID: "candidate", Text: "candidate", From: start, To: end}) == nil
 }
 
 // compressID matches the IDs this package issues.

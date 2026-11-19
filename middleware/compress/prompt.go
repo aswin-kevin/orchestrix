@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
+	"github.com/aswin-kevin/orchestrix/state"
 )
 
 // DefaultPrompt is the system segment explaining the two tools when
@@ -27,10 +29,19 @@ const restoreHint = "Call " + ToolRestore + " with this id to see the original m
 // model's summary and the quoted excerpts.
 var neutralize = promptsafe.NewTagNeutralizer("compress_request", "compressed")
 
-// requestSegment is the system segment asking the model to compress p.
-func requestSegment(msgs []llm.Message, p Proposal) string {
+// requestSegment is the system segment asking the model to compress p. The
+// excerpts quote what the model sees: when an applied elision starts right
+// after the range, "Up to" quotes that elision's text, since the message it
+// hides is not in the view.
+func requestSegment(s *state.State, msgs []llm.Message, p Proposal) string {
+	upTo := msgs[p.To]
+	for _, e := range agent.AppliedElisions(s, 0) {
+		if e.From == p.To {
+			upTo = llm.UserText(e.Text)
+		}
+	}
 	return fmt.Sprintf("<compress_request id=%q messages=\"%d\">\nFrom: %q\nUp to: %q\n</compress_request>\n"+requestInstruction,
-		p.ID, p.To-p.From, excerpt(msgs[p.From]), excerpt(msgs[p.To]), p.ID, p.To-p.From)
+		p.ID, p.To-p.From, excerpt(msgs[p.From]), excerpt(upTo), p.ID, p.To-p.From)
 }
 
 // excerpt returns the first excerptChars characters of m's text (or of its

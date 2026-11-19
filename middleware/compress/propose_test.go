@@ -164,3 +164,22 @@ func TestStopContinuationsAreNotTurns(t *testing.T) {
 		t.Fatalf("proposal = %+v (set %v), want one that ends before the run's input at 10", pr, ok)
 	}
 }
+
+func TestUpToQuotesWhatTheModelSees(t *testing.T) {
+	s := state.New()
+	s.SetMessages(append(history(6), llm.UserText(turnText("U", 6))))
+	// Turns 2 and 3 are already elided: the proposal [0, 4) ends where
+	// that elision starts, so the model sees its text there, not U2.
+	if err := agent.AddElision(s, agent.Elision{ID: "x1", From: 4, To: 8, Text: "EARLIER NOTE about turns two and three"}); err != nil {
+		t.Fatal(err)
+	}
+	sent := wrap(t, New(testCfg), s)
+
+	if p, _ := ProposalKey.Get(s); p.From != 0 || p.To != 4 {
+		t.Fatalf("proposal = %+v, want [0, 4)", p)
+	}
+	sys := strings.Join(sent.System, "\n")
+	if !strings.Contains(sys, `Up to: "EARLIER NOTE about turns two and three"`) || strings.Contains(sys, `Up to: "U2`) {
+		t.Fatalf("system = %q, want the Up to excerpt quoting the elision the model sees", sys)
+	}
+}

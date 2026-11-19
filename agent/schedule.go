@@ -134,6 +134,11 @@ func (c *toolCall) pending() bool { return c.interrupt != nil }
 // resumed run may have appended messages after it; elisions over those
 // shift with them. An index past the end (a tool or wrapper shrank the
 // history during the turn) appends.
+//
+// SetMessages and shiftElisions are two steps, not one atomic update: this
+// is safe because insertAfter runs on the run's own goroutine before any
+// tool of the turn starts, and elisions only change in BeforeModel, in a
+// tool (compress_context) or here, never concurrently with this call.
 func (r *run) insertAfter(index int, msgs []llm.Message) {
 	history := r.state.Messages()
 	at := min(index+1, len(history))

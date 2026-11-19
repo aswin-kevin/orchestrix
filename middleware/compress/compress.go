@@ -23,7 +23,13 @@
 //
 // The summary is text the model wrote, possibly from untrusted input, so any
 // <compressed> or <compress_request> tag inside it is neutralized before it
-// enters the view.
+// enters the view. The <compress_request> segment itself quotes short
+// excerpts (excerptChars characters) of the messages that bound the range,
+// which may be user or tool text: this is the one place where such text
+// enters a system segment rather than a user or tool message. The excerpts
+// are kept on one line, neutralized for the compress tags and quoted as Go
+// strings, and serve only to locate the range; the design keeps the request
+// next to the instructions it belongs to.
 //
 // Put this middleware after summarize: summarize rebuilds the request
 // messages from State, and compress only appends system segments and never
@@ -73,7 +79,9 @@ const (
 )
 
 // Config configures the compress middleware. Zero values select the
-// defaults above.
+// defaults above. Out-of-range values are not errors: a negative number
+// selects the default as zero does, and a TriggerFraction of 1 or more never
+// proposes a range (the request would have to exceed the whole window).
 type Config struct {
 	// TriggerFraction is the share of the context window above which a
 	// range is proposed; 0 means DefaultTriggerFraction.
@@ -212,7 +220,7 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 		system = append(system, m.prompt)
 	}
 	if open {
-		system = append(system, requestSegment(msgs, p))
+		system = append(system, requestSegment(s, msgs, p))
 	}
 	req.Request.System = system
 	return next(ctx, req)
@@ -263,7 +271,9 @@ func boundary(s *state.State, n int) int {
 
 // dropPassed removes every elision that starts before summarize's boundary:
 // one wholly before it is covered by the summary, and one straddling it is
-// no longer applied; both would only block new ranges.
+// no longer applied; both would only block new ranges. It removes such
+// elisions whoever recorded them, which is harmless: ElidedView skips them
+// past the boundary anyway.
 func dropPassed(s *state.State) {
 	b := boundary(s, len(s.Messages()))
 	if b == 0 {
