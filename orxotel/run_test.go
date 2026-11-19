@@ -115,8 +115,8 @@ func TestRunSpanEndsWhenConsumerStops(t *testing.T) {
 	// The iterator returns only after the run has wound down, so the end
 	// function has already run.
 	oneSpan(t, rec, "invoke_agent worker")
-	if n := len(rec.Started()); n != 1 {
-		t.Errorf("started %d spans, want 1", n)
+	if started, ended := len(rec.Started()), len(rec.Ended()); started != ended {
+		t.Errorf("started %d spans, ended %d, want every span ended", started, ended)
 	}
 }
 

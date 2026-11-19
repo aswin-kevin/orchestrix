@@ -2,8 +2,11 @@ package orxotel
 
 import (
 	"context"
+	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/tool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -47,7 +50,11 @@ type middleware struct {
 	cfg Config
 }
 
-var _ agent.RunWrapper = (*middleware)(nil)
+var (
+	_ agent.RunWrapper   = (*middleware)(nil)
+	_ agent.ModelWrapper = (*middleware)(nil)
+	_ agent.ToolWrapper  = (*middleware)(nil)
+)
 
 // Name implements agent.Middleware.
 func (m *middleware) Name() string { return "otel" }
@@ -108,4 +115,102 @@ func runFailed(reason agent.TerminalReason) bool {
 		return false
 	}
 	return true
+}
+
+// WrapModel implements agent.ModelWrapper: it traces one model call. The
+// span's context goes to next, so a fallback provider's OnFallback records
+// its event on this span.
+func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+	attrs := []attribute.KeyValue{
+		attribute.String(keyOperationName, opChat),
+		attribute.String(keyRequestModel, req.Request.Model),
+		attribute.Int(keyRequestMaxTokens, req.Request.MaxTokens),
+		attribute.Int(keyTurn, req.Turn),
+	}
+	if m.cfg.ProviderName != "" {
+		attrs = append(attrs, attribute.String(keyProviderName, m.cfg.ProviderName))
+	}
+	if t := req.Request.Temperature; t != nil {
+		attrs = append(attrs, attribute.Float64(keyRequestTemperature, *t))
+	}
+	ctx, span := m.tracer().Start(ctx, spanName(opChat, req.Request.Model),
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(attrs...),
+	)
+	defer span.End()
+
+	resp, err := next(ctx, req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return resp, err
+	}
+	if resp != nil {
+		span.SetAttributes(
+			attribute.StringSlice(keyFinishReasons, []string{resp.StopReason}),
+			attribute.Int(keyInputTokens, resp.Usage.Input),
+			attribute.Int(keyOutputTokens, resp.Usage.Output),
+			attribute.Int(keyCacheReadTokens, resp.Usage.CacheRead),
+		)
+	}
+	return resp, err
+}
+
+// WrapTool implements agent.ToolWrapper: it traces one tool execution. The
+// span's context goes to next, so a subagent run started by the tool is a
+// child of this span.
+func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
+	attrs := []attribute.KeyValue{
+		attribute.String(keyOperationName, opExecuteTool),
+		attribute.String(keyToolName, call.Name),
+		attribute.String(keyToolCallID, call.ID),
+		attribute.Bool(keyToolApproved, call.Approved),
+	}
+	if call.Via != "" {
+		attrs = append(attrs, attribute.String(keyToolVia, call.Via))
+	}
+	if m.cfg.CaptureContent {
+		attrs = append(attrs, attribute.String(keyToolCallArguments, m.capped(string(call.Input))))
+	}
+	ctx, span := m.tracer().Start(ctx, spanName(opExecuteTool, call.Name),
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attrs...),
+	)
+	defer span.End()
+
+	res, err := next(ctx, call)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return res, err
+	}
+	var text string
+	if m.cfg.CaptureContent {
+		text = m.capped(res.Flatten())
+		span.SetAttributes(attribute.String(keyToolCallResult, text))
+	}
+	if res.IsError {
+		// Without content capture the description stays empty: the
+		// result text may hold data the host chose not to export.
+		span.SetAttributes(attribute.Bool(keyToolIsError, true))
+		span.SetStatus(codes.Error, text)
+	}
+	return res, nil
+}
+
+// capped returns s cut to at most MaxContentBytes, on a rune boundary.
+func (m *middleware) capped(s string) string {
+	return truncate(s, m.cfg.MaxContentBytes)
+}
+
+// truncate returns s cut to at most n bytes without splitting a UTF-8
+// sequence.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
