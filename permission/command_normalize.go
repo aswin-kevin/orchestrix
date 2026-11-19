@@ -30,6 +30,22 @@ var opaqueCommands = map[string]bool{
 	"nsenter": true, "unshare": true,
 }
 
+// interpreters run a program written in their arguments or read from a file,
+// and every one of them can start other commands (awk's system(), perl's
+// exec, python's subprocess), so an allow rule such as "awk *" would
+// otherwise vouch for anything. Versioned names (python3.12, lua5.4) count
+// too; see isInterpreter.
+var interpreters = map[string]bool{
+	"awk": true, "gawk": true, "mawk": true, "nawk": true,
+	"perl": true, "python": true, "pypy": true, "ruby": true,
+	"node": true, "nodejs": true, "deno": true, "bun": true,
+	"php": true, "lua": true, "luajit": true, "tclsh": true, "wish": true,
+	"expect": true, "Rscript": true, "osascript": true, "pwsh": true,
+}
+
+// versionChars may trail an interpreter's name, as in python3.12.
+const versionChars = "0123456789."
+
 // wrapperCommands run the rest of their words as a command. nice, env,
 // timeout and stdbuf are wrappers too but take arguments of their own; see
 // stripWrapper.
@@ -318,7 +334,19 @@ func stripWrapper(name string, quotedAt int, args []word) (rest []word, stripped
 		rest, ok := stripOptions(args, stdbufOptions)
 		return rest, true, ok
 	}
-	return nil, false, !opaqueCommands[name]
+	return nil, false, !runsHiddenCode(name)
+}
+
+// runsHiddenCode reports whether a command runs code the parser cannot see:
+// an opaque command or a script interpreter.
+func runsHiddenCode(name string) bool {
+	return opaqueCommands[name] || isInterpreter(name)
+}
+
+// isInterpreter reports whether name is a script interpreter, with or without
+// a version suffix.
+func isInterpreter(name string) bool {
+	return interpreters[name] || interpreters[strings.TrimRight(name, versionChars)]
 }
 
 // stripEnvArgs drops env's -i and NAME=value arguments. An assignment is not

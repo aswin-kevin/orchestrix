@@ -17,8 +17,9 @@ const devNull = "/dev/null"
 // vouch that the segments are every command the line runs, and are the
 // programs their names suggest: command or process substitution, grouping,
 // heredocs, redirections other than discarding output to /dev/null,
-// unbalanced quotes, shells and other commands that run hidden code (sh,
-// eval, xargs, sudo, find -exec, ...), compound commands, a command word that
+// unbalanced quotes, shells, script interpreters and other commands that run
+// hidden code (sh, eval, xargs, sudo, awk, python, find -exec, ...), compound
+// commands, a command word that
 // depends on expansion, contains whitespace or names a path (./npm), any
 // variable assignment (PATH=... or LD_PRELOAD=... can change which program
 // runs or what it does), and an empty line. Normalization is for deny rules:
