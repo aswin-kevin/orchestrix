@@ -250,3 +250,19 @@ func truncate(s string, n int) string {
 	}
 	return s[:n]
 }
+
+// RecordFallback adds an "orchestrix.fallback" event, with the attributes
+// from, to and error, to the span in ctx. Pass it as
+// llm.FallbackConfig.OnFallback: the middleware gives each model call's
+// span to the provider, so the event lands on the chat span that switched.
+// A ctx without a span records nothing.
+func RecordFallback(ctx context.Context, ev llm.FallbackEvent) {
+	attrs := []attribute.KeyValue{
+		attribute.String(keyFallbackFrom, ev.From),
+		attribute.String(keyFallbackTo, ev.To),
+	}
+	if ev.Err != nil {
+		attrs = append(attrs, attribute.String(keyFallbackError, ev.Err.Error()))
+	}
+	trace.SpanFromContext(ctx).AddEvent(eventFallback, trace.WithAttributes(attrs...))
+}

@@ -45,6 +45,9 @@
 // fails with an overload, a rate limit or a network error, the call moves to
 // the next one (see llm.NewFallback).
 //
+// The separate module github.com/aswin-kevin/orchestrix/orxotel traces runs,
+// model calls and tool calls with OpenTelemetry (see README, "Tracing").
+//
 // Everything New configures can be inspected and overridden: the options cover
 // the common cases and WithConfig exposes the full agent.Config. For custom
 // stacks, build an agent.Config yourself and call agent.New directly.

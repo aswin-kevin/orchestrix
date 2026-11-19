@@ -52,7 +52,7 @@ Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and 
 - **Long conversations.** Automatic summarization, model-directed compression with restore, prompt caching, deferred tools for large tool sets, and checkpointed threads.
 - **Workspaces.** In-memory, disk, shell with background jobs, key/value, remote sandbox, and composite mounts (for example, memories that persist across threads).
 - **Quality.** A self-grading rubric that sends the model back to revise, a validated typed final answer, structured questions to the user, and per-model profiles.
-- **Extensible.** Every behavior is a middleware; write your own or replace any built-in one.
+- **Extensible.** Every behavior is a middleware; write your own or replace any built-in one. OpenTelemetry tracing is an optional module (`orxotel`).
 
 ## Install
 
@@ -538,6 +538,56 @@ _, _ = a, err
 Hooks for concurrency-safe tool calls of one turn may run concurrently, so synchronize any shared data.
 
 A `Stop` hook's `Continue` is one of the `agent.MaxStopContinuations` (3) continuations a run may get from all its `BeforeStop` middleware together. In the preset, `hooks` is consulted last, after the background-task inbox and reminder (`WithAsync`) and `rubric` (`WithRubric`), and the first non-empty prompt wins. So a `Stop` hook does not run on a reply another middleware already continued, and once the three slots are spent it does not run at all: the run then returns its last answer without it. A `Stop` hook used as a quality gate is therefore not guaranteed to see the final answer when it shares the run with those middleware.
+
+## Tracing
+
+The separate module `orxotel` traces agents with OpenTelemetry. It lives in its own module so the core keeps two dependencies; it needs `orchestrix` v0.5.0 or later (`orxotel/v0.1.0` requires it).
+
+```
+go get github.com/aswin-kevin/orchestrix/orxotel
+```
+
+```go
+// Imports omitted; model and tp (an OpenTelemetry TracerProvider) come from surrounding code.
+a, err := orchestrix.New(model,
+	orchestrix.WithMiddleware(orxotel.New(orxotel.Config{
+		TracerProvider: tp,          // nil uses otel.GetTracerProvider()
+		ProviderName:   "anthropic", // optional: gen_ai.provider.name
+	})),
+)
+_, _ = a, err
+```
+
+Every run (`Run`, `Resume` and `ResumeWith`) produces one trace:
+
+```
+invoke_agent <agent name>
+├── chat <model>            one per model call
+├── execute_tool <tool>     one per tool call, parallel calls included
+│   └── invoke_agent ...    a subagent run started by that tool
+└── chat <model>
+```
+
+| Span | Kind | Attributes |
+| --- | --- | --- |
+| `invoke_agent <agent>` | Internal | `gen_ai.operation.name`, `gen_ai.agent.name`, `gen_ai.conversation.id` (the thread id, when set), `orchestrix.run.depth`, `orchestrix.run.resumed`; at the end `orchestrix.run.reason`, `orchestrix.run.turns`, `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens` (run totals) |
+| `chat <model>` | Client | `gen_ai.operation.name`, `gen_ai.provider.name` (when configured), `gen_ai.request.model`, `gen_ai.request.max_tokens`, `gen_ai.request.temperature` (when set), `gen_ai.response.finish_reasons`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `orchestrix.usage.cache_read_tokens`, `orchestrix.turn` |
+| `execute_tool <tool>` | Internal | `gen_ai.operation.name`, `gen_ai.tool.name`, `gen_ai.tool.call.id`, `orchestrix.tool.via` (when dispatched), `orchestrix.tool.approved`; `orchestrix.tool.is_error` for an error result; `orchestrix.tool.outcome` for an interrupt or stop; `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result` with content capture |
+
+Names follow the OpenTelemetry GenAI semantic conventions, which are in Development status and may change in a later release; attributes the conventions do not define are prefixed `orchestrix.`. They are all declared in one file of the module.
+
+- **Content capture.** Off by default. `Config.CaptureContent` records tool call arguments and results (not prompts or model replies), each capped at `Config.MaxContentBytes` (default 4096) on a character boundary. Go error messages are always exported, as the span's status description and exception event, whether or not capture is on: keep secrets out of the errors your tools and providers return. A tool result with `IsError` sets status Error, with a description only when capture is on.
+- **Interrupts and stops are outcomes, not errors.** A tool call that pauses the run for approval, or ends it with `agent.ErrStopRun`, leaves its span status unset and sets `orchestrix.tool.outcome` to `interrupted` or `stopped`. A run ending as `completed`, `max_turns`, `timeout`, `interrupted` or `hook_stopped` is not an error either; every other reason sets status Error. A run resumed after an interrupt is a new trace: `gen_ai.conversation.id` joins the two.
+- **Subagents.** A child that copies the parent's middleware is traced, and its `invoke_agent` span is a child of the parent's `execute_tool` span for the `task` call, in the same trace. A subagent spec that sets its own `Middleware` list is traced only if the list includes the `otel` middleware.
+- **Background subagents.** A run started with `WithAsync` outlives the tool call that started it, so its spans are children of an `execute_tool` span that has already ended. OpenTelemetry allows this and backends show it.
+- **Fallback.** With `WithFallbackConfig`, pass `OnFallback: orxotel.RecordFallback`: each switch is added as an `orchestrix.fallback` event with the attributes `from`, `to` and `error` to the `chat` span that switched.
+
+```go
+orchestrix.WithFallbackConfig(llm.FallbackConfig{
+	Entries:    []llm.FallbackEntry{{Provider: backup, Model: "gpt-4o", Name: "backup"}},
+	OnFallback: orxotel.RecordFallback,
+})
+```
 
 ## Checkpoints and threads
 
