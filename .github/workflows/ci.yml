@@ -71,6 +71,25 @@ jobs:
         working-directory: orxpg
         run: go test -race ./...
 
+  orxdocker:
+    name: Test (orxdocker, Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: orxdocker/go.mod
+      - name: Vet
+        working-directory: orxdocker
+        run: go vet ./... && GOOS=windows go vet ./...
+      - name: Test against the runner's Docker daemon
+        working-directory: orxdocker
+        env:
+          ORX_TEST_DOCKER: "1"
+        run: go test -race -timeout 15m ./...
+      - name: No containers left behind
+        run: test -z "$(docker ps -aq --filter label=dev.orchestrix.orxdocker)"
+
   vulncheck:
     name: Vulnerability check
     runs-on: ubuntu-latest
@@ -92,4 +111,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
       - name: govulncheck (evals)
         working-directory: evals
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+      - name: govulncheck (orxdocker)
+        working-directory: orxdocker
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...

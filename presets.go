@@ -116,8 +116,10 @@ func WithShell(root string, opts shell.Options) Option {
 }
 
 // WithTasks lets execute run commands in the background and adds the tools to
-// follow them. It needs a backend that can start commands, which WithShell
-// provides. The host keeps m and calls its Shutdown when done, to stop jobs
+// follow them. It needs a backend that can start commands (a
+// backend.Starter): WithShell provides one, and so does a sandbox built with
+// sandbox.NewStarter, passed with WithBackend or from WithBackendFactory. The
+// host keeps m and calls its Shutdown when done, to stop jobs
 // still running.
 func WithTasks(m *tasks.Middleware) Option {
 	return func(s *settings) { s.tasks = m }
@@ -129,7 +131,7 @@ func (s *settings) checkPresets() {
 		s.errs = append(s.errs, errors.New("WithShell cannot be combined with WithBackend or WithBackendFactory"))
 	}
 	if s.tasks != nil && !s.canStartCommands() {
-		s.errs = append(s.errs, errors.New("WithTasks needs a backend that can start commands: use WithShell, or WithBackend with a backend.Starter"))
+		s.errs = append(s.errs, errors.New("WithTasks needs a backend that can start commands: use WithShell, or WithBackend with a backend.Starter such as sandbox.NewStarter's"))
 	}
 }
 

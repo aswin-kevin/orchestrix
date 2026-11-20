@@ -44,6 +44,12 @@
 // names: <path>" rather than with a raw tool error; GNU coreutils, busybox
 // and the BSD tools handle any bytes.
 //
+// Background commands: the Backend New returns implements backend.Executor
+// only. When the executor also implements backend.Starter, NewStarter
+// returns a StarterBackend that starts commands the same way, which tasks
+// middleware (orchestrix.WithTasks) needs. orxdocker, a separate module,
+// provides a Docker executor that does.
+//
 // Local implementation: wrapping a backend/shell Backend gives a sandbox on
 // the host, useful for development and tests:
 //
@@ -130,14 +136,24 @@ func New(exec backend.Executor, opts Options) (*Backend, error) {
 // names a path in the executor's own namespace; if the cd fails, the command
 // does not run. opts.Timeout, Env and MaxOutputBytes pass through unchanged.
 func (b *Backend) Execute(ctx context.Context, cmd string, opts backend.ExecOptions) (backend.ExecResult, error) {
-	dir, err := cleanBase(opts.Dir)
+	cmd, opts, err := b.prepare(cmd, opts)
 	if err != nil {
 		return backend.ExecResult{}, fmt.Errorf("sandbox: execute: %w", err)
+	}
+	return b.exec.Execute(ctx, cmd, opts)
+}
+
+// prepare prefixes cmd with a quoted cd into Root+opts.Dir and clears
+// opts.Dir, which would name a path in the executor's own namespace.
+func (b *Backend) prepare(cmd string, opts backend.ExecOptions) (string, backend.ExecOptions, error) {
+	dir, err := cleanBase(opts.Dir)
+	if err != nil {
+		return "", opts, err
 	}
 	opts.Dir = ""
 	// "|| exit" ending its own line, unlike "&&", also guards the later
 	// lines of a multi-line command.
-	return b.exec.Execute(ctx, "cd "+quote(b.real(dir))+" || exit\n"+cmd, opts)
+	return "cd " + quote(b.real(dir)) + " || exit\n" + cmd, opts, nil
 }
 
 // real maps a cleaned virtual path to its path inside the sandbox.
