@@ -304,3 +304,22 @@ func TestChildConfigNeverCarriesOutputSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestChildConfigMaxTurns(t *testing.T) {
+	for _, tc := range []struct {
+		parent, spec, want int
+	}{
+		{parent: 7, spec: 0, want: 7},   // zero inherits
+		{parent: 7, spec: 3, want: 3},   // positive bounds the child
+		{parent: 7, spec: -1, want: -1}, // negative is unbounded
+		{parent: 0, spec: -5, want: -5},
+	} {
+		cfg, err := childConfig(agent.Config{MaxTurns: tc.parent}, Subagent{Name: "s", SystemPrompt: "p", MaxTurns: tc.spec})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.MaxTurns != tc.want {
+			t.Errorf("parent %d, spec %d: child MaxTurns = %d, want %d", tc.parent, tc.spec, cfg.MaxTurns, tc.want)
+		}
+	}
+}

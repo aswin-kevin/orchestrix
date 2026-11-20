@@ -11,7 +11,7 @@ A hardening pass ahead of v1.0.0: security fixes in the permission parser, bound
 - `orchestrix.New` takes a model spec string only; use `orchestrix.NewWithProvider` for an `llm.Provider`. `NewWithProvider(nil)` returns an error.
 - `coordinator.New` takes a model spec string only; use `coordinator.NewWithProvider` for an `llm.Provider`.
 - `orchestrix.WithFallback` takes `...string`; use `WithFallbackConfig` (`FallbackEntry.Provider`) for `llm.Provider` backups.
-- `agent.Config.MaxTurns` zero now means `agent.DefaultMaxTurns` (100) instead of unbounded; use a negative value (or `WithMaxTurns(-1)`) for unbounded.
+- `agent.Config.MaxTurns` zero now means `agent.DefaultMaxTurns` (100) instead of unbounded; use a negative value (or `WithMaxTurns(-1)`) for unbounded; a negative `subagents.Subagent.MaxTurns` makes that subagent unbounded (zero still inherits the parent's).
 - `mcp.Middleware.Close` takes a `context.Context` (it implements `agent.Closer`); when `ctx` ends first it returns `ctx.Err()` and closing continues in the background.
 - The MCP HTTP transport (`mcp.DialHTTP`) ends an SSE reply stream when the `ctx` passed to `Send` ends; a custom caller of the transport must keep that `ctx` alive until the response arrives (`mcp.Client` does).
 - orxdocker: a command for an empty thread id returns `orxdocker.ErrNoThread` instead of sharing one container among every threadless run.

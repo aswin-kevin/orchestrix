@@ -47,7 +47,9 @@ type Subagent struct {
 	PermissionMode permission.Mode
 	// Rules replaces the parent's permission rules; nil means the parent's.
 	Rules *permission.Rules
-	// MaxTurns bounds the subagent's run; 0 means the parent's MaxTurns.
+	// MaxTurns bounds the subagent's run; 0 means the parent's MaxTurns
+	// and a negative value leaves the subagent's run unbounded (see
+	// agent.Config.MaxTurns).
 	MaxTurns int
 	// Skills limits the skills offered to the subagent (see
 	// skills.Scope) to these names, within those the delegating run is

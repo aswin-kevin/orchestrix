@@ -207,7 +207,7 @@ func childConfig(cfg agent.Config, spec Subagent) (agent.Config, error) {
 	if spec.Rules != nil {
 		cfg.Rules = *spec.Rules
 	}
-	if spec.MaxTurns > 0 {
+	if spec.MaxTurns != 0 {
 		cfg.MaxTurns = spec.MaxTurns
 	}
 	return cfg, nil
