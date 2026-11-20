@@ -59,7 +59,7 @@ func run() int {
 	}
 	format, err := configureModel(*model, *baseURL, os.Getenv("ORX_TEST_API_KEY"))
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "orxeval:", err)
+		fmt.Fprintln(os.Stderr, "orxeval:", evals.Scrub(err.Error()))
 		return 2
 	}
 	var re *regexp.Regexp
@@ -72,7 +72,7 @@ func run() int {
 	var base evals.Baseline
 	if *baseline != "" {
 		if base, err = evals.ReadBaseline(*baseline); err != nil {
-			fmt.Fprintln(os.Stderr, "orxeval:", err)
+			fmt.Fprintln(os.Stderr, "orxeval:", evals.Scrub(err.Error()))
 			return 2
 		}
 	}
@@ -102,14 +102,14 @@ func run() int {
 	})
 	res.Format = format
 	if err := evals.WriteJSON(*out, res); err != nil {
-		fmt.Fprintln(os.Stderr, "orxeval:", err)
+		fmt.Fprintln(os.Stderr, "orxeval:", evals.Scrub(err.Error()))
 		return 1
 	}
 	fmt.Print(evals.Summary(res))
 	fmt.Println("results written to", *out)
 	if *writeBaseline != "" {
 		if err := evals.WriteJSON(*writeBaseline, evals.BaselineOf(res)); err != nil {
-			fmt.Fprintln(os.Stderr, "orxeval:", err)
+			fmt.Fprintln(os.Stderr, "orxeval:", evals.Scrub(err.Error()))
 			return 1
 		}
 		fmt.Println("baseline written to", *writeBaseline)

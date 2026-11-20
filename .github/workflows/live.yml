@@ -51,6 +51,18 @@ jobs:
       - name: Check configuration
         id: cfg
         run: |
+          mask_url() {
+            # Variables are not masked by GitHub, so mask the URL, its
+            # host:port and its hostname before any test prints them.
+            u="$1"
+            [ -n "$u" ] || return 0
+            hp="${u#*://}"; hp="${hp%%/*}"; hp="${hp##*@}"
+            hn="${hp%%:*}"
+            for m in "$u" "$hp" "$hn"; do
+              [ -n "$m" ] && echo "::add-mask::$m"
+            done
+          }
+          mask_url "$ORX_TEST_BASE_URL"
           if [ -z "$ORX_TEST_MODEL" ]; then
             echo "Slot ${{ matrix.slot }} has no model configured; skipping."
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -66,8 +78,10 @@ jobs:
       - name: Live tests
         if: steps.cfg.outputs.enabled == 'true'
         run: |
-          # The raw test output can echo the endpoint and key, so it stays
-          # in the job log and out of the uploaded artifact.
+          # The raw test output can echo the endpoint and key. It is not
+          # uploaded; in the job log the key (a secret) and the endpoint URL,
+          # host:port and hostname (masked in the configuration step) are
+          # masked.
           mkdir -p live-results
           go test -run Live -count=1 -timeout 30m -v . 2>&1
       - name: Evals
@@ -101,6 +115,18 @@ jobs:
       - name: Check configuration
         id: cfg
         run: |
+          mask_url() {
+            # Variables are not masked by GitHub, so mask the URL, its
+            # host:port and its hostname before any test prints them.
+            u="$1"
+            [ -n "$u" ] || return 0
+            hp="${u#*://}"; hp="${hp%%/*}"; hp="${hp##*@}"
+            hn="${hp%%:*}"
+            for m in "$u" "$hp" "$hn"; do
+              [ -n "$m" ] && echo "::add-mask::$m"
+            done
+          }
+          mask_url "$ORX_TEST_DECIDER_BASE_URL"
           if [ -z "$ORX_TEST_DECIDER_MODEL" ] || [ -z "$ORX_TEST_DECIDER_BASE_URL" ] || [ -z "$ORX_TEST_DECIDER_API_KEY" ]; then
             echo "No decision model configured; skipping."
             echo "enabled=false" >> "$GITHUB_OUTPUT"

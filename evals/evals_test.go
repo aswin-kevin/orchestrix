@@ -173,10 +173,13 @@ func TestReportScrubbed(t *testing.T) {
 	t.Setenv("ORX_TEST_API_KEY", key)
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
 	sc := Scenario{Name: "leaky", Run: func(ctx context.Context, env Env, tt *T) {
 		tt.Errorf("Post %q: dial private-host.example.net:8443 with key %s failed", url, key)
 		tt.Failf("saw %s", key)
 		tt.Note("endpoint", url)
+		tt.Note("list", []string{"x", url})
 	}}
 	res := RunSuite(context.Background(), Env{}, []Scenario{sc}, Options{Trials: 1})
 	path := filepath.Join(t.TempDir(), "report.json")

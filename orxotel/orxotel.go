@@ -207,8 +207,8 @@ func responseSource(resp *llm.Response) string {
 // Captured arguments are call.Input as this middleware receives it. A Go
 // error from next is recorded as Config describes (its message only with
 // CaptureContent or through RedactError), except an *agent.Interrupt or
-// agent.ErrStopRun: they pause or stop the run on purpose, so the span keeps status Unset and gets
-// orchestrix.tool.outcome instead. A panic marks the span as an error and
+// agent.ErrStopRun: they pause or stop the run on purpose, so the span keeps
+// status Unset and gets orchestrix.tool.outcome instead. A panic marks the span as an error and
 // is re-raised for the agent loop to recover.
 func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	attrs := []attribute.KeyValue{

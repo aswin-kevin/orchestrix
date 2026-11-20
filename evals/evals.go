@@ -122,7 +122,10 @@ type Trial struct {
 // reports are uploaded from CI, so every string a report records goes
 // through it. The configured values are those of the orxeval flags'
 // environment (ORX_TEST_*) and of the provider variables it points at them.
-func scrub(s string) string {
+func scrub(s string) string { return Scrub(s) }
+
+// Scrub is the exported form of scrub, for the orxeval command.
+func Scrub(s string) string {
 	var secrets []string
 	for _, name := range []string{
 		"ORX_TEST_BASE_URL", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL",
@@ -156,6 +159,14 @@ func (tr *Trial) scrub() {
 	for k, v := range tr.Notes {
 		if str, ok := v.(string); ok {
 			tr.Notes[k] = scrub(str)
+			continue
+		}
+		// Other values (slices, maps) become their scrubbed JSON text when
+		// they hold a secret.
+		if b, err := json.Marshal(v); err == nil {
+			if clean := scrub(string(b)); clean != string(b) {
+				tr.Notes[k] = clean
+			}
 		}
 	}
 }
