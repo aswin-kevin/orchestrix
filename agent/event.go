@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 
+	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -81,11 +82,14 @@ const (
 	// is joined into Final.Err and sets this reason only when the run had
 	// otherwise succeeded (Final.Err nil). That includes an interrupted run:
 	// its pending record is still in Final.State, so Pending and Resume work
-	// in this process, but the store may not hold it.
+	// in this process, but the store may not hold it. A save that found the
+	// thread changed by another writer wraps checkpoint.ErrConflict: reopen
+	// the thread (Agent.Thread) to continue from what that writer saved.
 	ReasonCheckpointError TerminalReason = "checkpoint_error"
 	// ReasonBusy: a Thread was asked to run while one of its runs was still
-	// in progress (Final.Err is ErrThreadBusy). Nothing ran and Final.State
-	// is nil.
+	// in progress (Final.Err is ErrThreadBusy; Final.State is nil), or the
+	// thread's lease is held by another run (Final.Err wraps
+	// checkpoint.ErrLeaseHeld; Final.State is the input State). Nothing ran.
 	ReasonBusy TerminalReason = "busy"
 	// ReasonInvalidOutput: the final answer failed Config.OutputSchema after
 	// OutputRetries corrections (Final.Err wraps ErrInvalidOutput). Final.Text
@@ -132,6 +136,10 @@ type Final struct {
 	Err error
 	// State is the run's final state, from which a later run can continue.
 	State *state.State
+	// Version is the thread's checkpoint version after the run: the one
+	// its last successful save returned, or Input.Version when it saved
+	// nothing. Pass it as Input.Version to continue from State.
+	Version checkpoint.Version
 	// Output is the normalized compact JSON answer. It is non-nil exactly
 	// when Config.OutputSchema applied to the run and Reason is
 	// ReasonCompleted.

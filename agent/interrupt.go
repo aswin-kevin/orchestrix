@@ -126,7 +126,10 @@ type Decision struct {
 // BeforeAgent hook added) and the run goes on like one started by Run, with
 // the same hooks, a fresh budget, and threadID selecting the backend.
 //
-// Resume is ResumeWith with an Input holding just threadID and s.
+// Resume is ResumeWith with an Input holding just threadID and s. With
+// Config.Checkpointer set it saves under threadID as a new thread (the zero
+// Version), so to resume a saved thread use Thread.Resume, or ResumeWith
+// with the Version s was loaded at.
 func (a *Agent) Resume(ctx context.Context, threadID string, s *state.State, decisions []Decision) iter.Seq2[Event, error] {
 	return a.ResumeWith(ctx, Input{ThreadID: threadID, State: s}, decisions)
 }
@@ -140,7 +143,7 @@ func (a *Agent) ResumeWith(ctx context.Context, in Input, decisions []Decision) 
 	return func(yield func(Event, error) bool) {
 		resume, err := a.newResumption(in, decisions)
 		if err != nil {
-			final := &Final{Reason: ReasonInvalidResume, Err: err, State: in.State}
+			final := &Final{Reason: ReasonInvalidResume, Err: err, State: in.State, Version: in.Version}
 			yield(Event{Kind: KindFinal, Agent: a.name(in), Final: final}, err)
 			return
 		}

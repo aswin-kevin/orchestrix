@@ -683,7 +683,9 @@ for ev, err := range th.Prompt(ctx, "Continue where we left off.") {
 }
 ```
 
-Open one `Thread` handle per conversation: two handles on the same ID do not know about each other and overwrite each other's checkpoints. A checkpointed workspace is stored whole in the thread's state, so for large workspaces prefer a disk or shell backend (which `WithCheckpointer` leaves alone).
+Saves are conditional. Every checkpoint has a version, and a save only succeeds over the version the run loaded, so two handles on the same ID (in one process or several) never overwrite each other: the run that finds the thread changed ends with `checkpoint_error` wrapping `checkpoint.ErrConflict`, and you reopen the thread with `Agent.Thread` to continue from what the other run saved. A run started from an outdated version ends before its first model call. A checkpointer that also implements `checkpoint.Leaser` (both built-in ones do, within one process) keeps two runs of one thread from overlapping at all: the second ends at once with reason `busy`. If you drive `Agent.Run` yourself instead of a `Thread`, pass `Final.Version` back as `Input.Version`.
+
+`checkpoint/file` is for one process per directory. Workers on several machines need a shared store; implement `checkpoint.Checkpointer` on a database and run `checkpointtest.Run` against it. A checkpointed workspace is stored whole in the thread's state, so for large workspaces prefer a disk or shell backend (which `WithCheckpointer` leaves alone).
 
 ## Shell and background tasks
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,14 +58,18 @@ func stateJSON(t *testing.T, s *state.State) string {
 
 func save(t *testing.T, c *file.Checkpointer, id string, s *state.State) {
 	t.Helper()
-	if err := c.Save(ctx, id, s); err != nil {
+	_, v, err := c.Load(ctx, id)
+	if err != nil && !errors.Is(err, checkpoint.ErrNotFound) {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := c.Save(ctx, id, s, v); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 }
 
 func load(t *testing.T, c *file.Checkpointer, id string) *state.State {
 	t.Helper()
-	s, err := c.Load(ctx, id)
+	s, _, err := c.Load(ctx, id)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -249,11 +254,11 @@ func TestFileUnparsableTerminatedLastLineErrors(t *testing.T) {
 	appendRaw(t, path, "garbage\n")
 	before := readLines(t, path)
 
-	if _, err := c.Load(ctx, "t"); err == nil {
+	if _, _, err := c.Load(ctx, "t"); err == nil {
 		t.Fatal("Load succeeded on an unparsable newline-terminated last line")
 	}
 	c2 := newCP(t, dir)
-	if err := c2.Save(ctx, "t", s); err == nil {
+	if _, err := c2.Save(ctx, "t", s, ""); err == nil {
 		t.Fatal("Save succeeded on an unparsable newline-terminated last line")
 	}
 	if after := readLines(t, path); !slices.Equal(after, before) {
@@ -275,10 +280,10 @@ func TestFileCorruptMiddleLineErrors(t *testing.T) {
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Load(ctx, "t"); err == nil {
+	if _, _, err := c.Load(ctx, "t"); err == nil {
 		t.Fatal("Load succeeded on a corrupt middle line")
 	}
-	if err := c.Save(ctx, "t", s); err == nil {
+	if _, err := c.Save(ctx, "t", s, ""); err == nil {
 		t.Fatal("Save succeeded on a corrupt middle line")
 	}
 }
@@ -379,5 +384,60 @@ func appendRaw(t *testing.T, path, text string) {
 	defer f.Close()
 	if _, err := f.WriteString(text); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFileLegacyRecordsWithoutGeneration(t *testing.T) {
+	dir := t.TempDir()
+	c := newCP(t, dir)
+	s := state.New()
+	s.AppendMessages(llm.UserText("a"))
+	save(t, c, "t", s)
+	path := onlyFile(t, dir)
+	// Strip the generation, as a file written before versions existed has none.
+	lines := readLines(t, path)
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
+		t.Fatal(err)
+	}
+	delete(rec, "gen")
+	line, _ := json.Marshal(rec)
+	if err := os.WriteFile(path, append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := newCP(t, dir)
+	_, v, err := fresh.Load(ctx, "t")
+	if err != nil || v != ":1" {
+		t.Fatalf("Load of a legacy file = %q, %v, want version \":1\"", v, err)
+	}
+	s.AppendMessages(llm.UserText("b"))
+	if _, err := fresh.Save(ctx, "t", s, "other:1"); !errors.Is(err, checkpoint.ErrConflict) {
+		t.Fatalf("Save with a wrong version: %v", err)
+	}
+	if v2, err := fresh.Save(ctx, "t", s, v); err != nil || v2 != ":2" {
+		t.Fatalf("Save over a legacy version = %q, %v, want \":2\"", v2, err)
+	}
+}
+
+func TestFileSeesSaveByAnotherCheckpointer(t *testing.T) {
+	// Two Checkpointers on one directory are unsupported for concurrent
+	// writers, but a save one made is still detected by the other's version
+	// check, because the changed file size makes it replay the file.
+	dir := t.TempDir()
+	a, b := newCP(t, dir), newCP(t, dir)
+	s := state.New()
+	s.AppendMessages(llm.UserText("a"))
+	v1, err := a.Save(ctx, "t", s, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.AppendMessages(llm.UserText("b"))
+	if _, err := b.Save(ctx, "t", s, v1); err != nil {
+		t.Fatal(err)
+	}
+	s.AppendMessages(llm.UserText("c"))
+	if _, err := a.Save(ctx, "t", s, v1); !errors.Is(err, checkpoint.ErrConflict) {
+		t.Fatalf("stale save through another Checkpointer: got %v, want ErrConflict", err)
 	}
 }

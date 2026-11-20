@@ -20,6 +20,9 @@ const (
 	DefaultMaxToolOutputChars = 200_000
 	// DefaultAgentName is the agent id used when Config.Name is empty.
 	DefaultAgentName = "main"
+	// DefaultLeaseTTL is how long a run's lease on its thread lasts between
+	// renewals when Config.Checkpointer implements checkpoint.Leaser.
+	DefaultLeaseTTL = 30 * time.Second
 	// DefaultSettlementMaxTurns is how many extra model calls a run gets to
 	// wrap up after hitting a limit.
 	DefaultSettlementMaxTurns = 2
@@ -84,7 +87,25 @@ type Config struct {
 	// another process (see Agent.Thread). A failed save ends the run with
 	// ReasonCheckpointError. Runs without a ThreadID and ephemeral runs
 	// (Input.Ephemeral) are never saved. Nil persists nothing.
+	//
+	// Saves are conditional (see checkpoint.Checkpointer): a run's first
+	// save expects Input.Version, and each later save expects the version
+	// the previous one returned. When another writer saved the thread in
+	// between, the save fails with checkpoint.ErrConflict and the run ends
+	// with ReasonCheckpointError; it is not retried. The first save comes
+	// before the first model call, so a run started from an outdated version
+	// ends before it spends tokens or runs tools.
+	//
+	// When the Checkpointer also implements checkpoint.Leaser, a persisted
+	// run takes the thread's lease before the BeforeAgent hooks, renews it
+	// every LeaseTTL/3 and gives it up when it ends. A lease held by another
+	// run ends the run at once with ReasonBusy, and a lease lost while the
+	// run is going fails its next save.
 	Checkpointer checkpoint.Checkpointer
+	// LeaseTTL is how long a run's lease lasts without renewal; zero means
+	// DefaultLeaseTTL. It applies only when Checkpointer implements
+	// checkpoint.Leaser.
+	LeaseTTL time.Duration
 
 	// PermissionMode, Rules and Approver drive tool permission checks.
 	PermissionMode permission.Mode

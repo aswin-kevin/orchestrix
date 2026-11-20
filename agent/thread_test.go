@@ -175,7 +175,7 @@ func TestThreadForkIndependent(t *testing.T) {
 	if t2.ID() != "t2" {
 		t.Fatalf("ID() = %q, want t2", t2.ID())
 	}
-	saved, err := cp.Load(ctx, "t2")
+	saved, _, err := cp.Load(ctx, "t2")
 	if err != nil || len(saved.Messages()) != len(before) {
 		t.Fatalf("fork checkpoint: err = %v, want %d saved messages", err, len(before))
 	}
@@ -196,7 +196,7 @@ func TestThreadForkIndependent(t *testing.T) {
 	if got, want := len(t2.Messages()), len(before)+4; got != want {
 		t.Fatalf("t2 has %d messages, want %d", got, want)
 	}
-	stored, err := cp.Load(ctx, "t1")
+	stored, _, err := cp.Load(ctx, "t1")
 	if err != nil || len(stored.Messages()) != len(before) {
 		t.Fatalf("t1 checkpoint changed: err = %v, %d messages", err, len(stored.Messages()))
 	}
@@ -262,7 +262,7 @@ func TestForkRefusesExistingThread(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"}), Checkpointer: cp})
 	t1 := mustThread(t, a, "t1")
 	collect(t, t1.Prompt(ctx, "hi"))
-	if err := cp.Save(ctx, "t2", state.New()); err != nil {
+	if _, err := cp.Save(ctx, "t2", state.New(), ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -271,10 +271,10 @@ func TestForkRefusesExistingThread(t *testing.T) {
 			t.Fatalf("Fork(%q): err = %v, want ErrThreadExists", id, err)
 		}
 	}
-	if saved, err := cp.Load(ctx, "t2"); err != nil || len(saved.Messages()) != 0 {
+	if saved, _, err := cp.Load(ctx, "t2"); err != nil || len(saved.Messages()) != 0 {
 		t.Fatalf("t2 checkpoint overwritten: err = %v, %d messages", err, len(saved.Messages()))
 	}
-	if saved, err := cp.Load(ctx, "t1"); err != nil || len(saved.Messages()) != 2 {
+	if saved, _, err := cp.Load(ctx, "t1"); err != nil || len(saved.Messages()) != 2 {
 		t.Fatalf("t1 checkpoint changed: err = %v", err)
 	}
 }

@@ -40,6 +40,10 @@ type run struct {
 	// checkpoint.go.
 	store     checkpoint.Checkpointer
 	workspace backend.Snapshotter
+	// version is the thread's checkpoint version the next save expects;
+	// see lease.go for lease, the run's hold on the thread.
+	version checkpoint.Version
+	lease   *runLease
 	// model is the model handler chain wrapped around streamModel (or
 	// completeModel); it is built per run because the innermost handler
 	// emits to this run.
@@ -115,6 +119,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 		backend:   be,
 		store:     a.storeFor(in),
 		workspace: a.workspaceFor(in, be),
+		version:   in.Version,
 		resume:    resume,
 		events:    make(chan Event),
 		gone:      make(chan struct{}),
@@ -184,6 +189,14 @@ func (r *run) drive(input []llm.Message) {
 	defer r.seal()
 	defer r.budget.stopClock()
 
+	if final := r.acquireLease(); final != nil {
+		r.seal()
+		r.endRun(final)
+		r.send(Event{Kind: KindFinal, Final: final})
+		return
+	}
+	defer r.releaseLease()
+
 	if r.resume == nil {
 		// A new run abandons an interrupt left in State; repairHistory
 		// answers the calls it left unanswered in the model's view.
@@ -192,12 +205,14 @@ func (r *run) drive(input []llm.Message) {
 	r.state.AppendMessages(input...)
 	final := r.loop()
 	if r.abandoned() {
+		final.Version = r.version
 		r.seal()
 		r.endRun(final)
 		return
 	}
 	r.runAfterAgent(final)
 	r.finalCheckpoint(final)
+	final.Version = r.version
 	r.seal()
 	r.endRun(final)
 	r.send(Event{Kind: KindFinal, Final: final})

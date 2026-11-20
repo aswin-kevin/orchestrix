@@ -37,15 +37,15 @@ func newRecordingCheckpointer() *recordingCheckpointer {
 	return &recordingCheckpointer{Checkpointer: cpmemory.New()}
 }
 
-func (c *recordingCheckpointer) Save(ctx context.Context, threadID string, s *state.State) error {
+func (c *recordingCheckpointer) Save(ctx context.Context, threadID string, s *state.State, expected checkpoint.Version) (checkpoint.Version, error) {
 	c.mu.Lock()
 	c.counts = append(c.counts, len(s.Messages()))
 	n := len(c.counts)
 	c.mu.Unlock()
 	if n == c.failOn || (c.failFrom > 0 && n >= c.failFrom) {
-		return errSaveFailed
+		return "", errSaveFailed
 	}
-	return c.Checkpointer.Save(ctx, threadID, s)
+	return c.Checkpointer.Save(ctx, threadID, s, expected)
 }
 
 func (c *recordingCheckpointer) saves() []int {
@@ -76,7 +76,7 @@ func TestCheckpointSavePoints(t *testing.T) {
 	if got, want := cp.saves(), []int{1, 2, 3, 4, 4}; !slices.Equal(got, want) {
 		t.Fatalf("saves = %v, want message counts %v", got, want)
 	}
-	saved, err := cp.Load(context.Background(), "t1")
+	saved, _, err := cp.Load(context.Background(), "t1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

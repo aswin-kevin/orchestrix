@@ -9,6 +9,7 @@ import (
 	"slices"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -45,6 +46,11 @@ type Input struct {
 	// State holds the conversation to continue; nil starts a fresh one.
 	// ResumeWith requires it.
 	State *state.State
+	// Version is the checkpoint version State was loaded at (from
+	// Checkpointer.Load or a previous Final.Version); the run's first save
+	// expects it. The zero Version means the thread has no checkpoint yet.
+	// It matters only for a persisted run (Config.Checkpointer).
+	Version checkpoint.Version
 	// Backend, when non-nil, is the backend this run uses instead of
 	// BackendFactory(ThreadID) or Config.Backend; nil keeps those.
 	Backend backend.Backend
@@ -159,6 +165,9 @@ func withDefaults(cfg Config) Config {
 	}
 	if cfg.MaxToolOutputChars <= 0 {
 		cfg.MaxToolOutputChars = DefaultMaxToolOutputChars
+	}
+	if cfg.LeaseTTL <= 0 {
+		cfg.LeaseTTL = DefaultLeaseTTL
 	}
 	if cfg.Settlement != nil && cfg.Settlement.MaxTurns <= 0 {
 		cfg.Settlement.MaxTurns = DefaultSettlementMaxTurns

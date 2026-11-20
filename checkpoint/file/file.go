@@ -27,13 +27,26 @@
 // parse, even the last one, cannot come from a crash and is reported as
 // corruption.
 //
+// # Versions
+//
+// Every record carries the thread's generation, a random token chosen when
+// the thread file is started, and its sequence number; together they form
+// the checkpoint.Version. A thread deleted and saved again gets a new
+// generation, so versions never repeat. Files written before versions
+// existed have no generation; their version is ":<seq>" until the thread is
+// recreated.
+//
 // # Concurrency
 //
-// A Checkpointer serializes all operations with a mutex, so concurrent Save
-// calls (even for one thread) are safe. Several Checkpointers, in one or
-// several processes, must not write the same directory at once; that is
-// unsupported. Edits made behind a Checkpointer's back are only noticed when
-// they change a thread file's size, in which case the file is replayed again.
+// A Checkpointer serializes all operations with a mutex, so the version
+// check and the append of a Save are atomic among the callers of one
+// Checkpointer, and its leases (checkpoint.Leaser) hold among them.
+// Several Checkpointers, in one or several processes, must not write the
+// same directory at once; that is unsupported, and neither versions nor
+// leases protect against it. Use a shared store such as a database for
+// several processes. Edits made behind a Checkpointer's back are only
+// noticed when they change a thread file's size, in which case the file is
+// replayed again.
 package file
 
 import (
@@ -51,6 +64,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/checkpoint"
+	"github.com/aswin-kevin/orchestrix/checkpoint/internal/revision"
 	"github.com/aswin-kevin/orchestrix/state"
 )
 
@@ -91,6 +105,7 @@ func WithSync(sync bool) Option {
 type threadState struct {
 	img    *image
 	seq    int
+	gen    string
 	deltas int
 	size   int64 // file size after the last write; a different size on disk means someone else touched the file
 }
@@ -104,9 +119,20 @@ type Checkpointer struct {
 
 	mu      sync.Mutex
 	threads map[string]*threadState // primed lazily; dropped on write failure
+	leases  revision.Leases
 }
 
-var _ checkpoint.Checkpointer = (*Checkpointer)(nil)
+var (
+	_ checkpoint.Checkpointer = (*Checkpointer)(nil)
+	_ checkpoint.Leaser       = (*Checkpointer)(nil)
+)
+
+func (ts *threadState) version() checkpoint.Version {
+	if ts == nil {
+		return ""
+	}
+	return revision.Version(ts.gen, ts.seq)
+}
 
 // New returns a Checkpointer storing files in dir, creating it (mode 0o700)
 // when needed.
@@ -133,38 +159,46 @@ func (c *Checkpointer) path(threadID string) string {
 }
 
 // Save appends the state as a delta (or a snapshot, see the package comment)
-// and, by default, fsyncs it before returning.
-func (c *Checkpointer) Save(ctx context.Context, threadID string, s *state.State) error {
+// when the thread is at version expected and, by default, fsyncs it before
+// returning.
+func (c *Checkpointer) Save(ctx context.Context, threadID string, s *state.State, expected checkpoint.Version) (checkpoint.Version, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return "", err
 	}
 	if err := checkpoint.ValidThreadID(threadID); err != nil {
-		return err
+		return "", err
 	}
 	data, err := s.MarshalJSON()
 	if err != nil {
-		return fmt.Errorf("checkpoint/file: encode state: %w", err)
+		return "", fmt.Errorf("checkpoint/file: encode state: %w", err)
 	}
 	next, err := parseImage(data)
 	if err != nil {
-		return fmt.Errorf("checkpoint/file: %w", err)
+		return "", fmt.Errorf("checkpoint/file: %w", err)
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.save(threadID, next); err != nil {
-		delete(c.threads, threadID) // the file may hold a torn tail; re-prime next time
-		return fmt.Errorf("checkpoint/file: save %q: %w", threadID, err)
+	version, err := c.save(threadID, next, expected)
+	if err != nil {
+		if !errors.Is(err, checkpoint.ErrConflict) {
+			delete(c.threads, threadID) // the file may hold a torn tail; re-prime next time
+		}
+		return "", fmt.Errorf("checkpoint/file: save %q: %w", threadID, err)
 	}
-	return nil
+	return version, nil
 }
 
-// save appends the record that moves the thread to next. c.mu must be held.
-func (c *Checkpointer) save(threadID string, next *image) error {
+// save appends the record that moves the thread from version expected to
+// next. c.mu must be held.
+func (c *Checkpointer) save(threadID string, next *image, expected checkpoint.Version) (checkpoint.Version, error) {
 	path := c.path(threadID)
 	prev, err := c.prime(threadID, path)
 	if err != nil {
-		return err
+		return "", err
+	}
+	if current := prev.version(); current != expected {
+		return "", revision.Conflict(threadID, expected, current)
 	}
 	now := time.Now().UTC()
 
@@ -173,28 +207,39 @@ func (c *Checkpointer) save(threadID string, next *image) error {
 		fresh = prev == nil
 		ts    = &threadState{img: next, seq: 1}
 	)
+	if fresh {
+		ts.gen = revision.NewGeneration()
+	} else {
+		ts.gen = prev.gen
+	}
 	switch {
 	case fresh || prev.deltas >= c.snapshotEvery:
 		if !fresh {
 			ts.seq = prev.seq + 1
 		}
-		if rec, err = snapshotRecord(ts.seq, now, threadID, next); err != nil {
-			return err
+		if rec, err = snapshotRecord(ts.seq, now, threadID, ts.gen, next); err != nil {
+			return "", err
 		}
 	default:
 		ts.seq, ts.deltas = prev.seq+1, prev.deltas+1
-		rec = deltaRecord(ts.seq, now, threadID, prev.img, next)
+		rec = deltaRecord(ts.seq, now, threadID, ts.gen, prev.img, next)
 	}
 	written, err := c.appendRecord(path, rec, fresh)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !fresh {
 		written += prev.size
 	}
 	ts.size = written
 	c.threads[threadID] = ts
-	return nil
+	return ts.version(), nil
+}
+
+// Acquire implements checkpoint.Leaser; the leases hold among the callers
+// of this Checkpointer only (see the package comment).
+func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (renew, release func(context.Context) error, err error) {
+	return c.leases.Acquire(ctx, threadID, owner, ttl)
 }
 
 // prime returns the cached state of a thread, replaying its file on first
@@ -220,7 +265,7 @@ func (c *Checkpointer) prime(threadID, path string) (*threadState, error) {
 			return nil, err
 		}
 	}
-	ts := &threadState{img: r.img, seq: r.seq, deltas: r.deltas, size: r.goodEnd}
+	ts := &threadState{img: r.img, seq: r.seq, gen: r.gen, deltas: r.deltas, size: r.goodEnd}
 	c.threads[threadID] = ts
 	return ts, nil
 }
@@ -299,31 +344,31 @@ func (c *Checkpointer) syncDir() error {
 // Load replays the thread's file from its last snapshot. A torn
 // (unterminated) final line is ignored; any unparsable complete line is an
 // error.
-func (c *Checkpointer) Load(ctx context.Context, threadID string) (*state.State, error) {
+func (c *Checkpointer) Load(ctx context.Context, threadID string) (*state.State, checkpoint.Version, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := checkpoint.ValidThreadID(threadID); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	c.mu.Lock()
 	r, err := replayFile(c.path(threadID), threadID)
 	c.mu.Unlock()
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, checkpoint.ErrNotFound
+		return nil, "", checkpoint.ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("checkpoint/file: load %q: %w", threadID, err)
+		return nil, "", fmt.Errorf("checkpoint/file: load %q: %w", threadID, err)
 	}
 	data, err := r.img.encode()
 	if err != nil {
-		return nil, fmt.Errorf("checkpoint/file: load %q: %w", threadID, err)
+		return nil, "", fmt.Errorf("checkpoint/file: load %q: %w", threadID, err)
 	}
 	s := state.New()
 	if err := s.UnmarshalJSON(data); err != nil {
-		return nil, fmt.Errorf("checkpoint/file: load %q: %w", threadID, err)
+		return nil, "", fmt.Errorf("checkpoint/file: load %q: %w", threadID, err)
 	}
-	return s, nil
+	return s, revision.Version(r.gen, r.seq), nil
 }
 
 // List reads the last record of every thread file, newest first. Files in the
@@ -350,7 +395,7 @@ func (c *Checkpointer) List(ctx context.Context) ([]checkpoint.ThreadInfo, error
 		if err != nil {
 			return nil, fmt.Errorf("checkpoint/file: list %s: %w", e.Name(), err)
 		}
-		infos = append(infos, checkpoint.ThreadInfo{ID: rec.Thread, Updated: rec.Time, Saves: rec.Seq})
+		infos = append(infos, checkpoint.ThreadInfo{ID: rec.Thread, Updated: rec.Time, Saves: rec.Seq, Version: revision.Version(rec.Gen, rec.Seq)})
 	}
 	sort.Slice(infos, func(i, j int) bool {
 		if !infos[i].Updated.Equal(infos[j].Updated) {

@@ -21,6 +21,8 @@ const saveGap = 3 * time.Millisecond
 
 // Run executes the conformance suite. newCheckpointer must return an empty
 // Checkpointer isolated from other calls (for example backed by t.TempDir()).
+// When the Checkpointer implements checkpoint.Leaser, the lease cases run
+// too.
 func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointer) {
 	t.Helper()
 	cases := []struct {
@@ -37,8 +39,33 @@ func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointe
 		{"LongIDWithSlashes", longIDWithSlashes},
 		{"LoadedStateIsIndependent", loadedStateIndependent},
 		{"OverwriteKeepsLatest", overwriteKeepsLatest},
-		{"ConcurrentSavesSameThread", concurrentSaves},
+		{"LoadReturnsSavedVersion", loadReturnsSavedVersion},
+		{"StaleVersionConflicts", staleVersionConflicts},
+		{"ZeroVersionOnExistingConflicts", zeroVersionOnExisting},
+		{"VersionOnMissingConflicts", versionOnMissing},
+		{"VersionAfterDeleteConflicts", versionAfterDelete},
+		{"ConcurrentSavesOneWins", concurrentSavesOneWins},
+		{"SequentialSavesFromManyWriters", sequentialSaves},
 		{"CancelledContext", cancelledContext},
+	}
+	leaseCases := []struct {
+		name string
+		fn   func(*testing.T, checkpoint.Leaser)
+	}{
+		{"LeaseExclusive", leaseExclusive},
+		{"LeaseReleaseAndReacquire", leaseRelease},
+		{"LeaseExpires", leaseExpires},
+		{"LeaseRenewAfterTakeover", leaseRenewAfterTakeover},
+		{"LeasePerThread", leasePerThread},
+	}
+	for _, tc := range leaseCases {
+		t.Run(tc.name, func(t *testing.T) {
+			l, ok := newCheckpointer(t).(checkpoint.Leaser)
+			if !ok {
+				t.Skip("checkpointer does not implement checkpoint.Leaser")
+			}
+			tc.fn(t, l)
+		})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { tc.fn(t, newCheckpointer(t)) })
@@ -67,16 +94,35 @@ func stateWith(t *testing.T, texts ...string) *state.State {
 	return s
 }
 
-func mustSave(t *testing.T, c checkpoint.Checkpointer, id string, s *state.State) {
+// current returns the thread's version, the zero Version when it has none.
+func current(t *testing.T, c checkpoint.Checkpointer, id string) checkpoint.Version {
 	t.Helper()
-	if err := c.Save(ctx, id, s); err != nil {
+	_, v, err := c.Load(ctx, id)
+	switch {
+	case errors.Is(err, checkpoint.ErrNotFound):
+		return ""
+	case err != nil:
+		t.Fatalf("Load(%q): %v", id, err)
+	}
+	return v
+}
+
+// mustSave saves s over the thread's current version and returns the new one.
+func mustSave(t *testing.T, c checkpoint.Checkpointer, id string, s *state.State) checkpoint.Version {
+	t.Helper()
+	v, err := c.Save(ctx, id, s, current(t, c, id))
+	if err != nil {
 		t.Fatalf("Save(%q): %v", id, err)
 	}
+	if v == "" {
+		t.Fatalf("Save(%q) returned the zero Version", id)
+	}
+	return v
 }
 
 func mustLoad(t *testing.T, c checkpoint.Checkpointer, id string) *state.State {
 	t.Helper()
-	s, err := c.Load(ctx, id)
+	s, _, err := c.Load(ctx, id)
 	if err != nil {
 		t.Fatalf("Load(%q): %v", id, err)
 	}
@@ -101,7 +147,7 @@ func roundTrip(t *testing.T, c checkpoint.Checkpointer) {
 }
 
 func loadMissing(t *testing.T, c checkpoint.Checkpointer) {
-	if _, err := c.Load(ctx, "nope"); !errors.Is(err, checkpoint.ErrNotFound) {
+	if _, _, err := c.Load(ctx, "nope"); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("Load missing: got %v, want ErrNotFound", err)
 	}
 	infos, err := c.List(ctx)
@@ -139,7 +185,7 @@ func deleteThread(t *testing.T, c checkpoint.Checkpointer) {
 	if err := c.Delete(ctx, "x"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := c.Load(ctx, "x"); !errors.Is(err, checkpoint.ErrNotFound) {
+	if _, _, err := c.Load(ctx, "x"); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("Load after Delete: got %v, want ErrNotFound", err)
 	}
 	if err := c.Delete(ctx, "x"); !errors.Is(err, checkpoint.ErrNotFound) {
@@ -155,10 +201,10 @@ func deleteThread(t *testing.T, c checkpoint.Checkpointer) {
 func invalidIDs(t *testing.T, c checkpoint.Checkpointer) {
 	for _, id := range []string{"", strings.Repeat("x", checkpoint.MaxThreadIDBytes+1), "a\x00b", "bad\xffutf8"} {
 		s := stateWith(t, "1")
-		if err := c.Save(ctx, id, s); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
+		if _, err := c.Save(ctx, id, s, ""); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
 			t.Errorf("Save(%.12q): got %v, want ErrInvalidThreadID", id, err)
 		}
-		if _, err := c.Load(ctx, id); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
+		if _, _, err := c.Load(ctx, id); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
 			t.Errorf("Load(%.12q): got %v, want ErrInvalidThreadID", id, err)
 		}
 		if err := c.Delete(ctx, id); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
@@ -255,16 +301,154 @@ func overwriteKeepsLatest(t *testing.T, c checkpoint.Checkpointer) {
 	}
 }
 
-func concurrentSaves(t *testing.T, c checkpoint.Checkpointer) {
+func loadReturnsSavedVersion(t *testing.T, c checkpoint.Checkpointer) {
+	seen := map[checkpoint.Version]bool{}
+	for i := range 3 {
+		v := mustSave(t, c, "t", stateWith(t, strings.Repeat("m", i+1)))
+		if seen[v] {
+			t.Fatalf("Save returned version %q twice", v)
+		}
+		seen[v] = true
+		if _, got, err := c.Load(ctx, "t"); err != nil || got != v {
+			t.Fatalf("Load version = %q, %v, want %q", got, err, v)
+		}
+		infos, err := c.List(ctx)
+		if err != nil || len(infos) != 1 || infos[0].Version != v {
+			t.Fatalf("List = %+v, %v, want version %q", infos, err, v)
+		}
+	}
+}
+
+// assertUnchanged fails unless the thread still holds want at version v.
+func assertUnchanged(t *testing.T, c checkpoint.Checkpointer, id string, want *state.State, v checkpoint.Version) {
+	t.Helper()
+	got, gotV, err := c.Load(ctx, id)
+	if err != nil {
+		t.Fatalf("Load(%q): %v", id, err)
+	}
+	if gotV != v || stateJSON(t, got) != stateJSON(t, want) {
+		t.Fatalf("a conflicting Save changed the thread: version %q (want %q), state %s", gotV, v, stateJSON(t, got))
+	}
+}
+
+func staleVersionConflicts(t *testing.T, c checkpoint.Checkpointer) {
+	v1 := mustSave(t, c, "t", stateWith(t, "one"))
+	second := stateWith(t, "one", "two")
+	v2, err := c.Save(ctx, "t", second, v1)
+	if err != nil {
+		t.Fatalf("Save over current version: %v", err)
+	}
+	v, err := c.Save(ctx, "t", stateWith(t, "stale"), v1)
+	if !errors.Is(err, checkpoint.ErrConflict) || v != "" {
+		t.Fatalf("Save over stale version = %q, %v, want ErrConflict", v, err)
+	}
+	assertUnchanged(t, c, "t", second, v2)
+	infos, _ := c.List(ctx)
+	if len(infos) != 1 || infos[0].Saves != 2 {
+		t.Fatalf("a conflicting Save counted as a save: %+v", infos)
+	}
+}
+
+func zeroVersionOnExisting(t *testing.T, c checkpoint.Checkpointer) {
+	first := stateWith(t, "first")
+	v1 := mustSave(t, c, "t", first)
+	if _, err := c.Save(ctx, "t", stateWith(t, "intruder"), ""); !errors.Is(err, checkpoint.ErrConflict) {
+		t.Fatalf("create-only Save onto an existing thread: got %v, want ErrConflict", err)
+	}
+	assertUnchanged(t, c, "t", first, v1)
+}
+
+func versionOnMissing(t *testing.T, c checkpoint.Checkpointer) {
+	v := mustSave(t, c, "other", stateWith(t, "x"))
+	if _, err := c.Save(ctx, "t", stateWith(t, "x"), v); !errors.Is(err, checkpoint.ErrConflict) {
+		t.Fatalf("Save with a version onto a missing thread: got %v, want ErrConflict", err)
+	}
+	if _, _, err := c.Load(ctx, "t"); !errors.Is(err, checkpoint.ErrNotFound) {
+		t.Fatalf("a conflicting Save created the thread: %v", err)
+	}
+}
+
+// versionAfterDelete guards against ABA: a writer holding a version from
+// before a Delete must not overwrite the thread created after it, even
+// when the new thread has had as many saves.
+func versionAfterDelete(t *testing.T, c checkpoint.Checkpointer) {
+	var old checkpoint.Version
+	for i := range 2 {
+		old = mustSave(t, c, "t", stateWith(t, strings.Repeat("o", i+1)))
+	}
+	if err := c.Delete(ctx, "t"); err != nil {
+		t.Fatal(err)
+	}
+	var fresh *state.State
+	var v checkpoint.Version
+	for i := range 2 {
+		fresh = stateWith(t, strings.Repeat("n", i+1))
+		v = mustSave(t, c, "t", fresh)
+	}
+	if v == old {
+		t.Fatalf("recreated thread reused version %q", v)
+	}
+	if _, err := c.Save(ctx, "t", stateWith(t, "stale"), old); !errors.Is(err, checkpoint.ErrConflict) {
+		t.Fatalf("Save with a pre-delete version: got %v, want ErrConflict", err)
+	}
+	assertUnchanged(t, c, "t", fresh, v)
+}
+
+func concurrentSavesOneWins(t *testing.T, c checkpoint.Checkpointer) {
+	base := mustSave(t, c, "shared", stateWith(t, "base"))
+	const writers = 16
+	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		wins      int
+		winner    *state.State
+		winnerV   checkpoint.Version
+		conflicts int
+	)
+	for w := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s := stateWith(t, "base", strings.Repeat("w", w+1))
+			v, err := c.Save(ctx, "shared", s, base)
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				wins++
+				winner, winnerV = s, v
+			case errors.Is(err, checkpoint.ErrConflict):
+				conflicts++
+			default:
+				t.Errorf("Save: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if wins != 1 || conflicts != writers-1 {
+		t.Fatalf("%d saves won and %d conflicted, want 1 and %d", wins, conflicts, writers-1)
+	}
+	assertUnchanged(t, c, "shared", winner, winnerV)
+}
+
+func sequentialSaves(t *testing.T, c checkpoint.Checkpointer) {
 	const writers, each = 8, 10
 	var wg sync.WaitGroup
 	for w := range writers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := range each {
+			for i := 0; i < each; {
 				s := stateWith(t, strings.Repeat("w", w+1), strings.Repeat("i", i+1))
-				if err := c.Save(ctx, "shared", s); err != nil {
+				_, v, err := c.Load(ctx, "shared")
+				if err != nil && !errors.Is(err, checkpoint.ErrNotFound) {
+					t.Errorf("Load: %v", err)
+					return
+				}
+				switch _, err := c.Save(ctx, "shared", s, v); {
+				case err == nil:
+					i++
+				case !errors.Is(err, checkpoint.ErrConflict):
 					t.Errorf("Save: %v", err)
 					return
 				}
@@ -283,13 +467,110 @@ func concurrentSaves(t *testing.T, c checkpoint.Checkpointer) {
 	}
 }
 
+const leaseTTL = time.Minute
+
+func leaseExclusive(t *testing.T, l checkpoint.Leaser) {
+	renew, release, err := l.Acquire(ctx, "t", "a", leaseTTL)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	defer release(ctx)
+	if _, _, err := l.Acquire(ctx, "t", "b", leaseTTL); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+		t.Fatalf("second owner Acquire: got %v, want ErrLeaseHeld", err)
+	}
+	if err := renew(ctx); err != nil {
+		t.Fatalf("renew: %v", err)
+	}
+	if _, rel, err := l.Acquire(ctx, "t", "a", leaseTTL); err != nil {
+		t.Fatalf("holder re-Acquire: %v", err)
+	} else {
+		defer rel(ctx)
+	}
+}
+
+func leaseRelease(t *testing.T, l checkpoint.Leaser) {
+	_, release, err := l.Acquire(ctx, "t", "a", leaseTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := release(ctx); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	_, releaseB, err := l.Acquire(ctx, "t", "b", leaseTTL)
+	if err != nil {
+		t.Fatalf("Acquire after release: %v", err)
+	}
+	// A stale release by the old owner must not drop b's lease.
+	if err := release(ctx); err != nil {
+		t.Fatalf("second release: %v", err)
+	}
+	if _, _, err := l.Acquire(ctx, "t", "c", leaseTTL); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+		t.Fatalf("old owner's release dropped another owner's lease: %v", err)
+	}
+	releaseB(ctx)
+}
+
+func leaseExpires(t *testing.T, l checkpoint.Leaser) {
+	if _, _, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, release, err := l.Acquire(ctx, "t", "b", leaseTTL)
+		if err == nil {
+			release(ctx)
+			return
+		}
+		if !errors.Is(err, checkpoint.ErrLeaseHeld) || time.Now().After(deadline) {
+			t.Fatalf("Acquire after expiry: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func leaseRenewAfterTakeover(t *testing.T, l checkpoint.Leaser) {
+	renew, _, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var releaseB func(context.Context) error
+	for {
+		_, releaseB, err = l.Acquire(ctx, "t", "b", leaseTTL)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Acquire after expiry: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer releaseB(ctx)
+	if err := renew(ctx); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+		t.Fatalf("renew after another owner took the lease: got %v, want ErrLeaseHeld", err)
+	}
+}
+
+func leasePerThread(t *testing.T, l checkpoint.Leaser) {
+	_, relA, err := l.Acquire(ctx, "t1", "a", leaseTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer relA(ctx)
+	_, relB, err := l.Acquire(ctx, "t2", "b", leaseTTL)
+	if err != nil {
+		t.Fatalf("lease on another thread: %v", err)
+	}
+	relB(ctx)
+}
+
 func cancelledContext(t *testing.T, c checkpoint.Checkpointer) {
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
-	if err := c.Save(cctx, "t", stateWith(t, "1")); !errors.Is(err, context.Canceled) {
+	if _, err := c.Save(cctx, "t", stateWith(t, "1"), ""); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Save with cancelled ctx: got %v", err)
 	}
-	if _, err := c.Load(cctx, "t"); !errors.Is(err, context.Canceled) {
+	if _, _, err := c.Load(cctx, "t"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Load with cancelled ctx: got %v", err)
 	}
 }

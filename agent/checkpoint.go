@@ -109,14 +109,25 @@ func (r *run) checkpoint(withWorkspace bool) error {
 	return r.save()
 }
 
-// save stores State in the run's checkpointer, if it has one.
+// save stores State in the run's checkpointer, if it has one, over the
+// version the run holds. After a conflict the thread belongs to another
+// writer, so the run stops saving: the conflict is reported once.
 func (r *run) save() error {
 	if r.store == nil {
 		return nil
 	}
-	if err := r.store.Save(context.WithoutCancel(r.ctx), r.threadID, r.state); err != nil {
+	if err := r.lease.lost(); err != nil {
+		r.store = nil
 		return fmt.Errorf("agent: checkpoint: %w", err)
 	}
+	v, err := r.store.Save(context.WithoutCancel(r.ctx), r.threadID, r.state, r.version)
+	if err != nil {
+		if errors.Is(err, checkpoint.ErrConflict) {
+			r.store = nil
+		}
+		return fmt.Errorf("agent: checkpoint: %w", err)
+	}
+	r.version = v
 	return nil
 }
 

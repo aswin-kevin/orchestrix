@@ -12,6 +12,7 @@ import (
 type replayed struct {
 	img     *image    // state after the last good record
 	seq     int       // seq of the last good record
+	gen     string    // generation of the last good record
 	updated time.Time // time of the last good record
 	deltas  int       // delta records since the last snapshot
 	goodEnd int64     // byte offset just past the last good record
@@ -77,7 +78,7 @@ func foldFromLastSnapshot(recs []record, goodEnd, size int64) (*replayed, error)
 		if rec.Kind == kindDelta {
 			out.deltas++
 		}
-		out.img, out.seq, out.updated = img, rec.Seq, rec.Time
+		out.img, out.seq, out.gen, out.updated = img, rec.Seq, rec.Gen, rec.Time
 	}
 	return out, nil
 }

@@ -22,6 +22,9 @@ type record struct {
 	Time   time.Time `json:"time"`
 	Thread string    `json:"thread"`
 	Kind   string    `json:"kind"`
+	// Gen names the thread's incarnation; with Seq it forms the version.
+	// Records written before versions existed have none.
+	Gen string `json:"gen,omitempty"`
 
 	State json.RawMessage `json:"state,omitempty"`
 
@@ -63,19 +66,19 @@ func (img *image) encode() ([]byte, error) {
 }
 
 // snapshotRecord builds a full-state record for img.
-func snapshotRecord(seq int, now time.Time, thread string, img *image) (record, error) {
+func snapshotRecord(seq int, now time.Time, thread, gen string, img *image) (record, error) {
 	data, err := img.encode()
 	if err != nil {
 		return record{}, err
 	}
-	return record{Seq: seq, Time: now, Thread: thread, Kind: kindSnapshot, State: data}, nil
+	return record{Seq: seq, Time: now, Thread: thread, Kind: kindSnapshot, Gen: gen, State: data}, nil
 }
 
 // deltaRecord builds the record that turns prev into next.
-func deltaRecord(seq int, now time.Time, thread string, prev, next *image) record {
+func deltaRecord(seq int, now time.Time, thread, gen string, prev, next *image) record {
 	keep := commonPrefix(prev.Messages, next.Messages)
 	rec := record{
-		Seq: seq, Time: now, Thread: thread, Kind: kindDelta,
+		Seq: seq, Time: now, Thread: thread, Kind: kindDelta, Gen: gen,
 		Keep:     keep,
 		Messages: next.Messages[keep:],
 	}
