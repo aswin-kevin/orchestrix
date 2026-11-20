@@ -682,3 +682,49 @@ func TestExpansionStillVouchedForPlainCommands(t *testing.T) {
 		}
 	}
 }
+
+func TestGitGlobalsAndWriters(t *testing.T) {
+	for _, tt := range []struct {
+		cmd    string
+		wantOK bool
+	}{
+		{`git --attr-source HEAD rebase --exec 'touch pwned' HEAD~1`, false},
+		{`git --attr-source=HEAD rebase -x y`, false},
+		{`git --unknown-global status`, false},
+		{`git log -1 --output=.git/config`, false},
+		{`git diff --output x`, false},
+		{`git format-patch -o .git/hooks HEAD~1`, false},
+		{`git update-index --add --chmod=+x pre-commit`, false},
+		{`git checkout-index --prefix=.git/hooks/ -a`, false},
+		{`git --exec-path=/tmp/x status`, false},
+		{`git -C sub status`, true},
+		{`git --no-pager log -1`, true},
+		{`git -p status`, true},
+		{`git --exec-path`, true},
+		{`git log --oneline`, true},
+		{`git format-patch HEAD~1`, true},
+	} {
+		if _, ok := SplitCommand(tt.cmd); ok != tt.wantOK {
+			t.Errorf("SplitCommand(%q) ok = %v, want %v", tt.cmd, ok, tt.wantOK)
+		}
+	}
+}
+
+func TestSSHOptionSeparators(t *testing.T) {
+	for _, tt := range []struct {
+		cmd    string
+		wantOK bool
+	}{
+		{"ssh -o \"ProxyCommand\ttouch pwned\" h", false},
+		{`ssh -oPKCS11Provider=/tmp/e.so h`, false},
+		{`ssh -o SecurityKeyProvider=/tmp/e.so h`, false},
+		{`ssh -I /tmp/e.so h`, false},
+		{`scp -I /tmp/e.so a h:b`, false},
+		{`sftp -I /tmp/e.so h`, false},
+		{`ssh -o ConnectTimeout=5 h uptime`, true},
+	} {
+		if _, ok := SplitCommand(tt.cmd); ok != tt.wantOK {
+			t.Errorf("SplitCommand(%q) ok = %v, want %v", tt.cmd, ok, tt.wantOK)
+		}
+	}
+}

@@ -1,6 +1,9 @@
 package permission
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // commandOptionChecks hold, for ordinary commands that can also run a command
 // of the caller's choosing, a check of whether their arguments make them do
@@ -35,7 +38,7 @@ func runsCommandThroughOptions(name string, args []word) bool {
 // attached "=value", or an abbreviation of it, as getopt-style parsers accept.
 // An ambiguous abbreviation also counts, which errs on the side of caution.
 func isLongOption(arg, opt string) bool {
-	name, _, _ := strings.Cut(arg, "=")
+	name := optionName(arg)
 	return name == opt || (len(name) > len("--") && strings.HasPrefix(opt, name))
 }
 
@@ -89,7 +92,19 @@ func tarRunsCommand(args []word) bool {
 // gitValueOptions are git's global options whose value may be the next word.
 // Those that choose the configuration (-c, --config-env, --git-dir,
 // --work-tree) are refused before their value matters.
-var gitValueOptions = map[string]bool{"-C": true, "--namespace": true}
+var gitValueOptions = map[string]bool{"-C": true, "--namespace": true, "--attr-source": true}
+
+// gitFlagOptions are git's global options that take no value. A global option
+// in neither this set, gitValueOptions nor gitConfigOptions is unknown, and an
+// unknown one may take a value that hides the subcommand.
+var gitFlagOptions = map[string]bool{
+	"--no-pager": true, "--paginate": true, "-p": true, "-P": true,
+	"--bare": true, "--no-replace-objects": true, "--literal-pathspecs": true,
+	"--glob-pathspecs": true, "--noglob-pathspecs": true, "--icase-pathspecs": true,
+	"--no-optional-locks": true, "--no-advice": true, "--version": true, "-v": true,
+	"--help": true, "-h": true, "--html-path": true, "--man-path": true,
+	"--info-path": true, "--exec-path": true, // --exec-path= is refused earlier
+}
 
 // gitConfigOptions are git's global options that choose configuration git
 // reads: set directly (-c, --config-env), or taken from a repository that
@@ -112,6 +127,16 @@ var gitCommandOptions = map[string][]string{
 	"init":       {"--template"},
 	"instaweb":   {"--httpd", "-d", "--browser", "-b"},
 	"send-email": {"--sendmail-cmd", "--smtp-server", "--to-cmd", "--cc-cmd", "--header-cmd"},
+
+	// Writers: a file named by the option is created or overwritten, which
+	// may be a hook or configuration (.git is also protected by path rules,
+	// but only where the option is visible as a path).
+	"log": {"--output"}, "show": {"--output"}, "diff": {"--output"},
+	"whatchanged": {"--output"}, "range-diff": {"--output"},
+	"diff-tree": {"--output"}, "diff-files": {"--output"}, "diff-index": {"--output"},
+	"format-patch":   {"--output", "-o", "--output-directory"},
+	"update-index":   {"--chmod"},
+	"checkout-index": {"--prefix"},
 }
 
 // gitCommandActions are the subcommands that run a command given as their
@@ -136,11 +161,20 @@ func gitRunsCommand(args []word) bool {
 			return true
 		case gitValueOptions[arg]:
 			i++
-		case !strings.HasPrefix(arg, "-"):
+		case gitValueOptions[optionName(arg)] || gitFlagOptions[arg]:
+		case strings.HasPrefix(arg, "-"):
+			return true // unknown global: it may take the subcommand as its value
+		default:
 			return gitSubcommandRunsCommand(arg, args[i+1:])
 		}
 	}
 	return false
+}
+
+// optionName returns arg up to any "=value".
+func optionName(arg string) string {
+	name, _, _ := strings.Cut(arg, "=")
+	return name
 }
 
 func gitSubcommandRunsCommand(subcommand string, args []word) bool {
@@ -185,9 +219,9 @@ func startsWithAny(s string, prefixes []string) bool {
 // The ssh family runs a program named in an option (scp and sftp -S, sftp
 // -D), in a configuration file (-F) or in -o settings (see sshCommandKeys).
 var (
-	sshProgramOptions  = []string{"-F"}
-	scpProgramOptions  = []string{"-F", "-S"}
-	sftpProgramOptions = []string{"-F", "-S", "-D"}
+	sshProgramOptions  = []string{"-F", "-I"}
+	scpProgramOptions  = []string{"-F", "-S", "-I"}
+	sftpProgramOptions = []string{"-F", "-S", "-D", "-I"}
 )
 
 // sshCommandKeys are the ssh settings, lower-cased, that name a local
@@ -195,6 +229,7 @@ var (
 var sshCommandKeys = map[string]bool{
 	"proxycommand": true, "localcommand": true, "permitlocalcommand": true,
 	"knownhostscommand": true, "include": true, "match": true,
+	"pkcs11provider": true, "securitykeyprovider": true,
 }
 
 // sshRunsCommand returns a check for a command of the ssh family that
@@ -219,8 +254,11 @@ func sshRunsCommand(programOptions []string) func(args []word) bool {
 			if value == "" && i+1 < len(args) {
 				value = args[i+1].text
 			}
-			key, _, _ := strings.Cut(strings.TrimSpace(value), "=")
-			key, _, _ = strings.Cut(key, " ")
+			value = strings.TrimSpace(value)
+			key := value
+			if n := strings.IndexFunc(value, func(r rune) bool { return r == '=' || unicode.IsSpace(r) }); n >= 0 {
+				key = value[:n]
+			}
 			if sshCommandKeys[strings.ToLower(key)] {
 				return true
 			}
