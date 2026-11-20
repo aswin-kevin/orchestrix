@@ -96,8 +96,9 @@ func WithoutMiddleware(names ...string) Option {
 	return func(s *settings) { s.exclude = append(s.exclude, names...) }
 }
 
-// WithBackend makes every thread work on b. It cannot be combined with
-// WithBackendFactory.
+// WithBackend makes every thread work on b. When b can run commands
+// (backend.Executor, such as a sandbox or shell backend), the agent gets the
+// execute tool. It cannot be combined with WithBackendFactory.
 func WithBackend(b backend.Backend) Option {
 	return func(s *settings) { s.cfg.Backend = b }
 }

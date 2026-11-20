@@ -10,6 +10,7 @@ import (
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
+	membackend "github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -157,6 +158,49 @@ func TestWithShellRegistersExecute(t *testing.T) {
 	finalOf(t, a, orchestrix.Text("hi"))
 	if !slices.Contains(toolNames(p), "execute") {
 		t.Errorf("tools %v lack execute", toolNames(p))
+	}
+}
+
+// recordingExecutor is an in-memory workspace that can run commands: it
+// records each one and runs nothing.
+type recordingExecutor struct {
+	*membackend.Backend
+	cmds []string
+}
+
+func (r *recordingExecutor) Execute(_ context.Context, cmd string, _ backend.ExecOptions) (backend.ExecResult, error) {
+	r.cmds = append(r.cmds, cmd)
+	return backend.ExecResult{Output: "ran"}, nil
+}
+
+// A backend given with WithBackend that can run commands gets the execute
+// tool, as WithShell's does; one that cannot does not.
+func TestWithBackendExecutorRegistersExecute(t *testing.T) {
+	exec := &recordingExecutor{Backend: membackend.New()}
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "1", Name: "execute", Input: map[string]any{"command": "echo hi"}}}},
+		llmtest.Turn{Text: "done"},
+	)
+	a, err := orchestrix.New(p, orchestrix.WithBackend(exec), orchestrix.WithPermissionMode(permission.ModeBypass))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalOf(t, a, orchestrix.Text("run it"))
+	if !slices.Contains(toolNames(p), "execute") {
+		t.Errorf("tools %v lack execute", toolNames(p))
+	}
+	if !slices.Equal(exec.cmds, []string{"echo hi"}) {
+		t.Errorf("executed %q, want [echo hi]", exec.cmds)
+	}
+
+	plain := llmtest.New(llmtest.Turn{Text: "ok"})
+	a, err = orchestrix.New(plain, orchestrix.WithBackend(membackend.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalOf(t, a, orchestrix.Text("hi"))
+	if slices.Contains(toolNames(plain), "execute") {
+		t.Errorf("tools %v offer execute on a backend that cannot run commands", toolNames(plain))
 	}
 }
 
