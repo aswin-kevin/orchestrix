@@ -26,6 +26,9 @@ const (
 	// DefaultSettlementMaxTurns is how many extra model calls a run gets to
 	// wrap up after hitting a limit.
 	DefaultSettlementMaxTurns = 2
+	// DefaultMaxTurns is the number of tool-calling model turns a run may
+	// take when Config.MaxTurns is zero.
+	DefaultMaxTurns = 100
 )
 
 // Settlement configures the wrap-up phase a run enters when it hits a limit
@@ -119,9 +122,26 @@ type Config struct {
 	MaxTokens   int
 	Temperature *float64
 
-	// MaxTurns and MaxDuration bound a run; zero means unbounded.
-	MaxTurns    int
+	// MaxTurns bounds the model turns of a run that call tools; zero means
+	// DefaultMaxTurns and a negative value means unbounded. A run that
+	// reaches it ends with ReasonMaxTurns after the tools of its last turn
+	// ran. This is not Settlement.MaxTurns.
+	MaxTurns int
+	// MaxDuration bounds the wall-clock time of a run; zero means
+	// unbounded.
 	MaxDuration time.Duration
+	// MaxTotalTokens is a hard cap on the tokens a run spends; zero means
+	// no cap. The count is the run's own model calls, summed over
+	// Usage.Input, Output, CacheRead and CacheWrite (the run's Final.Usage;
+	// nested subagent runs count only if they are folded into that usage,
+	// and each run counts its own tokens against the cap it inherits). Once
+	// it is reached, the run ends with ReasonTokenLimit instead of taking
+	// another turn. When the reply that reached it contains tool calls they
+	// do not run; the next run on the same State answers them as interrupted
+	// through history repair. If the turn limit is reached on the same turn,
+	// ReasonTokenLimit wins, and no settlement phase follows it. Unlike
+	// TokenBudget, which only nudges the model, this ends the run.
+	MaxTotalTokens int
 	// ModelTimeout bounds each model call, including any retries made by
 	// the provider or by model middleware and any extra model calls a
 	// middleware makes within it (such as summarization); zero means no

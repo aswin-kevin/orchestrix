@@ -472,3 +472,73 @@ func TestBeforeStopReverseOrderFirstPromptWins(t *testing.T) {
 		t.Fatalf("hook order = %v, want %v first", log, want)
 	}
 }
+
+// toolTurns scripts n tool-calling turns of the given usage, then, when
+// finish is set, a final text turn.
+func toolTurns(n int, usage llm.Usage, finish bool) []llmtest.Turn {
+	turns := make([]llmtest.Turn, 0, n+1)
+	for i := range n {
+		turn := toolTurn(fmt.Sprintf("t%d", i))
+		turn.Usage = usage
+		turns = append(turns, turn)
+	}
+	if finish {
+		turns = append(turns, llmtest.Turn{Text: "done"})
+	}
+	return turns
+}
+
+func TestDefaultMaxTurns(t *testing.T) {
+	p := llmtest.New(toolTurns(DefaultMaxTurns+50, llm.Usage{}, false)...)
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonMaxTurns || final.Turns != DefaultMaxTurns || p.Calls() != DefaultMaxTurns {
+		t.Fatalf("final = %+v after %d calls, want max_turns at %d turns", final, p.Calls(), DefaultMaxTurns)
+	}
+	if got := a.Config().MaxTurns; got != DefaultMaxTurns {
+		t.Fatalf("Config().MaxTurns = %d, want %d", got, DefaultMaxTurns)
+	}
+}
+
+func TestNegativeMaxTurnsUnbounded(t *testing.T) {
+	p := llmtest.New(toolTurns(150, llm.Usage{}, true)...)
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTurns: -1})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonCompleted || final.Turns != 151 {
+		t.Fatalf("final = reason %s turns %d, want completed after 151", final.Reason, final.Turns)
+	}
+}
+
+func TestMaxTotalTokens(t *testing.T) {
+	// Cache tokens count too: 400 + 300 + 200 + 100 = 1000 per turn.
+	usage := llm.Usage{Input: 400, Output: 300, CacheRead: 200, CacheWrite: 100}
+	p := llmtest.New(toolTurns(10, usage, false)...)
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTotalTokens: 2500})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonTokenLimit || final.Err != nil || final.Turns != 3 || p.Calls() != 3 {
+		t.Fatalf("final = %+v after %d calls, want token_limit after 3 turns", final, p.Calls())
+	}
+	// The last reply's tool call did not run: State ends on the assistant
+	// message, and history repair answers the call on the next run.
+	msgs := final.State.Messages()
+	if last := msgs[len(msgs)-1]; last.Role != llm.RoleAssistant || len(last.ToolUses()) != 1 {
+		t.Fatalf("last message = %+v, want the assistant reply with its unanswered tool call", last)
+	}
+}
+
+func TestTokenLimitBeatsMaxTurnsOnSameTurn(t *testing.T) {
+	p := llmtest.New(toolTurns(5, llm.Usage{Input: 1000}, false)...)
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTurns: 2, MaxTotalTokens: 2000})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonTokenLimit || final.Turns != 2 {
+		t.Fatalf("final = reason %s turns %d, want token_limit at turn 2", final.Reason, final.Turns)
+	}
+}

@@ -300,6 +300,10 @@ func (r *run) afterReply(resp *llm.Response) *Final {
 	if len(uses) == 0 {
 		return r.afterNoToolTurn(resp)
 	}
+	if r.tokenLimitReached() {
+		// The tools do not run; history repair answers them next run.
+		return r.finish(ReasonTokenLimit, nil)
+	}
 	assistantIndex := len(r.state.Messages()) - 1 // record just appended it
 	if final := r.toolTurn(assistantIndex, r.prepareAll(uses)); final != nil {
 		return final

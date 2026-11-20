@@ -141,10 +141,16 @@ func WithApprover(a permission.Approver) Option {
 	return func(s *settings) { s.cfg.Approver = a }
 }
 
-// WithMaxTurns limits how many model turns one run may take; zero means
-// unbounded.
+// WithMaxTurns limits how many tool-calling model turns one run may take;
+// zero means agent.DefaultMaxTurns and a negative value means unbounded.
 func WithMaxTurns(n int) Option {
 	return func(s *settings) { s.cfg.MaxTurns = n }
+}
+
+// WithMaxTotalTokens sets a hard cap on the tokens one run may spend (see
+// agent.Config.MaxTotalTokens); zero means no cap.
+func WithMaxTotalTokens(n int) Option {
+	return func(s *settings) { s.cfg.MaxTotalTokens = n }
 }
 
 // WithMaxDuration limits the wall-clock time of one run; zero means

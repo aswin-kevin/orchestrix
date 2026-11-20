@@ -10,7 +10,7 @@ import (
 )
 
 // Prompts and limits of the run budgets (Config.MaxTurns, MaxDuration,
-// TokenBudget, EscalateMaxTokens and Settlement).
+// TokenBudget, MaxTotalTokens, EscalateMaxTokens and Settlement).
 const (
 	// EscalatedMaxTokens is the output limit a reply cut off at MaxTokens is
 	// retried with when Config.EscalateMaxTokens is set, capped at the
@@ -157,6 +157,15 @@ func (r *run) maxTokens() int {
 	}
 }
 
+// tokenLimitReached reports whether the run's cumulative token usage has
+// reached Config.MaxTotalTokens. Settlement is exempt: it only wraps up a
+// limit that already ended the run's work.
+func (r *run) tokenLimitReached() bool {
+	limit := r.agent.cfg.MaxTotalTokens
+	u := r.usage
+	return limit > 0 && !r.budget.settling() && u.Input+u.Output+u.CacheRead+u.CacheWrite >= limit
+}
+
 // afterToolTurn applies the run limits once a turn's tool calls are done. It
 // returns a Final when a limit ends the run.
 func (r *run) afterToolTurn() *Final {
@@ -229,6 +238,9 @@ func (r *run) complete(resp *llm.Response) *Final {
 // continueWith appends prompt as a user message so the model takes another
 // turn, unless the time budget has run out.
 func (r *run) continueWith(prompt string) *Final {
+	if r.tokenLimitReached() {
+		return r.finish(ReasonTokenLimit, nil)
+	}
 	if r.budget.expired() {
 		return r.limitReached(ReasonTimeout)
 	}

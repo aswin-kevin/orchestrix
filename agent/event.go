@@ -52,6 +52,8 @@ const (
 	ReasonCompleted TerminalReason = "completed"
 	// ReasonMaxTurns: Config.MaxTurns was reached.
 	ReasonMaxTurns TerminalReason = "max_turns"
+	// ReasonTokenLimit: the run's token usage reached Config.MaxTotalTokens.
+	ReasonTokenLimit TerminalReason = "token_limit"
 	// ReasonTimeout: Config.MaxDuration elapsed.
 	ReasonTimeout TerminalReason = "timeout"
 	// ReasonInterrupted: a tool call awaits a human decision; see

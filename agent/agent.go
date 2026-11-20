@@ -167,6 +167,9 @@ func withDefaults(cfg Config) Config {
 	if cfg.Name == "" {
 		cfg.Name = DefaultAgentName
 	}
+	if cfg.MaxTurns == 0 {
+		cfg.MaxTurns = DefaultMaxTurns
+	}
 	if cfg.MaxConcurrency <= 0 {
 		cfg.MaxConcurrency = DefaultMaxConcurrency
 	}
