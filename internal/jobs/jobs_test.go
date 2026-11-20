@@ -255,6 +255,23 @@ func TestCloseWaitBoundedByContext(t *testing.T) {
 	}
 }
 
+func TestCloseDoneContextWithEndedJobs(t *testing.T) {
+	for range 50 {
+		m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+		_, f := startFake(t, m, "t")
+		f.end()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := m.Close(ctx, time.Minute); err != nil {
+			t.Fatalf("Close with every job ended = %v, want nil", err)
+		}
+		empty := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+		if err := empty.Close(ctx, time.Minute); err != nil {
+			t.Fatalf("Close without jobs = %v, want nil", err)
+		}
+	}
+}
+
 func TestRequestStopAndStop(t *testing.T) {
 	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
 	j, _ := startFake(t, m, "t")

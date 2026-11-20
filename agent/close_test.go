@@ -160,3 +160,62 @@ func TestRunAfterClose(t *testing.T) {
 		t.Errorf("Resume after Close: err = %v, want ErrClosed", final.Err)
 	}
 }
+
+// drainingMiddleware is a middleware that implements Drainer and Closer.
+type drainingMiddleware struct {
+	closingMiddleware
+}
+
+func (m *drainingMiddleware) Drain(context.Context) error {
+	m.log.add("drain " + m.name)
+	return nil
+}
+
+func TestAgentCloseDrainsBeforeClosing(t *testing.T) {
+	log := &closeLog{}
+	a := mustNew(t, Config{
+		Provider: llmtest.New(),
+		Middleware: []Middleware{
+			&drainingMiddleware{closingMiddleware{name: "bg", log: log}},
+			&closingMiddleware{name: "res", log: log},
+			&drainingMiddleware{closingMiddleware{name: "bg2", log: log}},
+		},
+	})
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	want := []string{"drain bg", "drain bg2", "bg2", "res", "bg"}
+	if got := log.list(); !slices.Equal(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+}
+
+func TestCloseConcurrentWithRun(t *testing.T) {
+	log := &closeLog{}
+	turns := make([]llmtest.Turn, 8)
+	for i := range turns {
+		turns[i] = llmtest.Turn{Text: "ok"}
+	}
+	a := mustNew(t, Config{
+		Provider:   llmtest.New(turns...),
+		Middleware: []Middleware{&closingMiddleware{name: "a", log: log}},
+	})
+	var wg sync.WaitGroup
+	for range len(turns) {
+		wg.Go(func() {
+			_, final := collect(t, a.Run(context.Background(), userInput("hi")))
+			if final.Err != nil && !errors.Is(final.Err, ErrClosed) {
+				t.Errorf("run: %s / %v, want success or ErrClosed", final.Reason, final.Err)
+			}
+		})
+	}
+	wg.Go(func() {
+		if err := a.Close(context.Background()); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	wg.Wait()
+	if got := log.list(); !slices.Equal(got, []string{"a"}) {
+		t.Errorf("closed %v, want a once", got)
+	}
+}

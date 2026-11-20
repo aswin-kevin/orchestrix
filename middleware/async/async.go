@@ -233,6 +233,12 @@ func (m *Middleware) Close(ctx context.Context) error {
 	return m.jobs.Close(ctx, DefaultStopWait)
 }
 
+// Drain implements agent.Drainer: Agent.Close stops the background tasks
+// this way before it closes the resources they use (MCP sessions, jobs,
+// backends). It is Close: the tasks are cancelled and waited for within
+// ctx, and none can be started afterwards.
+func (m *Middleware) Drain(ctx context.Context) error { return m.Close(ctx) }
+
 // BeforeModel implements agent.BeforeModel: every task of the run's thread
 // that ended since the last turn is announced with one user message (see
 // notification). Records of other threads are left alone, so a run never

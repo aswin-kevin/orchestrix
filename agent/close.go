@@ -14,20 +14,37 @@ type Closer interface {
 	Close(ctx context.Context) error
 }
 
+// Drainer is implemented by a middleware that runs work of its own beside
+// the agent's runs, such as background agents, which use the resources of
+// the stack. Agent.Close drains every Drainer before it closes anything, so
+// that work stops while the resources it uses are still open. A middleware
+// that runs nested agents in the background should implement it. ctx bounds
+// how long Drain may wait for the work to end.
+type Drainer interface {
+	Drain(ctx context.Context) error
+}
+
 // ErrClosed is wrapped by the Final.Err of a run started after Agent.Close.
 var ErrClosed = errors.New("agent: closed")
 
-// Close releases what the agent holds, in this order: every middleware of
-// Config.Middleware that implements Closer, in reverse stack order (those a
-// MiddlewareExcluder left out of the run's stack included), then
+// Close releases what the agent holds, in two phases. First it drains: every
+// middleware of Config.Middleware that implements Drainer, in stack order,
+// stops its own work (background agents, say), which may still use the
+// resources closed next. Then it closes: every middleware of
+// Config.Middleware that implements Closer, in reverse stack order, then
 // Config.Backend and Config.Checkpointer when they implement Closer, then the
-// Config.OnClose functions in reverse order. Every one is called even when an
-// earlier one fails; the errors are joined into the result and each is
+// Config.OnClose functions in reverse order. Both phases include the
+// middleware a MiddlewareExcluder left out of the run's stack. Every one is
+// called even when an earlier one fails; the errors are joined into the result and each is
 // logged at Warn. A backend built by Config.BackendFactory is not closed:
 // release those with an OnClose function.
 //
 // Close is idempotent and safe for concurrent use: the first call does the
-// work, and every call returns its result once it is done.
+// work, and every call returns its result once it is done. That result is
+// final: a later call with a longer deadline does not retry. A host whose
+// first Close ran out of time while background work was still ending can
+// wait longer through the middleware itself (tasks or async Shutdown, for
+// instance).
 //
 // Runs already started when Close is called are not waited for or stopped:
 // they keep going, and may fail once the resources they use are closed.
@@ -47,8 +64,8 @@ func (a *Agent) Close(ctx context.Context) error {
 	return a.closeErr
 }
 
-// closeResources closes everything Close lists, in its order, and joins the
-// errors.
+// closeResources drains and closes everything Close lists, in its order,
+// and joins the errors.
 func (a *Agent) closeResources(ctx context.Context) error {
 	var errs []error
 	report := func(kind, name string, err error) {
@@ -59,6 +76,11 @@ func (a *Agent) closeResources(ctx context.Context) error {
 		errs = append(errs, err)
 	}
 	mws := a.cfg.Middleware
+	for _, mw := range mws {
+		if d, ok := mw.(Drainer); ok {
+			report("middleware", mw.Name(), d.Drain(ctx))
+		}
+	}
 	for i := len(mws) - 1; i >= 0; i-- {
 		if c, ok := mws[i].(Closer); ok {
 			report("middleware", mws[i].Name(), c.Close(ctx))

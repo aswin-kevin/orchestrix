@@ -101,11 +101,11 @@ const (
 	ReasonInvalidOutput TerminalReason = "invalid_output"
 	// ReasonInternalError: code the run calls on its own goroutine (the
 	// provider, a ModelWrapper, the Checkpointer or its lease) panicked.
-	// Final.Err is a *PanicError. The end-of-run save is still attempted,
-	// the lease released and the RunWrappers' end functions called;
-	// Final.Version is the version of the last save that succeeded. It is
-	// also the reason of a run started after Agent.Close: Final.Err wraps
-	// ErrClosed, nothing ran and Final.State is the input State.
+	// Final.Err is a *PanicError, or wraps ErrClosed for a run started
+	// after Agent.Close. After a panic the end-of-run save is still
+	// attempted, the lease released and the RunWrappers' end functions
+	// called; Final.Version is the version of the last save that succeeded.
+	// A run started after Close never ran: Final.State is the input State.
 	ReasonInternalError TerminalReason = "internal_error"
 )
 

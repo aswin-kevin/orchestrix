@@ -373,6 +373,11 @@ func stopAll[H Handle](list []*Job[H], wait time.Duration) bool {
 	for _, j := range list {
 		select {
 		case <-j.Handle.Done():
+			continue // already ended: never lose it to a fired timer
+		default:
+		}
+		select {
+		case <-j.Handle.Done():
 		case <-deadline.C:
 			return false
 		}
@@ -453,17 +458,25 @@ func (m *Manager[H]) shutdown(wait time.Duration) bool {
 	deadline := time.Now().Add(wait)
 	m.mu.Lock()
 	m.closed = true
-	m.mu.Unlock()
-	started := make(chan struct{})
-	go func() { m.starting.Wait(); close(started) }()
-	timer := time.NewTimer(time.Until(deadline))
-	startsDone := false
-	select {
-	case <-started:
-		startsDone = true
-	case <-timer.C:
+	inFlight := 0
+	for _, t := range m.threads {
+		inFlight += t.starting
 	}
-	timer.Stop()
+	m.mu.Unlock()
+	// With no start in flight there is nothing to wait for; checking first
+	// keeps a zero wait from racing the timer against a finished Wait.
+	startsDone := inFlight == 0
+	if !startsDone {
+		started := make(chan struct{})
+		go func() { m.starting.Wait(); close(started) }()
+		timer := time.NewTimer(time.Until(deadline))
+		select {
+		case <-started:
+			startsDone = true
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
 
 	m.mu.Lock()
 	var list []*Job[H]

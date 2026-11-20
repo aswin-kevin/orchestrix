@@ -324,8 +324,9 @@ func WithSkills(cfg skills.Config) Option {
 
 // WithMCP offers the tools, resources and instructions of the MCP servers m
 // is connected to. The host connects with mcp.Connect; Agent.Close closes m
-// (an agent.Closer), or the host calls m.Close itself. A server configured with Defer or Gated also adds the deferred
-// middleware, so its tools are found with search_tools or unlocked first.
+// (an agent.Closer), or the host calls m.Close itself. A server configured
+// with Defer or Gated also adds the deferred middleware, so its tools are
+// found with search_tools or unlocked first.
 func WithMCP(m *mcp.Middleware) Option {
 	return func(s *settings) {
 		if m == nil {

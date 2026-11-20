@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
+	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -323,5 +326,56 @@ func TestLocalOutcomeTokenLimit(t *testing.T) {
 	out := localOutcome(&agent.Final{Reason: agent.ReasonTokenLimit, Text: "partial"}, false, false)
 	if out.Status != StatusCompleted || out.Error != "" || out.Text != "partial\n[stopped: token_limit]" {
 		t.Fatalf("outcome = %+v, want completed with a stopped note", out)
+	}
+}
+
+// resource stands for a resource the background tasks use (an MCP session,
+// say), placed after async in the stack so it is closed first. On Close it
+// records whether task async_1 had already ended.
+type resource struct {
+	m         *Middleware
+	closed    atomic.Bool
+	taskEnded atomic.Bool
+}
+
+func (r *resource) Name() string { return "resource" }
+
+func (r *resource) Close(context.Context) error {
+	if j := r.m.jobs.Get("t", "async_1"); j != nil && j.Ended() {
+		r.taskEnded.Store(true)
+	}
+	r.closed.Store(true)
+	return nil
+}
+
+func TestAgentCloseDrainsTasksBeforeResources(t *testing.T) {
+	g := newGate(llmtest.Turn{Text: "never"})
+	m, err := New(Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := &resource{m: m}
+	p := llmtest.New(start("s1", "researcher", "a"), llmtest.Turn{Text: "started"})
+	a, err := agent.New(agent.Config{Provider: p, Middleware: []agent.Middleware{m, res}, PermissionMode: permission.ModeDefault})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{m: m, a: a, p: p, st: state.New(), thread: "t"}
+	h.run(t, context.Background(), "go", nil)
+	g.waitEntered(t, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultStopWait)
+	defer cancel()
+	if err := a.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !res.closed.Load() {
+		t.Fatal("resource not closed")
+	}
+	if !res.taskEnded.Load() {
+		t.Error("the resource was closed while the background task was still running")
+	}
+	if out := outcomeOf(t, m, h.st, "async_1"); out.Status != StatusCancelled {
+		t.Errorf("task outcome = %+v, want %s", out, StatusCancelled)
 	}
 }
