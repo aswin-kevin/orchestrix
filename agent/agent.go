@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"maps"
 	"slices"
 
@@ -19,7 +20,9 @@ import (
 // New and safe for concurrent Runs; everything a run changes lives in that
 // run's State.
 type Agent struct {
-	cfg      Config
+	cfg Config
+	// logger is Config.Logger, or a discarding logger when that is nil.
+	logger   *slog.Logger
 	stack    []Middleware
 	registry *tool.Registry
 	// dynamic are the stack's DynamicToolProviders, in stack order; see
@@ -103,6 +106,7 @@ func New(cfg Config) (*Agent, error) {
 	}
 	return &Agent{
 		cfg:          cfg,
+		logger:       loggerOrDiscard(cfg.Logger),
 		stack:        stack,
 		registry:     registry,
 		dynamic:      dynamicProviders(stack),

@@ -118,6 +118,7 @@ func (r *run) save() error {
 	}
 	if err := r.lease.lost(); err != nil {
 		r.store = nil
+		r.logger.Warn("agent: checkpoint save skipped", "err", err)
 		return fmt.Errorf("agent: checkpoint: %w", err)
 	}
 	v, err := r.store.Save(context.WithoutCancel(r.ctx), r.threadID, r.state, r.version)
@@ -125,6 +126,7 @@ func (r *run) save() error {
 		if errors.Is(err, checkpoint.ErrConflict) {
 			r.store = nil
 		}
+		r.logger.Warn("agent: checkpoint save failed", "err", err)
 		return fmt.Errorf("agent: checkpoint: %w", err)
 	}
 	r.version = v

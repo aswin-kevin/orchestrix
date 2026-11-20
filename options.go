@@ -2,6 +2,7 @@ package orchestrix
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -139,6 +140,12 @@ func WithDeny(rules ...string) Option {
 // one, such a call interrupts the run so the host can decide and resume it.
 func WithApprover(a permission.Approver) Option {
 	return func(s *settings) { s.cfg.Approver = a }
+}
+
+// WithLogger sets the logger that receives the errors the agent loop recovers
+// from or drops (see agent.Config.Logger). Nil drops them.
+func WithLogger(l *slog.Logger) Option {
+	return func(s *settings) { s.cfg.Logger = l }
 }
 
 // WithMaxTurns limits how many tool-calling model turns one run may take;

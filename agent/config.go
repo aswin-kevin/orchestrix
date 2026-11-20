@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
@@ -109,6 +110,15 @@ type Config struct {
 	// DefaultLeaseTTL. It applies only when Checkpointer implements
 	// checkpoint.Leaser.
 	LeaseTTL time.Duration
+
+	// Logger receives the errors the loop recovers from or drops, at Warn:
+	// lease release and renew errors, recovered panics in RunWrapper end
+	// functions and lease calls, dynamic tools that were skipped, and failed
+	// checkpoint saves. A panic that ends a run is logged at Error. Records
+	// carry thread_id and agent attributes and an err attribute; message
+	// content and tool inputs are never logged. Nil drops every record.
+	// Subagent runs built from a copy of this Config share it.
+	Logger *slog.Logger
 
 	// PermissionMode, Rules and Approver drive tool permission checks.
 	PermissionMode permission.Mode

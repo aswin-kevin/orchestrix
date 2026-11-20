@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ type runLease struct {
 	ttl     time.Duration
 	stop    chan struct{}
 	done    chan struct{}
+	log     *slog.Logger
 
 	mu sync.Mutex
 	// err is set once a renewal found the lease taken by another owner.
@@ -53,14 +55,14 @@ func (r *run) acquireLease() *Final {
 		final.Version = r.version
 		return final
 	}
-	l := &runLease{release: release, ttl: ttl, stop: make(chan struct{}), done: make(chan struct{})}
+	l := &runLease{release: release, ttl: ttl, stop: make(chan struct{}), done: make(chan struct{}), log: r.logger}
 	go l.keep(ctx, renew, ttl)
 	r.lease = l
 	return nil
 }
 
 // releaseLease stops renewing and gives the lease up. A failed, timed-out
-// or panicking release is dropped: the lease then expires after its TTL.
+// or panicking release is logged and dropped: the lease then expires after its TTL.
 func (r *run) releaseLease() {
 	l := r.lease
 	if l == nil {
@@ -70,8 +72,14 @@ func (r *run) releaseLease() {
 	<-l.done
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), leaseCallTimeout(l.ttl))
 	defer cancel()
-	defer func() { _ = recover() }()
-	_ = l.release(ctx)
+	defer func() {
+		if v := recover(); v != nil {
+			l.log.Warn("agent: lease release panicked", "err", &PanicError{Value: v})
+		}
+	}()
+	if err := l.release(ctx); err != nil {
+		l.log.Warn("agent: lease release failed", "err", err)
+	}
 }
 
 // keep renews the lease every ttl/3 until stop is closed. A renewal that
@@ -89,6 +97,9 @@ func (l *runLease) keep(ctx context.Context, renew func(context.Context) error, 
 			return
 		case <-ticker.C:
 			err := renewGuarded(ctx, renew, leaseCallTimeout(ttl))
+			if err != nil {
+				l.log.Warn("agent: lease renew failed", "err", err)
+			}
 			if errors.Is(err, checkpoint.ErrLeaseHeld) {
 				l.mu.Lock()
 				l.err = err

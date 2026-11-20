@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -29,8 +30,10 @@ var errNoResponse = errors.New("model handler returned no response")
 type run struct {
 	agent *Agent
 	// ctx carries info (see Info); hooks and wrappers run under it.
-	ctx      context.Context
-	info     *RunInfo
+	ctx  context.Context
+	info *RunInfo
+	// logger is info.Logger(): the agent logger with the run's attributes.
+	logger   *slog.Logger
 	threadID string
 	// name is the effective agent name, RunInfo.AgentName.
 	name    string
@@ -132,6 +135,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 	}
 	r.outputActive = a.outputPrompt != "" && info.Depth == 0
 	info.run = r
+	r.logger = info.Logger()
 	innermost := r.streamModel
 	if a.cfg.NonStreaming {
 		innermost = r.completeModel
@@ -168,7 +172,11 @@ func (a *Agent) wrapRun(ctx context.Context, info *RunInfo) (context.Context, []
 func (r *run) endRun(final *Final) {
 	for _, end := range slices.Backward(r.ends) {
 		func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if v := recover(); v != nil {
+					r.logger.Warn("agent: run end function panicked", "err", &PanicError{Value: v})
+				}
+			}()
 			end(final)
 		}()
 	}
@@ -251,7 +259,9 @@ func (r *run) reportEnd(final *Final) {
 func (r *run) guarded(step func() *Final) (final *Final) {
 	defer func() {
 		if v := recover(); v != nil {
-			final = r.finish(ReasonInternalError, &PanicError{Value: v, Stack: debug.Stack()})
+			perr := &PanicError{Value: v, Stack: debug.Stack()}
+			r.logger.Error("agent: run step panicked", "err", perr)
+			final = r.finish(ReasonInternalError, perr)
 		}
 	}()
 	return step()

@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -21,7 +22,7 @@ import (
 // RunInfo.Tools returns the turn's snapshot instead. During settlement a run
 // still withholds the disabled ones from its model.
 func (a *Agent) Tools() []tool.Tool {
-	return a.toolSet().Tools()
+	return a.toolSet(a.logger).Tools()
 }
 
 // Tool returns the tool named name among those the next turn offers (see
@@ -30,12 +31,12 @@ func (a *Agent) Tool(name string) (tool.Tool, bool) {
 	if t, ok := a.registry.Get(name); ok {
 		return t, true
 	}
-	return a.toolSet().Get(name)
+	return a.toolSet(a.logger).Get(name)
 }
 
 // toolSet returns a snapshot of the tool set. Without dynamic providers it
 // is the registry itself, which never changes after New.
-func (a *Agent) toolSet() *tool.Registry {
+func (a *Agent) toolSet(log *slog.Logger) *tool.Registry {
 	if len(a.dynamic) == 0 {
 		return a.registry
 	}
@@ -45,7 +46,9 @@ func (a *Agent) toolSet() *tool.Registry {
 		for _, t := range p.DynamicTools() {
 			// Add refuses a nil tool, an invalid name and a name already
 			// taken: such a tool is skipped, as DynamicToolProvider says.
-			_ = set.Add(t)
+			if err := set.Add(t); err != nil {
+				log.Warn("agent: dynamic tool skipped", "err", err)
+			}
 		}
 	}
 	return set
@@ -66,7 +69,7 @@ func dynamicProviders(stack []Middleware) []DynamicToolProvider {
 // DynamicToolProvider fails the run like a failing hook.
 func (r *run) refreshTools() error {
 	err := guard(func() error {
-		r.tools.Store(r.agent.toolSet())
+		r.tools.Store(r.agent.toolSet(r.logger))
 		return nil
 	})
 	if err != nil {
@@ -82,7 +85,7 @@ func (r *run) turnTools() *tool.Registry {
 	if set := r.tools.Load(); set != nil {
 		return set
 	}
-	r.tools.CompareAndSwap(nil, r.agent.toolSet())
+	r.tools.CompareAndSwap(nil, r.agent.toolSet(r.logger))
 	return r.tools.Load()
 }
 
@@ -114,7 +117,7 @@ func (i RunInfo) toolSet() *tool.Registry {
 		}
 	}
 	if i.Agent != nil {
-		return i.Agent.toolSet()
+		return i.Agent.toolSet(i.Logger())
 	}
 	return nil
 }
