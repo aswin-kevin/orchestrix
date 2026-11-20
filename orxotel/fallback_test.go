@@ -58,8 +58,8 @@ func TestRecordFallback(t *testing.T) {
 	if got := attrs["to"].AsString(); got != "backup" {
 		t.Errorf("to = %q, want backup", got)
 	}
-	if got := attrs["error"].AsString(); !strings.Contains(got, "529") {
-		t.Errorf("error = %q, want it to mention 529", got)
+	if got := attrs["error"].AsString(); got != "*llm.APIError (kind=overloaded)" {
+		t.Errorf("error = %q, want the error type and kind", got)
 	}
 }
 

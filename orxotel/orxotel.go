@@ -3,6 +3,7 @@ package orxotel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -32,10 +33,16 @@ type Config struct {
 	ProviderName string
 	// CaptureContent records tool call arguments and results. The arguments
 	// are the input as this middleware receives it, after any middleware
-	// added before it has changed it. It does not cover Go errors: a tool's
-	// or model's error message is always the status description and the
-	// exception event of its span.
+	// added before it has changed it. It also decides what a Go error from
+	// a tool or model exports: without it a span's status description and
+	// exception event hold only the error's Go type and, for an
+	// *llm.APIError, its kind (errors can echo prompt fragments); with it
+	// they hold err.Error().
 	CaptureContent bool
+	// RedactError, when set, returns the text exported for a Go error in
+	// place of the default, whatever CaptureContent says. Return "" to
+	// export nothing.
+	RedactError func(error) string
 	// MaxContentBytes caps each captured value; 0 means 4096.
 	MaxContentBytes int
 }
@@ -118,7 +125,7 @@ func (m *middleware) WrapRun(ctx context.Context, info agent.RunInfo) (context.C
 		if runFailed(final.Reason) {
 			desc := string(final.Reason)
 			if final.Err != nil {
-				desc = final.Err.Error()
+				desc = m.cfg.errorText(final.Err)
 			}
 			span.SetStatus(codes.Error, desc)
 		}
@@ -161,15 +168,16 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 	)
 	defer span.End()
 
-	resp, err := next(ctx, req)
+	resp, err := next(withConfig(ctx, &m.cfg), req)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		m.recordError(span, err)
 		return resp, err
 	}
 	if resp != nil {
+		if resp.StopReason != "" {
+			span.SetAttributes(attribute.StringSlice(keyFinishReasons, []string{resp.StopReason}))
+		}
 		span.SetAttributes(
-			attribute.StringSlice(keyFinishReasons, []string{resp.StopReason}),
 			attribute.Int(keyInputTokens, resp.Usage.Input),
 			attribute.Int(keyOutputTokens, resp.Usage.Output),
 			attribute.Int(keyCacheReadTokens, resp.Usage.CacheRead),
@@ -197,9 +205,9 @@ func responseSource(resp *llm.Response) string {
 // child of this span.
 //
 // Captured arguments are call.Input as this middleware receives it. A Go
-// error from next is recorded with its message even without content
-// capture, except an *agent.Interrupt or agent.ErrStopRun: they pause or
-// stop the run on purpose, so the span keeps status Unset and gets
+// error from next is recorded as Config describes (its message only with
+// CaptureContent or through RedactError), except an *agent.Interrupt or
+// agent.ErrStopRun: they pause or stop the run on purpose, so the span keeps status Unset and gets
 // orchestrix.tool.outcome instead. A panic marks the span as an error and
 // is re-raised for the agent loop to recover.
 func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
@@ -234,8 +242,7 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 			span.SetAttributes(attribute.String(keyToolOutcome, outcome))
 			return res, err
 		}
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		m.recordError(span, err)
 		return res, err
 	}
 	var text string
@@ -293,7 +300,48 @@ func RecordFallback(ctx context.Context, ev llm.FallbackEvent) {
 		attribute.String(keyFallbackTo, ev.To),
 	}
 	if ev.Err != nil {
-		attrs = append(attrs, attribute.String(keyFallbackError, ev.Err.Error()))
+		cfg, _ := ctx.Value(configKey{}).(*Config)
+		if cfg == nil {
+			cfg = &Config{}
+		}
+		attrs = append(attrs, attribute.String(keyFallbackError, cfg.errorText(ev.Err)))
 	}
 	trace.SpanFromContext(ctx).AddEvent(eventFallback, trace.WithAttributes(attrs...))
+}
+
+// configKey carries the middleware's Config to RecordFallback.
+type configKey struct{}
+
+func withConfig(ctx context.Context, cfg *Config) context.Context {
+	return context.WithValue(ctx, configKey{}, cfg)
+}
+
+// errorText returns the text exported for err: RedactError's if set, else
+// err.Error() with CaptureContent, else the error's Go type plus the kind
+// of an *llm.APIError.
+func (c *Config) errorText(err error) string {
+	if c.RedactError != nil {
+		return c.RedactError(err)
+	}
+	if c.CaptureContent {
+		return err.Error()
+	}
+	text := fmt.Sprintf("%T", err)
+	var apiErr *llm.APIError
+	if errors.As(err, &apiErr) {
+		text += " (kind=" + string(apiErr.Kind()) + ")"
+	}
+	return text
+}
+
+// recordError marks span as failed with err and adds an exception event,
+// both with the text errorText allows (span.RecordError would export
+// err.Error() unconditionally).
+func (m *middleware) recordError(span trace.Span, err error) {
+	text := m.cfg.errorText(err)
+	span.AddEvent("exception", trace.WithAttributes(
+		attribute.String("exception.type", fmt.Sprintf("%T", err)),
+		attribute.String("exception.message", text),
+	))
+	span.SetStatus(codes.Error, text)
 }

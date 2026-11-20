@@ -56,7 +56,7 @@ func TestRunSpan(t *testing.T) {
 func TestRunSpanErrorStatus(t *testing.T) {
 	t.Run("model_error", func(t *testing.T) {
 		rec, tp := newRecorder(t)
-		a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
+		a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp, CaptureContent: true}, []llmtest.Turn{
 			{Err: errors.New("model exploded")},
 		})
 

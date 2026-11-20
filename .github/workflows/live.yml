@@ -66,12 +66,10 @@ jobs:
       - name: Live tests
         if: steps.cfg.outputs.enabled == 'true'
         run: |
+          # The raw test output can echo the endpoint and key, so it stays
+          # in the job log and out of the uploaded artifact.
           mkdir -p live-results
-          set -o pipefail
-          status=0
-          go test -run Live -count=1 -timeout 30m -v . 2>&1 | tee live-results/live-tests.txt || status=$?
-          go tool test2json -t < live-results/live-tests.txt > live-results/live-tests.json || true
-          exit "$status"
+          go test -run Live -count=1 -timeout 30m -v . 2>&1
       - name: Evals
         if: ${{ !cancelled() && steps.cfg.outputs.enabled == 'true' }}
         working-directory: evals
@@ -81,6 +79,8 @@ jobs:
             args+=(-baseline "baselines/$BASELINE")
           fi
           go run ./cmd/orxeval "${args[@]}"
+      # live-results holds only evals.json, whose strings orxeval scrubs of
+      # the configured endpoint URL, host and API key.
       - name: Upload results
         if: ${{ always() && steps.cfg.outputs.enabled == 'true' }}
         uses: actions/upload-artifact@v4

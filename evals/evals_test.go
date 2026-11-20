@@ -2,6 +2,8 @@ package evals
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -162,5 +164,35 @@ func TestCompare(t *testing.T) {
 	}
 	if got := Compare(res, base, 0.2, true); strings.Contains(strings.Join(got, "\n"), "gone") {
 		t.Errorf("a filtered run reports missing scenarios: %q", got)
+	}
+}
+
+func TestReportScrubbed(t *testing.T) {
+	const url, key = "https://private-host.example.net:8443/v1", "sk-live-0123456789"
+	t.Setenv("ORX_TEST_BASE_URL", url)
+	t.Setenv("ORX_TEST_API_KEY", key)
+	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	sc := Scenario{Name: "leaky", Run: func(ctx context.Context, env Env, tt *T) {
+		tt.Errorf("Post %q: dial private-host.example.net:8443 with key %s failed", url, key)
+		tt.Failf("saw %s", key)
+		tt.Note("endpoint", url)
+	}}
+	res := RunSuite(context.Background(), Env{}, []Scenario{sc}, Options{Trials: 1})
+	path := filepath.Join(t.TempDir(), "report.json")
+	if err := WriteJSON(path, res); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{key, "private-host.example.net", "8443"} {
+		if strings.Contains(string(data), secret) {
+			t.Errorf("report contains %q:\n%s", secret, data)
+		}
+	}
+	if !strings.Contains(string(data), "[REDACTED]") {
+		t.Errorf("report has no [REDACTED] marker:\n%s", data)
 	}
 }

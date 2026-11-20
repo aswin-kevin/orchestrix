@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"regexp"
 	"runtime/debug"
@@ -114,6 +115,49 @@ type Trial struct {
 	Violation    string         `json:"violation,omitempty"`
 	Error        string         `json:"error,omitempty"`
 	Notes        map[string]any `json:"notes,omitempty"`
+}
+
+// scrub returns s with the configured endpoint URL (and its host) and API
+// key replaced by [REDACTED]. Errors from the model call can echo both, and
+// reports are uploaded from CI, so every string a report records goes
+// through it. The configured values are those of the orxeval flags'
+// environment (ORX_TEST_*) and of the provider variables it points at them.
+func scrub(s string) string {
+	var secrets []string
+	for _, name := range []string{
+		"ORX_TEST_BASE_URL", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL",
+		"ORX_TEST_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+	} {
+		v := strings.TrimSpace(os.Getenv(name))
+		if v == "" {
+			continue
+		}
+		secrets = append(secrets, v)
+		if strings.HasSuffix(name, "BASE_URL") {
+			if u, err := url.Parse(v); err == nil && u.Host != "" {
+				secrets = append(secrets, u.Host, u.Hostname())
+			}
+		}
+	}
+	// Longest first, so a URL goes whole before its host is looked for.
+	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
+	for _, v := range secrets {
+		s = strings.ReplaceAll(s, v, "[REDACTED]")
+	}
+	return s
+}
+
+// scrub applies the package scrub to every string the trial records.
+func (tr *Trial) scrub() {
+	tr.Reason = scrub(tr.Reason)
+	tr.Failure = scrub(tr.Failure)
+	tr.Violation = scrub(tr.Violation)
+	tr.Error = scrub(tr.Error)
+	for k, v := range tr.Notes {
+		if str, ok := v.(string); ok {
+			tr.Notes[k] = scrub(str)
+		}
+	}
 }
 
 // ScenarioResult aggregates the trials of one scenario.
@@ -235,6 +279,7 @@ func RunTrial(ctx context.Context, env Env, sc Scenario) (tr Trial) {
 			_ = os.RemoveAll(d)
 		}
 		tr = t.trial
+		tr.scrub()
 		tr.WallMS = time.Since(start).Milliseconds()
 		if tr.Error == "" && ctx.Err() != nil && tr.Violation == "" && tr.Failure == "" {
 			tr.Error = "trial timed out"

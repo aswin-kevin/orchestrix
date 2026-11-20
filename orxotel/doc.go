@@ -24,7 +24,8 @@
 //     totals
 //
 // The span's status is Error, described by the run's error (or its reason
-// when there is none), for every terminal reason except completed,
+// when there is none; Config.CaptureContent and Config.RedactError decide how
+// much of an error is exported), for every terminal reason except completed,
 // max_turns, timeout, interrupted and hook_stopped.
 //
 // A run resumed after an interrupt is a new trace; gen_ai.conversation.id
@@ -35,7 +36,8 @@
 // gen_ai.operation.name = "chat", gen_ai.provider.name (when
 // Config.ProviderName is set), gen_ai.request.model,
 // gen_ai.request.max_tokens, gen_ai.request.temperature (when set),
-// gen_ai.response.finish_reasons, gen_ai.usage.input_tokens,
+// gen_ai.response.finish_reasons (left out when the reply has no stop
+// reason), gen_ai.usage.input_tokens,
 // gen_ai.usage.output_tokens, orchestrix.usage.cache_read_tokens,
 // orchestrix.turn and, for a reply from a fallback provider,
 // orchestrix.response.source, the name of the entry that answered. A failed

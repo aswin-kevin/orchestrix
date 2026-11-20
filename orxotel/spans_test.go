@@ -389,7 +389,7 @@ func hasException(s sdktrace.ReadOnlySpan) bool {
 func runOneCall(t *testing.T, tl tool.Tool, opts ...orchestrix.Option) (*tracetest.SpanRecorder, *agent.Final) {
 	t.Helper()
 	rec, tp := newRecorder(t)
-	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
+	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp, CaptureContent: true}, []llmtest.Turn{
 		{ToolCalls: []llmtest.Call{{ID: "c1", Name: tl.Name(), Input: map[string]any{"text": "x"}}}},
 		{Text: "done"},
 	}, append([]orchestrix.Option{orchestrix.WithTools(tl)}, opts...)...)
@@ -497,4 +497,103 @@ func TestToolSpanVia(t *testing.T) {
 	s := oneSpan(t, rec, "execute_tool echo")
 	wantAttr(t, s, "gen_ai.tool.name", "echo")
 	wantAttr(t, s, "orchestrix.tool.via", "call_tool")
+}
+
+// errorTexts returns every string a span exports about an error: the status
+// description and the attributes of its events.
+func errorTexts(s sdktrace.ReadOnlySpan) string {
+	out := s.Status().Description
+	for _, ev := range s.Events() {
+		for _, kv := range ev.Attributes {
+			out += " " + kv.Value.Emit()
+		}
+	}
+	return out
+}
+
+func apiErr() error {
+	return &llm.APIError{Status: 400, Body: "echo of prompt: SECRET-FRAGMENT"}
+}
+
+func TestErrorTextHiddenWithoutCapture(t *testing.T) {
+	rec, tp := newRecorder(t)
+	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
+		{Err: apiErr()},
+	}, withModel("m"))
+	drain(t, a.Run(context.Background(), prompt("hi")))
+
+	for _, name := range []string{"chat m", "invoke_agent worker"} {
+		s := oneSpan(t, rec, name)
+		if s.Status().Code != codes.Error {
+			t.Errorf("%s: status = %v, want error", name, s.Status().Code)
+		}
+		got := errorTexts(s)
+		if strings.Contains(got, "SECRET-FRAGMENT") {
+			t.Errorf("%s: exported error text %q", name, got)
+		}
+		if !strings.HasSuffix(s.Status().Description, "(kind=invalid_request)") || !strings.HasPrefix(s.Status().Description, "*") {
+			t.Errorf("%s: description = %q, want type and kind", name, s.Status().Description)
+		}
+	}
+}
+
+func TestErrorTextWithCapture(t *testing.T) {
+	rec, tp := newRecorder(t)
+	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp, CaptureContent: true}, []llmtest.Turn{
+		{Err: apiErr()},
+	}, withModel("m"))
+	drain(t, a.Run(context.Background(), prompt("hi")))
+	s := oneSpan(t, rec, "chat m")
+	if !strings.Contains(errorTexts(s), "SECRET-FRAGMENT") {
+		t.Errorf("error text missing with CaptureContent: %q", errorTexts(s))
+	}
+}
+
+func TestRedactErrorHook(t *testing.T) {
+	for _, capture := range []bool{false, true} {
+		rec, tp := newRecorder(t)
+		a := newAgent(t, "worker", orxotel.Config{
+			TracerProvider: tp,
+			CaptureContent: capture,
+			RedactError:    func(err error) string { return "redacted-by-hook" },
+		}, []llmtest.Turn{{Err: apiErr()}}, withModel("m"))
+		drain(t, a.Run(context.Background(), prompt("hi")))
+		for _, name := range []string{"chat m", "invoke_agent worker"} {
+			s := oneSpan(t, rec, name)
+			if s.Status().Description != "redacted-by-hook" {
+				t.Errorf("capture=%v %s: description = %q", capture, name, s.Status().Description)
+			}
+			if got := errorTexts(s); strings.Contains(got, "SECRET-FRAGMENT") || strings.Contains(got, "invalid_request") {
+				t.Errorf("capture=%v %s: leaked %q", capture, name, got)
+			}
+		}
+	}
+}
+
+func TestNoEmptyFinishReason(t *testing.T) {
+	rec, tp := newRecorder(t)
+	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
+		{Text: "ok", StopReason: ""},
+	}, withModel("m"), orchestrix.WithMiddleware(blankStop{}))
+	drain(t, a.Run(context.Background(), prompt("hi")))
+	s := oneSpan(t, rec, "chat m")
+	for _, kv := range s.Attributes() {
+		if kv.Key == "gen_ai.response.finish_reasons" {
+			t.Errorf("finish_reasons = %v, want omitted for an empty stop reason", kv.Value.Emit())
+		}
+	}
+}
+
+// blankStop clears the stop reason of every reply, as a provider that does
+// not report one would.
+type blankStop struct{}
+
+func (blankStop) Name() string { return "blank-stop" }
+
+func (blankStop) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+	resp, err := next(ctx, req)
+	if resp != nil {
+		resp.StopReason = ""
+	}
+	return resp, err
 }
