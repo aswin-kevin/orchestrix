@@ -832,6 +832,12 @@ func TestGitGlobalsAndWriters(t *testing.T) {
 		{`git credential-store x`, false},
 		{`git credential-cache x`, false},
 		{`git imap-send x`, false},
+		// More subcommands that run a command or bypass the -c refusal.
+		{`git for-each-repo --config=remote.x.url -- -c 'alias.zz=!touch pwned' zz`, false},
+		{`git submodule--helper foreach 'touch pwned'`, false},
+		{`git merge-index -a 'touch pwned'`, false},
+		{`git merge-one-file a b c`, false},
+		{`git credential-cache--daemon /tmp/s`, false},
 		{`git fetch origin`, true},
 		{`git push origin main`, true},
 		{`git ls-remote origin`, true},

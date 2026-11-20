@@ -65,6 +65,8 @@ var shellDiffSeeds = []string{
 	`git --exec-path`, `git log --oneline`, `git format-patch HEAD~1`,
 	`git fetch-pack --upload-pack='touch pwned;' . HEAD`, `git fetch-pack --exec='touch pwned;' . HEAD`, `git ls-remote --exec='touch pwned;' .`,
 	`git send-pack --receive-pack='touch pwned;' . HEAD`, `git send-pack --exec='touch pwned;' . HEAD`, `git upload-pack .`, `git remote-ext . x`,
+	`git for-each-repo --config=remote.x.url -- -c 'alias.zz=!touch pwned' zz`, `git submodule--helper foreach 'touch pwned'`,
+	`git merge-index -a 'touch pwned'`, `git merge-one-file a b c`, `git credential-cache--daemon /tmp/s`,
 	`git fetch-pack x`, `git send-pack x`, `git receive-pack x`, `git upload-archive x`, `git upload-archive--writer x`, `git remote-fd x`, `git daemon x`, `git shell x`, `git http-backend x`, `git credential x`, `git credential-store x`, `git credential-cache x`, `git imap-send x`,
 
 	"ssh -o \"ProxyCommand\ttouch pwned\" h", `ssh -oPKCS11Provider=/tmp/e.so h`,

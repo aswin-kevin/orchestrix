@@ -141,16 +141,21 @@ var gitCommandOptions = map[string][]string{
 // all take them.
 var gitAnySubcommandOptions = []string{"--output", "--exec", "--upload-pack", "--receive-pack"}
 
-// gitRefusedSubcommands are plumbing and transport subcommands that are never
-// vouched for: they take the program to run on the other side as an option
-// or argument, run a server or helper that can, or send data to a place
-// their configuration chooses. execute(git:*) is meant for porcelain.
+// gitRefusedSubcommands are subcommands that are never vouched for: they
+// take the program to run on the other side as an option or argument, run a
+// server, helper or command, run git with arguments the other checks do not
+// see, or send data to a place their configuration chooses.
 var gitRefusedSubcommands = map[string]bool{
 	"fetch-pack": true, "send-pack": true, "upload-pack": true, "receive-pack": true,
 	"upload-archive": true, "upload-archive--writer": true, "remote-ext": true,
 	"remote-fd": true, "daemon": true, "shell": true, "http-backend": true,
 	"credential": true, "credential-store": true, "credential-cache": true,
-	"imap-send": true,
+	"credential-cache--daemon": true, "imap-send": true,
+	// for-each-repo runs a git command with arguments that follow --, which
+	// the global -c refusal never sees; submodule--helper foreach,
+	// merge-index and merge-one-file run commands.
+	"for-each-repo": true, "submodule--helper": true, "merge-index": true,
+	"merge-one-file": true,
 }
 
 // gitCommandActions are the subcommands that run a command given as their
