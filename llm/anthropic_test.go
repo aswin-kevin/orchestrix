@@ -583,3 +583,142 @@ func equalBools(a, b []bool) bool {
 	}
 	return true
 }
+
+// anthropicAssistantContent sends history and returns the wire content of the
+// assistant message at messages[1].
+func anthropicAssistantContent(t *testing.T, srv *sseServer, p *anthropicProvider, assistant []Block) []any {
+	t.Helper()
+	history := []Message{UserText("q"), {Role: RoleAssistant, Content: assistant}, UserText("again")}
+	if _, err := Collect(context.Background(), p, Request{Messages: history, Thinking: "adaptive"}); err != nil {
+		t.Fatal(err)
+	}
+	return srv.body["messages"].([]any)[1].(map[string]any)["content"].([]any)
+}
+
+// TestAnthropicReplaysEmptyThinking checks that a signed thinking block with
+// no readable text (as sent when thinking display is omitted) is replayed
+// with the thinking field present, since the API requires it.
+func TestAnthropicReplaysEmptyThinking(t *testing.T) {
+	srv := newSSEServer(t, 200, "text/event-stream", textOnlyStream)
+	p := newTestAnthropic(t, srv.URL)
+
+	content := anthropicAssistantContent(t, srv, p, []Block{
+		{Type: BlockThinking, Thinking: "", Signature: "SIG"}, TextBlock("a"),
+	})
+	got, _ := json.Marshal(content[0])
+	if want := `{"signature":"SIG","thinking":"","type":"thinking"}`; string(got) != want {
+		t.Errorf("replayed thinking = %s, want %s", got, want)
+	}
+	if text, _ := json.Marshal(content[1]); strings.Contains(string(text), "thinking") {
+		t.Errorf("text block carries a thinking field: %s", text)
+	}
+}
+
+func TestAnthropicThinkingBudgetClamped(t *testing.T) {
+	srv := newSSEServer(t, 200, "text/event-stream", textOnlyStream)
+	p := newTestAnthropic(t, srv.URL)
+
+	req := Request{Messages: []Message{UserText("q")}, MaxTokens: 1000, Thinking: "enabled"}
+	if _, err := Collect(context.Background(), p, req); err != nil {
+		t.Fatal(err)
+	}
+	budget := srv.body["thinking"].(map[string]any)["budget_tokens"]
+	if budget != float64(1024) {
+		t.Errorf("budget_tokens = %v, want 1024", budget)
+	}
+	if got := srv.body["max_tokens"]; got != float64(1024+1000) {
+		t.Errorf("max_tokens = %v, want %d", got, 1024+1000)
+	}
+}
+
+func TestAnthropicThinkingDropsTemperature(t *testing.T) {
+	srv := newSSEServer(t, 200, "text/event-stream", textOnlyStream)
+	p := newTestAnthropic(t, srv.URL)
+	temp := 0.2
+
+	for _, mode := range []string{"enabled", "adaptive"} {
+		req := Request{Messages: []Message{UserText("q")}, Thinking: mode, Temperature: &temp}
+		if _, err := Collect(context.Background(), p, req); err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{"temperature", "top_k"} {
+			if v, ok := srv.body[k]; ok {
+				t.Errorf("thinking %s: %s = %v, want absent", mode, k, v)
+			}
+		}
+	}
+	for _, mode := range []string{"", "disabled"} {
+		req := Request{Messages: []Message{UserText("q")}, Thinking: mode, Temperature: &temp}
+		if _, err := Collect(context.Background(), p, req); err != nil {
+			t.Fatal(err)
+		}
+		if srv.body["temperature"] != temp {
+			t.Errorf("thinking %q: temperature = %v, want %v", mode, srv.body["temperature"], temp)
+		}
+	}
+}
+
+func TestForeignThinkingNotReplayed(t *testing.T) {
+	srv := newSSEServer(t, 200, "text/event-stream", textOnlyStream)
+	p := newTestAnthropic(t, srv.URL)
+	stamped := func(format Format, sig string) Block {
+		return Block{Type: BlockThinking, Thinking: "t", Signature: sig,
+			ProviderData: map[string]string{formatKey: string(format)}}
+	}
+
+	content := anthropicAssistantContent(t, srv, p, []Block{
+		stamped(FormatOpenAIResponses, "FOREIGN"),
+		stamped(FormatAnthropic, "OWN"),
+		{Type: BlockThinking, Thinking: "t", Signature: "LEGACY"},
+		TextBlock("a"),
+	})
+	var sigs []string
+	for _, b := range content {
+		if sig, ok := b.(map[string]any)["signature"].(string); ok {
+			sigs = append(sigs, sig)
+		}
+	}
+	if want := []string{"OWN", "LEGACY"}; !reflect.DeepEqual(sigs, want) {
+		t.Errorf("replayed signatures = %v, want %v", sigs, want)
+	}
+}
+
+func TestAdaptersStampThinking(t *testing.T) {
+	srv := newSSEServer(t, 200, "text/event-stream", richStream)
+	p := newTestAnthropic(t, srv.URL)
+	resp, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Message.Content[0].ProviderData[formatKey]; got != string(FormatAnthropic) {
+		t.Errorf("streamed thinking stamp = %q, want %q", got, FormatAnthropic)
+	}
+
+	srv = newSSEServer(t, 200, "text/event-stream", redactedStream)
+	p = newTestAnthropic(t, srv.URL)
+	if resp, err = Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Message.Content[0].ProviderData[formatKey]; got != string(FormatAnthropic) {
+		t.Errorf("streamed redacted stamp = %q, want %q", got, FormatAnthropic)
+	}
+
+	reply := `{"content":[
+		{"type":"thinking","thinking":"","signature":"S"},
+		{"type":"redacted_thinking","data":"ENCRYPTED"},
+		{"type":"text","text":"done"}],
+		"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
+	srv = newSSEServer(t, 200, "application/json", reply)
+	p = newTestAnthropic(t, srv.URL)
+	if resp, err = p.Complete(context.Background(), Request{Messages: []Message{UserText("x")}}); err != nil {
+		t.Fatal(err)
+	}
+	for i, b := range resp.Message.Content[:2] {
+		if got := b.ProviderData[formatKey]; got != string(FormatAnthropic) {
+			t.Errorf("complete block %d stamp = %q, want %q", i, got, FormatAnthropic)
+		}
+	}
+	if resp.Message.Content[2].ProviderData != nil {
+		t.Errorf("text block stamped: %+v", resp.Message.Content[2])
+	}
+}

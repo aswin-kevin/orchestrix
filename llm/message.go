@@ -67,6 +67,31 @@ type Block struct {
 	ProviderData map[string]string `json:"provider_data,omitempty"`
 }
 
+// formatKey marks, in Block.ProviderData, the provider format that produced
+// a thinking block. Thinking is only replayed to the format that wrote it;
+// unstamped blocks predate the mark and keep their earlier treatment.
+const formatKey = "orchestrix.format"
+
+// stampFormat records on b the format that produced it.
+func stampFormat(b *Block, format Format) {
+	if b.ProviderData == nil {
+		b.ProviderData = make(map[string]string)
+	}
+	b.ProviderData[formatKey] = string(format)
+}
+
+// formatStampEvent stamps the block at index with format during a stream.
+func formatStampEvent(index int, format Format) StreamEvent {
+	return StreamEvent{Type: EvProviderData, Index: index, Key: formatKey, Value: string(format)}
+}
+
+// foreignThinking reports whether b is thinking that a format other than own
+// produced. Its signature means nothing to own's API.
+func foreignThinking(b Block, own Format) bool {
+	format := b.ProviderData[formatKey]
+	return b.Type == BlockThinking && format != "" && format != string(own)
+}
+
 // Message is one turn of a conversation.
 type Message struct {
 	Role    Role    `json:"role"`

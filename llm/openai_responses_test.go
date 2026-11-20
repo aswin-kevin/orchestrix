@@ -371,3 +371,38 @@ func TestResponsesFunctionCallOnlyOnDoneItem(t *testing.T) {
 		t.Errorf("tool uses = %+v", tu)
 	}
 }
+
+func TestResponsesStampsReasoning(t *testing.T) {
+	srv := newSSEServer(t, 200, "text/event-stream", responsesToolStream)
+	p := newTestResponses(t, srv.URL)
+
+	resp := collectResponses(t, p, Request{})
+	if got := resp.Message.Content[0].ProviderData[formatKey]; got != string(FormatOpenAIResponses) {
+		t.Errorf("reasoning stamp = %q, want %q", got, FormatOpenAIResponses)
+	}
+}
+
+func TestResponsesForeignThinkingNotReplayed(t *testing.T) {
+	srv := newSSEServer(t, 200, "text/event-stream", responsesBody(responsesTextDelta, responsesCompleted))
+	p := newTestResponses(t, srv.URL)
+	stamped := func(format Format, sig string) Block {
+		return Block{Type: BlockThinking, Signature: sig, ProviderData: map[string]string{formatKey: string(format)}}
+	}
+
+	history := []Message{UserText("q"), {Role: RoleAssistant, Content: []Block{
+		stamped(FormatAnthropic, "FOREIGN"),
+		stamped(FormatOpenAIResponses, "OWN"),
+		{Type: BlockThinking, Signature: "LEGACY"},
+		TextBlock("a"),
+	}}, UserText("again")}
+	collectResponses(t, p, Request{Messages: history})
+	input, _ := json.Marshal(srv.body["input"])
+	if strings.Contains(string(input), "FOREIGN") {
+		t.Errorf("anthropic thinking replayed: %s", input)
+	}
+	for _, want := range []string{"OWN", "LEGACY"} {
+		if !strings.Contains(string(input), `"encrypted_content":"`+want+`"`) {
+			t.Errorf("input missing %s reasoning: %s", want, input)
+		}
+	}
+}

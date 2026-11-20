@@ -78,7 +78,7 @@ type anthropicMessage struct {
 type anthropicBlock struct {
 	Type      BlockType        `json:"type"`
 	Text      string           `json:"text,omitempty"`
-	Thinking  string           `json:"thinking,omitempty"`
+	Thinking  *string          `json:"thinking,omitempty"` // set on thinking blocks, even when empty
 	Signature string           `json:"signature,omitempty"`
 	Data      string           `json:"data,omitempty"` // redacted thinking
 	ID        string           `json:"id,omitempty"`
@@ -190,7 +190,12 @@ func fromAnthropicBlock(b anthropicBlock) (Block, bool) {
 	case BlockText:
 		return Block{Type: BlockText, Text: b.Text}, true
 	case BlockThinking:
-		return Block{Type: BlockThinking, Thinking: b.Thinking, Signature: b.Signature}, true
+		block := Block{Type: BlockThinking, Signature: b.Signature}
+		if b.Thinking != nil {
+			block.Thinking = *b.Thinking
+		}
+		stampFormat(&block, FormatAnthropic)
+		return block, true
 	case anthropicRedactedThinking:
 		return redactedThinkingBlock(b.Data), true
 	case BlockToolUse:
@@ -294,6 +299,7 @@ func blockStartEvents(ev anthropicEvent) []StreamEvent {
 		return []StreamEvent{
 			{Type: EvSignature, Index: ev.Index, Value: ev.ContentBlock.Data},
 			{Type: EvProviderData, Index: ev.Index, Key: anthropicRedactedKey, Value: "true"},
+			formatStampEvent(ev.Index, FormatAnthropic),
 		}
 	}
 	// Text and thinking blocks are created by their first delta.
@@ -311,7 +317,13 @@ func blockDeltaEvents(ev anthropicEvent) []StreamEvent {
 	case "thinking_delta":
 		return []StreamEvent{{Type: EvThinkingDelta, Index: ev.Index, Text: d.Thinking}}
 	case "signature_delta":
-		return []StreamEvent{{Type: EvSignature, Index: ev.Index, Value: d.Signature}}
+		// Every thinking block ends with its signature, which also makes the
+		// block exist even when no thinking text streamed, so it is stamped
+		// here.
+		return []StreamEvent{
+			{Type: EvSignature, Index: ev.Index, Value: d.Signature},
+			formatStampEvent(ev.Index, FormatAnthropic),
+		}
 	case "input_json_delta":
 		return []StreamEvent{{Type: EvToolInputDelta, Index: ev.Index, Text: d.PartialJSON}}
 	}
@@ -370,8 +382,9 @@ func (p *anthropicProvider) setHeaders(r *http.Request, stream bool) {
 }
 
 func (p *anthropicProvider) buildRequest(req Request, stream bool) anthropicRequest {
-	maxTokens := firstNonZero(req.MaxTokens, p.cfg.DefaultMaxTokens, DefaultMaxTokens)
 	thinking := firstNonEmpty(req.Thinking, p.cfg.Thinking)
+	thinkingCfg, maxTokens := toAnthropicThinking(thinking,
+		firstNonZero(req.MaxTokens, p.cfg.DefaultMaxTokens, DefaultMaxTokens))
 	effort := firstNonEmpty(req.ReasoningEffort, p.cfg.ReasoningEffort)
 
 	wire := anthropicRequest{
@@ -382,8 +395,12 @@ func (p *anthropicProvider) buildRequest(req Request, stream bool) anthropicRequ
 		Tools:         toAnthropicTools(req.Tools),
 		Temperature:   req.Temperature,
 		StopSequences: req.Stop,
-		Thinking:      toAnthropicThinking(thinking, maxTokens),
+		Thinking:      thinkingCfg,
 		Stream:        stream,
+	}
+	if thinking == "enabled" || thinking == "adaptive" {
+		// The API rejects sampling changes alongside thinking.
+		wire.Temperature = nil
 	}
 	markRecentUserMessages(wire.Messages, req.CacheRecent, MaxCacheBreakpoints-countSystemBreakpoints(wire.System))
 	if effort != "" {
@@ -441,14 +458,22 @@ func toAnthropicTools(tools []ToolSchema) []anthropicTool {
 	return wire
 }
 
-func toAnthropicThinking(mode string, maxTokens int) *anthropicThinking {
+// toAnthropicThinking returns the thinking setting for mode and the max_tokens
+// to send with it. The API requires a budget of at least minThinkingBudget
+// and below max_tokens, so when the minimum does not fit, max_tokens grows by
+// the budget and the reply keeps the room the caller asked for.
+func toAnthropicThinking(mode string, maxTokens int) (*anthropicThinking, int) {
 	switch mode {
 	case "enabled":
-		return &anthropicThinking{Type: "enabled", BudgetTokens: max(minThinkingBudget, maxTokens/2)}
+		budget := max(minThinkingBudget, maxTokens/2)
+		if budget >= maxTokens {
+			maxTokens += budget
+		}
+		return &anthropicThinking{Type: "enabled", BudgetTokens: budget}, maxTokens
 	case "adaptive", "disabled":
-		return &anthropicThinking{Type: mode}
+		return &anthropicThinking{Type: mode}, maxTokens
 	}
-	return nil
+	return nil, maxTokens
 }
 
 // toAnthropicMessages converts history. Messages left with no content after
@@ -472,9 +497,9 @@ func toAnthropicMessages(msgs []Message, keepThinking bool) []anthropicMessage {
 func toAnthropicBlocks(blocks []Block, keepThinking bool) []anthropicBlock {
 	out := make([]anthropicBlock, 0, len(blocks))
 	for _, b := range blocks {
-		// Unsigned thinking cannot be replayed, and disabled thinking must
-		// not see earlier thinking blocks at all.
-		if b.Type == BlockThinking && (!keepThinking || b.Signature == "") {
+		// Unsigned or another provider's thinking cannot be replayed, and
+		// disabled thinking must not see earlier thinking blocks at all.
+		if b.Type == BlockThinking && (!keepThinking || b.Signature == "" || foreignThinking(b, FormatAnthropic)) {
 			continue
 		}
 		if b.Type == BlockText && b.Text == "" {
@@ -491,9 +516,13 @@ func toAnthropicBlock(b Block, keepThinking bool) anthropicBlock {
 		return anthropicBlock{Type: anthropicRedactedThinking, Data: b.Signature}
 	}
 	wire := anthropicBlock{
-		Type: b.Type, Text: b.Text, Thinking: b.Thinking, Signature: b.Signature,
+		Type: b.Type, Text: b.Text, Signature: b.Signature,
 		ID: b.ID, Name: b.Name, Input: b.Input,
 		ToolUseID: b.ToolUseID, IsError: b.IsError, Source: b.Source,
+	}
+	if b.Type == BlockThinking {
+		// The API requires the field even when the text was omitted.
+		wire.Thinking = &b.Thinking
 	}
 	if b.Type == BlockToolUse && len(b.Input) == 0 {
 		wire.Input = json.RawMessage(emptyToolInput)
@@ -510,7 +539,7 @@ func redactedThinkingBlock(data string) Block {
 	return Block{
 		Type:         BlockThinking,
 		Signature:    data,
-		ProviderData: map[string]string{anthropicRedactedKey: "true"},
+		ProviderData: map[string]string{anthropicRedactedKey: "true", formatKey: string(FormatAnthropic)},
 	}
 }
 

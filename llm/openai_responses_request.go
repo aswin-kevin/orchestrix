@@ -151,8 +151,8 @@ func toResponsesUserItems(m Message) []any {
 }
 
 // toResponsesAssistantItems converts an assistant message. Consecutive text
-// blocks share one message item; unsigned thinking cannot be replayed and is
-// dropped.
+// blocks share one message item; unsigned thinking and another provider's
+// thinking cannot be replayed and are dropped.
 func toResponsesAssistantItems(m Message) []any {
 	var items []any
 	var text strings.Builder
@@ -172,7 +172,7 @@ func toResponsesAssistantItems(m Message) []any {
 		case BlockText:
 			text.WriteString(b.Text)
 		case BlockThinking:
-			if b.Signature != "" {
+			if b.Signature != "" && !foreignThinking(b, FormatOpenAIResponses) {
 				flushText()
 				items = append(items, responsesReasoning{
 					Type:             responsesReasoningType,

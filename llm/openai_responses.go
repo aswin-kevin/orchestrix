@@ -219,6 +219,7 @@ func (s *responsesStreamState) itemDone(ev responsesEvent) []StreamEvent {
 		return []StreamEvent{
 			{Type: EvSignature, Index: index, Value: ev.Item.EncryptedContent},
 			{Type: EvProviderData, Index: index, Key: responsesReasoningIDKey, Value: ev.Item.ID},
+			formatStampEvent(index, FormatOpenAIResponses),
 		}
 	case responsesFunctionCallType:
 		// Some servers send the call only on the finished item, arguments
