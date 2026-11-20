@@ -15,10 +15,15 @@ import (
 
 // RecordInput is the input of record_memory.
 type RecordInput struct {
-	Name        string `json:"name" desc:"Short title of the memory."`
+	// Name is the short title of the memory.
+	Name string `json:"name" desc:"Short title of the memory."`
+	// Description is one line saying what the memory is and when it is
+	// relevant.
 	Description string `json:"description" desc:"One line saying what it is and when it is relevant."`
-	Type        Type   `json:"type" enum:"user,feedback,project,reference" desc:"user: about the user; feedback: how they want you to work; project: facts about the work; reference: where to find things."`
-	Content     string `json:"content" desc:"The memory itself."`
+	// Type is the memory's category: user, feedback, project or reference.
+	Type Type `json:"type" enum:"user,feedback,project,reference" desc:"user: about the user; feedback: how they want you to work; project: facts about the work; reference: where to find things."`
+	// Content is the memory itself.
+	Content string `json:"content" desc:"The memory itself."`
 }
 
 // RecallInput is the input of recall_memory.
@@ -28,7 +33,8 @@ type RecallInput struct {
 	// shorter than two characters are ignored, so a query made only of
 	// punctuation or of one-letter words matches nothing.
 	Query string `json:"query,omitempty" desc:"Keywords; empty lists the most recent memories."`
-	Limit int    `json:"limit,omitempty" desc:"Maximum memories to return."`
+	// Limit is the maximum number of memories to return.
+	Limit int `json:"limit,omitempty" desc:"Maximum memories to return."`
 }
 
 const (

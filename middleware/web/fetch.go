@@ -31,9 +31,12 @@ const fetchDescription = "Fetch a web page and return its content: HTML is conve
 
 // FetchInput is the input of web_fetch.
 type FetchInput struct {
-	URL        string `json:"url" desc:"An http or https URL."`
-	StartIndex int    `json:"start_index,omitempty" desc:"Character offset to continue a truncated page from."`
-	MaxChars   int    `json:"max_chars,omitempty" desc:"Maximum characters to return."`
+	// URL is the http or https URL to fetch.
+	URL string `json:"url" desc:"An http or https URL."`
+	// StartIndex is the character offset to continue a truncated page from.
+	StartIndex int `json:"start_index,omitempty" desc:"Character offset to continue a truncated page from."`
+	// MaxChars is the maximum number of characters to return.
+	MaxChars int `json:"max_chars,omitempty" desc:"Maximum characters to return."`
 }
 
 // fetcher runs web_fetch with a guarded client.

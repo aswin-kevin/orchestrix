@@ -76,7 +76,9 @@ type Config struct {
 
 // File is one instruction file as loaded for a run.
 type File struct {
-	Path    string `json:"path"`
+	// Path is the file's path.
+	Path string `json:"path"`
+	// Content is the file's text.
 	Content string `json:"content"`
 	// Truncated reports that Content was cut to MaxFileBytes.
 	Truncated bool `json:"truncated,omitempty"`

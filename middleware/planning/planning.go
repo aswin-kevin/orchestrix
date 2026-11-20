@@ -41,8 +41,10 @@ const (
 
 // Todo is one item of the plan.
 type Todo struct {
+	// Content is what needs to be done, in a short imperative sentence.
 	Content string `json:"content" desc:"What needs to be done, in a short imperative sentence."`
-	Status  Status `json:"status" desc:"One of pending, in_progress or completed."`
+	// Status is one of pending, in_progress or completed.
+	Status Status `json:"status" desc:"One of pending, in_progress or completed."`
 }
 
 // TodosKey holds the current todo list. It is private to the run that owns it.

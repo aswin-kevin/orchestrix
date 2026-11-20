@@ -19,6 +19,8 @@ type ExecStarter interface {
 // commands. It adds backend.Starter, so it works with tasks middleware
 // (orchestrix.WithTasks). Build one with NewStarter.
 type StarterBackend struct {
+	// Backend is the sandbox backend whose file operations and Execute
+	// StarterBackend provides.
 	*Backend
 	start backend.Starter
 }

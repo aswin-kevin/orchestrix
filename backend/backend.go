@@ -56,8 +56,7 @@ const (
 type GrepOptions struct {
 	Path string // directory or file to search; empty means the root
 	Glob string // optional file-name filter
-	// Mode selects what Grep reports; empty selects the implementation
-	// default.
+	// Mode selects what Grep reports; empty means GrepFiles.
 	Mode GrepMode
 	// IgnoreCase matches case-insensitively.
 	IgnoreCase bool

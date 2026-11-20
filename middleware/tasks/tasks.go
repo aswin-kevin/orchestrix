@@ -77,14 +77,19 @@ const lostExitCode = -1
 
 // JobRecord is a run's record of one background job.
 type JobRecord struct {
-	ID       string `json:"id"`
+	// ID is the job's id, the one the model passes to task_output and
+	// task_stop.
+	ID string `json:"id"`
+	// ThreadID is the thread whose run started the job.
 	ThreadID string `json:"thread_id"`
-	Command  string `json:"command"`
+	// Command is the shell command line the job runs.
+	Command string `json:"command"`
 	// Status is one of the Status constants.
 	Status string `json:"status"`
 	// ExitCode is set once the job ended; -1 when it was killed or lost.
-	ExitCode int       `json:"exit_code"`
-	Started  time.Time `json:"started"`
+	ExitCode int `json:"exit_code"`
+	// Started is when the job was started.
+	Started time.Time `json:"started"`
 	// Ended is when the middleware observed the end (a tool or the next
 	// turn looked at the job), not the exact exit time; zero while the job
 	// runs.

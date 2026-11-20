@@ -12,13 +12,18 @@ import (
 
 // TaskRecord is a run's record of one background task.
 type TaskRecord struct {
-	ID           string `json:"id"`
-	ThreadID     string `json:"thread_id"`
+	// ID is the task's id, the one the model passes to check_task,
+	// update_task and cancel_task.
+	ID string `json:"id"`
+	// ThreadID is the thread of the run that started the task.
+	ThreadID string `json:"thread_id"`
+	// SubagentType is the name of the subagent the task runs.
 	SubagentType string `json:"subagent_type"`
 	// Description is the task as the model wrote it.
 	Description string `json:"description"`
 	// Status is one of the Status constants.
-	Status  string    `json:"status"`
+	Status string `json:"status"`
+	// Started is when the task was started.
 	Started time.Time `json:"started"`
 	// Ended is when the task ended, or for a lost task when that was
 	// noticed; zero while it runs.

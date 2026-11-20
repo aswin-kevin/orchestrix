@@ -22,15 +22,21 @@ const noMatchText = "No matching tools."
 
 // SearchInput is the input of search_tools.
 type SearchInput struct {
-	Query      string `json:"query" desc:"Keywords matched against tool names and descriptions, or select:name1,name2 for exact names."`
-	Regex      bool   `json:"regex,omitempty" desc:"Treat query as a case-insensitive regular expression."`
-	MaxResults int    `json:"max_results,omitempty" desc:"Maximum tools to return."`
+	// Query holds keywords matched against tool names and descriptions, or
+	// select:name1,name2 for exact names.
+	Query string `json:"query" desc:"Keywords matched against tool names and descriptions, or select:name1,name2 for exact names."`
+	// Regex treats Query as a case-insensitive regular expression.
+	Regex bool `json:"regex,omitempty" desc:"Treat query as a case-insensitive regular expression."`
+	// MaxResults is the maximum number of tools to return.
+	MaxResults int `json:"max_results,omitempty" desc:"Maximum tools to return."`
 }
 
 // CallInput is the input of call_tool. Input is optional: a missing or null
 // input calls the tool with {}.
 type CallInput struct {
-	Name  string          `json:"name" desc:"Exact name of the tool to call."`
+	// Name is the exact name of the tool to call.
+	Name string `json:"name" desc:"Exact name of the tool to call."`
+	// Input is the tool's input object; nil or null calls it with {}.
 	Input json.RawMessage `json:"input,omitempty" desc:"The tool's input object."`
 }
 

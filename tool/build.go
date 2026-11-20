@@ -13,15 +13,20 @@ import (
 // most restrictive behaviour, so forgetting one never widens what a tool may do.
 type Spec struct {
 	// Name must be non-empty and use only [A-Za-z0-9_.:-].
-	Name        string
+	Name string
+	// Description tells the model what the tool does.
 	Description string
 	// Schema is the input schema; nil means a tool without parameters.
 	Schema map[string]any
 
 	// ReadOnly, Concurrent and Edit default to false when nil.
-	ReadOnly   func(json.RawMessage) bool
+	ReadOnly func(json.RawMessage) bool
+	// Concurrent reports whether a call with this input may run in parallel
+	// with other calls; nil means it may not.
 	Concurrent func(json.RawMessage) bool
-	Edit       func(json.RawMessage) bool
+	// Edit reports whether the call modifies files, for the accept-edits
+	// permission mode; nil means it does not.
+	Edit func(json.RawMessage) bool
 	// Subject returns the string permission rules match against (a shell
 	// command, a URL); nil means none.
 	Subject func(json.RawMessage) string

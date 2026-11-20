@@ -14,12 +14,16 @@ import (
 
 // CompressInput is the input of compress_context.
 type CompressInput struct {
+	// RangeID is the id from the compression request.
 	RangeID string `json:"range_id" desc:"The id from the compression request."`
+	// Summary replaces the range; it should hold everything from it the
+	// model still needs.
 	Summary string `json:"summary" desc:"Everything from that range you still need: goals, decisions, facts, paths, identifiers, open items."`
 }
 
 // RestoreInput is the input of restore_context.
 type RestoreInput struct {
+	// RangeID is the id of a compressed range to bring back verbatim.
 	RangeID string `json:"range_id" desc:"Id of a compressed range to bring back verbatim."`
 }
 

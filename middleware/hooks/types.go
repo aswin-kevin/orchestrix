@@ -56,7 +56,8 @@ type ToolInput struct {
 type PreToolUseOutput struct {
 	// Block stops the tool from running; the model gets an error result
 	// "Blocked by hook: <Reason>".
-	Block  bool
+	Block bool
+	// Reason is the explanation the model sees when Block is set.
 	Reason string
 	// UpdatedInput, when non-empty, replaces the call's input. It is
 	// validated against the tool's schema and checked by the permission
@@ -101,7 +102,9 @@ type PromptInput struct {
 type PromptOutput struct {
 	// Block rejects the prompt: the run's input is removed from State and
 	// the run ends with agent.ReasonHookStopped. Reason is in the error.
-	Block  bool
+	Block bool
+	// Reason is the explanation reported in the run's error when Block is
+	// set.
 	Reason string
 	// Context, when non-empty, is added to the conversation as a user
 	// message marked with ContextMetaKey.
@@ -181,7 +184,8 @@ type SubagentInput struct {
 type SubagentOutput struct {
 	// Block refuses the launch; the model gets an error result
 	// "Blocked by hook: <Reason>".
-	Block  bool
+	Block bool
+	// Reason is the explanation the model sees when Block is set.
 	Reason string
 	// Context, when non-empty, is appended to the task description as
 	// "\n\n" + Context.
@@ -194,6 +198,7 @@ type SubagentOutput struct {
 // again, so the hook fires again for it: once for the attempt that
 // interrupted and once for the resumed one.
 type PreToolUseHook struct {
+	// Matcher selects the tools the hook applies to.
 	Matcher
 	// Fn decides the call's fate. A returned error is not a verdict: it
 	// fails the call, or stops the run when it wraps agent.ErrStopRun.
@@ -202,6 +207,7 @@ type PreToolUseHook struct {
 
 // PostToolUseHook runs after a matching tool call returned a result.
 type PostToolUseHook struct {
+	// Matcher selects the tools the hook applies to.
 	Matcher
 	// Fn sees the result as it stands, after earlier hooks. A returned
 	// error fails the call, or stops the run when it wraps agent.ErrStopRun.

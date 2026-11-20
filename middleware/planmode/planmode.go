@@ -92,11 +92,14 @@ type Config struct {
 
 // EnterInput is the input of enter_plan_mode.
 type EnterInput struct {
+	// Reason says why planning first helps.
 	Reason string `json:"reason,omitempty" desc:"Why planning first helps."`
 }
 
 // ExitInput is the input of exit_plan_mode.
 type ExitInput struct {
+	// Plan is the implementation plan in markdown: steps, files to change
+	// and how to verify.
 	Plan string `json:"plan" desc:"The implementation plan in markdown: steps, files to change, how to verify."`
 }
 

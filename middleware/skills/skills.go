@@ -68,7 +68,9 @@ type Skill struct {
 	// Description says what the skill does and when to use it. Required.
 	Description string
 	// License and Compatibility are optional free text.
-	License       string
+	License string
+	// Compatibility is optional free text on the environments the skill
+	// suits; License is optional free text naming its license.
 	Compatibility string
 	// Metadata holds the frontmatter's extra key/value pairs; nil if none.
 	Metadata map[string]string
@@ -83,7 +85,8 @@ type Skill struct {
 	Body string
 	// FS and Dir locate the skill directory for file reads; both are zero for
 	// a programmatic skill, which has no files.
-	FS  fs.FS
+	FS fs.FS
+	// Dir is the skill's directory within FS.
 	Dir string
 	// Files lists the skill's other regular files as slash paths relative to
 	// Dir, sorted, at most MaxListedFiles; nil if none.

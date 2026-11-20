@@ -20,7 +20,10 @@ import (
 
 // ToolInput is the input of the skill tool.
 type ToolInput struct {
+	// Name is the skill to load.
 	Name string `json:"name" desc:"The skill to load."`
+	// File is a file inside the skill directory to read instead of its
+	// instructions.
 	File string `json:"file,omitempty" desc:"A file inside the skill directory to read instead of its instructions."`
 }
 

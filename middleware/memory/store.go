@@ -96,12 +96,19 @@ type StoreConfig struct {
 // Entry is one stored memory. The frontmatter holds the yaml-tagged fields;
 // the file body is Body.
 type Entry struct {
-	Name        string    `yaml:"name"`
-	Description string    `yaml:"description"`
-	Type        Type      `yaml:"type"`
-	Created     time.Time `yaml:"created"`
-	Updated     time.Time `yaml:"updated"`
-	Body        string    `yaml:"-"`
+	// Name is the memory's short title.
+	Name string `yaml:"name"`
+	// Description is one line saying what the memory is and when it is
+	// relevant.
+	Description string `yaml:"description"`
+	// Type is the memory's category.
+	Type Type `yaml:"type"`
+	// Created is when the memory was first recorded.
+	Created time.Time `yaml:"created"`
+	// Updated is when the memory was last changed.
+	Updated time.Time `yaml:"updated"`
+	// Body is the memory's text, the part of the file after the frontmatter.
+	Body string `yaml:"-"`
 	// File is the entry's base name in the store directory, such as
 	// "favorite-color.md".
 	File string `yaml:"-"`

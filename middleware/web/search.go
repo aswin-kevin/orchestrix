@@ -34,8 +34,10 @@ const searchDescription = "Search the web and return a numbered list of results,
 
 // SearchInput is the input of web_search.
 type SearchInput struct {
-	Query      string `json:"query" desc:"The search query."`
-	MaxResults int    `json:"max_results,omitempty" desc:"Number of results (1-10)."`
+	// Query is the search query.
+	Query string `json:"query" desc:"The search query."`
+	// MaxResults is the number of results, 1 to 10.
+	MaxResults int `json:"max_results,omitempty" desc:"Number of results (1-10)."`
 }
 
 // searchTool returns web_search over backend. Its permission subject is the

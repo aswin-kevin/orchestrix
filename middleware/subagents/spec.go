@@ -39,7 +39,8 @@ type Subagent struct {
 	// Provider and Model select the subagent's model; nil and "" mean the
 	// parent's. Setting Model also re-derives the model profile from it.
 	Provider llm.Provider
-	Model    string
+	// Model is the model name; see Provider.
+	Model string
 	// PermissionMode is the subagent's configured permission mode; "" means
 	// the parent's Config.PermissionMode. A run starts in the stricter of it
 	// and the parent's current mode (see the package documentation).

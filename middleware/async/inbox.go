@@ -14,7 +14,9 @@ import (
 
 // UpdateInput is update_task's input.
 type UpdateInput struct {
-	TaskID  string `json:"task_id" desc:"The task to send the message to."`
+	// TaskID is the task to send the message to.
+	TaskID string `json:"task_id" desc:"The task to send the message to."`
+	// Message is the new instructions or information for the running task.
 	Message string `json:"message" desc:"New instructions or information for the running task."`
 }
 

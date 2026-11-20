@@ -62,20 +62,28 @@ const (
 
 // Option is one choice of a question.
 type Option struct {
-	Label       string `json:"label" desc:"Short choice text."`
+	// Label is the short choice text shown to the user.
+	Label string `json:"label" desc:"Short choice text."`
+	// Description says what choosing the option means.
 	Description string `json:"description,omitempty" desc:"What choosing it means."`
 }
 
 // Question is one multiple-choice question.
 type Question struct {
-	Question    string   `json:"question" desc:"The full question."`
-	Header      string   `json:"header,omitempty" desc:"Very short label (max 12 chars)."`
-	Options     []Option `json:"options" desc:"2-4 choices; the user may also answer in their own words."`
-	MultiSelect bool     `json:"multi_select,omitempty" desc:"Allow several choices."`
+	// Question is the full question text.
+	Question string `json:"question" desc:"The full question."`
+	// Header is a very short label for the question, at most 12 characters.
+	Header string `json:"header,omitempty" desc:"Very short label (max 12 chars)."`
+	// Options are the choices, two to four; the user may also answer in
+	// their own words.
+	Options []Option `json:"options" desc:"2-4 choices; the user may also answer in their own words."`
+	// MultiSelect allows the user to pick several options.
+	MultiSelect bool `json:"multi_select,omitempty" desc:"Allow several choices."`
 }
 
 // Input is the input of ask_user.
 type Input struct {
+	// Questions are the questions to ask, one to four.
 	Questions []Question `json:"questions" desc:"1-4 questions."`
 }
 

@@ -46,8 +46,12 @@ const (
 // Decision is a permission verdict. Message explains Deny and Ask. A tool's
 // own Allow may carry UpdatedInput, a rewritten input to run instead.
 type Decision struct {
-	Behavior     Behavior
-	Message      string
+	// Behavior is the verdict.
+	Behavior Behavior
+	// Message explains a Deny or Ask to the model or the user.
+	Message string
+	// UpdatedInput is a rewritten input to run instead, only meaningful on a
+	// tool's own Allow.
 	UpdatedInput json.RawMessage
 }
 
@@ -139,13 +143,15 @@ type PathAccess struct {
 	// Path is a virtual absolute path. A relative path is treated as rooted at
 	// the virtual root when rules are matched.
 	Path string
-	Op   Op
+	// Op is whether the call reads or writes the path.
+	Op Op
 }
 
 // Request describes a tool call to be checked.
 type Request struct {
 	// Tool is the tool's name; tool rules match it exactly.
-	Tool  string
+	Tool string
+	// Input is the call's raw JSON arguments.
 	Input json.RawMessage
 	// ReadOnly marks a call that changes nothing.
 	ReadOnly bool
@@ -183,11 +189,15 @@ type Approver func(ctx context.Context, req Request, reason string) Decision
 
 // Context carries the session's permission configuration.
 type Context struct {
-	Mode  Mode
+	// Mode is the active permission mode.
+	Mode Mode
+	// Rules are the allow, ask and deny rules.
 	Rules Rules
 }
 
 // Rules groups permission rules by the behavior they trigger.
 type Rules struct {
+	// Allow lists rules that permit a call without asking; Ask lists rules
+	// that require a human decision and Deny lists rules that refuse it.
 	Allow, Ask, Deny []Rule
 }

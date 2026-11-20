@@ -40,6 +40,8 @@ type Config struct {
 // embedded Agent), which stops the workers too and releases the agent's
 // other resources.
 type Coordinator struct {
+	// Agent is the coordinating agent; Run, Thread, Resume and Close come
+	// from it.
 	*agent.Agent
 	// tasks runs the background workers; the Coordinator owns it.
 	tasks    *async.Middleware

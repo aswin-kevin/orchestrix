@@ -15,7 +15,10 @@ import (
 
 // TaskInput is the input of the task tool.
 type TaskInput struct {
-	Description  string `json:"description" desc:"The complete task, with every detail the subagent needs; only a fork sees this conversation."`
+	// Description is the complete task with every detail the subagent needs;
+	// only a fork sees the conversation.
+	Description string `json:"description" desc:"The complete task, with every detail the subagent needs; only a fork sees this conversation."`
+	// SubagentType is the name of the subagent to use.
 	SubagentType string `json:"subagent_type" desc:"Which subagent to use."`
 }
 

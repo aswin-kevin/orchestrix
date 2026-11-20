@@ -95,13 +95,21 @@ type Availability interface {
 
 // Call carries the per-invocation environment handed to Tool.Call.
 type Call struct {
-	ToolUseID  string
-	AgentID    string
-	ThreadID   string
+	// ToolUseID is the tool_use id of the call being executed.
+	ToolUseID string
+	// AgentID is the name of the agent whose run made the call.
+	AgentID string
+	// ThreadID is the run's thread id; empty for a run without one.
+	ThreadID string
+	// WorkingDir is the agent's Config.WorkingDir, the directory the tool
+	// treats as current.
 	WorkingDir string
-	Backend    backend.Backend
-	State      *state.State
-	Profile    llm.Profile
+	// Backend is the backend resolved for this run; it may be nil.
+	Backend backend.Backend
+	// State is the run's conversation state.
+	State *state.State
+	// Profile is the agent's model profile.
+	Profile llm.Profile
 	// Emit receives progress messages; use Progress, which tolerates nil.
 	Emit func(progress string)
 	// MaxOutputChars is the cap, in bytes, the tool should apply to its
@@ -147,8 +155,11 @@ const (
 type ResumeValue struct {
 	// Type is one of ResumeApprove, ResumeEdit, ResumeReject or
 	// ResumeRespond.
-	Type    string
-	Input   json.RawMessage
+	Type string
+	// Input is the replacement input, set for ResumeEdit.
+	Input json.RawMessage
+	// Message is the rejection reason for ResumeReject or the answer for
+	// ResumeRespond.
 	Message string
 }
 
@@ -172,8 +183,10 @@ func (c *Call) Visible(path string) bool {
 
 // Result is what a tool returns to the model.
 type Result struct {
+	// Content is the blocks returned to the model, normally text.
 	Content []llm.Block `json:"content"`
-	IsError bool        `json:"is_error,omitempty"`
+	// IsError reports that the call failed and Content describes the error.
+	IsError bool `json:"is_error,omitempty"`
 	// Extra holds additional messages to append to the conversation after the
 	// tool result.
 	Extra []llm.Message `json:"extra,omitempty"`

@@ -23,9 +23,13 @@ const (
 // rule has Tool empty and Op set, and matches calls that access a path
 // matching Pattern with that Op.
 type Rule struct {
-	Tool    string
+	// Tool is the tool name a tool rule matches; empty for a path rule.
+	Tool string
+	// Pattern narrows a tool rule against Request.Subject, or is the path
+	// pattern of a path rule.
 	Pattern string
-	Op      Op
+	// Op is the access a path rule matches; empty for a tool rule.
+	Op Op
 }
 
 // ParseRule parses the textual rule forms "Tool", "Tool(pattern)",

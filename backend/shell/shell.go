@@ -106,6 +106,7 @@ type Options struct {
 // Backend is a disk backend that also runs commands; it implements
 // backend.Backend, backend.MultiEditor, backend.Executor and backend.Starter.
 type Backend struct {
+	// Backend is the disk backend that provides the file operations.
 	*disk.Backend
 	opts Options
 }
