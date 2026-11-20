@@ -12,6 +12,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
@@ -75,6 +76,75 @@ func TestDefaultBackendKeepsFilesPerThread(t *testing.T) {
 	}
 	if factory("t1") == factory("t2") {
 		t.Error("different thread ids share a backend")
+	}
+}
+
+// writeThenReadInSeparateRuns runs two runs of one agent on thread tid, the
+// first writing /secret.txt and the second reading it, and returns the tool
+// result of the read.
+func writeThenReadInSeparateRuns(t *testing.T, tid string) llm.Block {
+	t.Helper()
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "w", Name: "write_file", Input: map[string]string{"path": "/secret.txt", "content": "s3cret"}}}},
+		llmtest.Turn{Text: "written"},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "r", Name: "read_file", Input: map[string]string{"path": "/secret.txt"}}}},
+		llmtest.Turn{Text: "read"},
+	)
+	a, err := orchestrix.New(p, orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 {
+		in := orchestrix.Text("go")
+		in.ThreadID = tid
+		final := finalOf(t, a, in)
+		if final.Reason != agent.ReasonCompleted {
+			t.Fatalf("run %d: %s (err %v)", i, final.Reason, final.Err)
+		}
+		if i == 1 {
+			for _, m := range final.State.Messages() {
+				for _, b := range m.Content {
+					if b.Type == llm.BlockToolResult && b.ToolUseID == "r" {
+						return b
+					}
+				}
+			}
+			t.Fatal("read_file produced no tool result")
+		}
+	}
+	return llm.Block{}
+}
+
+func blockText(b llm.Block) string {
+	var s string
+	for _, c := range b.Content {
+		s += c.Text
+	}
+	return s
+}
+
+func TestThreadlessRunsIsolated(t *testing.T) {
+	res := writeThenReadInSeparateRuns(t, "")
+	if !res.IsError || strings.Contains(blockText(res), "s3cret") {
+		t.Fatalf("a threadless run saw another run's file: error=%v %q", res.IsError, blockText(res))
+	}
+}
+
+func TestThreadedRunKeepsFiles(t *testing.T) {
+	res := writeThenReadInSeparateRuns(t, "t1")
+	if res.IsError || !strings.Contains(blockText(res), "s3cret") {
+		t.Fatalf("a threaded run lost its file: error=%v %q", res.IsError, blockText(res))
+	}
+}
+
+func TestThreadlessFactoryNeverShares(t *testing.T) {
+	a, err := orchestrix.New(llmtest.New(), orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := a.Config().BackendFactory
+	if f("") == f("") {
+		t.Error("the empty thread id got a shared backend")
 	}
 }
 

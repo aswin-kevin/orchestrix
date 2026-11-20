@@ -186,6 +186,9 @@ func (e *Executor) containerID() string {
 
 // ensure returns the container id, creating or adopting the container.
 func (e *Executor) ensure(ctx context.Context) (string, error) {
+	if e.thread == "" {
+		return "", ErrNoThread
+	}
 	e.createMu.Lock()
 	defer e.createMu.Unlock()
 	m := e.m

@@ -38,7 +38,9 @@ type Agent struct {
 type Input struct {
 	// ThreadID identifies the conversation; it selects the backend when
 	// Config.BackendFactory is set and is passed to tools and model
-	// wrappers. Empty is allowed and is passed on as is.
+	// wrappers. Empty is allowed and is passed on as is; the run is not
+	// checkpointed, and orchestrix.New's default factory gives it a fresh,
+	// unshared workspace that is dropped after the run.
 	ThreadID string
 	// Messages are appended to State's history before the first turn. A
 	// resumed run takes none (see ResumeWith).

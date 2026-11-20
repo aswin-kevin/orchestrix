@@ -3,6 +3,7 @@ package orxdocker
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -194,5 +195,22 @@ func TestManagerWithoutDaemon(t *testing.T) {
 	}
 	if _, err := m.Executor("t1").Execute(t.Context(), "true", execOpts(time.Second)); err == nil {
 		t.Error("Execute succeeded after Close")
+	}
+}
+
+func TestExecutorRejectsEmptyThread(t *testing.T) {
+	// The socket does not exist: any engine call would fail with a dial
+	// error, so ErrNoThread proves the check comes first.
+	m, err := NewManager(Options{Socket: t.TempDir() + "/missing.sock", IdleTTL: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	_, err = m.Executor("").Execute(t.Context(), "true", execOpts(time.Second))
+	if !errors.Is(err, ErrNoThread) {
+		t.Fatalf("Execute with an empty thread id = %v, want ErrNoThread", err)
+	}
+	if _, err := m.Executor("").ContainerID(t.Context()); !errors.Is(err, ErrNoThread) {
+		t.Fatalf("ContainerID with an empty thread id = %v, want ErrNoThread", err)
 	}
 }

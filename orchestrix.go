@@ -42,7 +42,8 @@ import (
 //
 // Without WithBackend, WithBackendFactory or WithShell, each thread gets its
 // own in-memory workspace; it lives as long as the agent and, with
-// WithCheckpointer, is saved with the thread. WithMount routes path prefixes
+// WithCheckpointer, is saved with the thread. A run with an empty ThreadID
+// gets a fresh, unshared workspace that is dropped when the run ends. WithMount routes path prefixes
 // to other backends on top of any of these, for example memory.DefaultDir to a
 // kv backend so memories outlive the thread. New never panics on bad
 // options: every problem is returned, joined, as one error.
@@ -135,11 +136,20 @@ func (s *settings) build() agent.Config {
 // survive across runs of a thread. A non-nil mount puts the WithMount routes
 // over each one; a checkpoint still snapshots only the in-memory part.
 // Backends are never evicted; hosts with many long-lived threads should
-// supply their own factory via WithBackendFactory.
+// supply their own factory via WithBackendFactory. The empty thread id never
+// shares: each call returns a fresh backend that is not kept, so runs without
+// a ThreadID cannot read each other's files.
 func newThreadMemoryFactory(mount func(backend.Backend) backend.Backend) func(threadID string) backend.Backend {
 	var mu sync.Mutex
 	backends := make(map[string]backend.Backend)
 	return func(threadID string) backend.Backend {
+		if threadID == "" {
+			var b backend.Backend = memory.New()
+			if mount != nil {
+				b = mount(b)
+			}
+			return b
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		b, ok := backends[threadID]
@@ -162,7 +172,10 @@ func joinModes(modes []permission.Mode) string {
 	return strings.Join(names, ", ")
 }
 
-// Text wraps s as the user message that starts a run:
+// Text wraps s as the user message that starts a run. The input has no
+// ThreadID: with the default backend such a run gets a fresh, unshared
+// workspace that is not kept after the run. Set Input.ThreadID to keep files
+// and history across runs:
 //
 //	a.Run(ctx, orchestrix.Text("hello"))
 func Text(s string) agent.Input {

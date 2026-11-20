@@ -20,6 +20,10 @@ var (
 	// stopped behind the Manager's back. The next command creates a new,
 	// empty container.
 	ErrContainerGone = errors.New("orxdocker: container is gone")
+	// ErrNoThread is returned by an executor of the empty thread id. Every
+	// run needs its own Input.ThreadID: the thread id names the container,
+	// so an empty one would put unrelated runs in one container.
+	ErrNoThread = errors.New("orxdocker: empty thread id: every run needs its own Input.ThreadID")
 )
 
 // cleanupTimeout bounds the API calls of Close and of the idle janitor.
@@ -92,7 +96,8 @@ func (m *Manager) Ping(ctx context.Context) error {
 // rooted at Options.WorkDir whose commands run in the thread's container. It
 // implements backend.Backend, backend.MultiEditor, backend.Executor and
 // backend.Starter, so it works with orchestrix.WithTasks. Pass the method to
-// orchestrix.WithBackendFactory.
+// orchestrix.WithBackendFactory. The empty thread id is rejected with
+// ErrNoThread when a command runs: give every run an Input.ThreadID.
 func (m *Manager) Backend(threadID string) backend.Backend {
 	return m.Executor(threadID).sb
 }
