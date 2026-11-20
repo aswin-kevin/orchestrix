@@ -16,12 +16,19 @@ import (
 // and renewed in the background until the run ends.
 type runLease struct {
 	release func(context.Context) error
+	ttl     time.Duration
 	stop    chan struct{}
 	done    chan struct{}
 
 	mu sync.Mutex
 	// err is set once a renewal found the lease taken by another owner.
 	err error
+}
+
+// leaseCallTimeout bounds each Acquire, renew and release call, so a lease
+// store that stops answering ends the call instead of hanging the run.
+var leaseCallTimeout = func(ttl time.Duration) time.Duration {
+	return max(ttl/2, 5*time.Second)
 }
 
 // acquireLease takes the thread's lease when the run is persisted and its
@@ -34,7 +41,9 @@ func (r *run) acquireLease() *Final {
 	}
 	ttl := r.agent.cfg.LeaseTTL
 	ctx := context.WithoutCancel(r.ctx)
-	renew, release, err := leaser.Acquire(ctx, r.threadID, leaseOwner(), ttl)
+	callCtx, cancel := context.WithTimeout(ctx, leaseCallTimeout(ttl))
+	renew, release, err := leaser.Acquire(callCtx, r.threadID, leaseOwner(), ttl)
+	cancel()
 	if err != nil {
 		reason := ReasonCheckpointError
 		if errors.Is(err, checkpoint.ErrLeaseHeld) {
@@ -44,14 +53,14 @@ func (r *run) acquireLease() *Final {
 		final.Version = r.version
 		return final
 	}
-	l := &runLease{release: release, stop: make(chan struct{}), done: make(chan struct{})}
+	l := &runLease{release: release, ttl: ttl, stop: make(chan struct{}), done: make(chan struct{})}
 	go l.keep(ctx, renew, ttl)
 	r.lease = l
 	return nil
 }
 
-// releaseLease stops renewing and gives the lease up. A failed or
-// panicking release is dropped: the lease then expires after its TTL.
+// releaseLease stops renewing and gives the lease up. A failed, timed-out
+// or panicking release is dropped: the lease then expires after its TTL.
 func (r *run) releaseLease() {
 	l := r.lease
 	if l == nil {
@@ -59,14 +68,16 @@ func (r *run) releaseLease() {
 	}
 	close(l.stop)
 	<-l.done
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), leaseCallTimeout(l.ttl))
+	defer cancel()
 	defer func() { _ = recover() }()
-	_ = l.release(context.WithoutCancel(r.ctx))
+	_ = l.release(ctx)
 }
 
 // keep renews the lease every ttl/3 until stop is closed. A renewal that
 // finds the lease held by another owner records the loss and stops; other
-// renewal errors, and a renewal that panics, are retried on the next tick,
-// since the lease may still be valid.
+// renewal errors, a renewal that times out and a renewal that panics are
+// retried on the next tick, since the lease may still be valid.
 func (l *runLease) keep(ctx context.Context, renew func(context.Context) error, ttl time.Duration) {
 	defer close(l.done)
 	interval := max(ttl/3, time.Millisecond)
@@ -77,7 +88,7 @@ func (l *runLease) keep(ctx context.Context, renew func(context.Context) error, 
 		case <-l.stop:
 			return
 		case <-ticker.C:
-			err := renewGuarded(ctx, renew)
+			err := renewGuarded(ctx, renew, leaseCallTimeout(ttl))
 			if errors.Is(err, checkpoint.ErrLeaseHeld) {
 				l.mu.Lock()
 				l.err = err
@@ -88,8 +99,11 @@ func (l *runLease) keep(ctx context.Context, renew func(context.Context) error, 
 	}
 }
 
-// renewGuarded calls renew, turning a panic into an error.
-func renewGuarded(ctx context.Context, renew func(context.Context) error) (err error) {
+// renewGuarded calls renew bounded by timeout, turning a panic into an
+// error.
+func renewGuarded(ctx context.Context, renew func(context.Context) error, timeout time.Duration) (err error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	defer func() {
 		if v := recover(); v != nil {
 			err = &PanicError{Value: v}

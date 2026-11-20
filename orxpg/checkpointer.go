@@ -25,7 +25,7 @@ type Checkpointer struct {
 	tenant string
 
 	sqlCreate, sqlUpdate, sqlLoad, sqlList, sqlDelete string
-	sqlLease, sqlRelease                              string
+	sqlLease, sqlRenew, sqlRelease                    string
 }
 
 var (
@@ -70,6 +70,10 @@ ON CONFLICT (tenant_id, thread_id) DO UPDATE
 SET owner = EXCLUDED.owner, expires_at = EXCLUDED.expires_at
 WHERE l.owner = EXCLUDED.owner OR l.expires_at <= clock_timestamp()
 RETURNING l.owner`,
+		sqlRenew: `UPDATE ` + t.leases + `
+SET expires_at = clock_timestamp() + $4::bigint * interval '1 microsecond'
+WHERE tenant_id = $1 AND thread_id = $2 AND owner = $3 AND expires_at > clock_timestamp()
+RETURNING owner`,
 		sqlRelease: `DELETE FROM ` + t.leases + ` WHERE tenant_id = $1 AND thread_id = $2 AND owner = $3`,
 	}, nil
 }
@@ -238,12 +242,14 @@ func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl 
 		return nil, nil, fmt.Errorf("orxpg: lease ttl %v is not positive", ttl)
 	}
 	micros := max(ttl.Microseconds(), 1)
-	take := func(ctx context.Context) error {
+	// run executes a lease statement that returns a row only when owner
+	// holds the lease afterwards.
+	run := func(ctx context.Context, sql string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		var got string
-		err := c.pool.QueryRow(ctx, c.sqlLease, c.tenant, threadID, owner, micros).Scan(&got)
+		err := c.pool.QueryRow(ctx, sql, c.tenant, threadID, owner, micros).Scan(&got)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("orxpg: %w: thread %q", checkpoint.ErrLeaseHeld, threadID)
 		}
@@ -252,9 +258,10 @@ func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl 
 		}
 		return nil
 	}
-	if err := take(ctx); err != nil {
+	if err := run(ctx, c.sqlLease); err != nil {
 		return nil, nil, err
 	}
+	renew = func(ctx context.Context) error { return run(ctx, c.sqlRenew) }
 	release = func(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -264,5 +271,5 @@ func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl 
 		}
 		return nil
 	}
-	return take, release, nil
+	return renew, release, nil
 }

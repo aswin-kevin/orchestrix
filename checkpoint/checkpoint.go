@@ -92,8 +92,9 @@ type Leaser interface {
 	// returns functions that extend it by ttl from now and give it up. It
 	// returns an error wrapping ErrLeaseHeld while another owner holds an
 	// unexpired lease. Acquiring a lease owner already holds extends it.
-	// renew fails with ErrLeaseHeld once the lease expired and another
-	// owner took it; release never removes another owner's lease.
+	// renew only extends a lease owner still holds unexpired: once the
+	// lease expired it fails with ErrLeaseHeld, even when no other owner
+	// took it since. release never removes another owner's lease.
 	Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (renew func(context.Context) error, release func(context.Context) error, err error)
 }
 

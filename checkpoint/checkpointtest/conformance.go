@@ -56,6 +56,7 @@ func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointe
 		{"LeaseReleaseAndReacquire", leaseRelease},
 		{"LeaseExpires", leaseExpires},
 		{"LeaseRenewAfterTakeover", leaseRenewAfterTakeover},
+		{"LeaseRenewAfterExpiryFails", leaseRenewAfterExpiry},
 		{"LeasePerThread", leasePerThread},
 	}
 	for _, tc := range leaseCases {
@@ -548,6 +549,26 @@ func leaseRenewAfterTakeover(t *testing.T, l checkpoint.Leaser) {
 	defer releaseB(ctx)
 	if err := renew(ctx); !errors.Is(err, checkpoint.ErrLeaseHeld) {
 		t.Fatalf("renew after another owner took the lease: got %v, want ErrLeaseHeld", err)
+	}
+}
+
+// leaseRenewAfterExpiry checks that renew only extends a lease that is still
+// valid: once it expired, another owner may have taken and released it, so
+// renewing must not silently take it again.
+func leaseRenewAfterExpiry(t *testing.T, l checkpoint.Leaser) {
+	renew, release, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release(ctx)
+	time.Sleep(120 * time.Millisecond)
+	if err := renew(ctx); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+		t.Fatalf("renew after expiry: got %v, want ErrLeaseHeld", err)
+	}
+	if _, releaseB, err := l.Acquire(ctx, "t", "b", leaseTTL); err != nil {
+		t.Fatalf("Acquire after the failed renew: %v", err)
+	} else {
+		releaseB(ctx)
 	}
 }
 

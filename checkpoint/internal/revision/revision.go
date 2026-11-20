@@ -81,7 +81,7 @@ func (l *Leases) Acquire(ctx context.Context, threadID, owner string, ttl time.D
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return l.take(threadID, owner, ttl)
+		return l.extend(threadID, owner, ttl)
 	}
 	release := func(context.Context) error {
 		l.mu.Lock()
@@ -105,6 +105,21 @@ func (l *Leases) take(threadID, owner string, ttl time.Duration) error {
 	}
 	if l.leases == nil {
 		l.leases = make(map[string]lease)
+	}
+	l.leases[threadID] = lease{owner: owner, until: now.Add(ttl)}
+	return nil
+}
+
+// extend moves owner's lease to now+ttl only while owner still holds it
+// unexpired. An expired lease is not taken again: another owner may have
+// held and released it since.
+func (l *Leases) extend(threadID, owner string, ttl time.Duration) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := l.clock()
+	cur, ok := l.leases[threadID]
+	if !ok || cur.owner != owner || !now.Before(cur.until) {
+		return fmt.Errorf("%w: thread %q", checkpoint.ErrLeaseHeld, threadID)
 	}
 	l.leases[threadID] = lease{owner: owner, until: now.Add(ttl)}
 	return nil

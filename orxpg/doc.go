@@ -58,10 +58,13 @@
 // # Leases
 //
 // Acquire, renew and release are each one statement and use the database
-// clock, so the clocks of the workers do not matter. Acquire and renew
-// insert the lease or take over a row that the same owner holds or that
-// has expired; when another owner holds an unexpired lease they change
-// nothing and return an error wrapping checkpoint.ErrLeaseHeld. Release
+// clock, so the clocks of the workers do not matter. Acquire inserts the
+// lease or takes over a row that the same owner holds or that has expired;
+// when another owner holds an unexpired lease it changes nothing and
+// returns an error wrapping checkpoint.ErrLeaseHeld. Renew only extends a
+// row the owner holds that has not expired, and otherwise returns an error
+// wrapping checkpoint.ErrLeaseHeld: an expired lease is never taken back
+// by renew, since another worker may have held it in between. Release
 // deletes the row only while the owner still holds it. A lease row left by
 // a crashed worker stays until its thread's lease is next taken.
 //

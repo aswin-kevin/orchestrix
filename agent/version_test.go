@@ -232,3 +232,112 @@ func TestForkIsCreateOnly(t *testing.T) {
 		t.Fatalf("Fork onto an existing thread: %v", err)
 	}
 }
+
+// hangingLeaser is a memory checkpointer whose chosen lease calls block
+// until their context is done, like a call on a black-holed connection.
+type hangingLeaser struct {
+	checkpoint.Checkpointer
+	hangAcquire, hangRenew, hangRelease bool
+	renews                              atomic.Int32
+	releaseErr                          chan error
+}
+
+func (l *hangingLeaser) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (func(context.Context) error, func(context.Context) error, error) {
+	if l.hangAcquire {
+		<-ctx.Done()
+		return nil, nil, ctx.Err()
+	}
+	renew := func(ctx context.Context) error {
+		l.renews.Add(1)
+		if l.hangRenew {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}
+	release := func(ctx context.Context) error {
+		var err error
+		if l.hangRelease {
+			<-ctx.Done()
+			err = ctx.Err()
+		}
+		l.releaseErr <- err
+		return err
+	}
+	return renew, release, nil
+}
+
+// shortLeaseCalls bounds lease calls at d for the rest of the test.
+func shortLeaseCalls(t *testing.T, d time.Duration) {
+	prev := leaseCallTimeout
+	leaseCallTimeout = func(time.Duration) time.Duration { return d }
+	t.Cleanup(func() { leaseCallTimeout = prev })
+}
+
+func TestLeaseCallTimeout(t *testing.T) {
+	for _, tc := range []struct{ ttl, want time.Duration }{
+		{time.Second, 5 * time.Second},
+		{10 * time.Second, 5 * time.Second},
+		{30 * time.Second, 15 * time.Second},
+	} {
+		if got := leaseCallTimeout(tc.ttl); got != tc.want {
+			t.Errorf("leaseCallTimeout(%v) = %v, want %v", tc.ttl, got, tc.want)
+		}
+	}
+}
+
+func TestLeaseAcquireHangBounded(t *testing.T) {
+	shortLeaseCalls(t, 50*time.Millisecond)
+	cp := &hangingLeaser{Checkpointer: cpmemory.New(), hangAcquire: true}
+	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"}), Checkpointer: cp, LeaseTTL: time.Second})
+	done := make(chan *Final, 1)
+	go func() {
+		_, final := collect(t, a.Run(context.Background(), threadInput("go")))
+		done <- final
+	}()
+	select {
+	case final := <-done:
+		if final.Reason != ReasonCheckpointError || !errors.Is(final.Err, context.DeadlineExceeded) {
+			t.Fatalf("final = %+v, want checkpoint_error wrapping DeadlineExceeded", final)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run hung on a blocked lease Acquire")
+	}
+}
+
+func TestLeaseRenewAndReleaseHangBounded(t *testing.T) {
+	shortLeaseCalls(t, 30*time.Millisecond)
+	cp := &hangingLeaser{Checkpointer: cpmemory.New(), hangRenew: true, hangRelease: true, releaseErr: make(chan error, 1)}
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	a := mustNew(t, Config{
+		Provider:     llmtest.New(toolTurn("e1"), llmtest.Turn{Text: "done"}),
+		Tools:        []tool.Tool{blockingTool(started, release)},
+		Checkpointer: cp,
+		LeaseTTL:     9 * time.Millisecond,
+	})
+	done := make(chan *Final, 1)
+	go func() {
+		_, final := collect(t, a.Run(context.Background(), threadInput("go")))
+		done <- final
+	}()
+	<-started
+	deadline := time.Now().Add(5 * time.Second)
+	for cp.renews.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if cp.renews.Load() < 2 {
+		t.Fatal("a hung renew blocked the renewals after it")
+	}
+	close(release)
+	select {
+	case final := <-done:
+		if final.Reason != ReasonCompleted {
+			t.Fatalf("final = %+v, want completed", final)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run hung on a blocked lease renew or release")
+	}
+	if err := <-cp.releaseErr; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("release ended with %v, want DeadlineExceeded", err)
+	}
+}
