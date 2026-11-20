@@ -182,6 +182,12 @@ func (m *Middleware) Name() string { return "tasks" }
 // records of the jobs it stopped show them as stopped.
 func (m *Middleware) Shutdown() { m.jobs.Shutdown(stopWait) }
 
+// Close implements agent.Closer, so Agent.Close stops the jobs: it is
+// Shutdown with the wait cut to ctx's deadline when that comes sooner. It
+// returns an error when a job had not ended by then (ctx's error when ctx
+// ended). Calling it more than once, or after Shutdown, is safe.
+func (m *Middleware) Close(ctx context.Context) error { return m.jobs.Close(ctx, stopWait) }
+
 // WrapTool implements agent.ToolWrapper: it offers background execution to
 // every tool call.
 func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {

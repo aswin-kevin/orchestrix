@@ -232,6 +232,29 @@ func TestShutdownBoundedWithHungHandle(t *testing.T) {
 	f.end() // let the watcher goroutine go
 }
 
+func TestCloseWaitBoundedByContext(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	f := newFake()
+	f.hang = true
+	if _, err := m.Start("t", nil, func() (*fake, error) { return f, nil }); err != nil {
+		t.Fatal(err)
+	}
+	defer f.end() // let the watcher goroutine go
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	begin := time.Now()
+	err := m.Close(ctx, time.Minute)
+	if d := time.Since(begin); d > time.Second {
+		t.Fatalf("Close took %s, want it bounded by the context's deadline", d)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close = %v, want the context's error", err)
+	}
+	if _, err := m.Start("t", nil, func() (*fake, error) { return newFake(), nil }); !errors.Is(err, ErrShutdown) {
+		t.Fatalf("Start after Close: err = %v, want ErrShutdown", err)
+	}
+}
+
 func TestRequestStopAndStop(t *testing.T) {
 	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
 	j, _ := startFake(t, m, "t")

@@ -477,7 +477,7 @@ func TestLiveMCPInProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := m.Close(); err != nil {
+		if err := m.Close(context.Background()); err != nil {
 			t.Errorf("Close: %v", err)
 		}
 	})

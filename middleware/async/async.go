@@ -225,6 +225,14 @@ func (m *Middleware) Name() string { return "async" }
 // tasks it stopped show them as cancelled (as the runner reports them).
 func (m *Middleware) Shutdown() { m.jobs.Shutdown(DefaultStopWait) }
 
+// Close implements agent.Closer, so Agent.Close stops the tasks: it is
+// Shutdown with the wait cut to ctx's deadline when that comes sooner. It
+// returns an error when a task had not ended by then (ctx's error when ctx
+// ended). Calling it more than once, or after Shutdown, is safe.
+func (m *Middleware) Close(ctx context.Context) error {
+	return m.jobs.Close(ctx, DefaultStopWait)
+}
+
 // BeforeModel implements agent.BeforeModel: every task of the run's thread
 // that ended since the last turn is announced with one user message (see
 // notification). Records of other threads are left alone, so a run never

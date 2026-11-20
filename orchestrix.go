@@ -1,6 +1,7 @@
 package orchestrix
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -41,7 +42,7 @@ import (
 // ready llm.Provider instead, call NewWithProvider.
 //
 // Without WithBackend, WithBackendFactory or WithShell, each thread gets its
-// own in-memory workspace; it lives as long as the agent and, with
+// own in-memory workspace; it lives until Agent.Close and, with
 // WithCheckpointer, is saved with the thread. A run with an empty ThreadID
 // gets a fresh, unshared workspace that is dropped when the run ends. WithMount routes path prefixes
 // to other backends on top of any of these, for example memory.DefaultDir to a
@@ -126,7 +127,9 @@ func (s *settings) build() agent.Config {
 	case s.shell != nil:
 		s.useShell(&cfg)
 	case cfg.Backend == nil && cfg.BackendFactory == nil:
-		cfg.BackendFactory = newThreadMemoryFactory(mount)
+		threads := newThreadMemory(mount)
+		cfg.BackendFactory = threads.backend
+		cfg.OnClose = append(cfg.OnClose, threads.Close)
 		cfg.SyncWorkspace = true
 		mount = nil // the factory already mounts each thread's backend
 	}
@@ -145,37 +148,59 @@ func (s *settings) build() agent.Config {
 	return cfg
 }
 
-// newThreadMemoryFactory returns a factory that gives every thread id its own
-// in-memory backend and hands the same one back on later calls, so files
-// survive across runs of a thread. A non-nil mount puts the WithMount routes
-// over each one; a checkpoint still snapshots only the in-memory part.
-// Backends are never evicted; hosts with many long-lived threads should
+// threadMemory gives every thread id its own in-memory backend and hands
+// the same one back on later calls, so files survive across runs of a
+// thread. A non-nil mount puts the WithMount routes over each one; a
+// checkpoint still snapshots only the in-memory part. Backends are never
+// evicted while the agent lives; hosts with many long-lived threads should
 // supply their own factory via WithBackendFactory. The empty thread id never
 // shares: each call returns a fresh backend that is not kept, so runs without
-// a ThreadID cannot read each other's files.
-func newThreadMemoryFactory(mount func(backend.Backend) backend.Backend) func(threadID string) backend.Backend {
-	var mu sync.Mutex
-	backends := make(map[string]backend.Backend)
-	return func(threadID string) backend.Backend {
-		if threadID == "" {
-			var b backend.Backend = memory.New()
-			if mount != nil {
-				b = mount(b)
-			}
-			return b
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		b, ok := backends[threadID]
-		if !ok {
-			b = memory.New()
-			if mount != nil {
-				b = mount(b)
-			}
-			backends[threadID] = b
-		}
-		return b
+// a ThreadID cannot read each other's files. Close (an agent.Config.OnClose
+// function) drops every kept backend; later calls get fresh ones that are
+// not kept.
+type threadMemory struct {
+	mount    func(backend.Backend) backend.Backend
+	mu       sync.Mutex
+	backends map[string]backend.Backend // nil once closed
+}
+
+func newThreadMemory(mount func(backend.Backend) backend.Backend) *threadMemory {
+	return &threadMemory{mount: mount, backends: make(map[string]backend.Backend)}
+}
+
+// backend is the agent.Config.BackendFactory.
+func (m *threadMemory) backend(threadID string) backend.Backend {
+	if threadID == "" {
+		return m.fresh()
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.backends == nil {
+		return m.fresh()
+	}
+	b, ok := m.backends[threadID]
+	if !ok {
+		b = m.fresh()
+		m.backends[threadID] = b
+	}
+	return b
+}
+
+// fresh returns a new in-memory backend under the mounts.
+func (m *threadMemory) fresh() backend.Backend {
+	var b backend.Backend = memory.New()
+	if m.mount != nil {
+		b = m.mount(b)
+	}
+	return b
+}
+
+// Close drops every kept backend.
+func (m *threadMemory) Close(context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.backends = nil
+	return nil
 }
 
 func joinModes(modes []permission.Mode) string {

@@ -2,10 +2,13 @@ package orchestrix_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +18,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
+	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
@@ -334,5 +339,109 @@ func TestText(t *testing.T) {
 	in := orchestrix.Text("hello")
 	if len(in.Messages) != 1 || in.Messages[0].Text() != "hello" {
 		t.Errorf("Text = %+v", in)
+	}
+}
+
+// stoppableProcess is a backend.Process that runs until it is stopped.
+type stoppableProcess struct {
+	done chan struct{}
+	once sync.Once
+}
+
+func (p *stoppableProcess) Done() <-chan struct{} { return p.done }
+func (p *stoppableProcess) Result() (backend.ExecResult, bool) {
+	select {
+	case <-p.done:
+		return backend.ExecResult{ExitCode: -1}, true
+	default:
+		return backend.ExecResult{}, false
+	}
+}
+func (p *stoppableProcess) Output() string { return "" }
+func (p *stoppableProcess) Stop() error    { p.once.Do(func() { close(p.done) }); return nil }
+
+// startingBackend is a memory backend that can start commands; each one runs
+// until it is stopped.
+type startingBackend struct {
+	*memory.Backend
+	mu    sync.Mutex
+	procs []*stoppableProcess
+}
+
+func (b *startingBackend) Execute(context.Context, string, backend.ExecOptions) (backend.ExecResult, error) {
+	return backend.ExecResult{}, nil
+}
+
+func (b *startingBackend) Start(context.Context, string, backend.ExecOptions) (backend.Process, error) {
+	p := &stoppableProcess{done: make(chan struct{})}
+	b.mu.Lock()
+	b.procs = append(b.procs, p)
+	b.mu.Unlock()
+	return p, nil
+}
+
+func TestOrchestrixCloseStopsMCPAndTasks(t *testing.T) {
+	m := connectMCP(t, false)
+	tm := tasks.New(tasks.Config{})
+	b := &startingBackend{Backend: memory.New()}
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e1", Name: filesystem.ToolExecute,
+			Input: map[string]any{"command": "serve", "run_in_background": true}}}},
+		llmtest.Turn{Text: "started"},
+	)
+	a, err := orchestrix.NewWithProvider(p,
+		orchestrix.WithBackend(b),
+		orchestrix.WithTasks(tm),
+		orchestrix.WithMCP(m),
+		orchestrix.WithPermissionMode(permission.ModeBypass),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := orchestrix.Text("start the server")
+	in.ThreadID = "t1"
+	if final := finalOf(t, a, in); final.Reason != agent.ReasonCompleted {
+		t.Fatalf("run: %s (err %v)", final.Reason, final.Err)
+	}
+	b.mu.Lock()
+	procs := slices.Clone(b.procs)
+	b.mu.Unlock()
+	if len(procs) != 1 {
+		t.Fatalf("started %d jobs, want 1", len(procs))
+	}
+	if len(m.DynamicTools()) == 0 {
+		t.Fatal("MCP server offers no tools before Close")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case <-procs[0].Done():
+	default:
+		t.Error("background job still running after Close")
+	}
+	if st := m.Status(); len(st) != 1 || st[0].Connected {
+		t.Errorf("MCP status after Close = %+v, want the server disconnected", st)
+	}
+	if final := finalOf(t, a, in); !errors.Is(final.Err, agent.ErrClosed) {
+		t.Errorf("run after Close: err = %v, want ErrClosed", final.Err)
+	}
+}
+
+func TestOrchestrixCloseDropsThreadWorkspaces(t *testing.T) {
+	a, err := orchestrix.NewWithProvider(llmtest.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := a.Config().BackendFactory
+	before := factory("t1")
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if factory("t1") == before {
+		t.Error("the thread's workspace is still kept after Close")
 	}
 }

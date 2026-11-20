@@ -188,7 +188,7 @@ func Connect(ctx context.Context, servers []ServerConfig) (*Middleware, error) {
 	}
 	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
-		_ = m.Close()
+		m.closeAll()
 		return nil, err
 	}
 	if slices.ContainsFunc(m.servers, func(s *serverConn) bool { return s.client != nil && s.client.HasResources() }) {
@@ -233,8 +233,29 @@ func (m *Middleware) HasHiddenTools() bool {
 }
 
 // Close closes every server connection and waits for pending tool-list
-// refreshes. It is idempotent.
-func (m *Middleware) Close() error {
+// refreshes. It implements agent.Closer, so Agent.Close calls it. It is
+// idempotent and safe for concurrent use. When ctx ends first, Close returns
+// ctx.Err() and the closing goes on in the background.
+func (m *Middleware) Close(ctx context.Context) error {
+	if ctx.Done() == nil {
+		m.closeAll()
+		return m.closeErr
+	}
+	done := make(chan struct{})
+	go func() {
+		m.closeAll()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return m.closeErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// closeAll closes every server once and records the joined errors.
+func (m *Middleware) closeAll() {
 	m.closeOnce.Do(func() {
 		var errs []error
 		for _, s := range m.servers {
@@ -242,7 +263,6 @@ func (m *Middleware) Close() error {
 		}
 		m.closeErr = errors.Join(errs...)
 	})
-	return m.closeErr
 }
 
 // instructionsTag is the element that frames a server's instructions in

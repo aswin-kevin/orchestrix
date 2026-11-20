@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"sync"
+	"sync/atomic"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/checkpoint"
@@ -17,8 +19,8 @@ import (
 )
 
 // Agent runs the model/tool loop described by a Config. It is immutable after
-// New and safe for concurrent Runs; everything a run changes lives in that
-// run's State.
+// New, apart from being closed (Close), and safe for concurrent Runs;
+// everything a run changes lives in that run's State.
 type Agent struct {
 	cfg Config
 	// logger is Config.Logger, or a discarding logger when that is nil.
@@ -34,6 +36,11 @@ type Agent struct {
 	// outputPrompt is the system segment built from Config.OutputSchema,
 	// "" when there is none; see output.go.
 	outputPrompt string
+
+	// closed is set by Close; runs started afterwards do not start.
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Input starts a run. Its fields override, for this run only, what the
@@ -133,6 +140,9 @@ func (a *Agent) Config() Config {
 // When in.State holds a run that ended interrupted, Run abandons that
 // interrupt and starts afresh: the model sees the calls it left unanswered
 // as interrupted. Use Resume to continue it instead.
+//
+// After Close, the stream is a single KindFinal with ReasonInternalError
+// wrapping ErrClosed.
 func (a *Agent) Run(ctx context.Context, in Input) iter.Seq2[Event, error] {
 	return a.stream(ctx, in, nil)
 }
@@ -149,6 +159,10 @@ func (a *Agent) name(in Input) string {
 // is set, and streams its events as described on Run.
 func (a *Agent) stream(ctx context.Context, in Input, resume *resumption) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
+		if a.closed.Load() {
+			yield(a.closedEvent(in), ErrClosed)
+			return
+		}
 		ctx, cancel := context.WithCancel(ctx)
 		r := a.newRun(ctx, in, resume)
 		go r.drive(in.Messages)
@@ -200,6 +214,7 @@ func cloneConfig(cfg Config) Config {
 	cfg.System = slices.Clone(cfg.System)
 	cfg.Tools = slices.Clone(cfg.Tools)
 	cfg.Middleware = slices.Clone(cfg.Middleware)
+	cfg.OnClose = slices.Clone(cfg.OnClose)
 	cfg.Rules.Allow = slices.Clone(cfg.Rules.Allow)
 	cfg.Rules.Ask = slices.Clone(cfg.Rules.Ask)
 	cfg.Rules.Deny = slices.Clone(cfg.Rules.Deny)

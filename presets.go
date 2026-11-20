@@ -40,6 +40,9 @@ type shellSpec struct {
 // WithCheckpointer saves every thread's state with c after each state change,
 // so a conversation can be continued in another process with Agent.Thread.
 // With the default workspace, the thread's files are saved along with it.
+// Agent.Close closes c when it implements agent.Closer; a checkpointer on a
+// connection pool the host passed in (orxpg, for instance) leaves the pool
+// to the host.
 func WithCheckpointer(c checkpoint.Checkpointer) Option {
 	return func(s *settings) { s.cfg.Checkpointer = c }
 }
@@ -118,9 +121,9 @@ func WithShell(root string, opts shell.Options) Option {
 // WithTasks lets execute run commands in the background and adds the tools to
 // follow them. It needs a backend that can start commands (a
 // backend.Starter): WithShell provides one, and so does a sandbox built with
-// sandbox.NewStarter, passed with WithBackend or from WithBackendFactory. The
-// host keeps m and calls its Shutdown when done, to stop jobs
-// still running.
+// sandbox.NewStarter, passed with WithBackend or from WithBackendFactory.
+// Agent.Close stops the jobs still running (m is an agent.Closer); a host
+// that does not close the agent calls m.Shutdown instead.
 func WithTasks(m *tasks.Middleware) Option {
 	return func(s *settings) { s.tasks = m }
 }
@@ -320,8 +323,8 @@ func WithSkills(cfg skills.Config) Option {
 }
 
 // WithMCP offers the tools, resources and instructions of the MCP servers m
-// is connected to. The host connects with mcp.Connect and calls m.Close when
-// done. A server configured with Defer or Gated also adds the deferred
+// is connected to. The host connects with mcp.Connect; Agent.Close closes m
+// (an agent.Closer), or the host calls m.Close itself. A server configured with Defer or Gated also adds the deferred
 // middleware, so its tools are found with search_tools or unlocked first.
 func WithMCP(m *mcp.Middleware) Option {
 	return func(s *settings) {

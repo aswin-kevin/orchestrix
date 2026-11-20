@@ -142,6 +142,10 @@ func (a *Agent) Resume(ctx context.Context, threadID string, s *state.State, dec
 // the stream is a single KindFinal with ReasonInvalidResume.
 func (a *Agent) ResumeWith(ctx context.Context, in Input, decisions []Decision) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
+		if a.closed.Load() {
+			yield(a.closedEvent(in), ErrClosed)
+			return
+		}
 		resume, err := a.newResumption(in, decisions)
 		if err != nil {
 			final := &Final{Reason: ReasonInvalidResume, Err: err, State: in.State, Version: in.Version}

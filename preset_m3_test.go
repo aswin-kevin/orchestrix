@@ -48,7 +48,7 @@ func connectMCP(t *testing.T, gated bool) *mcp.Middleware {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = m.Close() })
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
 	return m
 }
 

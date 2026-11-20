@@ -864,7 +864,7 @@ _, _ = a, err
 
 ## MCP
 
-`mcp.Connect` starts or dials Model Context Protocol servers and returns a middleware for `WithMCP`. Each server tool becomes a tool named `mcp__<server>__<tool>`, the servers' instructions are added to the system prompt, and servers with resources add `list_mcp_resources` and `read_mcp_resource`. A server that announces a changed tool list is picked up from the next turn. You own the connections: call `Close` when you are done.
+`mcp.Connect` starts or dials Model Context Protocol servers and returns a middleware for `WithMCP`. Each server tool becomes a tool named `mcp__<server>__<tool>`, the servers' instructions are added to the system prompt, and servers with resources add `list_mcp_resources` and `read_mcp_resource`. A server that announces a changed tool list is picked up from the next turn. You own the connections: call `m.Close(ctx)` when you are done, or `Close` the agent, which closes its MCP, tasks and async middleware too.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -876,7 +876,7 @@ m, err := mcp.Connect(ctx, []mcp.ServerConfig{
 if err != nil {
 	log.Fatal(err)
 }
-defer m.Close() // stops stdio servers and ends HTTP sessions
+defer m.Close(ctx) // stops stdio servers and ends HTTP sessions
 
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithMCP(m),

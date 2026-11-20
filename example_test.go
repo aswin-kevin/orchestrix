@@ -197,7 +197,7 @@ func ExampleWithMCP() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer m.Close() // stops stdio servers and ends HTTP sessions
+	defer m.Close(ctx) // stops stdio servers and ends HTTP sessions
 
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithMCP(m),

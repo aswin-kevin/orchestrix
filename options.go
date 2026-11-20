@@ -99,14 +99,18 @@ func WithoutMiddleware(names ...string) Option {
 
 // WithBackend makes every thread work on b. When b can run commands
 // (backend.Executor, such as a sandbox or shell backend), the agent gets the
-// execute tool. It cannot be combined with WithBackendFactory.
+// execute tool. It cannot be combined with WithBackendFactory. Agent.Close
+// closes b when it implements agent.Closer.
 func WithBackend(b backend.Backend) Option {
 	return func(s *settings) { s.cfg.Backend = b }
 }
 
 // WithBackendFactory builds one backend per thread id, for hosts that isolate
 // threads or need to control backend lifetime. It cannot be combined with
-// WithBackend.
+// WithBackend. Agent.Close does not close the backends f builds, nor what
+// f draws them from: the host releases those itself (an orxdocker Manager,
+// for instance, with its own Close), or adds a function to
+// agent.Config.OnClose that does.
 func WithBackendFactory(f func(threadID string) backend.Backend) Option {
 	return func(s *settings) { s.cfg.BackendFactory = f }
 }

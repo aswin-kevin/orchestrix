@@ -450,7 +450,7 @@ func TestCloseWaitsForRefresh(t *testing.T) {
 	}
 	srv.AddTool(ToolInfo{Name: "x"}, nil)
 	waitFor(t, "refresh in flight", func() bool { return gate.lists.Load() == 2 })
-	_ = m.Close()
+	_ = m.Close(context.Background())
 	if gate.returned.Load() != 1 {
 		t.Fatal("Close returned before the in-flight refresh ended")
 	}

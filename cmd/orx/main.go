@@ -290,7 +290,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 			return fail(code, "mcp: %v", err)
 		}
 		cleanups = append(cleanups, func() {
-			if err := m.Close(); err != nil {
+			if err := m.Close(context.Background()); err != nil {
 				fmt.Fprintln(stderr, "orx: mcp:", termsafe.String(err.Error()))
 			}
 		})

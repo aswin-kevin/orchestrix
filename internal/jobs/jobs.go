@@ -408,13 +408,48 @@ func (m *Manager[H]) StopAndForget(threadID string, ids []string, wait time.Dura
 	}
 }
 
+// ErrNotEnded is returned by Close when some job had not ended by the end
+// of its wait.
+var ErrNotEnded = errors.New("jobs: some jobs did not end in time")
+
+// Close is Shutdown for a context: it waits up to wait, or until ctx's
+// deadline when that comes first, and not at all when ctx is already done.
+// It returns nil when every job ended in time; otherwise ctx.Err() when ctx
+// is done, context.DeadlineExceeded when ctx's deadline cut the wait short,
+// else ErrNotEnded.
+func (m *Manager[H]) Close(ctx context.Context, wait time.Duration) error {
+	cut := false
+	if deadline, ok := ctx.Deadline(); ok {
+		if left := time.Until(deadline); left < wait {
+			wait, cut = left, true
+		}
+	}
+	if ctx.Err() != nil {
+		wait = 0
+	}
+	if m.shutdown(max(wait, 0)) {
+		return nil
+	}
+	switch {
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case cut:
+		return context.DeadlineExceeded
+	}
+	return ErrNotEnded
+}
+
 // Shutdown refuses new jobs, stops every job and waits for them, up to wait.
 // It first waits, within the same wait, for the starts in flight: each one
 // commits its job and stops it at once (see Start), so it is stopped and
 // waited for with the others. A start still in flight when wait passes stops
 // its job as it commits, after Shutdown returned. The entries are kept, so
 // records refreshed afterwards show the jobs as stopped rather than lost.
-func (m *Manager[H]) Shutdown(wait time.Duration) {
+func (m *Manager[H]) Shutdown(wait time.Duration) { m.shutdown(wait) }
+
+// shutdown is Shutdown; it reports whether every job and start ended within
+// wait.
+func (m *Manager[H]) shutdown(wait time.Duration) bool {
 	deadline := time.Now().Add(wait)
 	m.mu.Lock()
 	m.closed = true
@@ -442,5 +477,7 @@ func (m *Manager[H]) Shutdown(wait time.Duration) {
 	// WaitGroup forbids, so the watchers are waited for only when none is.
 	if stopAll(list, time.Until(deadline)) && startsDone {
 		m.watchers.Wait()
+		return true
 	}
+	return false
 }

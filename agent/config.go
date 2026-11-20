@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -111,8 +112,14 @@ type Config struct {
 	// checkpoint.Leaser.
 	LeaseTTL time.Duration
 
+	// OnClose functions release resources the agent does not otherwise own,
+	// such as the backends a BackendFactory built. Agent.Close calls them
+	// last, in reverse order, with its context; see Agent.Close.
+	OnClose []func(ctx context.Context) error
+
 	// Logger receives the errors the loop recovers from or drops, at Warn:
-	// lease release and renew errors, recovered panics in RunWrapper end
+	// errors returned while closing (Agent.Close), lease release and renew
+	// errors, recovered panics in RunWrapper end
 	// functions and lease calls, dynamic tools that were skipped, and failed
 	// checkpoint saves. A panic that ends a run is logged at Error. Records
 	// carry thread_id and agent attributes. The loop adds no message or

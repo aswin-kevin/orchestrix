@@ -41,7 +41,7 @@ func connectMiddleware(t *testing.T, servers ...ServerConfig) *Middleware {
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	t.Cleanup(func() { _ = m.Close() })
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
 	return m
 }
 
@@ -408,7 +408,7 @@ func TestServerConfigValidation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if m, err := Connect(context.Background(), tc.servers); err == nil {
-				_ = m.Close()
+				_ = m.Close(context.Background())
 				t.Fatal("Connect succeeded, want a validation error")
 			}
 		})
@@ -423,10 +423,10 @@ func TestCloseIsIdempotent(t *testing.T) {
 	if m.Name() != "mcp" {
 		t.Fatalf("Name = %q", m.Name())
 	}
-	if err := m.Close(); err != nil {
+	if err := m.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Close(); err != nil {
+	if err := m.Close(context.Background()); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
 }

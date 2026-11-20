@@ -103,7 +103,9 @@ const (
 	// provider, a ModelWrapper, the Checkpointer or its lease) panicked.
 	// Final.Err is a *PanicError. The end-of-run save is still attempted,
 	// the lease released and the RunWrappers' end functions called;
-	// Final.Version is the version of the last save that succeeded.
+	// Final.Version is the version of the last save that succeeded. It is
+	// also the reason of a run started after Agent.Close: Final.Err wraps
+	// ErrClosed, nothing ran and Final.State is the input State.
 	ReasonInternalError TerminalReason = "internal_error"
 )
 
@@ -147,7 +149,7 @@ type Event struct {
 	// failed carry the number of the turn it attempted, which can exceed
 	// Final.Turns: that counts recorded replies. A resumed run numbers its
 	// own turns from 1. KindFinal of a run that never started (ReasonBusy,
-	// ReasonInvalidResume) has Turn 0.
+	// ReasonInvalidResume, or a run after Agent.Close) has Turn 0.
 	Turn int
 	// Time is when the run emitted the event. An event forwarded from a
 	// nested run keeps the time it had there.
