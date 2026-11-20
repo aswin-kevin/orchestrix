@@ -1,0 +1,14 @@
+{
+  "trials_each": 5,
+  "scenarios": {
+    "approval-cross-process": 1,
+    "background-job": 1,
+    "budget-time": 1,
+    "budget-tokens": 1,
+    "budget-turns": 1,
+    "concurrent-threads": 1,
+    "denial": 1,
+    "prompt-injection": 1,
+    "shell-parsing": 1
+  }
+}
