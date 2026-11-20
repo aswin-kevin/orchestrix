@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/jobs"
 )
 
 // fakeProcess is a backend.Process that ends when stopped.
@@ -76,7 +77,19 @@ func TestStartJobRefusedWhenShutdownDuringStart(t *testing.T) {
 	<-s.entered
 	shut := make(chan struct{})
 	go func() { mg.Shutdown(time.Second); close(shut) }()
-	time.Sleep(20 * time.Millisecond) // let Shutdown refuse new jobs
+	// Wait until Shutdown refuses new jobs, so the start commits after it. A
+	// probe whose start fails registers nothing while Shutdown has not begun.
+	probe := errors.New("probe")
+	for {
+		_, err := mg.Start("other", nil, func() (*process, error) { return nil, probe })
+		if errors.Is(err, jobs.ErrShutdown) {
+			break
+		}
+		if !errors.Is(err, probe) {
+			t.Fatalf("probe start: %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	close(s.release)
 	<-shut
 	r := <-out

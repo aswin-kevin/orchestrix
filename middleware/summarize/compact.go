@@ -186,11 +186,14 @@ func boundedRender(msgs []llm.Message, limit int) string {
 }
 
 // cutFront returns the last limit bytes of s, at a rune boundary, starting
-// with "…" when s was longer.
+// with "…" when s was longer; empty when limit cannot hold the mark.
 func cutFront(s string, limit int) string {
 	const mark = "…"
 	if len(s) <= limit {
 		return s
+	}
+	if limit < len(mark) {
+		return ""
 	}
 	cut := len(s) - (limit - len(mark))
 	for cut < len(s) && !utf8.RuneStart(s[cut]) {

@@ -14,6 +14,9 @@ type fake struct {
 	done chan struct{}
 	hang bool
 	once sync.Once
+	// onStop, when set, runs on the first Stop before the handle ends.
+	onStop func()
+	stop   sync.Once
 }
 
 func newFake() *fake { return &fake{done: make(chan struct{})} }
@@ -21,6 +24,9 @@ func newFake() *fake { return &fake{done: make(chan struct{})} }
 func (f *fake) Done() <-chan struct{} { return f.done }
 func (f *fake) end()                  { f.once.Do(func() { close(f.done) }) }
 func (f *fake) Stop() error {
+	if f.onStop != nil {
+		f.stop.Do(f.onStop)
+	}
 	if !f.hang {
 		f.end()
 	}
@@ -481,4 +487,29 @@ func TestPanickingStartRollsBack(t *testing.T) {
 		t.Fatalf("id = %s", j.ID)
 	}
 	m.Shutdown(time.Second) // returns at once: no start is left in flight
+}
+
+// TestStartCommittingAfterShutdownTimedOut commits a start after Shutdown
+// gave up waiting for it, just as Shutdown stops the other jobs and would
+// wait for their watchers: the commit adds a watcher, which must not race
+// a WaitGroup Wait.
+func TestStartCommittingAfterShutdownTimedOut(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	f := newFake()
+	entered, release, out := blockedStart(m, "b", f)
+	waitFor(t, entered)
+	a := newFake()
+	a.onStop = func() { close(release) } // B commits as Shutdown stops A
+	if _, err := m.Start("a", nil, func() (*fake, error) { return a, nil }); err != nil {
+		t.Fatal(err)
+	}
+	m.Shutdown(20 * time.Millisecond)
+	o := <-out
+	if o.err != nil || !o.j.Stopped() {
+		t.Fatalf("late start = %+v", o)
+	}
+	waitFor(t, f.done)
+	exited := make(chan struct{})
+	go func() { m.watchers.Wait(); close(exited) }()
+	waitFor(t, exited)
 }

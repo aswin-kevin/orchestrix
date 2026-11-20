@@ -421,9 +421,11 @@ func (m *Manager[H]) Shutdown(wait time.Duration) {
 	m.mu.Unlock()
 	started := make(chan struct{})
 	go func() { m.starting.Wait(); close(started) }()
-	timer := time.NewTimer(wait)
+	timer := time.NewTimer(time.Until(deadline))
+	startsDone := false
 	select {
 	case <-started:
+		startsDone = true
 	case <-timer.C:
 	}
 	timer.Stop()
@@ -436,7 +438,9 @@ func (m *Manager[H]) Shutdown(wait time.Duration) {
 		}
 	}
 	m.mu.Unlock()
-	if stopAll(list, time.Until(deadline)) {
+	// A start still in flight would Add a watcher while Wait runs, which
+	// WaitGroup forbids, so the watchers are waited for only when none is.
+	if stopAll(list, time.Until(deadline)) && startsDone {
 		m.watchers.Wait()
 	}
 }

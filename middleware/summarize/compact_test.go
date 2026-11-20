@@ -87,3 +87,14 @@ func TestBoundedRenderCutsOversizedMessage(t *testing.T) {
 		t.Fatalf("a cut message does not say so: %.20q", body)
 	}
 }
+
+func TestCutFrontTinyLimit(t *testing.T) {
+	for limit := range len("…") {
+		if got := cutFront("abcdef", limit); got != "" {
+			t.Fatalf("cutFront(limit %d) = %q", limit, got)
+		}
+	}
+	if got := cutFront("abcdef", 4); got != "…f" {
+		t.Fatalf("cutFront(limit 4) = %q", got)
+	}
+}
