@@ -164,6 +164,8 @@ orchestrix.New("openai-responses:gpt-4o")
 
 Decision-model formats (`systemone`, `openai-decisions`) are listed under "Decision models".
 
+**Anthropic on recent models.** The Anthropic adapter's wire changes in this release are covered by unit tests but have not been verified live against current models. `Thinking: "enabled"` sends a fixed `budget_tokens` budget, which recent models reject: use `"adaptive"`. Some recent models also reject `"disabled"`, and recent models reject a non-default `temperature` or `top_p` (the adapter sends `top_p` never and `temperature` only when `llm.Request.Temperature` is set), so leave the temperature unset for them.
+
 Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. For full control (proxy, headers, retries, rate limits, the stream idle timeout), build an `llm.Config`, create a provider with `llm.New`, and pass it to `orchestrix.NewWithProvider` instead.
 
 ```go
@@ -255,7 +257,7 @@ Behaviour:
 Two limits are not handled for you:
 
 - **Context window.** The agent sizes requests for the primary's profile. A backup with a smaller window answers with prompt-too-long errors, which never trigger a switch. Choose backups whose window is at least the primary's.
-- **Thinking on Anthropic backups.** With extended thinking enabled, Anthropic may reject a history whose last tool-use turn came from another provider and so has no thinking block. Turn thinking off on an Anthropic backup, or use a backup of the same family.
+- **Thinking on Anthropic backups.** With thinking on, Anthropic may reject a history whose last tool-use turn came from another provider and so has no thinking block. Use a backup of the same family as the primary. Turning thinking off on the backup is not a reliable way around it: some recent Anthropic models reject `Thinking: "disabled"` (see "Anthropic on recent models").
 
 See [`fallback`](examples/fallback) for a runnable example.
 

@@ -108,7 +108,11 @@ type Config struct {
 	RateLimit *RateLimit
 
 	// Thinking is the default Request.Thinking for requests that leave it
-	// empty.
+	// empty. For Anthropic, the adapter's wire format has not been verified
+	// live against current models: "enabled" sends a budget_tokens budget,
+	// which recent models reject (use "adaptive"); "disabled" is rejected by
+	// some recent models; and recent models reject a non-default
+	// temperature or top_p.
 	Thinking string
 	// ReasoningEffort is the default Request.ReasoningEffort for requests
 	// that leave it empty.

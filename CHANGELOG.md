@@ -73,6 +73,10 @@ A hardening pass ahead of v1.0.0: security fixes in the permission parser, bound
 - orxotel and subagents treat `token_limit` as a soft stop like `max_turns`.
 - `web_fetch` markdown: cells of tables nested up to four deep are converted as markdown and keep their links (deeper ones are plain text), and a table row that reaches the output cap keeps the cells rendered so far instead of being dropped.
 
+### Known limitations
+
+- The Anthropic adapter's wire changes in this release are covered by unit tests but not verified live against current models. `Thinking: "enabled"` sends a `budget_tokens` budget, which recent models reject: use `"adaptive"`. Some recent models reject `"disabled"`, and recent models reject a non-default `temperature` or `top_p`. The README no longer suggests turning thinking off on an Anthropic fallback backup.
+
 ### Modules and release
 
 - After this release is tagged as the core `v0.8.0`, the satellite modules move their core requirement from `v0.7.0` to `v0.8.0` and are tagged `orxotel/v0.2.0`, `orxpg/v0.2.0` and `orxdocker/v0.2.0`.

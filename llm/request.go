@@ -79,7 +79,8 @@ type Request struct {
 	Stop []string
 
 	// Thinking is "" to inherit the provider default, or "enabled",
-	// "adaptive" or "disabled".
+	// "adaptive" or "disabled". On recent Anthropic models use "adaptive";
+	// see Config.Thinking.
 	Thinking string
 
 	// ReasoningEffort is "" to inherit the provider default.
