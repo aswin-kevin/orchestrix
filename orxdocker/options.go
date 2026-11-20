@@ -44,6 +44,8 @@ const (
 	// DefaultIdleTTL removes a thread's container after this long without
 	// commands.
 	DefaultIdleTTL = 30 * time.Minute
+	// DefaultMaxThreads caps the executors a Manager keeps.
+	DefaultMaxThreads = 1024
 	// DefaultScope is the value of LabelScope when Options.Scope is empty.
 	DefaultScope = "default"
 )
@@ -110,6 +112,13 @@ type Options struct {
 	// this long and none is running; 0 means DefaultIdleTTL and a negative
 	// value keeps containers until Delete or Close.
 	IdleTTL time.Duration
+	// MaxThreads caps the thread executors a Manager keeps; 0 or less means
+	// DefaultMaxThreads. Creating one more evicts the least recently used
+	// executor that runs no command and removes its container (its
+	// workspace is lost; a later command of that thread starts a new one).
+	// When every executor is running a command the cap is exceeded rather
+	// than waiting.
+	MaxThreads int
 	// OpTimeout bounds each command a sandbox file operation sends; 0 means
 	// sandbox.DefaultOpTimeout.
 	OpTimeout time.Duration
@@ -183,6 +192,7 @@ func (o Options) withDefaults() (Options, error) {
 	}
 	o.Timeout = positiveOr(o.Timeout, DefaultTimeout)
 	o.MaxOutputBytes = positiveOr(o.MaxOutputBytes, DefaultMaxOutputBytes)
+	o.MaxThreads = positiveOr(o.MaxThreads, DefaultMaxThreads)
 	if o.IdleTTL == 0 {
 		o.IdleTTL = DefaultIdleTTL
 	}

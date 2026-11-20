@@ -146,25 +146,52 @@ func (c *client) stream(ctx context.Context, method, path string, query url.Valu
 // execStart starts a created exec and returns its multiplexed output
 // stream. The connection is upgraded (hijacked) as the Docker CLI does; a
 // daemon that answers 200 instead streams the same frames in the body.
-// Closing the stream drops the connection; it does not stop the process.
+// ctx bounds the start only: once the daemon answered, the stream outlives
+// it. Closing the stream drops the connection; it does not stop the
+// process.
 func (c *client) execStart(ctx context.Context, id string) (io.ReadCloser, error) {
 	path := "/exec/" + url.PathEscape(id) + "/start"
-	req, err := c.request(ctx, http.MethodPost, path, nil, map[string]bool{"Detach": false, "Tty": false})
+	reqCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stop := context.AfterFunc(ctx, cancel)
+	req, err := c.request(reqCtx, http.MethodPost, path, nil, map[string]bool{"Detach": false, "Tty": false})
 	if err != nil {
+		stop()
+		cancel()
 		return nil, err
 	}
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "tcp")
 	resp, err := c.http.Do(req)
+	if !stop() { // ctx ended during the start
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		cancel()
+		return nil, fmt.Errorf("orxdocker: POST %s: %w", path, context.Cause(ctx))
+	}
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("orxdocker: POST %s: %w", path, err)
 	}
 	switch resp.StatusCode {
 	case http.StatusSwitchingProtocols, http.StatusOK:
-		return resp.Body, nil
+		return &streamBody{ReadCloser: resp.Body, cancel: cancel}, nil
 	}
+	defer cancel()
 	defer resp.Body.Close()
 	return nil, responseError(http.MethodPost, path, resp)
+}
+
+// streamBody releases the request context of a stream when it is closed.
+type streamBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *streamBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.cancel()
+	return err
 }
 
 // Stream types of the multiplexed exec output.

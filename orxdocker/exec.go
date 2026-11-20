@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,6 +24,16 @@ import (
 // killGrace is how long a stopped command's process group gets after
 // SIGTERM before SIGKILL.
 const killGrace = backend.DefaultKillGrace
+
+// hardGrace is how long a command may run past its timeout before its
+// container is removed: by then the in-container kill and the backstop have
+// failed, which only a command that defeated them (it runs as the same user
+// as the wrapper) can cause.
+const hardGrace = 10 * time.Second
+
+// exitWait bounds the wait for an exec to report its exit once its output
+// stream ended.
+const exitWait = 5 * time.Second
 
 // Polling intervals for an exec's state while its output stream is open and
 // after it closed.
@@ -92,6 +103,10 @@ exit 0
 // exitNoPid is signalScript's status when no pid file exists.
 const exitNoPid = 3
 
+// errNoPid reports that a command's pid file never appeared or was removed
+// (by the command itself, which runs as the same user).
+var errNoPid = errors.New("orxdocker: the command's pid file is missing")
+
 // Executor runs commands in one thread's container; it implements
 // backend.Executor and backend.Starter. The container is created on the
 // first command. Paths (ExecOptions.Dir) are paths inside the container;
@@ -110,6 +125,12 @@ const exitNoPid = 3
 // even if the host process is gone. Processes that leave the group (setsid)
 // are not tracked, but cannot leave the container, which is the security
 // boundary.
+//
+// The pid file and the backstop run as the command's user, so a command can
+// defeat them. When the kill cannot end a stopped command within the grace
+// periods, or a command still runs 10 seconds after its timeout, the
+// container is force-removed, ending every command of the thread, and the
+// next command starts with a new container.
 type Executor struct {
 	m      *Manager
 	thread string
@@ -176,6 +197,26 @@ func (e *Executor) forgetIdle(cutoff time.Time) string {
 	old := e.id
 	e.id = ""
 	return old
+}
+
+// usage returns when the executor was last used and whether a command is
+// running.
+func (e *Executor) usage() (time.Time, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.lastUsed, e.active > 0
+}
+
+// evict clears and returns the container id unless a command is running.
+func (e *Executor) evict() (string, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.active > 0 {
+		return "", false
+	}
+	old := e.id
+	e.id = ""
+	return old, true
 }
 
 func (e *Executor) containerID() string {
@@ -252,7 +293,7 @@ func (e *Executor) Execute(ctx context.Context, cmd string, opts backend.ExecOpt
 	case <-p.Done():
 		res, _ := p.Result()
 		return res, ctx.Err()
-	case <-time.After(3 * killGrace):
+	case <-time.After(3 * e.m.killGrace):
 		return backend.ExecResult{Output: p.Output(), ExitCode: -1}, ctx.Err()
 	}
 }
@@ -304,18 +345,23 @@ func (e *Executor) start(ctx context.Context, token string, argv, env []string, 
 	if err != nil {
 		return nil, err
 	}
-	// The stream outlives ctx: cancelling it would only drop the
-	// connection, never stop the command.
-	body, err := e.m.c.execStart(context.WithoutCancel(ctx), execID)
+	// ctx bounds the start only: the stream outlives it.
+	body, err := e.m.c.execStart(ctx, execID)
 	if err != nil {
+		if ctx.Err() != nil {
+			// The daemon may have started the command all the same.
+			go func() { _ = e.signal(id, token, "KILL", nil) }()
+			return nil, err
+		}
 		return nil, e.goneError(id, err)
 	}
 	p := &process{
-		e:      e,
-		token:  token,
-		execID: execID,
-		out:    newCapture(maxOutput),
-		done:   make(chan struct{}),
+		e:         e,
+		container: id,
+		token:     token,
+		execID:    execID,
+		out:       newCapture(maxOutput),
+		done:      make(chan struct{}),
 	}
 	go p.follow(body, timeout)
 	return p, nil
@@ -353,10 +399,20 @@ func (e *Executor) goneError(id string, err error) error {
 	return fmt.Errorf("%w: %w", ErrContainerGone, err)
 }
 
-// execState is the part of GET /exec/{id}/json orxdocker reads.
+// execState is the part of GET /exec/{id}/json orxdocker reads. ExitCode
+// is null until the exec has exited, and Running is false before it starts
+// as well as after it exited.
 type execState struct {
 	Running  bool `json:"Running"`
-	ExitCode int  `json:"ExitCode"`
+	ExitCode *int `json:"ExitCode"`
+}
+
+// exited returns the exit code once the exec has exited.
+func (st execState) exited() (int, bool) {
+	if st.Running || st.ExitCode == nil {
+		return 0, false
+	}
+	return *st.ExitCode, true
 }
 
 func (e *Executor) inspectExec(ctx context.Context, execID string) (execState, error) {
@@ -366,20 +422,21 @@ func (e *Executor) inspectExec(ctx context.Context, execID string) (execState, e
 }
 
 // signal sends sig ("TERM" or "KILL") to the process group of the command
-// recorded under token, through a short exec. It retries while the pid is
-// not recorded yet and done is open, for up to about a second.
-func (e *Executor) signal(token, sig string, done <-chan struct{}) error {
+// recorded under token in container id, through a short exec. It retries
+// while the pid is not recorded and done is open, for up to about a second,
+// then returns errNoPid.
+func (e *Executor) signal(id, token, sig string, done <-chan struct{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), signalTimeout)
 	defer cancel()
 	var err error
 	for range 10 {
 		var code int
-		code, err = e.runQuick(ctx, []string{"/bin/sh", "-c", signalScript, "orx-signal", token, sig})
+		code, err = e.runQuick(ctx, id, []string{"/bin/sh", "-c", signalScript, "orx-signal", token, sig})
 		switch {
 		case err == nil && code == 0:
 			return nil
 		case err == nil && code == exitNoPid:
-			err = nil
+			err = errNoPid
 		case err == nil:
 			err = fmt.Errorf("orxdocker: signal exec exited with status %d", code)
 		}
@@ -392,10 +449,9 @@ func (e *Executor) signal(token, sig string, done <-chan struct{}) error {
 	return err
 }
 
-// runQuick runs a short internal command to completion, discarding its
-// output, and returns its exit status.
-func (e *Executor) runQuick(ctx context.Context, argv []string) (int, error) {
-	id := e.containerID()
+// runQuick runs a short internal command in container id to completion,
+// discarding its output, and returns its exit status.
+func (e *Executor) runQuick(ctx context.Context, id string, argv []string) (int, error) {
 	if id == "" {
 		return 0, ErrContainerGone
 	}
@@ -407,15 +463,21 @@ func (e *Executor) runQuick(ctx context.Context, argv []string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	stop := context.AfterFunc(ctx, func() { _ = body.Close() })
 	_ = demux(body, io.Discard)
+	stop()
 	_ = body.Close()
+	deadline := time.Now().Add(e.m.exitWait)
 	for {
 		st, err := e.inspectExec(ctx, execID)
 		if err != nil {
 			return 0, err
 		}
-		if !st.Running {
-			return st.ExitCode, nil
+		if code, ok := st.exited(); ok {
+			return code, nil
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("orxdocker: internal exec still running %s after its output ended", e.m.exitWait)
 		}
 		select {
 		case <-ctx.Done():
@@ -461,10 +523,11 @@ func newToken() (string, error) {
 
 // process is a started command; it implements backend.Process.
 type process struct {
-	e      *Executor
-	token  string
-	execID string
-	out    *capture
+	e         *Executor
+	container string // the container the command runs in
+	token     string
+	execID    string
+	out       *capture
 
 	timedOut atomic.Bool
 	stopOnce sync.Once
@@ -494,8 +557,10 @@ func (p *process) Result() (backend.ExecResult, bool) {
 func (p *process) Output() string { return p.out.String() }
 
 // Stop sends SIGTERM to the command's group and SIGKILL after
-// backend.DefaultKillGrace if it is still running. Stopping a finished
-// command is a no-op.
+// backend.DefaultKillGrace if it is still running. When the signal cannot be
+// sent, or the command still runs another grace period after SIGKILL, the
+// container is force-removed, which ends every command of the thread.
+// Stopping a finished command is a no-op.
 func (p *process) Stop() error {
 	select {
 	case <-p.done:
@@ -508,30 +573,63 @@ func (p *process) Stop() error {
 	return nil
 }
 
-// stop signals only on its first call.
+// stop acts only on its first call.
 func (p *process) stop() error {
 	p.stopOnce.Do(func() {
-		p.stopErr = p.e.signal(p.token, "TERM", p.done)
-		go func() {
-			for range 5 {
-				select {
-				case <-p.done:
-					return
-				case <-time.After(killGrace):
-				}
-				_ = p.e.signal(p.token, "KILL", p.done) // retried; the backstop covers the rest
+		grace := p.e.m.killGrace
+		err := p.e.signal(p.container, p.token, "TERM", p.done)
+		if err != nil && !errors.Is(err, errNoPid) {
+			// The signal could not be sent: only removing the container is left.
+			if rerr := p.remove(); rerr != nil {
+				p.stopErr = errors.Join(err, rerr)
 			}
+			return
+		}
+		// A missing pid file may only be late, so the kill gets its grace
+		// periods before the container goes.
+		go func() {
+			if p.ended(grace) {
+				return
+			}
+			_ = p.e.signal(p.container, p.token, "KILL", p.done)
+			if p.ended(grace) {
+				return
+			}
+			_ = p.remove() // the hard deadline retries
 		}()
 	})
 	return p.stopErr
 }
 
+// ended reports whether the command ends within d.
+func (p *process) ended(d time.Duration) bool {
+	select {
+	case <-p.done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// remove force-removes the command's container, which kills everything in
+// it, and forgets it so that the next command creates a new one.
+func (p *process) remove() error {
+	m := p.e.m
+	p.e.forget(p.container)
+	m.forgetContainer(p.container)
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	return m.c.removeContainer(ctx, p.container)
+}
+
 // follow copies the output stream into the capture, waits for the exec to
 // exit, and publishes the result. The stream can outlast the exec when a
 // process that left the group holds it open, so the exec's state is polled
-// and the stream is dropped killGrace after the exec exited.
+// and the stream is dropped killGrace after the exec exited. A command
+// still running hardGrace after its timeout has its container removed.
 func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 	defer p.e.release()
+	m := p.e.m
 	copied := make(chan struct{})
 	go func() {
 		defer close(copied)
@@ -542,11 +640,30 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 		_ = p.stop()
 	})
 	defer timer.Stop()
+	var hardErr error // written before removed is closed
+	var fired atomic.Bool
+	removed := make(chan struct{})
+	hard := time.AfterFunc(timeout+m.hardGrace, func() {
+		fired.Store(true)
+		p.timedOut.Store(true)
+		hardErr = fmt.Errorf("orxdocker: the command still ran %s after its timeout; its container was removed", m.hardGrace)
+		if err := p.remove(); err != nil {
+			hardErr = fmt.Errorf("orxdocker: the command still ran %s after its timeout; removing its container: %w", m.hardGrace, err)
+		}
+		close(removed)
+	})
+	defer hard.Stop()
 
-	exitCode, err := p.waitExit(copied)
+	exitCode, err := p.waitExit(copied, removed)
+	if fired.Load() { // whatever waitExit saw, the container is going
+		<-removed
+		err = hardErr
+	} else if errors.Is(err, errStillRunning) {
+		_ = p.stop() // its status is lost; do not leave it running
+	}
 	select {
 	case <-copied:
-	case <-time.After(killGrace):
+	case <-time.After(m.killGrace):
 	}
 	_ = body.Close()
 	<-copied
@@ -564,32 +681,42 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 	close(p.done)
 }
 
-// waitExit polls the exec until it is no longer running and returns its
-// exit code. An error means the state could not be read (for instance the
-// container was removed).
-func (p *process) waitExit(copied <-chan struct{}) (int, error) {
-	failures, closedPolls := 0, 0
+// errStillRunning is waitExit's error for an exec that does not report its
+// exit after its output ended.
+var errStillRunning = errors.New("orxdocker: exec still running")
+
+// waitExit polls the exec until it has exited and returns its exit code. An
+// error means the state could not be read (for instance the container was
+// removed), the exec still ran exitWait after its output ended, or removed
+// was closed.
+func (p *process) waitExit(copied, removed <-chan struct{}) (int, error) {
+	exitWait := p.e.m.exitWait
+	var deadline time.Time // set once the stream ended
+	failures := 0
 	for {
-		switch {
-		case copied != nil:
-			select {
-			case <-copied:
-				copied = nil // the stream ended: the exec is about to report its exit
-			case <-time.After(pollOpen):
-			}
-		case closedPolls < 50:
-			closedPolls++
-			time.Sleep(pollClosed)
-		default:
-			time.Sleep(pollOpen)
+		poll := pollClosed
+		if copied != nil {
+			poll = pollOpen
+		}
+		select {
+		case <-copied: // nil once closed
+			copied = nil // the stream ended: the exec is about to report its exit
+			deadline = time.Now().Add(exitWait)
+		case <-time.After(poll):
+		case <-removed:
+			return -1, errors.New("orxdocker: container removed")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), signalTimeout)
 		st, err := p.e.inspectExec(ctx, p.execID)
 		cancel()
 		switch {
-		case err == nil && !st.Running:
-			return st.ExitCode, nil
 		case err == nil:
+			if code, ok := st.exited(); ok {
+				return code, nil
+			}
+			if copied == nil && time.Now().After(deadline) {
+				return -1, fmt.Errorf("%w %s after its output ended", errStillRunning, exitWait)
+			}
 			failures = 0
 		default:
 			failures++

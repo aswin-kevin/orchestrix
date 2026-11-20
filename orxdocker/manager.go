@@ -50,6 +50,11 @@ type Manager struct {
 
 	stop        chan struct{}
 	janitorDone chan struct{}
+
+	// Waits, changed only by tests.
+	killGrace time.Duration // between SIGTERM, SIGKILL and removing the container
+	hardGrace time.Duration // after a command's timeout before its container is removed
+	exitWait  time.Duration // for an exec to report its exit once its output ended
 }
 
 // NewManager validates opts and returns a Manager. It does not contact the
@@ -71,6 +76,9 @@ func NewManager(opts Options) (*Manager, error) {
 		live:        map[*Executor]struct{}{},
 		stop:        make(chan struct{}),
 		janitorDone: make(chan struct{}),
+		killGrace:   killGrace,
+		hardGrace:   hardGrace,
+		exitWait:    exitWait,
 	}
 	if o.IdleTTL > 0 {
 		go m.janitor()
@@ -103,21 +111,61 @@ func (m *Manager) Backend(threadID string) backend.Backend {
 }
 
 // Executor returns the thread's executor, whose paths (ExecOptions.Dir) are
-// paths inside the container. Most callers want Backend.
+// paths inside the container. Most callers want Backend. Creating one past
+// Options.MaxThreads evicts the least recently used executor that runs no
+// command and removes its container in the background.
 func (m *Manager) Executor(threadID string) *Executor {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if e, ok := m.threads[threadID]; ok {
+		m.mu.Unlock()
 		return e
 	}
-	e := &Executor{m: m, thread: threadID}
+	var evicted string
+	if len(m.threads) >= m.opts.MaxThreads {
+		evicted = m.evictLocked()
+	}
+	e := &Executor{m: m, thread: threadID, lastUsed: time.Now()}
 	sb, err := sandbox.NewStarter(e, sandbox.Options{Root: m.opts.WorkDir, OpTimeout: m.opts.OpTimeout})
 	if err != nil {
+		m.mu.Unlock()
 		panic("orxdocker: sandbox options checked by NewManager: " + err.Error()) // unreachable
 	}
 	e.sb = sb
 	m.threads[threadID] = e
+	m.mu.Unlock()
+	if evicted != "" {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cancel()
+			_ = m.c.removeContainer(ctx, evicted) // a failure leaves it to Reap
+		}()
+	}
 	return e
+}
+
+// evictLocked drops the least recently used executor that runs no command
+// from threads and returns its container id, or "" when it has none. When
+// every executor is busy it evicts nothing and the cap is exceeded. m.mu is
+// held.
+func (m *Manager) evictLocked() string {
+	var lru *Executor
+	var lruUsed time.Time
+	for _, e := range m.threads {
+		used, busy := e.usage()
+		if !busy && (lru == nil || used.Before(lruUsed)) {
+			lru, lruUsed = e, used
+		}
+	}
+	if lru == nil {
+		return ""
+	}
+	id, ok := lru.evict()
+	if !ok { // it started a command meanwhile
+		return ""
+	}
+	delete(m.threads, lru.thread)
+	delete(m.live, lru)
+	return id
 }
 
 // track records that e owns a container. It reports false once the Manager

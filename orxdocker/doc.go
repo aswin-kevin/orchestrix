@@ -20,6 +20,8 @@
 // jobs work with WithTasks. Containers are removed after Options.IdleTTL
 // without commands, by Manager.Delete when a thread is deleted, and by
 // Manager.Close; Manager.Reap clears containers left by a crashed process.
+// A Manager keeps at most Options.MaxThreads executors, evicting the least
+// recently used idle one (and its container) beyond that.
 // Every container carries labels (LabelManaged, LabelScope, LabelThread,
 // LabelCreated) for that and for operators.
 //
@@ -55,6 +57,10 @@
 // SIGTERM to that group through a second exec, then SIGKILL after
 // backend.DefaultKillGrace. A backstop process inside the container kills
 // the group a few seconds after the timeout even if the host process died.
+// The pid file and the backstop run as the command's user, so a hostile
+// command can defeat them; when a stop does not end the command, or it still
+// runs 10 seconds after its timeout, the container is force-removed and the
+// thread's next command starts with a new one.
 // When a command's shell exits, whatever it left running in its group is
 // killed too. Output (stdout and stderr interleaved) is capped while it
 // streams at ExecOptions.MaxOutputBytes, keeping the first and last halves.

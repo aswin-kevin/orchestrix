@@ -370,6 +370,41 @@ func TestDockerTimeoutKillsProcess(t *testing.T) {
 	}
 }
 
+// A command that removes its pid file and kills the backstop defeats the
+// in-container kill; the container is removed instead and the next command
+// gets a new one.
+func TestDockerHostileCommandCannotOutliveTimeout(t *testing.T) {
+	m := newTestManager(t, Options{})
+	e := m.Executor("hostile")
+	before, err := e.ContainerID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	res, err := e.Execute(t.Context(),
+		"sleep 1; rm -f /tmp/.orx-*; pkill -KILL -f orx-backstop; trap '' TERM; sleep 600",
+		backend.ExecOptions{Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second+hardGrace+5*time.Second {
+		t.Fatalf("hostile command held Execute for %s", elapsed)
+	}
+	if !res.TimedOut || res.ExitCode != -1 {
+		t.Fatalf("result = %+v", res)
+	}
+	after, err := e.ContainerID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == before {
+		t.Fatal("the hostile command's container was kept")
+	}
+	if res := run(t, e, "echo fresh", backend.ExecOptions{}); res.Output != "fresh\n" {
+		t.Fatalf("next command: %+v", res)
+	}
+}
+
 func TestDockerExecOptions(t *testing.T) {
 	m := newTestManager(t, Options{})
 	e := m.Executor("opts")
