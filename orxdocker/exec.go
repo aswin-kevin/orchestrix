@@ -65,7 +65,8 @@ const stateDir = "/tmp"
 // $2 seconds, even if the host process died or could not reach the daemon;
 // it is killed as soon as the command ends. When the command's shell exits,
 // whatever it left in its group gets SIGTERM and, after a grace period,
-// SIGKILL, so nothing it spawned outlives it unless it left the group.
+// SIGKILL, so nothing it spawned outlives it unless it left the group or
+// killed this wrapper.
 const wrapper = `f=` + stateDir + `/.orx-$1
 d=$(printf '%s' "$3" | base64 -d; echo x)
 c=$(printf '%s' "$4" | base64 -d; echo x)
@@ -131,13 +132,23 @@ var errNoPid = errors.New("orxdocker: the command's pid file is missing")
 // boundary.
 //
 // The pid file and the backstop run as the command's user, so a command can
-// defeat them. When the kill cannot end a stopped command within the grace
-// periods, when a timed-out or stopped command's kill cannot be confirmed
-// (no signal reached its group and its wrapper died of a signal, or
-// something still holds its output a grace period after it exited), or when
-// a command still runs 10 seconds after its timeout, the container is
+// defeat them. Execute and timeouts stay bounded whatever the command does:
+// when the kill cannot end a stopped command within the grace periods, or a
+// command still runs 10 seconds after its timeout, the container is
 // force-removed, ending every command of the thread and discarding the
-// workspace tmpfs, and the next command starts with a new container.
+// workspace tmpfs, and the next command starts with a new container. The
+// same happens, as a best effort, when a command's exec ends after its
+// timeout or Stop without any signal having reached its group and with its
+// wrapper dead of a signal (status 128 or more, or lost).
+//
+// Processes can still outlive their command inside the thread's container:
+// a command can detach them (setsid, a double fork), or kill its own
+// wrapper before its timeout, after which the exec ends and the command's
+// group is no longer tracked. Such processes stay confined by the
+// container's hardening (no network by default, dropped capabilities,
+// no-new-privileges, process, memory and CPU limits) and end when the
+// container is removed: Manager.Delete, Manager.ReapIdle, the idle TTL,
+// Manager.Close, or a removal above.
 type Executor struct {
 	m      *Manager
 	thread string

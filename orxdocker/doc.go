@@ -58,13 +58,18 @@
 // backend.DefaultKillGrace. A backstop process inside the container kills
 // the group a few seconds after the timeout even if the host process died.
 // The pid file and the backstop run as the command's user, so a hostile
-// command can defeat them; when a stop does not end the command, when a
-// timed-out or stopped command's kill cannot be confirmed, or when it still
-// runs 10 seconds after its timeout, the container is force-removed (ending
-// the thread's other commands and its workspace) and the thread's next
-// command starts with a new one.
+// command can defeat them. Execute and timeouts stay bounded all the same:
+// when a stop does not end the command, or it still runs 10 seconds after
+// its timeout, the container is force-removed (ending the thread's other
+// commands and its workspace) and the thread's next command starts with a
+// new one; as a best effort, so is a timed-out or stopped command whose
+// wrapper died of a signal before any signal reached its group.
 // When a command's shell exits, whatever it left running in its group is
-// killed too. Output (stdout and stderr interleaved) is capped while it
+// killed too. A command can still leave processes running in its thread's
+// container, by detaching them or by killing its wrapper before its
+// timeout. They stay confined by the container's hardening (no network,
+// dropped capabilities, resource limits) and end when the container is
+// removed: Manager.Delete, Manager.ReapIdle, the idle TTL or Manager.Close. Output (stdout and stderr interleaved) is capped while it
 // streams at ExecOptions.MaxOutputBytes, keeping the first and last halves.
 //
 // The daemon is reached over its Unix socket with the standard library
