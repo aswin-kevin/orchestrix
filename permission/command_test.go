@@ -644,3 +644,41 @@ func TestANSICQuoting(t *testing.T) {
 		t.Fatal(`SplitCommand(echo $"x") ok = true, want false`)
 	}
 }
+
+func TestExpansionHidesOptions(t *testing.T) {
+	shell := func(cmd string) Request { return Request{Tool: "execute", Subject: cmd, Shell: true} }
+	for _, tt := range []struct {
+		cmd   string
+		rules []string
+	}{
+		{`git ${u:--c} 'alias.x=!touch pwned' x`, []string{"execute(git:*)"}},
+		{`git {-c,alias.x=!touch\ pwned} x`, []string{"execute(git:*)"}},
+		{`find . -maxdepth 0 ${u:--exec} touch pwned \;`, []string{"execute(find:*)"}},
+		{`echo x | sed ${u:--e} '1e touch pwned'`, []string{"execute(sed:*)", "execute(echo:*)"}},
+		{`tar xf a.tar $OPT`, []string{"execute(tar:*)"}},
+		{`printf ${V:--v} x y`, []string{"execute(printf:*)"}},
+		{`git "$X" status`, []string{"execute(git:*)"}},
+	} {
+		if _, ok := SplitCommand(tt.cmd); ok {
+			t.Errorf("SplitCommand(%q) ok = true, want false", tt.cmd)
+		}
+		pc := Context{Mode: ModeDontAsk}
+		for _, r := range tt.rules {
+			pc.Rules.Allow = append(pc.Rules.Allow, mustRule(t, r))
+		}
+		if got := Evaluate(shell(tt.cmd), pc); got.Behavior == Allow {
+			t.Errorf("Evaluate(%q) = Allow, want not allowed", tt.cmd)
+		}
+	}
+}
+
+func TestExpansionStillVouchedForPlainCommands(t *testing.T) {
+	for _, cmd := range []string{
+		`ls *.go`, `echo "$HOME"`, `cat ~/x`, `echo {a,b}`,
+		`git status`, `git log --oneline -5`, `grep -r foo .`,
+	} {
+		if _, ok := SplitCommand(cmd); !ok {
+			t.Errorf("SplitCommand(%q) ok = false, want true", cmd)
+		}
+	}
+}

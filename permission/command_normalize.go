@@ -193,7 +193,8 @@ func normalizeSegment(words []word) (segments []string, ok bool) {
 		guesses = append(guesses, guessSegments(commandTail(name, words[1:]))...)
 	}
 	ok = ok && vouchableName(name) && !changesShellState(name, words[1:]) &&
-		!runsCommandThroughOptions(name, words[1:])
+		!runsCommandThroughOptions(name, words[1:]) &&
+		!(expansionSensitive[name] && anyExpands(words[1:]))
 	texts := []string{name}
 	for _, w := range words[1:] {
 		texts = append(texts, w.text)
@@ -287,6 +288,26 @@ func changesShellState(name string, args []word) bool {
 			return false
 		}
 		if !strings.HasPrefix(a.text, "--") && strings.IndexByte(a.text[1:], letter) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// expansionSensitive are the commands whose safety depends on reading their
+// options: an argument that expands (${u:--c}, {-c,x}, a glob) can hide one.
+var expansionSensitive = func() map[string]bool {
+	m := map[string]bool{"find": true, "hash": true, "printf": true}
+	for name := range commandOptionChecks {
+		m[name] = true
+	}
+	return m
+}()
+
+// anyExpands reports whether any word may expand into other words.
+func anyExpands(words []word) bool {
+	for _, w := range words {
+		if w.expands {
 			return true
 		}
 	}

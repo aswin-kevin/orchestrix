@@ -49,7 +49,14 @@ type word struct {
 	// or escaped, or notQuoted. Quoting turns a reserved word, a brace or an
 	// assignment back into an ordinary word.
 	quotedAt int
+	// expands is true when the word contains an unquoted '$', brace, glob
+	// character or leading '~', or a '$' inside double quotes: the shell may
+	// turn it into other words (or options), so its text is not what runs.
+	expands bool
 }
+
+// expansionChars expand to other text when unquoted.
+const expansionChars = "${}*?["
 
 // commandParser tokenizes a command line into segments of words. It never
 // stops early: on input it cannot vouch for it sets unsafe and carries on, so
@@ -65,6 +72,8 @@ type commandParser struct {
 	buf      strings.Builder
 	inWord   bool
 	quotedAt int
+	// wordExpands becomes word.expands.
+	wordExpands bool
 }
 
 func (p *commandParser) parse() {
@@ -119,6 +128,9 @@ func (p *commandParser) step() {
 	case c == '\\':
 		p.escaped()
 	default:
+		if strings.IndexByte(expansionChars, c) >= 0 || (c == '~' && !p.inWord) {
+			p.wordExpands = true
+		}
 		p.inWord = true
 		p.buf.WriteByte(c)
 		p.pos++
@@ -148,7 +160,7 @@ func (p *commandParser) endWord() {
 	if !p.inWord {
 		return
 	}
-	w := word{text: p.buf.String(), quotedAt: p.quotedAt}
+	w := word{text: p.buf.String(), quotedAt: p.quotedAt, expands: p.wordExpands}
 	if w.quotedAt == notQuoted && (w.text == "{" || w.text == "}") {
 		p.reject() // a command group
 	}
@@ -156,6 +168,7 @@ func (p *commandParser) endWord() {
 	p.buf.Reset()
 	p.inWord = false
 	p.quotedAt = notQuoted
+	p.wordExpands = false
 }
 
 func (p *commandParser) endSegment() {
@@ -318,6 +331,9 @@ func (p *commandParser) doubleQuoted() {
 			continue
 		case c == '`' || (c == '$' && next == '('):
 			p.reject()
+		}
+		if c == '$' {
+			p.wordExpands = true
 		}
 		p.buf.WriteByte(c)
 		p.pos++
