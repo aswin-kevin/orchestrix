@@ -133,11 +133,11 @@ func (m *middleware) WrapRun(ctx context.Context, info agent.RunInfo) (context.C
 }
 
 // runFailed reports whether a run that ended for reason failed. A run that
-// completed, ran out of turns or time, paused for a decision or was stopped
+// completed, ran out of turns, tokens or time, paused for a decision or was stopped
 // on purpose by a hook did what it was configured to do.
 func runFailed(reason agent.TerminalReason) bool {
 	switch reason {
-	case agent.ReasonCompleted, agent.ReasonMaxTurns, agent.ReasonTimeout,
+	case agent.ReasonCompleted, agent.ReasonMaxTurns, agent.ReasonTokenLimit, agent.ReasonTimeout,
 		agent.ReasonInterrupted, agent.ReasonHookStopped:
 		return false
 	}

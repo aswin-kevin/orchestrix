@@ -131,16 +131,20 @@ type Config struct {
 	// unbounded.
 	MaxDuration time.Duration
 	// MaxTotalTokens is a hard cap on the tokens a run spends; zero means
-	// no cap. The count is the run's own model calls, summed over
-	// Usage.Input, Output, CacheRead and CacheWrite (the run's Final.Usage;
-	// nested subagent runs count only if they are folded into that usage,
-	// and each run counts its own tokens against the cap it inherits). Once
-	// it is reached, the run ends with ReasonTokenLimit instead of taking
-	// another turn. When the reply that reached it contains tool calls they
-	// do not run; the next run on the same State answers them as interrupted
-	// through history repair. If the turn limit is reached on the same turn,
-	// ReasonTokenLimit wins, and no settlement phase follows it. Unlike
-	// TokenBudget, which only nudges the model, this ends the run.
+	// no cap. The count is the sum of Usage.Input, Output, CacheRead and
+	// CacheWrite over the run's own model calls. Nested subagent runs are NOT
+	// counted: their usage is not part of the parent's Final.Usage. Children
+	// inherit the same cap and count their own usage against it, so total
+	// spend with N subagent runs can reach (N+1) times the cap. Usage resets
+	// per run, so a run resumed after an interrupt starts from zero. Once
+	// the cap is reached the run ends with ReasonTokenLimit instead of taking
+	// another turn or continuation. When the reply that reached it contains
+	// tool calls they do not run; the next run on the same State answers
+	// them as interrupted through history repair. A reply without tool calls
+	// that reaches the cap still completes normally. If the turn limit is
+	// reached on the same turn, ReasonTokenLimit wins, and no settlement
+	// phase follows it. Unlike TokenBudget, which only nudges the model,
+	// this ends the run.
 	MaxTotalTokens int
 	// ModelTimeout bounds each model call, including any retries made by
 	// the provider or by model middleware and any extra model calls a

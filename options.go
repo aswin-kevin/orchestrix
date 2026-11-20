@@ -148,7 +148,8 @@ func WithMaxTurns(n int) Option {
 }
 
 // WithMaxTotalTokens sets a hard cap on the tokens one run may spend (see
-// agent.Config.MaxTotalTokens); zero means no cap.
+// agent.Config.MaxTotalTokens); zero means no cap. Nested subagent runs are
+// not counted against it: each run counts only its own tokens.
 func WithMaxTotalTokens(n int) Option {
 	return func(s *settings) { s.cfg.MaxTotalTokens = n }
 }

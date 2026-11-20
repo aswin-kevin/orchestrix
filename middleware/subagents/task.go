@@ -221,7 +221,7 @@ func outcome(ctx context.Context, name string, final *agent.Final) (tool.Result,
 	switch final.Reason {
 	case agent.ReasonCompleted:
 		return tool.Text(finalText(final)), nil
-	case agent.ReasonMaxTurns, agent.ReasonTimeout:
+	case agent.ReasonMaxTurns, agent.ReasonTokenLimit, agent.ReasonTimeout:
 		return tool.Text(fmt.Sprintf("%s\n[subagent stopped: %s]", finalText(final), final.Reason)), nil
 	default:
 		return tool.Errorf("subagent %s failed (%s): %v", name, final.Reason, final.Err), nil

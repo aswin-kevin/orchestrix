@@ -124,7 +124,7 @@ func (b *budget) nudge(limit, output int) (string, bool) {
 func (r *run) escalate(resp *llm.Response) bool {
 	b := r.budget
 	if !r.agent.cfg.EscalateMaxTokens || b.maxTokens > 0 || b.settling() || b.expired() ||
-		resp.StopReason != llm.StopMaxTokens || len(resp.Message.ToolUses()) > 0 {
+		resp.StopReason != llm.StopMaxTokens || len(resp.Message.ToolUses()) > 0 || r.tokenLimitReached() {
 		return false
 	}
 	limit := r.escalatedMaxTokens()

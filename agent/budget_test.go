@@ -542,3 +542,51 @@ func TestTokenLimitBeatsMaxTurnsOnSameTurn(t *testing.T) {
 		t.Fatalf("final = reason %s turns %d, want token_limit at turn 2", final.Reason, final.Turns)
 	}
 }
+
+func TestTokenLimitSkipsEscalation(t *testing.T) {
+	cut := truncatedTurn("cut")
+	cut.Usage = llm.Usage{Output: 1000}
+	p := llmtest.New(cut, llmtest.Turn{Text: "never reached"})
+	a := mustNew(t, Config{Provider: p, MaxTokens: 1_000, EscalateMaxTokens: true, MaxTotalTokens: 1000})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonTokenLimit || p.Calls() != 1 {
+		t.Fatalf("final = %+v after %d calls, want token_limit after 1 (no escalated retry)", final, p.Calls())
+	}
+}
+
+func TestTokenLimitOnBeforeStopContinuation(t *testing.T) {
+	var calls int
+	first := llmtest.Turn{Text: `{"answer":"x"}`, Usage: llm.Usage{Output: 1000}}
+	p := llmtest.New(first, llmtest.Turn{Text: "never reached"})
+	a := mustNew(t, Config{
+		Provider: p, OutputSchema: answerSchema, MaxTotalTokens: 1000,
+		Middleware: []Middleware{stopHook{prompts: []string{"verify"}, calls: &calls}},
+	})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonTokenLimit || final.Output != nil || p.Calls() != 1 {
+		t.Fatalf("final = %+v after %d calls, want token_limit, no output, 1 call", final, p.Calls())
+	}
+}
+
+func TestSettlementPastTokenCapStillEndsMaxTurns(t *testing.T) {
+	// Turn 1 stays under the cap and hits MaxTurns; the settlement call then
+	// crosses the cap, which must not turn the reason into token_limit.
+	t1 := toolTurn("t1")
+	t1.Usage = llm.Usage{Input: 400}
+	settle := llmtest.Turn{Text: "summary", Usage: llm.Usage{Input: 5000}}
+	p := llmtest.New(t1, settle)
+	a := mustNew(t, Config{
+		Provider: p, Tools: []tool.Tool{echoTool()}, MaxTurns: 1, MaxTotalTokens: 1000,
+		Settlement: &Settlement{Prompt: settlementPrompt},
+	})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	if final.Reason != ReasonMaxTurns || final.Text != "summary" || p.Calls() != 2 {
+		t.Fatalf("final = %+v after %d calls, want max_turns with the settlement summary", final, p.Calls())
+	}
+}

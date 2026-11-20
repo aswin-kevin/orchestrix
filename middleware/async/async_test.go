@@ -316,3 +316,12 @@ func TestPromptSegment(t *testing.T) {
 		t.Fatalf("system = %q", sys)
 	}
 }
+
+// TestLocalOutcomeTokenLimit completes a task whose subagent hit its token
+// cap, with the stop noted in its text.
+func TestLocalOutcomeTokenLimit(t *testing.T) {
+	out := localOutcome(&agent.Final{Reason: agent.ReasonTokenLimit, Text: "partial"}, false, false)
+	if out.Status != StatusCompleted || out.Error != "" || out.Text != "partial\n[stopped: token_limit]" {
+		t.Fatalf("outcome = %+v, want completed with a stopped note", out)
+	}
+}

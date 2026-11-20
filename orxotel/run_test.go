@@ -224,4 +224,23 @@ func TestGlobalProviderResolvedPerRun(t *testing.T) {
 	if got := len(spansNamed(rec1, "chat")); got != 2 {
 		t.Errorf("got %d chat spans from the run's provider, want 2", got)
 	}
+
+	t.Run("token_limit", func(t *testing.T) {
+		rec, tp := newRecorder(t)
+		a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
+			{ToolCalls: []llmtest.Call{{ID: "c1", Name: "ls", Input: map[string]string{"path": "/"}}}, Usage: llm.Usage{Input: 100}},
+			{Text: "never reached"},
+		}, orchestrix.WithMaxTotalTokens(100))
+
+		final := drain(t, a.Run(context.Background(), prompt("hi")))
+		if final.Reason != agent.ReasonTokenLimit {
+			t.Fatalf("reason = %s, want token_limit", final.Reason)
+		}
+
+		s := oneSpan(t, rec, "invoke_agent worker")
+		wantAttr(t, s, "orchestrix.run.reason", "token_limit")
+		if s.Status().Code != codes.Unset {
+			t.Errorf("status = %v %q, want unset", s.Status().Code, s.Status().Description)
+		}
+	})
 }

@@ -187,7 +187,7 @@ func localOutcome(final *agent.Final, stopped, timedOut bool) Outcome {
 	switch {
 	case final.Reason == agent.ReasonCompleted:
 		out.Status, out.Text = StatusCompleted, finalText(final)
-	case final.Reason == agent.ReasonMaxTurns || final.Reason == agent.ReasonTimeout:
+	case final.Reason == agent.ReasonMaxTurns || final.Reason == agent.ReasonTokenLimit || final.Reason == agent.ReasonTimeout:
 		out.Status, out.Text = StatusCompleted, fmt.Sprintf("%s\n[stopped: %s]", finalText(final), final.Reason)
 	case final.Reason == agent.ReasonInterrupted:
 		out.Status, out.Error = StatusBlocked, "needs approval for: "+strings.Join(pendingTools(final), ", ")

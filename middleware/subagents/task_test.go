@@ -34,3 +34,14 @@ func TestTaskNilFinal(t *testing.T) {
 		t.Fatalf("settle(nil final) on a cancelled call = %v", err)
 	}
 }
+
+// TestOutcomeTokenLimitIsSoftStop returns the child's text, not an error,
+// when the child hit its token cap.
+func TestOutcomeTokenLimitIsSoftStop(t *testing.T) {
+	final := &agent.Final{Reason: agent.ReasonTokenLimit, Text: "partial"}
+	res, err := outcome(context.Background(), "worker", final)
+	if err != nil || res.IsError || len(res.Content) != 1 ||
+		res.Content[0].Text != "partial\n[subagent stopped: token_limit]" {
+		t.Fatalf("outcome = %+v, %v; want the text with a stopped note", res, err)
+	}
+}
