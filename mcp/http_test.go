@@ -691,3 +691,109 @@ func TestHTTPRefusesRedirects(t *testing.T) {
 		})
 	}
 }
+
+// fakeClock is a settable clock for a handler's session expiry.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
+// serveWithClock serves s's handler with its clock replaced by clock.
+func serveWithClock(t *testing.T, s *Server, opts HandlerOptions, clock *fakeClock) *httptest.Server {
+	t.Helper()
+	h := s.Handler(opts).(*httpHandler)
+	h.now = clock.Now
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestUninitializedSessionsEvicted(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	ts := serveWithClock(t, newTestServer(nil), HandlerOptions{MaxSessions: 4}, clock)
+	for i := range 4 {
+		if status, sid := rawInitialize(t, ts.URL, initializeBody); status != http.StatusOK || sid == "" {
+			t.Fatalf("initialize %d: status %d, id %q", i, status, sid)
+		}
+	}
+	if status, _ := rawInitialize(t, ts.URL, initializeBody); status != http.StatusServiceUnavailable {
+		t.Fatalf("5th initialize while the others are fresh = %d, want 503", status)
+	}
+	clock.advance(pendingSessionTTL)
+	if status, sid := rawInitialize(t, ts.URL, initializeBody); status != http.StatusOK || sid == "" {
+		t.Errorf("initialize once the uninitialized sessions are stale: status %d, id %q; want 200", status, sid)
+	}
+}
+
+func TestInitializedSessionsKeepTheirSlots(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	ts := serveWithClock(t, newTestServer(nil), HandlerOptions{MaxSessions: 4}, clock)
+	for i := range 4 {
+		status, sid := rawInitialize(t, ts.URL, initializeBody)
+		if status != http.StatusOK || sid == "" {
+			t.Fatalf("initialize %d: status %d, id %q", i, status, sid)
+		}
+		if got := rawPost(t, ts.URL, sid, `{"jsonrpc":"2.0","method":"notifications/initialized"}`, nil); got != http.StatusAccepted {
+			t.Fatalf("initialized %d = %d, want 202", i, got)
+		}
+	}
+	clock.advance(2 * pendingSessionTTL) // still far below the idle timeout
+	if status, _ := rawInitialize(t, ts.URL, initializeBody); status != http.StatusServiceUnavailable {
+		t.Errorf("5th initialize with 4 active sessions = %d, want 503", status)
+	}
+}
+
+// goroutinesIn counts the goroutines whose stack mentions fn.
+func goroutinesIn(fn string) int {
+	buf := make([]byte, 1<<20)
+	return strings.Count(string(buf[:runtime.Stack(buf, true)]), fn)
+}
+
+func TestSSEReplyClosedOnTimeout(t *testing.T) {
+	blocked := make(chan error, 1)
+	rec, ts := serveHTTP(t, newTestServer(blocked), HandlerOptions{StreamResponses: true, DisableGET: true})
+	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientOptions{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := c.CallTool(ctx, "block", nil); !errors.Is(err, ErrTimeout) {
+		t.Fatalf("err = %v, want ErrTimeout", err)
+	}
+	select {
+	case <-blocked: // the server cancelled the call and sends no response
+	case <-time.After(2 * time.Second):
+		t.Fatal("the server never saw the cancellation")
+	}
+
+	// The reply stream carries nothing more for the timed-out call: the
+	// client must close it rather than hold the connection open.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		served := false
+		for _, r := range rec.requests() {
+			if r.rpcMethod == "tools/call" && r.status != 0 {
+				served = true
+			}
+		}
+		relays := goroutinesIn("(*httpTransport).relay")
+		if served && relays == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after the timeout: server response finished = %v, client relay goroutines = %d", served, relays)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

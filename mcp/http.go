@@ -92,11 +92,13 @@ type httpTransport struct {
 //
 // Send POSTs each message. A JSON reply is delivered whole (one over
 // MaxMessageBytes fails that Send and the transport stays up); an SSE reply
-// is relayed event by event after Send returns. An event over
-// MaxMessageBytes ends the transport, since the request it belongs to could
-// not otherwise be failed; a reply stream that breaks before its response
-// leaves that request to its timeout. The session id and the negotiated
-// protocol version are sent once known. After notifications/initialized the
+// is relayed event by event after Send returns, until the stream ends or
+// Send's ctx does, so the caller keeps ctx alive while it waits for the
+// response and ends it once it stops waiting. An event over MaxMessageBytes
+// ends the transport, since the request it belongs to could not otherwise
+// be failed; a reply stream that breaks before its response leaves that
+// request to its timeout. The session id and the negotiated protocol
+// version are sent once known. After notifications/initialized the
 // transport keeps a GET stream open for server-initiated messages,
 // reopening it after DefaultSSERetry until DefaultMaxSSERetries attempts in
 // a row fail or the server answers 405. A 404 to a request carrying the
@@ -161,8 +163,8 @@ func (t *httpTransport) Send(ctx context.Context, msg json.RawMessage) error {
 	}
 	defer t.wg.Done()
 
-	// The request lives as long as the transport; ctx bounds it only until
-	// Send returns, so a reply stream outlives the caller's ctx.
+	// The request, and a reply stream after Send returns, end when ctx
+	// does or the transport ends.
 	reqCtx, cancel := context.WithCancel(t.ctx)
 	stop := context.AfterFunc(ctx, cancel)
 	streaming := false
@@ -199,9 +201,9 @@ func (t *httpTransport) Send(ctx context.Context, msg json.RawMessage) error {
 	case resp.StatusCode != http.StatusOK:
 		return statusError(resp)
 	case hasMediaType(resp, mediaTypeEventStream):
-		if !stop() { // ctx ended as the headers arrived
+		if err := ctx.Err(); err != nil { // ctx ended as the headers arrived
 			resp.Body.Close()
-			return ctx.Err()
+			return err
 		}
 		if !t.track() {
 			resp.Body.Close()
@@ -210,6 +212,7 @@ func (t *httpTransport) Send(ctx context.Context, msg json.RawMessage) error {
 		streaming = true
 		go func() {
 			defer t.wg.Done()
+			defer stop()
 			defer cancel()
 			defer resp.Body.Close()
 			if _, err := t.relay(resp.Body); errors.Is(err, sse.ErrTooLarge) {

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/internal/version"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -34,7 +35,7 @@ const (
 	// DefaultMaxRedirects is how many redirects a request follows.
 	DefaultMaxRedirects = 5
 	// DefaultUserAgent is the User-Agent of requests that set none.
-	DefaultUserAgent = "Mozilla/5.0 (compatible; orchestrix-web/0.3)"
+	DefaultUserAgent = "Mozilla/5.0 (compatible; orchestrix-web/" + version.Version + ")"
 )
 
 // ErrBlockedAddress is wrapped by the errors of requests the network guard

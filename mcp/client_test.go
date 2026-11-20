@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aswin-kevin/orchestrix/internal/version"
 )
 
 // connect returns a client for s over an in-process session, closed when the
@@ -347,5 +350,91 @@ func TestCancelSentWhenSendTimesOut(t *testing.T) {
 	params, _ := note["params"].(map[string]any)
 	if params["requestId"] != call["id"] {
 		t.Errorf("cancelled requestId = %v, want the call's id %v", params["requestId"], call["id"])
+	}
+}
+
+// isResponse matches messages that answer a request.
+func isResponse(msg map[string]any) bool {
+	_, hasMethod := msg["method"]
+	return !hasMethod
+}
+
+func TestServerRequestFloodBounded(t *testing.T) {
+	f := newFakeTransport(func(msg map[string]any) []string {
+		if msg["method"] == "tools/call" {
+			id, _ := json.Marshal(msg["id"])
+			return []string{fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"ok"}]}}`, id)}
+		}
+		return initializeReply(msg, ProtocolVersion)
+	})
+	// Every reply to the server gets stuck in the transport, so replies pile
+	// up unless the client bounds them.
+	f.hold = isResponse
+	c, err := NewClient(context.Background(), f, ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	baseline := runtime.NumGoroutine()
+	limit := baseline + 10
+	const pings = 100_000
+	for i := range pings {
+		f.push(fmt.Sprintf(`{"jsonrpc":"2.0","id":"p%d","method":"ping"}`, i))
+		if i%5000 == 0 {
+			if n := runtime.NumGoroutine(); n >= limit {
+				t.Fatalf("after %d pings: %d goroutines, baseline %d", i, n, baseline)
+			}
+		}
+	}
+	// Once the reader has taken the last ping, the count must have settled.
+	for range 5 {
+		time.Sleep(20 * time.Millisecond)
+		if n := runtime.NumGoroutine(); n >= limit {
+			t.Fatalf("after the flood: %d goroutines, baseline %d", n, baseline)
+		}
+	}
+
+	res, err := c.CallTool(context.Background(), "echo", nil)
+	if err != nil {
+		t.Fatalf("CallTool after the flood: %v", err)
+	}
+	if got := resultText(t, res); got != "ok" {
+		t.Errorf("CallTool after the flood = %q, want ok", got)
+	}
+}
+
+func TestCloseWithFullReplyQueue(t *testing.T) {
+	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
+	f.hold = isResponse
+	c, err := NewClient(context.Background(), f, ClientOptions{RequestTimeout: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 200 {
+		f.push(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"ping"}`, i))
+	}
+	f.waitSent(t, isResponse) // the replier is stuck in Send
+	closed := make(chan error, 1)
+	go func() { closed <- c.Close() }()
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return with a full reply queue and a stuck transport")
+	}
+}
+
+func TestVersionUsed(t *testing.T) {
+	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
+	c, err := NewClient(context.Background(), f, ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	init := f.waitSent(t, isMethod("initialize"))
+	params, _ := init["params"].(map[string]any)
+	info, _ := params["clientInfo"].(map[string]any)
+	if info["version"] != version.Version {
+		t.Errorf("clientInfo.version = %v, want %q", info["version"], version.Version)
 	}
 }

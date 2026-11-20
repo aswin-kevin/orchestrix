@@ -77,10 +77,12 @@ var defaultAllowedHosts = []string{"localhost", "127.0.0.1", "[::1]"}
 // still in flight gets 400. GET opens the session's notification stream,
 // DELETE ends the session.
 //
-// A session ends on DELETE, when its initialize fails, or after
-// SessionIdleTimeout without requests or open streams. Expiry is lazy: an
-// idle session is removed when it is next used or when a new session is
-// created, so the handler runs no background goroutine and needs no Close.
+// A session ends on DELETE, when its initialize fails, after
+// SessionIdleTimeout without requests or open streams, or when its client
+// has not sent notifications/initialized within 30 seconds and no response
+// is open. Expiry is lazy: an expired session is removed when it is next
+// used or when a new session is created, so the handler runs no background
+// goroutine and needs no Close.
 // At most MaxSessions sessions are live; an initialize over the cap gets
 // 503.
 //
@@ -102,13 +104,14 @@ func (s *Server) Handler(opts HandlerOptions) http.Handler {
 	if len(opts.AllowedHosts) == 0 {
 		opts.AllowedHosts = defaultAllowedHosts
 	}
-	return &httpHandler{srv: s, opts: opts, sessions: map[string]*httpSession{}}
+	return &httpHandler{srv: s, opts: opts, now: time.Now, sessions: map[string]*httpSession{}}
 }
 
 // httpHandler is the http.Handler returned by Server.Handler.
 type httpHandler struct {
 	srv  *Server
 	opts HandlerOptions
+	now  func() time.Time // the clock of session expiry
 
 	mu       sync.Mutex
 	sessions map[string]*httpSession // by session id
@@ -209,6 +212,9 @@ func (h *httpHandler) post(w http.ResponseWriter, r *http.Request) {
 		if err := hs.sess.handle(body); err != nil {
 			http.NotFound(w, r)
 			return
+		}
+		if m.Method == notifyInitialized {
+			hs.markInitialized()
 		}
 		w.WriteHeader(http.StatusAccepted)
 		return

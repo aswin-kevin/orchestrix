@@ -10,13 +10,17 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/aswin-kevin/orchestrix/internal/version"
 )
 
-// clientName and clientVersion identify this SDK in clientInfo.
-const (
-	clientName    = "orchestrix"
-	clientVersion = "0.3.0"
-)
+// clientName identifies this SDK in clientInfo, with version.Version.
+const clientName = "orchestrix"
+
+// replyQueueSize bounds the replies to server requests waiting to be sent;
+// a reply that finds the queue full is dropped (the server retries or times
+// out), so a flood of requests cannot grow the client without bound.
+const replyQueueSize = 64
 
 // cancelNotifyTimeout bounds the best-effort notifications/cancelled sent
 // after a request's context ends.
@@ -53,29 +57,33 @@ type Client struct {
 	done chan struct{} // closed when the reader has seen Messages close
 	err  error         // why; written before done is closed
 
-	replies   sync.WaitGroup  // goroutines answering server requests
-	ctx       context.Context // cancelled by Close; bounds those replies
-	cancel    context.CancelFunc
-	closeOnce sync.Once
-	closeErr  error
+	replyQueue chan message    // replies to server requests, sent by replier
+	replies    sync.WaitGroup  // the replier goroutine
+	ctx        context.Context // cancelled by Close; bounds the replies
+	cancel     context.CancelFunc
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 // NewClient runs the initialize handshake over t and sends
 // notifications/initialized. On failure it closes t.
 func NewClient(ctx context.Context, t Transport, opts ClientOptions) (*Client, error) {
 	if opts.Info == (Implementation{}) {
-		opts.Info = Implementation{Name: clientName, Version: clientVersion}
+		opts.Info = Implementation{Name: clientName, Version: version.Version}
 	}
 	if opts.RequestTimeout <= 0 {
 		opts.RequestTimeout = DefaultRequestTimeout
 	}
 	c := &Client{
-		t:       t,
-		opts:    opts,
-		pending: map[int64]chan *message{},
-		done:    make(chan struct{}),
+		t:          t,
+		opts:       opts,
+		pending:    map[int64]chan *message{},
+		done:       make(chan struct{}),
+		replyQueue: make(chan message, replyQueueSize),
 	}
 	c.ctx, c.cancel = context.WithCancel(context.Background())
+	c.replies.Add(1)
+	go c.replier()
 	go c.read()
 	if err := c.initialize(ctx); err != nil {
 		_ = c.Close()
@@ -211,13 +219,16 @@ func (c *Client) paginate(ctx context.Context, method string, add func(json.RawM
 
 // request sends a request and decodes its result into result. A context
 // without a deadline gets RequestTimeout; when the context ends first the
-// server is told to cancel.
+// server is told to cancel. The context passed to Send ends when request
+// returns, which closes an HTTP reply stream the server holds open.
 func (c *Client) request(ctx context.Context, method string, params, result any) error {
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
+	var cancel context.CancelFunc
+	if _, ok := ctx.Deadline(); ok {
+		ctx, cancel = context.WithCancel(ctx)
+	} else {
 		ctx, cancel = context.WithTimeout(ctx, c.opts.RequestTimeout)
-		defer cancel()
 	}
+	defer cancel()
 	rawParams, err := marshalParams(params)
 	if err != nil {
 		return err
@@ -360,18 +371,33 @@ func (c *Client) deliver(m message) {
 }
 
 // answer replies to a request from the server: ping succeeds, anything else
-// is not supported. Replies are sent off the reader goroutine so a slow
-// transport cannot stall responses.
+// is not supported. The reply is queued for the replier so a slow transport
+// cannot stall responses; when the queue is full it is dropped.
 func (c *Client) answer(m message) {
 	reply := message{ID: m.ID, Result: emptyObject}
 	if m.Method != methodPing {
 		reply = message{ID: m.ID, Error: &RPCError{Code: codeMethodNotFound, Message: "method not found"}}
 	}
-	c.replies.Add(1)
-	go func() {
-		defer c.replies.Done()
-		ctx, cancel := context.WithTimeout(c.ctx, c.opts.RequestTimeout)
-		defer cancel()
-		_ = c.send(ctx, reply)
-	}()
+	select {
+	case c.replyQueue <- reply:
+	default:
+	}
+}
+
+// replier sends the queued replies, each within RequestTimeout, until Close
+// or the end of the connection.
+func (c *Client) replier() {
+	defer c.replies.Done()
+	for {
+		select {
+		case reply := <-c.replyQueue:
+			ctx, cancel := context.WithTimeout(c.ctx, c.opts.RequestTimeout)
+			_ = c.send(ctx, reply)
+			cancel()
+		case <-c.ctx.Done():
+			return
+		case <-c.done:
+			return
+		}
+	}
 }
