@@ -382,7 +382,7 @@ func TestDockerHostileCommandCannotOutliveTimeout(t *testing.T) {
 	}
 	start := time.Now()
 	res, err := e.Execute(t.Context(),
-		"sleep 1; rm -f /tmp/.orx-*; pkill -KILL -f orx-backstop; trap '' TERM; sleep 600",
+		"sleep 1; rm -f /tmp/.orx-*; pkill -KILL -f 'orx-backst[o]p'; trap '' TERM; sleep 600",
 		backend.ExecOptions{Timeout: 2 * time.Second})
 	if err != nil {
 		t.Fatal(err)
