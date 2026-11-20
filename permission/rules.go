@@ -3,6 +3,7 @@ package permission
 import (
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 
@@ -136,18 +137,53 @@ func (r Rule) matchesPaths(accesses []PathAccess) bool {
 	return false
 }
 
+// matchesPathsFolded is matchesPaths with the pattern and every path compared
+// as a case-insensitive file system sees them (see foldPath), so that a deny
+// or an ask rule for "/secrets/**" also stops "/SECRETS/key" and
+// "/secrets./key", which macOS and Windows open as the same file. Only deny
+// and ask rules use it: on a case-sensitive file system it makes them match
+// more often, which fails closed. Allow rules always match exactly, so
+// folding never widens what is allowed.
+func (r Rule) matchesPathsFolded(accesses []PathAccess) bool {
+	if !r.isPathRule() {
+		return false
+	}
+	pattern := foldPath(r.Pattern)
+	for _, a := range accesses {
+		if a.Op == r.Op && glob.Match(pattern, foldPath("/"+a.Path)) {
+			return true
+		}
+	}
+	return false
+}
+
+// foldPath returns p with each component as a case-insensitive file system
+// that ignores trailing dots and spaces, as Windows does, sees it (see
+// fileName). p is cleaned first, so "." and ".." are resolved before folding
+// and cannot be trimmed into something else; a component left empty by the
+// trimming (such as "...") then drops out when the result is cleaned again.
+// Glob metacharacters are unaffected, so p may be a pattern.
+func foldPath(p string) string {
+	components := strings.Split(path.Clean(p), "/")
+	for i, c := range components {
+		components[i] = fileName(c)
+	}
+	return path.Clean(strings.Join(components, "/"))
+}
+
 // ReadVisible reports whether a search tool (ls, glob, grep) may show the
 // path p in its results. Rules only see the root a search starts from, so the
 // tool must filter what it finds below that root with this check.
 //
-// A path is hidden when a deny or an ask path rule for reading matches it.
+// A path is hidden when a deny or an ask path rule for reading matches it,
+// ignoring case as deny and ask rules do (see matchesPathsFolded).
 // Ask-gated paths are hidden as well (fail closed): a search reports many
 // paths at once and cannot pause to ask about each one, so the safe answer is
 // to leave them out. Reading such a file directly with a read tool still asks.
 func (r Rules) ReadVisible(p string) bool {
 	access := []PathAccess{{Path: p, Op: OpRead}}
 	for _, rule := range slices.Concat(r.Deny, r.Ask) {
-		if rule.isPathRule() && rule.matchesPaths(access) {
+		if rule.matchesPathsFolded(access) {
 			return false
 		}
 	}

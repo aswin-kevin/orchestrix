@@ -141,12 +141,14 @@ func (m matcher) unanalyzed(rules Rules) bool {
 // rule's pattern matches a shell subject as a whole or any one of its
 // commands, so "ls && rm x" cannot slip past a deny rule for rm. Commands
 // also match ignoring case, since a case-insensitive file system runs rm
-// for "RM x". Allow rules never fold case (see allowMatch).
+// for "RM x", and path rules match paths as such a file system sees them
+// (see Rule.matchesPathsFolded). Allow rules never fold case (see
+// allowMatch).
 func (m matcher) first(rules []Rule) (Rule, bool) {
 	for _, r := range rules {
 		folded := r
 		folded.Pattern = strings.ToLower(r.Pattern)
-		if m.matches(r) || slices.ContainsFunc(m.segments, func(seg string) bool {
+		if m.matches(r) || r.matchesPathsFolded(m.req.Paths) || slices.ContainsFunc(m.segments, func(seg string) bool {
 			return folded.matchesCommand(m.req.Tool, strings.ToLower(seg))
 		}) {
 			return r, true
