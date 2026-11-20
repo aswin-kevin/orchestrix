@@ -9,7 +9,6 @@ import (
 	"io"
 	"iter"
 	"net/http"
-	"strings"
 )
 
 const (
@@ -125,6 +124,8 @@ func (u anthropicUsage) toUsage() Usage {
 
 // anthropicResponse is the non-streaming reply.
 type anthropicResponse struct {
+	ID         string           `json:"id"`
+	Model      string           `json:"model"`
 	Content    []anthropicBlock `json:"content"`
 	StopReason string           `json:"stop_reason"`
 	Usage      anthropicUsage   `json:"usage"`
@@ -135,6 +136,8 @@ type anthropicEvent struct {
 	Type    string `json:"type"`
 	Index   int    `json:"index"`
 	Message *struct {
+		ID    string         `json:"id"`
+		Model string         `json:"model"`
 		Usage anthropicUsage `json:"usage"`
 	} `json:"message"`
 	ContentBlock *struct {
@@ -180,6 +183,8 @@ func (r anthropicResponse) toResponse() *Response {
 		Message:    Message{Role: RoleAssistant, Content: content},
 		StopReason: r.StopReason,
 		Usage:      r.Usage.toUsage(),
+		Model:      r.Model,
+		ID:         r.ID,
 	}
 }
 
@@ -281,7 +286,10 @@ func messageStartEvents(ev anthropicEvent) []StreamEvent {
 	// message_start reports a provisional output count and message_delta then
 	// reports the running total, so counting both would double-count.
 	usage.Output = 0
-	return []StreamEvent{{Type: EvMessageStart, Usage: usage}}
+	return []StreamEvent{{
+		Type: EvMessageStart, Usage: usage,
+		Model: ev.Message.Model, ResponseID: ev.Message.ID,
+	}}
 }
 
 func blockStartEvents(ev anthropicEvent) []StreamEvent {
@@ -348,7 +356,11 @@ func (p *anthropicProvider) send(ctx context.Context, req Request, stream bool) 
 		return nil, fmt.Errorf("llm: encode anthropic request: %w", err)
 	}
 	return p.cfg.Do(ctx, func() (*http.Request, error) {
-		httpReq, err := http.NewRequest(http.MethodPost, p.messagesURL(), bytes.NewReader(body))
+		target, err := p.messagesURL()
+		if err != nil {
+			return nil, err
+		}
+		httpReq, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -357,12 +369,8 @@ func (p *anthropicProvider) send(ctx context.Context, req Request, stream bool) 
 	})
 }
 
-func (p *anthropicProvider) messagesURL() string {
-	base := strings.TrimRight(p.cfg.BaseURL, "/")
-	if strings.HasSuffix(base, "/v1") {
-		return base + "/messages"
-	}
-	return base + "/v1/messages"
+func (p *anthropicProvider) messagesURL() (string, error) {
+	return versionedEndpoint(p.cfg.BaseURL, "messages")
 }
 
 func (p *anthropicProvider) setHeaders(r *http.Request, stream bool) {

@@ -120,7 +120,11 @@ func (o *openAIDecisions) Decide(ctx context.Context, req DecisionRequest) (*Dec
 	if err != nil {
 		return nil, err
 	}
-	resp, err := postDecision(ctx, o.cfg, strings.TrimRight(o.cfg.BaseURL, "/")+"/decisions", body)
+	target, err := endpoint(o.cfg.BaseURL, "decisions")
+	if err != nil {
+		return nil, err
+	}
+	resp, err := postDecision(ctx, o.cfg, target, body)
 	if err != nil {
 		return nil, err
 	}

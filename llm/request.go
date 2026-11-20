@@ -71,6 +71,13 @@ const (
 	StopToolUse   = "tool_use"
 	StopMaxTokens = "max_tokens"
 	StopSequence  = "stop_sequence"
+	// StopRefusal means the model declined to answer.
+	StopRefusal = "refusal"
+	// StopPauseTurn means the provider paused a long-running turn; sending
+	// the reply back as-is lets the model continue.
+	StopPauseTurn = "pause_turn"
+	// StopContentFilter means a content filter cut the reply short.
+	StopContentFilter = "content_filter"
 )
 
 // Response is a complete model reply.
@@ -78,4 +85,9 @@ type Response struct {
 	Message    Message
 	StopReason string
 	Usage      Usage
+	// Model is the model that produced the reply, as the provider reported
+	// it; it may be more specific than the model requested.
+	Model string
+	// ID is the provider's id for the reply.
+	ID string
 }

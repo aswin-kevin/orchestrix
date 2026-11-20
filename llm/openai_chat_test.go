@@ -729,3 +729,18 @@ func TestToolCallWithoutIndexIDLessFollowUpContinuesLast(t *testing.T) {
 		t.Errorf("second = %+v", uses[1])
 	}
 }
+
+func TestOpenAIChatResponseModelAndID(t *testing.T) {
+	body := chunks(
+		`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"chat-wire","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"chat-wire","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}`,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", body)
+	resp := collectOpenAI(t, newTestOpenAI(t, srv.URL), Request{})
+	if resp.Model != "chat-wire" || resp.ID != "chatcmpl-1" {
+		t.Errorf("Model, ID = %q, %q", resp.Model, resp.ID)
+	}
+	if resp.StopReason != StopContentFilter {
+		t.Errorf("stop = %q, want %q", resp.StopReason, StopContentFilter)
+	}
+}

@@ -34,21 +34,53 @@ var overflowMarkers = []string{
 
 // transientStreamErrors are the error types and codes that mean a provider
 // is out of capacity or failing on its side when it reports the error inside
-// a stream that started with a 200.
-var transientStreamErrors = map[string]bool{
-	"overloaded_error":    true, // Anthropic
-	"rate_limit_error":    true, // Anthropic
-	"api_error":           true, // Anthropic
-	"server_error":        true, // OpenAI chat and Responses
-	"rate_limit_exceeded": true, // OpenAI Responses
+// a stream that started with a 200, with the kind each one reports.
+var transientStreamErrors = map[string]ErrorKind{
+	"overloaded_error":    ErrorOverloaded, // Anthropic
+	"rate_limit_error":    ErrorRateLimit,  // Anthropic
+	"api_error":           ErrorServer,     // Anthropic
+	"server_error":        ErrorServer,     // OpenAI chat and Responses
+	"rate_limit_exceeded": ErrorRateLimit,  // OpenAI Responses
 }
 
-// APIError is a non-2xx reply from a provider.
+// ErrorKind classifies an APIError so callers can react to it without
+// matching status codes or provider-specific bodies.
+type ErrorKind string
+
+// Kinds of APIError.
+const (
+	// ErrorRateLimit is a 429, or a rate-limit error inside a stream.
+	ErrorRateLimit ErrorKind = "rate_limit"
+	// ErrorAuth is a 401 or 403.
+	ErrorAuth ErrorKind = "auth"
+	// ErrorOverloaded is a 529 or 503, or an overloaded error inside a
+	// stream.
+	ErrorOverloaded ErrorKind = "overloaded"
+	// ErrorInvalidRequest is a 400, 404 or 422 that is not a context
+	// overflow.
+	ErrorInvalidRequest ErrorKind = "invalid_request"
+	// ErrorContextOverflow means the prompt exceeded the model's context
+	// window; see IsContextOverflow.
+	ErrorContextOverflow ErrorKind = "context_overflow"
+	// ErrorServer is any other 5xx, or a server error inside a stream.
+	ErrorServer ErrorKind = "server"
+	// ErrorUnknown is anything else.
+	ErrorUnknown ErrorKind = "unknown"
+)
+
+// APIError is a non-2xx reply from a provider, or, with Status 0, an error
+// the provider reported inside a stream that started with a 200.
 type APIError struct {
 	// Status is the HTTP status code.
 	Status int
-	// Body is the (possibly truncated) response body.
+	// Body is the (possibly truncated) response body, with any echo of the
+	// configured API key replaced by [REDACTED].
 	Body string
+	// RequestID is the provider's id for the request, from the x-request-id
+	// or request-id header, for quoting to the provider's support.
+	RequestID string
+	// Header holds the response headers.
+	Header http.Header
 	// RetryAfter is the delay requested by the Retry-After header; see
 	// hasRetryAfter to tell an explicit zero from an absent header.
 	RetryAfter time.Duration
@@ -64,7 +96,37 @@ func (e *APIError) Error() string {
 	if len(body) > maxErrorMessageBytes {
 		body = body[:maxErrorMessageBytes] + "...(truncated)"
 	}
+	if e.RequestID != "" {
+		return fmt.Sprintf("llm: provider returned status %d (request id %s): %s", e.Status, e.RequestID, body)
+	}
 	return fmt.Sprintf("llm: provider returned status %d: %s", e.Status, body)
+}
+
+// Kind classifies the error. A context overflow takes precedence over the
+// invalid request its status would otherwise make it.
+func (e *APIError) Kind() ErrorKind {
+	if IsContextOverflow(e) {
+		return ErrorContextOverflow
+	}
+	switch e.Status {
+	case 0:
+		if kind := transientStreamKind(e); kind != "" {
+			return kind
+		}
+		return ErrorUnknown
+	case http.StatusTooManyRequests:
+		return ErrorRateLimit
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return ErrorAuth
+	case statusOverloaded, http.StatusServiceUnavailable:
+		return ErrorOverloaded
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity:
+		return ErrorInvalidRequest
+	}
+	if e.Status >= 500 {
+		return ErrorServer
+	}
+	return ErrorUnknown
 }
 
 // IsContextOverflow reports whether err says the prompt exceeded the model's
@@ -96,37 +158,46 @@ func IsContextOverflow(err error) bool {
 // a name does not.
 func isTransientStreamError(err error) bool {
 	var apiErr *APIError
-	if !errors.As(err, &apiErr) || apiErr.Status != 0 {
-		return false
-	}
-	var body any
-	if json.Unmarshal([]byte(apiErr.Body), &body) != nil {
-		return false
-	}
-	return hasTransientType(body)
+	return errors.As(err, &apiErr) && transientStreamKind(apiErr) != ""
 }
 
-// hasTransientType walks a decoded JSON value looking for a "type" or "code"
-// field that names a transient error.
-func hasTransientType(v any) bool {
+// transientStreamKind returns the kind of the transient error named by a
+// stream error's body, or "" when e is not a stream error (Status 0) or
+// names none.
+func transientStreamKind(e *APIError) ErrorKind {
+	if e.Status != 0 {
+		return ""
+	}
+	var body any
+	if json.Unmarshal([]byte(e.Body), &body) != nil {
+		return ""
+	}
+	return transientType(body)
+}
+
+// transientType walks a decoded JSON value looking for a "type" or "code"
+// field that names a transient error, and returns that error's kind.
+func transientType(v any) ErrorKind {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, field := range v {
-			if s, ok := field.(string); ok && (k == "type" || k == "code") && transientStreamErrors[s] {
-				return true
+			if s, ok := field.(string); ok && (k == "type" || k == "code") {
+				if kind := transientStreamErrors[s]; kind != "" {
+					return kind
+				}
 			}
-			if hasTransientType(field) {
-				return true
+			if kind := transientType(field); kind != "" {
+				return kind
 			}
 		}
 	case []any:
 		for _, field := range v {
-			if hasTransientType(field) {
-				return true
+			if kind := transientType(field); kind != "" {
+				return kind
 			}
 		}
 	}
-	return false
+	return ""
 }
 
 // IsRetryable reports whether repeating the request may succeed: transient

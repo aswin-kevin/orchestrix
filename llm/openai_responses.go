@@ -9,7 +9,6 @@ import (
 	"io"
 	"iter"
 	"net/http"
-	"strings"
 )
 
 // responsesReasoningIDKey is the ProviderData key under which a reasoning
@@ -79,8 +78,11 @@ func (p *responsesProvider) Stream(ctx context.Context, req Request) iter.Seq2[S
 
 func (p *responsesProvider) send(ctx context.Context, body []byte) (*http.Response, error) {
 	return p.cfg.Do(ctx, func() (*http.Request, error) {
-		url := strings.TrimRight(p.cfg.BaseURL, "/") + "/responses"
-		httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		target, err := endpoint(p.cfg.BaseURL, "responses")
+		if err != nil {
+			return nil, err
+		}
+		httpReq, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
@@ -115,6 +117,8 @@ type responsesEvent struct {
 		EncryptedContent string `json:"encrypted_content"`
 	} `json:"item"`
 	Response struct {
+		ID    string `json:"id"`
+		Model string `json:"model"`
 		Usage *struct {
 			InputTokens        int `json:"input_tokens"`
 			OutputTokens       int `json:"output_tokens"`
@@ -164,6 +168,10 @@ type responsesStreamState struct {
 	argumentsSeen map[int]bool
 	startedTools  map[int]bool
 	sawToolCall   bool
+	// model and id are the first the events reported (response.created
+	// carries them), reported with the closing events.
+	model string
+	id    string
 }
 
 // translate maps one event to stream events. done is true once the closing
@@ -173,6 +181,8 @@ func (s *responsesStreamState) translate(data string) (events []StreamEvent, don
 	if err := json.Unmarshal([]byte(data), &ev); err != nil {
 		return nil, false, fmt.Errorf("llm: decode responses event: %w", err)
 	}
+	s.model = firstNonEmpty(s.model, ev.Response.Model)
+	s.id = firstNonEmpty(s.id, ev.Response.ID)
 	index := ev.OutputIndex
 	switch ev.Type {
 	case respEvTextDelta:
@@ -235,7 +245,7 @@ func (s *responsesStreamState) itemDone(ev responsesEvent) []StreamEvent {
 
 // closingEvents emits the final usage and stop reason for a terminal event.
 func (s *responsesStreamState) closingEvents(ev responsesEvent) []StreamEvent {
-	final := StreamEvent{Type: EvMessageDelta, StopReason: s.stopReason(ev)}
+	final := StreamEvent{Type: EvMessageDelta, StopReason: s.stopReason(ev), Model: s.model, ResponseID: s.id}
 	if u := ev.Response.Usage; u != nil {
 		cached := u.InputTokensDetails.CachedTokens
 		final.Usage = Usage{Input: max(u.InputTokens-cached, 0), Output: u.OutputTokens, CacheRead: cached}

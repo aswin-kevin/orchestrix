@@ -28,7 +28,8 @@ const (
 // Field use by type: text and thinking deltas and tool input deltas use Text;
 // EvSignature uses Value; EvToolStart uses ToolID and ToolName; EvProviderData
 // uses Key and Value; EvMessageStart and EvMessageDelta use Usage, and the
-// latter may also set StopReason.
+// latter may also set StopReason. Either may carry Model and ResponseID, the
+// model and reply id the provider reported, once they are known.
 type StreamEvent struct {
 	Type       EventType
 	Index      int
@@ -39,6 +40,8 @@ type StreamEvent struct {
 	Key        string
 	Value      string
 	Usage      Usage
+	Model      string
+	ResponseID string
 }
 
 // emptyToolInput is the input recorded for a tool call that streamed none, so
@@ -59,6 +62,8 @@ type Accumulator struct {
 	byIndex    map[int]*slot // provider block index -> slot
 	stopReason string
 	usage      Usage
+	model      string
+	id         string
 	sawEvent   bool
 }
 
@@ -69,8 +74,10 @@ func (a *Accumulator) Add(ev StreamEvent) error {
 	switch ev.Type {
 	case EvMessageStart:
 		a.usage.MergeEcho(ev.Usage)
+		a.setReplyIDs(ev)
 	case EvMessageDelta:
 		a.usage.MergeEcho(ev.Usage)
+		a.setReplyIDs(ev)
 		if ev.StopReason != "" {
 			a.stopReason = ev.StopReason
 		}
@@ -112,7 +119,15 @@ func (a *Accumulator) Response() (*Response, error) {
 		Message:    Message{Role: RoleAssistant, Content: content},
 		StopReason: a.stopReason,
 		Usage:      a.usage,
+		Model:      a.model,
+		ID:         a.id,
 	}, nil
+}
+
+// setReplyIDs keeps the first model and reply id reported.
+func (a *Accumulator) setReplyIDs(ev StreamEvent) {
+	a.model = firstNonEmpty(a.model, ev.Model)
+	a.id = firstNonEmpty(a.id, ev.ResponseID)
 }
 
 // toolInput returns the streamed tool arguments as raw JSON. Malformed input

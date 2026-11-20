@@ -722,3 +722,45 @@ func TestAdaptersStampThinking(t *testing.T) {
 		t.Errorf("text block stamped: %+v", resp.Message.Content[2])
 	}
 }
+
+func TestAnthropicResponseModelAndID(t *testing.T) {
+	stream := `event: message_start
+data: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","content":[],"model":"claude-wire","stop_reason":null,"usage":{"input_tokens":1,"output_tokens":1}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"no"}}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":{"output_tokens":2}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp, err := Collect(context.Background(), newTestAnthropic(t, srv.URL), Request{Messages: []Message{UserText("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Model != "claude-wire" || resp.ID != "msg_01" {
+		t.Errorf("stream Model, ID = %q, %q", resp.Model, resp.ID)
+	}
+	if resp.StopReason != StopRefusal {
+		t.Errorf("stop = %q, want %q", resp.StopReason, StopRefusal)
+	}
+
+	reply := `{"id":"msg_02","type":"message","role":"assistant","model":"claude-wire",
+		"content":[{"type":"text","text":"later"}],"stop_reason":"pause_turn",
+		"usage":{"input_tokens":1,"output_tokens":1}}`
+	srv = newSSEServer(t, 200, "application/json", reply)
+	resp, err = newTestAnthropic(t, srv.URL).Complete(context.Background(), Request{Messages: []Message{UserText("x")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Model != "claude-wire" || resp.ID != "msg_02" {
+		t.Errorf("complete Model, ID = %q, %q", resp.Model, resp.ID)
+	}
+	if resp.StopReason != StopPauseTurn {
+		t.Errorf("stop = %q, want %q", resp.StopReason, StopPauseTurn)
+	}
+}

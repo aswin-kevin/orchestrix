@@ -406,3 +406,16 @@ func TestResponsesForeignThinkingNotReplayed(t *testing.T) {
 		}
 	}
 }
+
+func TestResponsesResponseModelAndID(t *testing.T) {
+	body := responsesBody(
+		`{"type":"response.created","sequence_number":0,"response":{"id":"resp_1","object":"response","status":"in_progress","model":"resp-wire","output":[]}}`,
+		responsesTextDelta,
+		`{"type":"response.completed","sequence_number":2,"response":{"id":"resp_1","object":"response","status":"completed","model":"resp-wire","usage":{"input_tokens":1,"output_tokens":1}}}`,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", body)
+	resp := collectResponses(t, newTestResponses(t, srv.URL), Request{})
+	if resp.Model != "resp-wire" || resp.ID != "resp_1" {
+		t.Errorf("Model, ID = %q, %q", resp.Model, resp.ID)
+	}
+}

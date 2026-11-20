@@ -87,7 +87,11 @@ func (s *systemOne) Decide(ctx context.Context, req DecisionRequest) (*DecisionR
 	if err != nil {
 		return nil, err
 	}
-	resp, err := postDecision(ctx, s.cfg, s.url(), body)
+	target, err := s.url()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := postDecision(ctx, s.cfg, target, body)
 	if err != nil {
 		return nil, err
 	}
@@ -107,12 +111,8 @@ func (s *systemOne) Decide(ctx context.Context, req DecisionRequest) (*DecisionR
 	return out, nil
 }
 
-func (s *systemOne) url() string {
-	base := strings.TrimRight(s.cfg.BaseURL, "/")
-	if strings.HasSuffix(base, "/v1") {
-		return base + "/systemone"
-	}
-	return base + "/v1/systemone"
+func (s *systemOne) url() (string, error) {
+	return versionedEndpoint(s.cfg.BaseURL, "systemone")
 }
 
 func (s *systemOne) buildRequest(req DecisionRequest) (systemOneRequest, error) {

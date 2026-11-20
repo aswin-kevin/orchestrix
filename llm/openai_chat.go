@@ -132,6 +132,8 @@ type openAIFunction struct {
 // openAIChunk is one streamed chunk. A final chunk may carry only usage, with
 // no choices.
 type openAIChunk struct {
+	ID      string          `json:"id"`
+	Model   string          `json:"model"`
 	Error   json.RawMessage `json:"error"`
 	Choices []struct {
 		Delta        openAIDelta `json:"delta"`
@@ -337,6 +339,10 @@ type openAIStreamState struct {
 	runID        string
 	finishReason string
 	usage        Usage
+	// model and id are the first the chunks reported, reported with the
+	// closing events.
+	model string
+	id    string
 }
 
 // toolSlot is one started tool call: the id it was given, whether that id
@@ -363,6 +369,8 @@ func (s *openAIStreamState) translate(data string) ([]StreamEvent, error) {
 		// Status 0: the HTTP exchange itself succeeded.
 		return nil, &APIError{Body: data}
 	}
+	s.model = firstNonEmpty(s.model, chunk.Model)
+	s.id = firstNonEmpty(s.id, chunk.ID)
 	if u := chunk.Usage; u != nil {
 		cached := u.PromptTokensDetails.CachedTokens
 		s.usage = Usage{
@@ -443,6 +451,8 @@ func (s *openAIStreamState) complete(emit func(StreamEvent) bool) {
 		Type:       EvMessageDelta,
 		StopReason: s.stopReason(),
 		Usage:      s.usage,
+		Model:      s.model,
+		ResponseID: s.id,
 	}
 	if emit(final) {
 		emit(StreamEvent{Type: EvMessageStop})
@@ -464,6 +474,8 @@ func (s *openAIStreamState) stopReason() string {
 		return StopToolUse
 	case "length":
 		return StopMaxTokens
+	case "content_filter":
+		return StopContentFilter
 	}
 	return s.finishReason
 }
@@ -471,17 +483,17 @@ func (s *openAIStreamState) stopReason() string {
 // send issues the HTTP request, returning the 2xx response.
 func (p *openAIProvider) send(ctx context.Context, body []byte) (*http.Response, error) {
 	return p.cfg.Do(ctx, func() (*http.Request, error) {
-		httpReq, err := http.NewRequest(http.MethodPost, p.completionsURL(), bytes.NewReader(body))
+		target, err := endpoint(p.cfg.BaseURL, "chat/completions")
+		if err != nil {
+			return nil, err
+		}
+		httpReq, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		p.setHeaders(httpReq)
 		return httpReq, nil
 	})
-}
-
-func (p *openAIProvider) completionsURL() string {
-	return strings.TrimRight(p.cfg.BaseURL, "/") + "/chat/completions"
 }
 
 func (p *openAIProvider) setHeaders(r *http.Request) {
