@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -294,11 +295,15 @@ func TestLiveSummarizationTinyWindow(t *testing.T) {
 		requireCompleted(t, final)
 	}
 
-	if b, ok := summarize.Current(thread.State()); !ok {
+	b, ok := summarize.Current(thread.State())
+	if !ok {
 		t.Errorf("no compaction happened (boundary %+v)", b)
 	}
-	if !strings.Contains(strings.ToUpper(final.Text), "ORCHID") {
-		t.Errorf("final text = %q, want it to mention ORCHID", final.Text)
+	requireTextContains(t, final.Text, "ORCHID")
+	if t.Failed() {
+		// The summary is the model's own: when it dropped the code word,
+		// the model forgot it, not the harness.
+		t.Logf("compaction summary: %q", b.Summary)
 	}
 }
 
@@ -359,9 +364,7 @@ func TestLiveCheckpointResumeAcrossAgents(t *testing.T) {
 	if got := readTrimmed(ctx, t, agentB.Config().BackendFactory("live"), "/a.txt"); !strings.Contains(strings.ToLower(got), "resume ok") {
 		t.Errorf("file content = %q, want it to contain %q", got, "resume ok")
 	}
-	if !strings.Contains(strings.ToLower(final.Text), "resume ok") {
-		t.Errorf("final text = %q, want it to contain %q", final.Text, "resume ok")
-	}
+	requireTextContains(t, final.Text, "resume ok")
 }
 
 // sawToolUse reports whether events contain a tool use of the named tool.
@@ -374,10 +377,18 @@ func sawToolUse(events []agent.Event, name string) bool {
 	return false
 }
 
-// requireTextContains fails the test unless text contains want, ignoring case.
+// requireTextContains fails the test unless text contains want, ignoring case
+// and invisible format characters: some models put a zero-width space inside
+// a word they quote.
 func requireTextContains(t *testing.T, text, want string) {
 	t.Helper()
-	if !strings.Contains(strings.ToLower(text), strings.ToLower(want)) {
+	visible := strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, text)
+	if !strings.Contains(strings.ToLower(visible), strings.ToLower(want)) {
 		t.Errorf("final text = %q, want it to contain %q", text, want)
 	}
 }

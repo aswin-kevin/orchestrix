@@ -1171,7 +1171,31 @@ Next is a stabilization pass toward v1.0.0: settling the public API (the contrac
 
 ## Contributing
 
-Issues and pull requests are welcome. Before sending a change, make sure `gofmt -l .` prints nothing and `go vet ./...` and `go test -race ./...` pass. The live integration test is skipped unless `ORX_TEST_MODEL` is set (for example `ORX_TEST_MODEL=openai:gpt-4o`, optionally with `ORX_TEST_BASE_URL` and `ORX_TEST_API_KEY`).
+Issues and pull requests are welcome. Before sending a change, make sure `gofmt -l .` prints nothing and `go vet ./...` and `go test -race ./...` pass. The live tests are skipped unless `ORX_TEST_MODEL` is set; see "Live tests and evals".
+
+## Live tests and evals
+
+The live tests (`TestLive*` in the root package) and the evals call a real model and are never part of `go test ./...`. Both read the model from `ORX_TEST_MODEL`, a spec such as `anthropic:<model>`, `openai:<model>` or `openai-responses:<model>`, and take `ORX_TEST_BASE_URL` and `ORX_TEST_API_KEY` for the endpoint and key:
+
+```sh
+ORX_TEST_MODEL=openai:<model> ORX_TEST_BASE_URL=<url> ORX_TEST_API_KEY=<key> go test -run Live -count=1 -v .
+```
+
+`TestLiveDecide` reads its own `ORX_TEST_DECIDER_MODEL`, `ORX_TEST_DECIDER_BASE_URL` and `ORX_TEST_DECIDER_API_KEY`.
+
+A single live run says little about behavior that varies between runs, so the evals in the separate `evals` module run each scenario several times and report a pass rate. The scenarios cover the safety boundary: a denied tool, approval resumed in a fresh process with an edited input, prompt injection in a file, a shell command the permission parser cannot analyze in bypass mode, the turn, time and token budgets, a background job that outlives its turn, and two workers racing one checkpointed thread. Destructive commands only ever reach a fake shell that records them. Each trial passes, fails because the model did not do what the scenario needs, or breaks a harness invariant; the last is a bug whatever the model did.
+
+```sh
+cd evals
+ORX_TEST_MODEL=openai:<model> ORX_TEST_BASE_URL=<url> ORX_TEST_API_KEY=<key> \
+  go run ./cmd/orxeval -n 5 -out results.json -baseline baselines/openai-compatible.json
+```
+
+`orxeval` writes every trial's outcome, terminal reason, turns, tokens and wall time to the results file, and exits non-zero when a scenario's pass rate falls below its baseline minus `-tolerance` (default 0.2) or any trial broke an invariant. `-write-baseline` records a new baseline. Each run is bounded by turn and time limits per agent, `-max-tokens` per response and `-max-total-tokens` for the whole run. `go test ./...` in `evals` runs the scenarios offline against a scripted model.
+
+The `Live` workflow runs both nightly and on demand for each configured model; see `.github/workflows/live.yml` for the repository variables and secrets it reads. It uploads the results as artifacts.
+
+Release checklist: tag a release only when the latest `Live` run is green for every configured model, with no harness violations and no scenario below its baseline.
 
 ## License
 
