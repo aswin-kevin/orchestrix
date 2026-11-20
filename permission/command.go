@@ -412,11 +412,17 @@ func (p *commandParser) checkArithmetic() {
 	}
 }
 
+// parameterBodyBreaks are the characters that end a word or a command, or
+// quote, for this parser. The shell reads an unquoted ${...} as one word
+// whatever it holds, so a body with any of them is split differently here:
+// in echo ${x:-a #}; cmd or echo ${x:-a;#}; cmd the '#' is not a comment
+// and cmd runs, while this parser would end the word or the command at the
+// blank or ';' and drop the rest as a comment. A nested brace hides where
+// the body ends.
+const parameterBodyBreaks = " \t\n;&|<>()`\"'\\{"
+
 // checkParameterBlanks rejects an unquoted ${...}, starting at the '$' at
-// p.pos, whose body holds a blank or a nested brace. The shell reads the
-// whole expansion as one word, blanks included, so a '#' after a blank in
-// it is not a comment (echo ${x:-a #}; cmd runs cmd), while this parser
-// would end the word there; and a nested brace hides where the body ends.
+// p.pos, whose body (up to the first '}') holds one of parameterBodyBreaks.
 func (p *commandParser) checkParameterBlanks() {
 	if p.peek(1) != '{' {
 		return
@@ -425,7 +431,7 @@ func (p *commandParser) checkParameterBlanks() {
 	if end := strings.IndexByte(rest, '}'); end >= 0 {
 		rest = rest[:end]
 	}
-	if strings.ContainsAny(rest, " \t\n{") {
+	if strings.ContainsAny(rest, parameterBodyBreaks) {
 		p.reject()
 	}
 }

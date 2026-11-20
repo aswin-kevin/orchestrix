@@ -621,6 +621,25 @@ func TestCommentSmuggling(t *testing.T) {
 		t.Fatalf("Evaluate(%q) = %+v, want Deny", smuggle, got)
 	}
 
+	// A ';', '|' or '&' inside an unquoted ${...} does not end the word:
+	// the shell runs touch in each of these.
+	for _, cmd := range []string{
+		"echo ${x:-a;#}; touch pwned",
+		"echo ${x:-a|#}; touch pwned",
+		"echo ${x:-a&#}; touch pwned",
+		"echo ${x#;#}; touch pwned",
+	} {
+		if segs, ok := SplitCommand(cmd); ok {
+			t.Errorf("SplitCommand(%q) = %q, true; want ok=false", cmd, segs)
+		}
+		if got := Evaluate(shell(cmd), allowEcho); got.Behavior == Allow {
+			t.Errorf("allow echo vouched for %q: %+v", cmd, got)
+		}
+		if got := Evaluate(shell(cmd), denyTouch); got.Behavior == Allow {
+			t.Errorf("Evaluate(%q) with deny touch = %+v, want Deny or Ask", cmd, got)
+		}
+	}
+
 	for _, tt := range []struct {
 		cmd  string
 		want []string

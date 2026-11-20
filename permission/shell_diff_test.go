@@ -44,6 +44,7 @@ var shellDiffSeeds = []string{
 	"getopts a PATH -a; ls", "getopts ab opt", "aa & wait -p PATH; ls", "wait",
 
 	"echo a # '\ntouch pwned # '", "echo a # x", "echo a#b",
+	"echo ${x:-a;#}; touch pwned", "echo ${x:-a|#}; touch pwned", "echo ${x:-a&#}; touch pwned", "echo ${x#;#}; touch pwned",
 	"echo ${x:-a #}; touch pwned", "echo ${x:-${y} #}; touch pwned", "ls;#x\ntouch p", "ls #x \\\ntouch p",
 	"git stash show stash@{0}", "git log HEAD@{1}", "git show {a,b}", "git show {1..3}", `git show \${-c,x}`,
 	`echo $'\'' ; touch pwned ; echo \'`, `echo $"x"`,
