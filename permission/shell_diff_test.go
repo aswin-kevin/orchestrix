@@ -36,6 +36,7 @@ var shellDiffSeeds = []string{
 	"aa >/dev/null 2>&1", "0&>/dev/null aa", "aa &>/dev/null; bb", "aa || bb", "aa\nbb", `\aa`, `"aa" x`, "LS", "aa ${x:-bb}",
 	"history -s 'touch p'; fc -s", "history -s x; fc -e touch", "compgen -C 'touch p' x",
 	"echo ${EXECIGNORE=x}; ls", "echo ${x:=1}", "echo ${x:-d}",
+	"getopts a PATH -a; ls", "getopts ab opt", "aa & wait -p PATH; ls", "wait",
 
 	"echo a # '\ntouch pwned # '", "echo a # x", "echo a#b",
 	`echo $'\'' ; touch pwned ; echo \'`, `echo $"x"`,

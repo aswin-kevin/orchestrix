@@ -150,11 +150,13 @@ var stateBuiltins = map[string]bool{
 	"let": true, // also evaluates arithmetic, which runs $(...) in subscripts
 	// history -s adds entries that fc runs, and -w writes them to any file.
 	"history": true,
+	"getopts": true, // assigns the variable it names (getopts a PATH -a)
 }
 
 // stateOptionLetters are builtins that change shell state only with one
-// option: printf -v assigns a variable, hash -p binds a name to a path.
-var stateOptionLetters = map[string]byte{"printf": 'v', "hash": 'p'}
+// option: printf -v and wait -p assign a variable, hash -p binds a name to
+// a path.
+var stateOptionLetters = map[string]byte{"printf": 'v', "hash": 'p', "wait": 'p'}
 
 var (
 	// looseDurationPattern accepts anything timeout might read as a
@@ -323,7 +325,7 @@ func changesShellState(name string, args []word) bool {
 // expansionSensitive are the commands whose safety depends on reading their
 // options: an argument that expands (${u:--c}, {-c,x}, a glob) can hide one.
 var expansionSensitive = func() map[string]bool {
-	m := map[string]bool{"find": true, "hash": true, "printf": true, "test": true, "[": true}
+	m := map[string]bool{"find": true, "hash": true, "printf": true, "wait": true, "test": true, "[": true}
 	for name := range commandOptionChecks {
 		m[name] = true
 	}

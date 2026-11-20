@@ -896,3 +896,24 @@ func TestParameterExpansionAssigns(t *testing.T) {
 		}
 	}
 }
+
+// Builtins that assign a variable the line names can set PATH, so a later
+// command resolves to a program the parser never saw.
+func TestBuiltinsAssignNamedVariables(t *testing.T) {
+	for _, tt := range []struct {
+		cmd    string
+		wantOK bool
+	}{
+		{`getopts a PATH -a; ls`, false},
+		{`getopts ab opt`, false},
+		{`true & wait -p PATH; ls`, false},
+		{`wait -np x`, false},
+		{`wait ${u:--p} PATH`, false},
+		{`wait`, true},
+		{`wait -n`, true},
+	} {
+		if _, ok := SplitCommand(tt.cmd); ok != tt.wantOK {
+			t.Errorf("SplitCommand(%q) ok = %v, want %v", tt.cmd, ok, tt.wantOK)
+		}
+	}
+}
