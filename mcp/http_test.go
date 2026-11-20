@@ -755,6 +755,27 @@ func TestInitializedSessionsKeepTheirSlots(t *testing.T) {
 	}
 }
 
+// A client that never sends notifications/initialized keeps its session
+// while the table has room: pending sessions are evicted only to make room.
+func TestLaxClientKeepsSessionWhenNotFull(t *testing.T) {
+	clock := &fakeClock{now: time.Now()}
+	ts := serveWithClock(t, newTestServer(nil), HandlerOptions{MaxSessions: 4}, clock)
+	status, sid := rawInitialize(t, ts.URL, initializeBody)
+	if status != http.StatusOK || sid == "" {
+		t.Fatalf("initialize: status %d, id %q", status, sid)
+	}
+	for i := range 2 {
+		clock.advance(2 * pendingSessionTTL) // 60s after the last use, below the idle timeout
+		if got := rawPost(t, ts.URL, sid, `{"jsonrpc":"2.0","id":7,"method":"tools/list"}`, nil); got != http.StatusOK {
+			t.Fatalf("tools/list %d from a session without notifications/initialized = %d, want 200", i, got)
+		}
+		// A new session while there is room evicts nothing either.
+		if status, _ := rawInitialize(t, ts.URL, initializeBody); status != http.StatusOK {
+			t.Fatalf("initialize %d = %d, want 200", i, status)
+		}
+	}
+}
+
 // goroutinesIn counts the goroutines whose stack mentions fn.
 func goroutinesIn(fn string) int {
 	buf := make([]byte, 1<<20)

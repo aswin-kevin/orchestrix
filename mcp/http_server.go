@@ -78,10 +78,12 @@ var defaultAllowedHosts = []string{"localhost", "127.0.0.1", "[::1]"}
 // DELETE ends the session.
 //
 // A session ends on DELETE, when its initialize fails, after
-// SessionIdleTimeout without requests or open streams, or when its client
-// has not sent notifications/initialized within 30 seconds and no response
-// is open. Expiry is lazy: an expired session is removed when it is next
-// used or when a new session is created, so the handler runs no background
+// SessionIdleTimeout without requests or open streams, or, when the table
+// is full and a new session needs a slot, when its client has not sent
+// notifications/initialized within 30 seconds and no response is open (a
+// client that skips the notification keeps its session while there is
+// room). Expiry is lazy: an expired session is removed when it is next used
+// or when a new session is created, so the handler runs no background
 // goroutine and needs no Close.
 // At most MaxSessions sessions are live; an initialize over the cap gets
 // 503.

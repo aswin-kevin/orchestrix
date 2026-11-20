@@ -15,7 +15,7 @@ import (
 const sessionIDBytes = 16
 
 // pendingSessionTTL is how long a session may stay without
-// notifications/initialized before it is evicted.
+// notifications/initialized before newSession may evict it to make room.
 const pendingSessionTTL = 30 * time.Second
 
 // httpSession is one client's session of an httpHandler and the open
@@ -66,10 +66,12 @@ func (st *outStream) deliver(ctx context.Context, m outMsg) error {
 }
 
 // newSession registers a session and names it in w's headers. It first
-// removes expired sessions, including those still without
-// notifications/initialized after pendingSessionTTL, so initialize requests
-// that never complete the handshake cannot hold the slots; when the cap is
-// still reached it writes 503 and returns nil.
+// removes idle sessions; when the table is still at its cap it also removes
+// those without an open response still lacking notifications/initialized
+// after pendingSessionTTL, so initialize requests that never complete the
+// handshake cannot hold the slots. A client that skips the notification
+// keeps its session while there is room. When the cap is still reached it
+// writes 503 and returns nil.
 func (h *httpHandler) newSession(w http.ResponseWriter) *httpSession {
 	buf := make([]byte, sessionIDBytes)
 	_, _ = rand.Read(buf) // never fails
@@ -85,6 +87,9 @@ func (h *httpHandler) newSession(w http.ResponseWriter) *httpSession {
 
 	h.mu.Lock()
 	expired := h.removeExpiredLocked(now)
+	if len(h.sessions) >= h.opts.MaxSessions {
+		expired = append(expired, h.removePendingLocked(now)...)
+	}
 	full := len(h.sessions) >= h.opts.MaxSessions
 	if !full {
 		hs.sess = h.srv.newSession(context.Background(), hs.write)
@@ -103,8 +108,7 @@ func (h *httpHandler) newSession(w http.ResponseWriter) *httpSession {
 }
 
 // removeExpiredLocked unregisters and returns the sessions idle past the
-// timeout or still uninitialized after pendingSessionTTL; h.mu is held. The
-// caller closes them after unlocking.
+// timeout; h.mu is held. The caller closes them after unlocking.
 func (h *httpHandler) removeExpiredLocked(now time.Time) []*httpSession {
 	var expired []*httpSession
 	for id, hs := range h.sessions {
@@ -114,6 +118,20 @@ func (h *httpHandler) removeExpiredLocked(now time.Time) []*httpSession {
 		}
 	}
 	return expired
+}
+
+// removePendingLocked unregisters and returns the sessions without an open
+// response still lacking notifications/initialized pendingSessionTTL after
+// they were created; h.mu is held. The caller closes them after unlocking.
+func (h *httpHandler) removePendingLocked(now time.Time) []*httpSession {
+	var pending []*httpSession
+	for id, hs := range h.sessions {
+		if hs.stalePending(now) {
+			delete(h.sessions, id)
+			pending = append(pending, hs)
+		}
+	}
+	return pending
 }
 
 // lookup returns the session r names and marks it used, removing it when
@@ -173,13 +191,18 @@ func (hs *httpSession) touch(now time.Time, timeout time.Duration) bool {
 }
 
 // expiredLocked reports whether the session has no open response and has
-// had no use for timeout, or has gone pendingSessionTTL since it was created
-// without notifications/initialized; hs.mu is held.
+// had no use for timeout; hs.mu is held.
 func (hs *httpSession) expiredLocked(now time.Time, timeout time.Duration) bool {
-	if hs.open > 0 {
-		return false
-	}
-	return now.Sub(hs.lastActive) >= timeout || !hs.initialized && now.Sub(hs.created) >= pendingSessionTTL
+	return hs.open == 0 && now.Sub(hs.lastActive) >= timeout
+}
+
+// stalePending reports whether the session has no open response and has
+// gone pendingSessionTTL since it was created without
+// notifications/initialized.
+func (hs *httpSession) stalePending(now time.Time) bool {
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	return hs.open == 0 && !hs.initialized && now.Sub(hs.created) >= pendingSessionTTL
 }
 
 // markInitialized records that the client completed the handshake.
