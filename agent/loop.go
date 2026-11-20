@@ -34,6 +34,7 @@ type run struct {
 	info *RunInfo
 	// logger is info.Logger(): the agent logger with the run's attributes.
 	logger   *slog.Logger
+	skips    warnOnce
 	threadID string
 	// name is the effective agent name, RunInfo.AgentName.
 	name    string
@@ -174,7 +175,7 @@ func (r *run) endRun(final *Final) {
 		func() {
 			defer func() {
 				if v := recover(); v != nil {
-					r.logger.Warn("agent: run end function panicked", "err", &PanicError{Value: v})
+					logPanic(r.logger, slog.LevelWarn, "agent: run end function panicked", v, debug.Stack())
 				}
 			}()
 			end(final)
@@ -260,7 +261,7 @@ func (r *run) guarded(step func() *Final) (final *Final) {
 	defer func() {
 		if v := recover(); v != nil {
 			perr := &PanicError{Value: v, Stack: debug.Stack()}
-			r.logger.Error("agent: run step panicked", "err", perr)
+			logPanic(r.logger, slog.LevelError, "agent: run step panicked", v, perr.Stack)
 			final = r.finish(ReasonInternalError, perr)
 		}
 	}()

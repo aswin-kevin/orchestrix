@@ -143,7 +143,8 @@ func WithApprover(a permission.Approver) Option {
 }
 
 // WithLogger sets the logger that receives the errors the agent loop recovers
-// from or drops (see agent.Config.Logger). Nil drops them.
+// from or drops (see agent.Config.Logger, including what the records may
+// carry). Nil drops them.
 func WithLogger(l *slog.Logger) Option {
 	return func(s *settings) { s.cfg.Logger = l }
 }

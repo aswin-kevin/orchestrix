@@ -115,8 +115,11 @@ type Config struct {
 	// lease release and renew errors, recovered panics in RunWrapper end
 	// functions and lease calls, dynamic tools that were skipped, and failed
 	// checkpoint saves. A panic that ends a run is logged at Error. Records
-	// carry thread_id and agent attributes and an err attribute; message
-	// content and tool inputs are never logged. Nil drops every record.
+	// carry thread_id and agent attributes. The loop adds no message or
+	// tool-input attributes and logs panic values by type only (panic_type
+	// and stack); err attributes carry the error text of stores, providers
+	// and middleware, which may echo their data: install a redacting
+	// slog.Handler if that matters. Nil drops every record.
 	// Subagent runs built from a copy of this Config share it.
 	Logger *slog.Logger
 

@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/checkpoint"
 	cpmemory "github.com/aswin-kevin/orchestrix/checkpoint/memory"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -114,8 +116,8 @@ func TestNilLoggerIsSilent(t *testing.T) {
 	if (RunInfo{}).Logger() == nil {
 		t.Fatal("zero RunInfo.Logger() is nil")
 	}
-	if a.logger == nil {
-		t.Fatal("agent logger is nil")
+	if a.logger.Enabled(context.Background(), slog.LevelError) {
+		t.Fatal("nil Config.Logger must drop every record")
 	}
 }
 
@@ -138,7 +140,7 @@ func (dupTools) DynamicTools() []tool.Tool {
 func TestLoggerReportsEndPanicAndSkippedTool(t *testing.T) {
 	log, records := newCapture()
 	a := mustNew(t, Config{
-		Provider:   llmtest.New(llmtest.Turn{Text: "done"}),
+		Provider:   llmtest.New(toolTurn("e1"), llmtest.Turn{Text: "done"}),
 		Tools:      []tool.Tool{echoTool()},
 		Middleware: []Middleware{panicEnd{}, dupTools{}},
 		Logger:     log,
@@ -148,10 +150,20 @@ func TestLoggerReportsEndPanicAndSkippedTool(t *testing.T) {
 	for _, r := range records() {
 		switch r.msg {
 		case "agent: run end function panicked":
-			end = r.level == slog.LevelWarn && strings.Contains(r.attrs["err"], "end boom")
+			end = r.level == slog.LevelWarn && r.attrs["panic_type"] == "string" && r.attrs["err"] == "" && !strings.Contains(r.text, "end boom")
 		case "agent: dynamic tool skipped":
 			skipped = r.level == slog.LevelWarn && r.attrs["thread_id"] == "t1"
 		}
+	}
+	// The snapshot is taken every turn; the skip is reported once per run.
+	n := 0
+	for _, r := range records() {
+		if r.msg == "agent: dynamic tool skipped" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("skipped tool logged %d times, want 1", n)
 	}
 	if !end || !skipped {
 		t.Fatalf("end panic logged = %v, skipped tool logged = %v: %+v", end, skipped, records())
@@ -184,4 +196,63 @@ func TestLoggerNeverLogsContent(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestLoggerGuardedPanicIsErrorWithoutValue(t *testing.T) {
+	log, records := newCapture()
+	a := mustNew(t, Config{
+		Provider:     llmtest.New(llmtest.Turn{Text: "done"}),
+		Checkpointer: panickingSaver{cpmemory.New()},
+		Logger:       log,
+	})
+	_, final := collect(t, a.Run(context.Background(), threadInput("hi")))
+	pe := requirePanicFinal(t, final)
+	value := pe.Value.(string) // "save exploded"
+	var found bool
+	for _, r := range records() {
+		if r.msg != "agent: run step panicked" {
+			continue
+		}
+		found = true
+		if r.level != slog.LevelError || r.attrs["panic_type"] != "string" || r.attrs["stack"] == "" {
+			t.Fatalf("record = %+v", r)
+		}
+	}
+	if !found {
+		t.Fatalf("no panic record: %+v", records())
+	}
+	for _, r := range records() {
+		if strings.Contains(r.text, value) {
+			t.Fatalf("panic value %q in record: %s", value, r.text)
+		}
+	}
+}
+
+// failingSaver is a checkpointer whose Save fails.
+type failingSaver struct{ *cpmemory.Checkpointer }
+
+func (failingSaver) Save(context.Context, string, *state.State, checkpoint.Version) (checkpoint.Version, error) {
+	return "", errors.New("save boom")
+}
+
+func TestLoggerReportsCheckpointSaveFailure(t *testing.T) {
+	log, records := newCapture()
+	a := mustNew(t, Config{
+		Provider:     llmtest.New(llmtest.Turn{Text: "done"}),
+		Checkpointer: failingSaver{cpmemory.New()},
+		Logger:       log,
+	})
+	_, final := collect(t, a.Run(context.Background(), threadInput("hi")))
+	if final.Reason != ReasonCheckpointError {
+		t.Fatalf("reason = %v", final.Reason)
+	}
+	for _, r := range records() {
+		if r.msg == "agent: checkpoint save failed" {
+			if r.level != slog.LevelWarn || !strings.Contains(r.attrs["err"], "save boom") || r.attrs["thread_id"] != "t1" {
+				t.Fatalf("record = %+v", r)
+			}
+			return
+		}
+	}
+	t.Fatalf("no save failure record: %+v", records())
 }

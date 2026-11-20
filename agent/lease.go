@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -74,7 +75,7 @@ func (r *run) releaseLease() {
 	defer cancel()
 	defer func() {
 		if v := recover(); v != nil {
-			l.log.Warn("agent: lease release panicked", "err", &PanicError{Value: v})
+			logPanic(l.log, slog.LevelWarn, "agent: lease release panicked", v, debug.Stack())
 		}
 	}()
 	if err := l.release(ctx); err != nil {
@@ -98,7 +99,12 @@ func (l *runLease) keep(ctx context.Context, renew func(context.Context) error, 
 		case <-ticker.C:
 			err := renewGuarded(ctx, renew, leaseCallTimeout(ttl))
 			if err != nil {
-				l.log.Warn("agent: lease renew failed", "err", err)
+				var perr *PanicError
+				if errors.As(err, &perr) {
+					logPanic(l.log, slog.LevelWarn, "agent: lease renew panicked", perr.Value, perr.Stack)
+				} else {
+					l.log.Warn("agent: lease renew failed", "err", err)
+				}
 			}
 			if errors.Is(err, checkpoint.ErrLeaseHeld) {
 				l.mu.Lock()
@@ -117,7 +123,7 @@ func renewGuarded(ctx context.Context, renew func(context.Context) error, timeou
 	defer cancel()
 	defer func() {
 		if v := recover(); v != nil {
-			err = &PanicError{Value: v}
+			err = &PanicError{Value: v, Stack: debug.Stack()}
 		}
 	}()
 	return renew(ctx)
