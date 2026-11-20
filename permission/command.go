@@ -74,9 +74,6 @@ type commandParser struct {
 	unsafe   bool
 	segments [][]word
 	current  []word
-	// commentSegments are the comments split as commands: a best effort for
-	// deny rules, added to segments only when the line is not vouched for.
-	commentSegments [][]word
 	// bothRedirected is set by "&>", and bothRedirectedAt is then the
 	// number of words in current before it.
 	bothRedirected   bool
@@ -101,9 +98,6 @@ func (p *commandParser) parse() {
 		p.step()
 	}
 	p.endSegment()
-	if p.unsafe {
-		p.segments = append(p.segments, p.commentSegments...)
-	}
 }
 
 // step consumes the token at p.pos.
@@ -305,13 +299,13 @@ func (p *commandParser) target() string {
 	return p.src[start:p.pos]
 }
 
-// comment consumes a comment: a '#' at the start of a word runs to the next
-// newline, which is left to end the segment. Every shell the backends run
-// commands with (/bin/sh -c: dash, bash, and zsh too) ignores it, so it is
-// dropped. Its text is still split as commands, a best effort for deny rules
-// that is used only when the line is not vouched for (see parse): there a
-// quote may hide where the comment really starts.
+// comment consumes a comment, which runs to the next newline. A comment is
+// never vouched for: a quote inside it, or a quote before it that this
+// parser reads differently from the shell, can hide where it starts. Its
+// text is still split, as a best effort for deny rules, and the newline is
+// left to end the segment.
 func (p *commandParser) comment() {
+	p.reject()
 	p.endSegment()
 	end := strings.IndexByte(p.src[p.pos:], '\n')
 	if end < 0 {
@@ -319,7 +313,7 @@ func (p *commandParser) comment() {
 	}
 	sub := commandParser{src: p.src[p.pos+1 : p.pos+end], quotedAt: notQuoted}
 	sub.parse()
-	p.commentSegments = append(p.commentSegments, sub.segments...)
+	p.segments = append(p.segments, sub.segments...)
 	p.pos += end
 }
 
@@ -457,15 +451,16 @@ var parameterOperators = []string{
 // one operator and its word. Indirection (${!x}, ${!prefix*}) expands a
 // value the line cannot see as a parameter, subscript included, so a
 // leading '!' followed by anything is rejected. The body runs to the first
-// '}'; a quote or backslash in it could hide where it really ends, so
-// either one rejects it, as do subscripts and substitutions.
+// '}'; a quote, backslash or nested brace (${x%${y}'...}) in it could hide
+// where it really ends, so any of them rejects it, as do subscripts and
+// substitutions.
 func plainParameterExpansion(rest string) bool {
 	end := strings.IndexByte(rest, '}')
 	if end < 0 {
 		return false
 	}
 	body := rest[:end]
-	if strings.ContainsAny(body, "['\"`\\") || strings.Contains(body, "$(") {
+	if strings.ContainsAny(body, "['\"`\\{") || strings.Contains(body, "$(") {
 		return false
 	}
 	if len(body) > 1 && body[0] == '#' {

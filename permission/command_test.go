@@ -604,30 +604,42 @@ func TestSplitCommandHiddenCommandOptions(t *testing.T) {
 
 func TestCommentSmuggling(t *testing.T) {
 	shell := func(cmd string) Request { return Request{Tool: "execute", Subject: cmd, Shell: true} }
-	// Every shell the backends run (/bin/sh: dash, bash; zsh too) drops a
-	// comment, so the quote inside it is not a quote and the next line is
-	// a command of its own.
+	allowEcho := Context{Mode: ModeDontAsk, Rules: Rules{Allow: []Rule{mustRule(t, "execute(echo:*)")}}}
+	denyTouch := Context{Mode: ModeBypass, Rules: Rules{Deny: []Rule{mustRule(t, "execute(touch:*)")}}}
+
+	// A comment is never vouched for: a quote the parser misreads can hide
+	// where it starts. Its text is still split for deny rules.
 	smuggle := "echo a # '\ntouch pwned # '"
 	segs, ok := SplitCommand(smuggle)
-	if !ok || !slices.Equal(segs, []string{"echo a", "touch pwned"}) {
-		t.Fatalf("SplitCommand(%q) = %q, %v; want [echo a touch pwned], true", smuggle, segs, ok)
+	if ok || !slices.Contains(segs, "touch pwned") {
+		t.Fatalf("SplitCommand(%q) = %q, %v; want ok=false with segment %q", smuggle, segs, ok, "touch pwned")
 	}
-	allowEcho := Context{Mode: ModeDontAsk, Rules: Rules{Allow: []Rule{mustRule(t, "execute(echo:*)")}}}
 	if got := Evaluate(shell(smuggle), allowEcho); got.Behavior == Allow {
 		t.Fatalf("allow echo vouched for %q: %+v", smuggle, got)
 	}
-	denyTouch := Context{Mode: ModeBypass, Rules: Rules{Deny: []Rule{mustRule(t, "execute(touch:*)")}}}
 	if got := Evaluate(shell(smuggle), denyTouch); got.Behavior != Deny {
 		t.Fatalf("Evaluate(%q) = %+v, want Deny", smuggle, got)
 	}
+	segs, ok = SplitCommand("echo a # x")
+	if ok || !slices.Contains(segs, "echo a") {
+		t.Fatalf("SplitCommand(comment) = %q, %v; want ok=false with segment %q", segs, ok, "echo a")
+	}
 
-	// A ';', '|' or '&' inside an unquoted ${...} does not end the word:
-	// the shell runs touch in each of these.
+	// Each of these runs touch in sh, bash and dash: a ';', '|' or '&'
+	// inside an unquoted ${...} does not end the word, and a nested ${...}
+	// inside double quotes ends where the shell's does not, so the quote
+	// that follows is read differently.
 	for _, cmd := range []string{
 		"echo ${x:-a;#}; touch pwned",
 		"echo ${x:-a|#}; touch pwned",
 		"echo ${x:-a&#}; touch pwned",
 		"echo ${x#;#}; touch pwned",
+		`echo "${x%${y}'" #'}"; touch pwned`,
+		`echo "${x%%${y}'" #'}"; touch pwned`,
+		`echo "${x#${y}'" #'}"; touch pwned`,
+		`echo "${x##${y}'" #'}"; touch pwned`,
+		`echo "${x:-${y}'" #'}"; touch pwned`,
+		`echo "${x%${y}'" ;'}"; touch pwned`,
 	} {
 		if segs, ok := SplitCommand(cmd); ok {
 			t.Errorf("SplitCommand(%q) = %q, true; want ok=false", cmd, segs)
@@ -637,20 +649,6 @@ func TestCommentSmuggling(t *testing.T) {
 		}
 		if got := Evaluate(shell(cmd), denyTouch); got.Behavior == Allow {
 			t.Errorf("Evaluate(%q) with deny touch = %+v, want Deny or Ask", cmd, got)
-		}
-	}
-
-	for _, tt := range []struct {
-		cmd  string
-		want []string
-	}{
-		{"echo a # x", []string{"echo a"}},
-		{"echo a #x; touch pwned", []string{"echo a"}},
-		{"# only a comment\nls", []string{"ls"}},
-		{"ls;#x", []string{"ls"}},
-	} {
-		if segs, ok := SplitCommand(tt.cmd); !ok || !slices.Equal(segs, tt.want) {
-			t.Errorf("SplitCommand(%q) = %q, %v; want %q, true", tt.cmd, segs, ok, tt.want)
 		}
 	}
 }
