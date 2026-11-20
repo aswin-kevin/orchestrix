@@ -103,7 +103,8 @@ var gitFlagOptions = map[string]bool{
 	"--glob-pathspecs": true, "--noglob-pathspecs": true, "--icase-pathspecs": true,
 	"--no-optional-locks": true, "--no-advice": true, "--version": true, "-v": true,
 	"--help": true, "-h": true, "--html-path": true, "--man-path": true,
-	"--info-path": true, "--exec-path": true, // --exec-path= is refused earlier
+	"--info-path": true, "--exec-path": true, "--no-lazy-fetch": true,
+	"--list-cmds": true, // --exec-path= is refused earlier
 }
 
 // gitConfigOptions are git's global options that choose configuration git
@@ -122,19 +123,16 @@ var gitCommandOptions = map[string][]string{
 	"pull":       {"--upload-pack"},
 	"ls-remote":  {"--upload-pack"},
 	"push":       {"--receive-pack", "--exec"},
-	"archive":    {"--exec"},
 	"clone":      {"--upload-pack", "-u", "--config", "-c", "--template"},
 	"init":       {"--template"},
 	"instaweb":   {"--httpd", "-d", "--browser", "-b"},
 	"send-email": {"--sendmail-cmd", "--smtp-server", "--to-cmd", "--cc-cmd", "--header-cmd"},
 
 	// Writers: a file named by the option is created or overwritten, which
-	// may be a hook or configuration (.git is also protected by path rules,
-	// but only where the option is visible as a path).
-	"log": {"--output"}, "show": {"--output"}, "diff": {"--output"},
-	"whatchanged": {"--output"}, "range-diff": {"--output"},
-	"diff-tree": {"--output"}, "diff-files": {"--output"}, "diff-index": {"--output"},
-	"format-patch":   {"--output", "-o", "--output-directory"},
+	// may be a hook or configuration. --output is refused for every
+	// subcommand (see gitSubcommandRunsCommand).
+	"archive":        {"--exec", "-o"},
+	"format-patch":   {"--output-directory", "-o"},
 	"update-index":   {"--chmod"},
 	"checkout-index": {"--prefix"},
 }
@@ -161,7 +159,7 @@ func gitRunsCommand(args []word) bool {
 			return true
 		case gitValueOptions[arg]:
 			i++
-		case gitValueOptions[optionName(arg)] || gitFlagOptions[arg]:
+		case gitValueOptions[optionName(arg)] || gitFlagOptions[optionName(arg)]:
 		case strings.HasPrefix(arg, "-"):
 			return true // unknown global: it may take the subcommand as its value
 		default:
@@ -187,7 +185,9 @@ func gitSubcommandRunsCommand(subcommand string, args []word) bool {
 	if action, ok := gitCommandActions[subcommand]; ok && hasAnyWord(args, []string{action}) {
 		return true
 	}
-	return hasAnyOption(args, gitCommandOptions[subcommand])
+	// Any command built on the revision machinery writes its output to the
+	// file --output names.
+	return hasAnyOption(args, []string{"--output"}) || hasAnyOption(args, gitCommandOptions[subcommand])
 }
 
 // hasAnyWord reports whether args, up to an end-of-options marker, contain
@@ -229,7 +229,7 @@ var (
 var sshCommandKeys = map[string]bool{
 	"proxycommand": true, "localcommand": true, "permitlocalcommand": true,
 	"knownhostscommand": true, "include": true, "match": true,
-	"pkcs11provider": true, "securitykeyprovider": true,
+	"pkcs11provider": true, "xauthlocation": true, "securitykeyprovider": true,
 }
 
 // sshRunsCommand returns a check for a command of the ssh family that
