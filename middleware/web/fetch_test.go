@@ -330,3 +330,34 @@ func TestFetchToolTraits(t *testing.T) {
 		t.Fatal("ReadOnly config not reported")
 	}
 }
+
+func TestFetchTimeoutCoversConversion(t *testing.T) {
+	srv := serve(t, "text/html", "<pre>"+strings.Repeat("`", 585<<10)+"</pre>")
+	tl := fetchTool(t, Config{AllowPrivateNetworks: true, Timeout: 2 * time.Second})
+	done := make(chan tool.Result, 1)
+	start := time.Now()
+	go func() { done <- runFetch(t, tl, FetchInput{URL: srv.URL}) }()
+	select {
+	case <-done:
+		if elapsed := time.Since(start); elapsed > 3*time.Second {
+			t.Fatalf("fetch took %s with a 2s timeout", elapsed)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("fetch still running 30s past a 2s timeout")
+	}
+}
+
+func TestFetchMarkdownTruncatedNote(t *testing.T) {
+	// Each short paragraph gains a line of quote markers, so the markdown
+	// outgrows the body: the body is read whole, the markdown is cut.
+	const maxBytes = 4096
+	doc := strings.Repeat("<blockquote>", maxNesting) + strings.Repeat("<p>a</p>", 400)
+	if len(doc) > maxBytes {
+		t.Fatalf("document is %d bytes, want at most %d", len(doc), maxBytes)
+	}
+	srv := serve(t, "text/html", doc)
+	got := runFetch(t, fetchTool(t, Config{AllowPrivateNetworks: true, MaxBytes: maxBytes}), FetchInput{URL: srv.URL}).Flatten()
+	if !strings.HasSuffix(got, "\n\n[content truncated]") {
+		t.Fatalf("output = %q, want the truncation note", got)
+	}
+}

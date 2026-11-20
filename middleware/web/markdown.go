@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/url"
@@ -34,18 +35,47 @@ const (
 	codeFence    = "```"
 )
 
+const (
+	// DefaultMaxMarkdownBytes is how much markdown HTMLToMarkdown writes.
+	DefaultMaxMarkdownBytes = 1 << 20
+	// maxNesting is how many quote markers and list indents a line takes
+	// at most; deeper blockquotes and lists add no further prefix. Tables
+	// nested in a table cell render their cells as plain text.
+	maxNesting = 16
+	// checkEvery is how many nodes are converted between checks of the
+	// context.
+	checkEvery = 1024
+)
+
 // HTMLToMarkdown converts an HTML document to markdown and returns its
-// title (whitespace collapsed; empty when it has none). Relative links and
-// image sources are resolved against the document's <base href>, itself
+// title (whitespace collapsed; empty when it has none). It is
+// HTMLToMarkdownContext without a deadline, writing at most
+// DefaultMaxMarkdownBytes of markdown.
+func HTMLToMarkdown(r io.Reader, base *url.URL) (title, markdown string, err error) {
+	title, markdown, _, err = HTMLToMarkdownContext(context.Background(), r, base, DefaultMaxMarkdownBytes)
+	return title, markdown, err
+}
+
+// HTMLToMarkdownContext converts an HTML document to markdown and returns
+// its title (whitespace collapsed; empty when it has none). Relative links
+// and image sources are resolved against the document's <base href>, itself
 // resolved against base; a nil base leaves them as they are written.
 // Scripts, styles and other non-content elements are dropped, and links to
-// javascript: URLs keep only their text. It fails only on documents the
-// parser rejects, such as ones nested more than 512 elements deep; the
-// parser's bound on nesting also bounds the conversion's recursion.
-func HTMLToMarkdown(r io.Reader, base *url.URL) (title, markdown string, err error) {
+// javascript: URLs keep only their text.
+//
+// The markdown is at most maxBytes long (≤ 0 means
+// DefaultMaxMarkdownBytes); truncated reports that it was cut there.
+// Conversion stops with ctx's error once ctx is done. It also fails on
+// documents the parser rejects, such as ones nested more than 512 elements
+// deep; the parser's bound on nesting also bounds the conversion's
+// recursion.
+func HTMLToMarkdownContext(ctx context.Context, r io.Reader, base *url.URL, maxBytes int) (title, markdown string, truncated bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", false, err
+	}
 	doc, err := html.Parse(r)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	if el := find(doc, "title"); el != nil {
 		title = collapse(rawText(el))
@@ -55,9 +85,15 @@ func HTMLToMarkdown(r io.Reader, base *url.URL) (title, markdown string, err err
 			base = resolveBase(base, href)
 		}
 	}
-	c := newConverter(base)
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxMarkdownBytes
+	}
+	c := newConverter(ctx, base, maxBytes)
 	c.children(doc)
-	return title, c.String(), nil
+	if c.err != nil {
+		return title, "", false, c.err
+	}
+	return title, c.String(), c.truncated, nil
 }
 
 func (c *converter) children(n *html.Node) {
@@ -67,6 +103,15 @@ func (c *converter) children(n *html.Node) {
 }
 
 func (c *converter) node(n *html.Node) {
+	if c.full {
+		return
+	}
+	if c.nodes++; c.nodes%checkEvery == 0 {
+		if err := c.ctx.Err(); err != nil {
+			c.err, c.full = err, true
+			return
+		}
+	}
 	switch n.Type {
 	case html.TextNode:
 		c.text(n.Data)
@@ -94,9 +139,9 @@ func (c *converter) node(n *html.Node) {
 	switch n.Data {
 	case "blockquote":
 		c.block(paragraph)
-		c.prefix = append(c.prefix, quotePrefix)
+		pushed := c.pushPrefix(quotePrefix)
 		c.children(n)
-		c.prefix = c.prefix[:len(c.prefix)-1]
+		c.popPrefix(pushed)
 		c.block(paragraph)
 	case "br":
 		c.br()
@@ -205,9 +250,9 @@ func (c *converter) item(n *html.Node) {
 	c.block(lineBreak)
 	c.open(marker)
 	c.markerOnly = true
-	c.prefix = append(c.prefix, listIndent)
+	pushed := c.pushPrefix(listIndent)
 	c.children(n)
-	c.prefix = c.prefix[:len(c.prefix)-1]
+	c.popPrefix(pushed)
 	c.markerOnly = false
 	// Items stay on consecutive lines even when their content ends with a
 	// paragraph.
@@ -223,24 +268,33 @@ func (c *converter) pre(n *html.Node) {
 	c.block(paragraph)
 	c.word(fence)
 	linePrefix := strings.Join(c.prefix, "")
-	for _, line := range strings.Split(body, "\n") {
-		c.buf = append(c.buf, '\n')
-		c.buf = append(c.buf, linePrefix...)
-		c.buf = append(c.buf, line...)
+	for line := range strings.SplitSeq(body, "\n") {
+		if c.full {
+			return
+		}
+		c.write("\n")
+		c.write(linePrefix)
+		c.write(line)
 	}
-	c.buf = append(c.buf, '\n')
-	c.buf = append(c.buf, linePrefix...)
-	c.buf = append(c.buf, fence...)
+	c.write("\n")
+	c.write(linePrefix)
+	c.write(fence)
 	c.block(paragraph)
 }
 
-// fenceFor returns a backtick fence longer than any backtick run in body.
+// fenceFor returns a backtick fence longer than any backtick run in body,
+// and at least codeFence long.
 func fenceFor(body string) string {
-	fence := codeFence
-	for strings.Contains(body, fence) {
-		fence += "`"
+	longest, run := 0, 0
+	for i := 0; i < len(body); i++ {
+		if body[i] == '`' {
+			run++
+			longest = max(longest, run)
+		} else {
+			run = 0
+		}
 	}
-	return fence
+	return strings.Repeat("`", max(len(codeFence), longest+1))
 }
 
 // code writes inline code, padding the delimiters when the code holds a
@@ -267,9 +321,14 @@ func (c *converter) table(n *html.Node) {
 	}
 	c.markerOnly = false
 	c.block(paragraph)
+	c.tables++
+	defer func() { c.tables-- }()
 	for i, row := range rows {
 		cells := make([]string, len(row))
 		for j, cell := range row {
+			if c.full {
+				return
+			}
 			cells[j] = c.cell(cell)
 		}
 		c.block(lineBreak)
@@ -283,11 +342,16 @@ func (c *converter) table(n *html.Node) {
 }
 
 // cell renders a table cell on one line, escaping the column separator.
+// A cell of a table nested in another table's cell is plain text: the
+// outer cell escapes its separators once.
 func (c *converter) cell(n *html.Node) string {
-	sub := newConverter(c.base)
+	if c.tables > 1 {
+		return collapse(rawText(n))
+	}
+	sub := c.sub()
 	sub.children(n)
-	s := strings.Join(strings.Fields(sub.String()), " ")
-	return strings.ReplaceAll(s, "|", `\|`)
+	c.adopt(sub)
+	return strings.ReplaceAll(collapse(sub.String()), "|", `\|`)
 }
 
 // tableRows returns the cells of the rows of table n, looking through

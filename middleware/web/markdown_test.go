@@ -1,9 +1,13 @@
 package web
 
 import (
+	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 func TestHTMLToMarkdown(t *testing.T) {
@@ -140,5 +144,147 @@ func TestHTMLToMarkdownRawURLWithSpace(t *testing.T) {
 	}
 	if md != "[x](<my page.html>)" {
 		t.Fatalf("markdown = %q", md)
+	}
+}
+
+// convertWithin converts doc with HTMLToMarkdownContext, failing the test
+// when it has not finished within d; a converter that ignores its bounds is
+// then reported instead of hanging the test binary.
+func convertWithin(t *testing.T, d time.Duration, ctx context.Context, doc string) (md string, truncated bool, err error) {
+	t.Helper()
+	type result struct {
+		md        string
+		truncated bool
+		err       error
+	}
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		_, md, truncated, err := HTMLToMarkdownContext(ctx, strings.NewReader(doc), nil, DefaultMaxMarkdownBytes)
+		done <- result{md, truncated, err}
+	}()
+	select {
+	case r := <-done:
+		if elapsed := time.Since(start); elapsed > d {
+			t.Fatalf("conversion took %s, want < %s", elapsed, d)
+		}
+		return r.md, r.truncated, r.err
+	case <-time.After(10 * d):
+		t.Fatalf("conversion still running after %s", 10*d)
+		return "", false, nil
+	}
+}
+
+func TestMarkdownNestedBlockquotesBounded(t *testing.T) {
+	const depth = 500
+	doc := strings.Repeat("<blockquote>", depth) + strings.Repeat("word ", 4<<20/5) + strings.Repeat("</blockquote>", depth)
+	md, truncated, err := convertWithin(t, 2*time.Second, context.Background(), doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(md) > DefaultMaxMarkdownBytes {
+		t.Fatalf("markdown is %d bytes, want at most %d", len(md), DefaultMaxMarkdownBytes)
+	}
+	if !truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if want := strings.Repeat(quotePrefix, maxNesting) + "word word"; !strings.HasPrefix(md, strings.TrimSpace(want)) {
+		t.Fatalf("markdown starts %q, want the prefix stopped at %d quote markers", md[:min(len(md), 80)], maxNesting)
+	}
+}
+
+func TestMarkdownNestedListsBounded(t *testing.T) {
+	const depth = 200
+	doc := strings.Repeat("<ul><li>x", depth) + strings.Repeat("</li></ul>", depth)
+	md, _, err := convertWithin(t, 2*time.Second, context.Background(), doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(md, "\n") {
+		if indent := len(line) - len(strings.TrimLeft(line, " ")); indent > maxNesting*len(listIndent) {
+			t.Fatalf("line %q is indented %d spaces, want at most %d", line, indent, maxNesting*len(listIndent))
+		}
+	}
+}
+
+func TestMarkdownNestedTablesBounded(t *testing.T) {
+	const depth = 120
+	doc := strings.Repeat("<table><tr><td>a|b</td><td>", depth) + "c|d" + strings.Repeat("</td></tr></table>", depth)
+	md, _, err := convertWithin(t, 2*time.Second, context.Background(), doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(md) > DefaultMaxMarkdownBytes {
+		t.Fatalf("markdown is %d bytes, want at most %d", len(md), DefaultMaxMarkdownBytes)
+	}
+	if !strings.Contains(md, "c\\|d") || strings.Contains(md, `\\`) {
+		t.Fatalf("markdown = %.300q, want the innermost cell escaped exactly once", md)
+	}
+}
+
+func TestMarkdownTruncatedAtLimit(t *testing.T) {
+	doc := "<p>" + strings.Repeat("é", 1000) + "</p>"
+	_, md, truncated, err := HTMLToMarkdownContext(context.Background(), strings.NewReader(doc), nil, 101)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated || len(md) > 101 || !utf8.ValidString(md) {
+		t.Fatalf("markdown = %q (%d bytes), truncated = %v; want valid UTF-8 within 101 bytes, truncated", md, len(md), truncated)
+	}
+	_, md, truncated, err = HTMLToMarkdownContext(context.Background(), strings.NewReader("<p>short</p>"), nil, 101)
+	if err != nil || truncated || md != "short" {
+		t.Fatalf("markdown = %q, truncated = %v, err = %v", md, truncated, err)
+	}
+}
+
+func TestFenceForLinear(t *testing.T) {
+	start := time.Now()
+	fence := fenceFor(strings.Repeat("`", 100000))
+	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
+		t.Fatalf("fenceFor took %s", elapsed)
+	}
+	if fence != strings.Repeat("`", 100001) {
+		t.Fatalf("fence is %d bytes, want 100001 backticks", len(fence))
+	}
+	for body, want := range map[string]string{"": "```", "a`b``c": "```", "``` and `````": "``````"} {
+		if got := fenceFor(body); got != want {
+			t.Errorf("fenceFor(%q) = %q, want %q", body, got, want)
+		}
+	}
+}
+
+func TestMarkdownHonoursContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, _, err := HTMLToMarkdownContext(ctx, strings.NewReader("<p>text</p>"), nil, DefaultMaxMarkdownBytes)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// cancelAfter is a context whose Err reports context.Canceled from its
+// n-th call on.
+type cancelAfter struct {
+	context.Context
+	n     int
+	calls int
+}
+
+func (c *cancelAfter) Err() error {
+	if c.calls++; c.calls >= c.n {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestMarkdownCancelledMidway(t *testing.T) {
+	ctx := &cancelAfter{Context: context.Background(), n: 2}
+	doc := strings.Repeat("<p>a</p>", 10*checkEvery)
+	_, md, _, err := HTMLToMarkdownContext(ctx, strings.NewReader(doc), nil, DefaultMaxMarkdownBytes)
+	if !errors.Is(err, context.Canceled) || md != "" {
+		t.Fatalf("markdown = %.40q, err = %v; want no markdown and context.Canceled", md, err)
+	}
+	if ctx.calls != 2 {
+		t.Fatalf("context checked %d times, want conversion to stop at the first failing check", ctx.calls)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net"
 	"net/http"
@@ -108,7 +109,7 @@ func (f *fetcher) fetch(ctx context.Context, in FetchInput, _ *tool.Call) (tool.
 		return tool.Errorf("fetching %s failed: %s", u, describe(err)), nil
 	}
 
-	title, text, convErr := convert(resp)
+	title, text, truncated, convErr := f.convert(ctx, resp)
 	if resp.status >= http.StatusBadRequest {
 		// The status is the error the model needs. The converted body, cut
 		// to errorBodyChars characters, is only context: an error page in
@@ -119,8 +120,14 @@ func (f *fetcher) fetch(ctx context.Context, in FetchInput, _ *tool.Call) (tool.
 		}
 		return tool.Errorf("%s", msg), nil
 	}
+	if ctx.Err() != nil {
+		return tool.Errorf("fetching %s failed: %s", u, describe(ctx.Err())), nil
+	}
 	if convErr != nil {
 		return tool.Errorf("%v", convErr), nil
+	}
+	if truncated {
+		text += "\n\n[content truncated]"
 	}
 	if resp.truncated {
 		text += fmt.Sprintf("\n\n[response truncated at %d bytes]", f.maxBytes)
@@ -167,23 +174,24 @@ func describe(err error) string {
 }
 
 // convert turns the body into text according to its content type, sniffed
-// when the server sent none.
-func convert(r *response) (title, text string, err error) {
+// when the server sent none. HTML is converted to at most maxBytes of
+// markdown, within ctx; truncated reports that the markdown was cut.
+func (f *fetcher) convert(ctx context.Context, r *response) (title, text string, truncated bool, err error) {
 	ct := r.contentType
 	if ct == "" {
 		ct = http.DetectContentType(r.body)
 	}
 	mediaType, _, err := mime.ParseMediaType(ct)
 	if err != nil {
-		return "", "", fmt.Errorf("unsupported content type %q", ct)
+		return "", "", false, fmt.Errorf("unsupported content type %q", ct)
 	}
 	switch {
 	case mediaType == "text/html" || mediaType == "application/xhtml+xml":
-		return HTMLToMarkdown(bytes.NewReader(r.body), r.url)
+		return HTMLToMarkdownContext(ctx, bytes.NewReader(r.body), r.url, int(min(f.maxBytes, math.MaxInt32)))
 	case textual(mediaType):
-		return "", strings.ToValidUTF8(string(r.body), "�"), nil
+		return "", strings.ToValidUTF8(string(r.body), "�"), false, nil
 	}
-	return "", "", fmt.Errorf("unsupported content type %s", mediaType)
+	return "", "", false, fmt.Errorf("unsupported content type %s", mediaType)
 }
 
 // textual reports whether mediaType is returned as it is: text, JSON or XML.

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/url"
 	"strings"
 	"unicode"
@@ -18,10 +19,19 @@ const (
 // until the next content, so leading and trailing breaks vanish and at most
 // one blank line separates blocks.
 type converter struct {
-	base *url.URL
-	buf  []byte
+	ctx   context.Context
+	base  *url.URL
+	buf   []byte
+	limit int // most bytes buf holds
+	// full stops the conversion: buf reached limit, or ctx is done.
+	full      bool
+	truncated bool  // output was cut at limit
+	err       error // ctx's error, once it is done
+	nodes     int   // nodes converted, for context checks
+	// tables counts the enclosing tables.
+	tables int
 	// prefix is the stack of line prefixes: quote markers and list
-	// indentation.
+	// indentation, at most maxNesting deep.
 	prefix []string
 	// lists holds the item count of each enclosing list; -1 marks an
 	// unordered list.
@@ -38,8 +48,59 @@ type converter struct {
 	markerOnly  bool   // the current line holds nothing but a list marker
 }
 
-func newConverter(base *url.URL) *converter {
-	return &converter{base: base, needPrefix: true, lineStart: true}
+func newConverter(ctx context.Context, base *url.URL, limit int) *converter {
+	return &converter{ctx: ctx, base: base, limit: limit, needPrefix: true, lineStart: true}
+}
+
+// sub returns a converter for content rendered apart, such as a table
+// cell, sharing c's context, node count and remaining room.
+func (c *converter) sub() *converter {
+	s := newConverter(c.ctx, c.base, c.limit-len(c.buf))
+	s.nodes, s.tables = c.nodes, c.tables
+	return s
+}
+
+// adopt takes back the node count and stop state of sub.
+func (c *converter) adopt(sub *converter) {
+	c.nodes = sub.nodes
+	if sub.err != nil {
+		c.err, c.full = sub.err, true
+	}
+	if sub.truncated {
+		c.truncated, c.full = true, true
+	}
+}
+
+// write appends s, cutting it at a character boundary where it would take
+// buf past limit; the conversion then stops.
+func (c *converter) write(s string) {
+	if c.full {
+		return
+	}
+	if room := c.limit - len(c.buf); len(s) > room {
+		for room > 0 && !utf8.RuneStart(s[room]) {
+			room--
+		}
+		s = s[:room]
+		c.full, c.truncated = true, true
+	}
+	c.buf = append(c.buf, s...)
+}
+
+// pushPrefix adds p to the line prefix unless it is maxNesting deep, and
+// reports whether it did; popPrefix undoes it.
+func (c *converter) pushPrefix(p string) bool {
+	if len(c.prefix) >= maxNesting {
+		return false
+	}
+	c.prefix = append(c.prefix, p)
+	return true
+}
+
+func (c *converter) popPrefix(pushed bool) {
+	if pushed {
+		c.prefix = c.prefix[:len(c.prefix)-1]
+	}
 }
 
 // String returns the markdown written so far.
@@ -55,6 +116,9 @@ func (c *converter) text(s string) {
 		c.space = true
 	}
 	for i, w := range strings.Fields(s) {
+		if c.full {
+			return
+		}
 		if i > 0 {
 			c.space = true
 		}
@@ -74,9 +138,9 @@ func (c *converter) text(s string) {
 func (c *converter) word(s string) {
 	c.flush()
 	if c.space && !c.lineStart && !c.afterOpen {
-		c.buf = append(c.buf, ' ')
+		c.write(" ")
 	}
-	c.buf = append(c.buf, s...)
+	c.write(s)
 	c.space, c.afterOpen, c.lineStart, c.markerOnly = false, false, false, false
 }
 
@@ -88,7 +152,7 @@ func (c *converter) open(marker string) {
 
 // close writes a closing marker; an owed space moves after it.
 func (c *converter) close(marker string) {
-	c.buf = append(c.buf, marker...)
+	c.write(marker)
 	c.afterOpen, c.lineStart = false, false
 }
 
@@ -125,16 +189,16 @@ func (c *converter) owe(n int) {
 func (c *converter) flush() {
 	if c.pending > 0 && len(c.buf) > 0 {
 		c.trimLine()
-		c.buf = append(c.buf, '\n')
+		c.write("\n")
 		if c.pending >= paragraph {
-			c.buf = append(c.buf, c.breakPrefix...)
-			c.buf = append(c.buf, '\n')
+			c.write(c.breakPrefix)
+			c.write("\n")
 		}
 		c.needPrefix, c.lineStart, c.space = true, true, false
 	}
 	c.pending = 0
 	if c.needPrefix {
-		c.buf = append(c.buf, strings.Join(c.prefix, "")...)
+		c.write(strings.Join(c.prefix, ""))
 		c.needPrefix = false
 	}
 }
