@@ -58,6 +58,8 @@ type run struct {
 	// ends holds the end functions the RunWrappers returned, in stack
 	// order; see endRun.
 	ends []func(*Final)
+	// onEnd is Input.onEnd.
+	onEnd func(*Final)
 	// resume, when set, is the interrupted turn this run finishes before
 	// its first model call; see Agent.Resume.
 	resume *resumption
@@ -126,6 +128,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 		gone:      make(chan struct{}),
 		budget:    newBudget(ctx, a.cfg.MaxDuration),
 		ends:      ends,
+		onEnd:     in.onEnd,
 	}
 	r.outputActive = a.outputPrompt != "" && info.Depth == 0
 	info.run = r
@@ -197,6 +200,7 @@ func (r *run) drive(input []llm.Message) {
 		final.Version = r.version
 		r.seal()
 		r.endRun(final)
+		r.reportEnd(final)
 		r.send(Event{Kind: KindFinal, Final: final})
 		return
 	}
@@ -212,9 +216,11 @@ func (r *run) drive(input []llm.Message) {
 		return r.loop()
 	})
 	if r.abandoned() {
+		final.State = r.state
 		final.Version = r.version
 		r.seal()
 		r.endRun(final)
+		r.reportEnd(final)
 		return
 	}
 	if panicked := r.guarded(func() *Final {
@@ -227,7 +233,17 @@ func (r *run) drive(input []llm.Message) {
 	final.Version = r.version
 	r.seal()
 	r.endRun(final)
+	r.reportEnd(final)
 	r.send(Event{Kind: KindFinal, Final: final})
+}
+
+// reportEnd passes final to Input.onEnd, if set. It runs on the drive
+// goroutine before the event stream closes, so whoever reads the stream to
+// its end sees what onEnd did.
+func (r *run) reportEnd(final *Final) {
+	if r.onEnd != nil {
+		r.onEnd(final)
+	}
 }
 
 // guarded runs step and returns its Final, or, when step panics, the Final

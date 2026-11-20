@@ -112,8 +112,9 @@ func (t *Thread) Prompt(ctx context.Context, text string) iter.Seq2[Event, error
 // Final.State. While another run of the thread is in progress the stream is
 // a single KindFinal with ReasonBusy.
 func (t *Thread) Send(ctx context.Context, msgs ...llm.Message) iter.Seq2[Event, error] {
-	return t.stream(func(s *state.State, v checkpoint.Version) iter.Seq2[Event, error] {
-		return t.agent.Run(ctx, Input{ThreadID: t.id, Messages: msgs, State: s, Version: v})
+	return t.stream(func(in Input) iter.Seq2[Event, error] {
+		in.Messages = msgs
+		return t.agent.Run(ctx, in)
 	})
 }
 
@@ -122,8 +123,8 @@ func (t *Thread) Send(ctx context.Context, msgs ...llm.Message) iter.Seq2[Event,
 // the thread is in progress the stream is a single KindFinal with
 // ReasonBusy.
 func (t *Thread) Resume(ctx context.Context, decisions []Decision) iter.Seq2[Event, error] {
-	return t.stream(func(s *state.State, v checkpoint.Version) iter.Seq2[Event, error] {
-		return t.agent.ResumeWith(ctx, Input{ThreadID: t.id, State: s, Version: v}, decisions)
+	return t.stream(func(in Input) iter.Seq2[Event, error] {
+		return t.agent.ResumeWith(ctx, in, decisions)
 	})
 }
 
@@ -199,30 +200,34 @@ func saveNew(ctx context.Context, cp checkpoint.Checkpointer, id string, s *stat
 // stream runs start on a copy of the thread's State and adopts a copy of
 // the State the run ends with, and its version. The run works on a copy so
 // that Messages and State keep describing a finished run while it is in
-// progress. A run that lost the thread to another writer (a conflict or a
-// lease held elsewhere) is not adopted: the handle keeps what it had.
-func (t *Thread) stream(start func(*state.State, checkpoint.Version) iter.Seq2[Event, error]) iter.Seq2[Event, error] {
+// progress. The run reports its end through Input.onEnd, so a consumer
+// breaking out early, which never sees KindFinal, still leaves the thread
+// with the progress the run made and the version it last saved. A run that
+// lost the thread to another writer (a conflict or a lease held elsewhere),
+// or that never started (an invalid resume), is not adopted: the handle
+// keeps what it had.
+func (t *Thread) stream(start func(Input) iter.Seq2[Event, error]) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
 		s, v, ok := t.acquire()
 		if !ok {
 			yield(t.busyEvent(), ErrThreadBusy)
 			return
 		}
-		original, originalV := s, v
-		// Deferred so that a consumer breaking out early, which never sees
-		// KindFinal, still frees the thread; the run's State then holds
-		// whatever progress it made, as its checkpoint does.
-		defer func() { t.release(s, v) }()
-		for ev, err := range start(s.Clone(), v) {
-			if ev.Kind == KindFinal && ev.Final.State != nil {
-				if lostThread(ev.Final.Err) {
-					s, v = original, originalV
-				} else {
-					// A copy, so a consumer changing Final.State cannot
-					// rewrite the thread's history.
-					s, v = ev.Final.State.Clone(), ev.Final.Version
-				}
+		// onEnd runs on the run's goroutine before its event stream closes,
+		// and the stream's iterator returns only once it has closed, so the
+		// deferred release sees what onEnd set.
+		onEnd := func(final *Final) {
+			if final.State == nil || lostThread(final.Err) {
+				return
 			}
+			// A copy, taken before the consumer gets Final.State, so a
+			// consumer changing it cannot rewrite the thread's history.
+			s, v = final.State.Clone(), final.Version
+		}
+		// Deferred so that a consumer breaking out early still frees the
+		// thread.
+		defer func() { t.release(s, v) }()
+		for ev, err := range start(Input{ThreadID: t.id, State: s.Clone(), Version: v, onEnd: onEnd}) {
 			if !yield(ev, err) {
 				return
 			}

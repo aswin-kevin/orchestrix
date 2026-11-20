@@ -356,3 +356,69 @@ func answersToolUse(msgs []llm.Message, id string) bool {
 	}
 	return false
 }
+
+// breakAtToolResult runs th.Prompt and stops reading at the first
+// KindToolResult, as a consumer breaking out of the loop does.
+func breakAtToolResult(t *testing.T, th *Thread, text string) {
+	t.Helper()
+	for ev := range th.Prompt(context.Background(), text) {
+		if ev.Kind == KindFinal {
+			t.Fatalf("run ended before its tool result: %+v", ev.Final)
+		}
+		if ev.Kind == KindToolResult {
+			break
+		}
+	}
+}
+
+// hasMessage reports whether msgs holds a message of role whose text or
+// tool call matches want.
+func hasMessage(msgs []llm.Message, role llm.Role, want func(llm.Message) bool) bool {
+	return slices.ContainsFunc(msgs, func(m llm.Message) bool { return m.Role == role && want(m) })
+}
+
+func TestThreadBreakEarlyKeepsProgress(t *testing.T) {
+	ctx := context.Background()
+	cp := cpmemory.New()
+	a := mustNew(t, Config{
+		// The spare text turn covers a model call the abandoned run may
+		// start before it notices the consumer left.
+		Provider:     llmtest.New(toolTurn("e1"), llmtest.Turn{Text: "done"}, llmtest.Turn{Text: "done"}),
+		Tools:        []tool.Tool{echoTool()},
+		Checkpointer: cp,
+	})
+	th := mustThread(t, a, "t1")
+	breakAtToolResult(t, th, "first")
+
+	_, saved, err := cp.Load(ctx, "t1")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := th.Version(); got != saved {
+		t.Fatalf("Version() = %q, want the saved %q", got, saved)
+	}
+	_, final := collect(t, th.Prompt(ctx, "second"))
+	if final.Reason != ReasonCompleted {
+		t.Fatalf("second run: final = %+v, want completed", final)
+	}
+	if !hasMessage(th.Messages(), llm.RoleUser, func(m llm.Message) bool { return m.Text() == "first" }) {
+		t.Fatal("thread lost the first user message")
+	}
+}
+
+func TestThreadBreakEarlyWithoutCheckpointer(t *testing.T) {
+	a := mustNew(t, Config{
+		Provider: llmtest.New(toolTurn("e1"), llmtest.Turn{Text: "done"}),
+		Tools:    []tool.Tool{echoTool()},
+	})
+	th := mustThread(t, a, "t1")
+	breakAtToolResult(t, th, "first")
+
+	msgs := th.Messages()
+	if !hasMessage(msgs, llm.RoleUser, func(m llm.Message) bool { return m.Text() == "first" }) {
+		t.Fatal("thread lost the first user message")
+	}
+	if !hasMessage(msgs, llm.RoleAssistant, func(m llm.Message) bool { return len(m.ToolUses()) == 1 }) {
+		t.Fatalf("thread lost the assistant tool call: %+v", msgs)
+	}
+}

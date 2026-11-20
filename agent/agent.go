@@ -62,6 +62,11 @@ type Input struct {
 	// is set; nested (subagent) runs set it because their parent's thread is
 	// the one that is saved. False saves as Config.Checkpointer describes.
 	Ephemeral bool
+
+	// onEnd, when set, is called with the run's Final on every way the run
+	// ends, including a consumer leaving early, before the event stream
+	// closes. Thread uses it to adopt a run whose KindFinal nobody read.
+	onEnd func(*Final)
 }
 
 // New validates cfg, applies its defaults and builds the agent. It fails for a
