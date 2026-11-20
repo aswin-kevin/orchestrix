@@ -452,8 +452,10 @@ func (b *Backend) replaceFile(rel string, content []byte) error {
 	if err := b.fsRoot.MkdirAll(dir, newDirMode); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			// A parent exists but is not a directory. Unix reports ENOTDIR,
-			// Windows "file exists"; report ENOTDIR on both.
-			return &fs.PathError{Op: "mkdir", Path: dir, Err: syscall.ENOTDIR}
+			// Windows "file exists". syscall.ENOTDIR cannot stand in for
+			// both: on Windows it is ERROR_PATH_NOT_FOUND, which reads as
+			// fs.ErrNotExist.
+			return fmt.Errorf("mkdir %s: %w", dir, backend.ErrNotDir)
 		}
 		return err
 	}
