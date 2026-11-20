@@ -2,7 +2,7 @@ module github.com/aswin-kevin/orchestrix/evals
 
 go 1.26.0
 
-require github.com/aswin-kevin/orchestrix v0.8.0
+require github.com/aswin-kevin/orchestrix v0.8.1
 
 require (
 	golang.org/x/net v0.63.0 // indirect

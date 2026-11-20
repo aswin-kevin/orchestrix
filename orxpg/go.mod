@@ -3,7 +3,7 @@ module github.com/aswin-kevin/orchestrix/orxpg
 go 1.26.0
 
 require (
-	github.com/aswin-kevin/orchestrix v0.8.0
+	github.com/aswin-kevin/orchestrix v0.8.1
 	github.com/jackc/pgx/v5 v5.13.0
 )
 

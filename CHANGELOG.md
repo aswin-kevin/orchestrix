@@ -10,6 +10,10 @@ A security fix for path rules on case-insensitive file systems.
 
 - Deny and ask path rules now match ignoring case and the trailing dots and spaces Windows drops from file names. Before, on a case-insensitive file system (macOS by default, Windows), `read(/secrets/**)` did not stop `read_file /SECRETS/key`, which opens the same file, and `ls`, `glob` and `grep` showed it; `write(/secrets/**)` likewise let the model write there. Every release from v0.1.0 to v0.8.0 is affected. On a case-sensitive file system the rules now match more often, which fails closed. Allow path rules still match exactly.
 
+### Modules
+
+- The satellite modules move their core requirement from `v0.8.0` to `v0.8.1` and are tagged `orxotel/v0.2.1`, `orxpg/v0.2.1` and `orxdocker/v0.2.1`, so adding any of them pulls in the fix.
+
 ## v0.8.0 — 2026-11-20
 
 A hardening pass ahead of v1.0.0: security fixes in the permission parser, bounds on everything that could grow or wait without limit, and a tighter public API.
