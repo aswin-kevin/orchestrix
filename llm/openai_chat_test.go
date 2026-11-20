@@ -672,3 +672,60 @@ func TestOpenAIDefaultsToMaxCompletionTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestToolCallLateIDContinuesSyntheticCall(t *testing.T) {
+	stream := chunks(
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read","arguments":"{\"f\":"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"real","function":{"arguments":"1}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectOpenAI(t, newTestOpenAI(t, srv.URL), Request{})
+
+	uses := resp.Message.ToolUses()
+	if len(uses) != 1 {
+		t.Fatalf("tool uses = %+v", resp.Message.Content)
+	}
+	if !strings.HasPrefix(uses[0].ID, "call_") || uses[0].Name != "read" || string(uses[0].Input) != `{"f":1}` {
+		t.Errorf("call = %+v", uses[0])
+	}
+}
+
+func TestToolCallRepeatedIDStaysOneCall(t *testing.T) {
+	stream := chunks(
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"same","function":{"name":"read","arguments":"{\"f\":"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"same","function":{"arguments":"1"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"same","function":{"arguments":"}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectOpenAI(t, newTestOpenAI(t, srv.URL), Request{})
+
+	uses := resp.Message.ToolUses()
+	if len(uses) != 1 || uses[0].ID != "same" || string(uses[0].Input) != `{"f":1}` {
+		t.Fatalf("tool uses = %+v", resp.Message.Content)
+	}
+}
+
+func TestToolCallWithoutIndexIDLessFollowUpContinuesLast(t *testing.T) {
+	stream := chunks(
+		`{"choices":[{"delta":{"tool_calls":[{"id":"a","function":{"name":"one","arguments":"{\"p\":"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"1}"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"id":"b","function":{"name":"two","arguments":"{\"q\":"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"2}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectOpenAI(t, newTestOpenAI(t, srv.URL), Request{})
+
+	uses := resp.Message.ToolUses()
+	if len(uses) != 2 {
+		t.Fatalf("tool uses = %+v", resp.Message.Content)
+	}
+	if uses[0].ID != "a" || string(uses[0].Input) != `{"p":1}` {
+		t.Errorf("first = %+v", uses[0])
+	}
+	if uses[1].ID != "b" || string(uses[1].Input) != `{"q":2}` {
+		t.Errorf("second = %+v", uses[1])
+	}
+}

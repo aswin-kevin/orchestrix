@@ -339,11 +339,12 @@ type openAIStreamState struct {
 	usage        Usage
 }
 
-// toolSlot is one started tool call: the id it was given and its stream
-// block index.
+// toolSlot is one started tool call: the id it was given, whether that id
+// was synthesised, and its stream block index.
 type toolSlot struct {
-	id    string
-	index int
+	id        string
+	synthetic bool
+	index     int
 }
 
 func newOpenAIStreamState() *openAIStreamState {
@@ -401,11 +402,14 @@ func (s *openAIStreamState) deltaEvents(d openAIDelta) []StreamEvent {
 func (s *openAIStreamState) toolCallEvents(call openAIToolCallDelta) []StreamEvent {
 	var events []StreamEvent
 	slot := s.slots[call.Index]
-	if slot == nil || (call.ID != "" && call.ID != slot.id) {
+	if slot == nil || s.startsNewCall(slot, call) {
 		// Some servers omit call ids, yet a result can only be matched to
 		// its call by id, and ids must not repeat across turns.
-		id := firstNonEmpty(call.ID, fmt.Sprintf("call_%s_%d", s.runID, s.next))
-		slot = &toolSlot{id: id, index: openAIToolIndexBase + s.next}
+		id, synthetic := call.ID, false
+		if id == "" {
+			id, synthetic = fmt.Sprintf("call_%s_%d", s.runID, s.next), true
+		}
+		slot = &toolSlot{id: id, synthetic: synthetic, index: openAIToolIndexBase + s.next}
 		s.slots[call.Index] = slot
 		s.next++
 		events = append(events, StreamEvent{Type: EvToolStart, Index: slot.index, ToolID: id, ToolName: call.Function.Name})
@@ -420,6 +424,17 @@ func (s *openAIStreamState) toolCallEvents(call openAIToolCallDelta) []StreamEve
 		events = append(events, StreamEvent{Type: EvToolInputDelta, Index: index, Text: call.Function.Arguments})
 	}
 	return events
+}
+
+// startsNewCall reports whether call, at the index where slot is open,
+// begins another call. It must bring a different id; when slot's id was
+// synthesised, the id may simply arrive late for the same call, so it must
+// also name a function.
+func (s *openAIStreamState) startsNewCall(slot *toolSlot, call openAIToolCallDelta) bool {
+	if call.ID == "" || call.ID == slot.id {
+		return false
+	}
+	return !slot.synthetic || call.Function.Name != ""
 }
 
 // complete emits the closing events.
