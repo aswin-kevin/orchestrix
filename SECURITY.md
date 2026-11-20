@@ -10,7 +10,7 @@ Include what you can of the following: the affected package and version (or comm
 
 Orchestrix runs model-chosen actions on the host, so the parts that stand between a model and the host matter most. Reports about these are especially welcome:
 
-- **The permission parser** (`permission`): a shell line that an allow rule vouches for but that runs a command the parser did not list, or a deny or ask rule that a line can evade.
+- **The permission parser** (`permission`): a shell line that an allow rule vouches for but that runs a command the parser did not list, or a deny or ask rule that a line can evade. A rule such as `execute(git:*)` is meant for git's porcelain; git's plumbing and transport commands (`fetch-pack`, `send-pack`, `upload-pack`, `remote-ext` and the like) are never vouched for, by design.
 - **Backends** (`backend/...`): a path that escapes a disk, shell, key/value or composite backend's root, or a workspace that one thread or threadless run can read from another.
 - **The sandbox backend** (`backend/sandbox`): quoting or encoding mistakes that let file operations run other commands in the sandbox.
 - **orxdocker**: a container setting that weakens the documented hardening, a command that escapes its time limit or container, or a container shared between threads.

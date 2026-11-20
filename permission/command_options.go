@@ -119,22 +119,38 @@ var gitCommandOptions = map[string][]string{
 	"rebase":     {"--exec", "-x"},
 	"difftool":   {"--extcmd", "-x"},
 	"grep":       {"--open-files-in-pager", "-O"},
-	"fetch":      {"--upload-pack"},
-	"pull":       {"--upload-pack"},
-	"ls-remote":  {"--upload-pack"},
-	"push":       {"--receive-pack", "--exec"},
-	"clone":      {"--upload-pack", "-u", "--config", "-c", "--template"},
+	"clone":      {"-u", "--config", "-c", "--template"},
 	"init":       {"--template"},
 	"instaweb":   {"--httpd", "-d", "--browser", "-b"},
 	"send-email": {"--sendmail-cmd", "--smtp-server", "--to-cmd", "--cc-cmd", "--header-cmd"},
 
 	// Writers: a file named by the option is created or overwritten, which
 	// may be a hook or configuration. --output is refused for every
-	// subcommand (see gitSubcommandRunsCommand).
-	"archive":        {"--exec", "-o"},
+	// subcommand (see gitAnySubcommandOptions).
+	"archive":        {"-o"},
 	"format-patch":   {"--output-directory", "-o"},
 	"update-index":   {"--chmod"},
 	"checkout-index": {"--prefix"},
+}
+
+// gitAnySubcommandOptions are refused for every subcommand. --output names a
+// file that any command built on the revision machinery writes to. --exec,
+// --upload-pack and --receive-pack name the program a transport runs on the
+// other side, which is a local shell command when the remote is a path:
+// fetch, pull, ls-remote, push, clone, archive and the plumbing beneath them
+// all take them.
+var gitAnySubcommandOptions = []string{"--output", "--exec", "--upload-pack", "--receive-pack"}
+
+// gitRefusedSubcommands are plumbing and transport subcommands that are never
+// vouched for: they take the program to run on the other side as an option
+// or argument, run a server or helper that can, or send data to a place
+// their configuration chooses. execute(git:*) is meant for porcelain.
+var gitRefusedSubcommands = map[string]bool{
+	"fetch-pack": true, "send-pack": true, "upload-pack": true, "receive-pack": true,
+	"upload-archive": true, "upload-archive--writer": true, "remote-ext": true,
+	"remote-fd": true, "daemon": true, "shell": true, "http-backend": true,
+	"credential": true, "credential-store": true, "credential-cache": true,
+	"imap-send": true,
 }
 
 // gitCommandActions are the subcommands that run a command given as their
@@ -176,8 +192,8 @@ func optionName(arg string) string {
 }
 
 func gitSubcommandRunsCommand(subcommand string, args []word) bool {
-	if subcommand == "filter-branch" {
-		return true // every filter is a shell command
+	if subcommand == "filter-branch" || gitRefusedSubcommands[subcommand] {
+		return true // every filter is a shell command; see gitRefusedSubcommands
 	}
 	if subcommand == "config" {
 		return !hasAnyWord(args, gitConfigReads)
@@ -185,9 +201,7 @@ func gitSubcommandRunsCommand(subcommand string, args []word) bool {
 	if action, ok := gitCommandActions[subcommand]; ok && hasAnyWord(args, []string{action}) {
 		return true
 	}
-	// Any command built on the revision machinery writes its output to the
-	// file --output names.
-	return hasAnyOption(args, []string{"--output"}) || hasAnyOption(args, gitCommandOptions[subcommand])
+	return hasAnyOption(args, gitAnySubcommandOptions) || hasAnyOption(args, gitCommandOptions[subcommand])
 }
 
 // hasAnyWord reports whether args, up to an end-of-options marker, contain

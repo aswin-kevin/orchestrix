@@ -60,6 +60,8 @@ var shellDiffSeeds = []string{
 	`git archive --output=x.tar HEAD`, `git --no-lazy-fetch log -1`, `git --list-cmds=main`,
 	`git --list-cmds main`, `git -C sub status`, `git --no-pager log -1`, `git -p status`,
 	`git --exec-path`, `git log --oneline`, `git format-patch HEAD~1`,
+	`git fetch-pack --upload-pack='touch pwned;' . HEAD`, `git fetch-pack --exec='touch pwned;' . HEAD`, `git ls-remote --exec='touch pwned;' .`,
+	`git send-pack --receive-pack='touch pwned;' . HEAD`, `git send-pack --exec='touch pwned;' . HEAD`, `git upload-pack .`, `git remote-ext . x`,
 
 	"ssh -o \"ProxyCommand\ttouch pwned\" h", `ssh -oPKCS11Provider=/tmp/e.so h`,
 	`ssh -o SecurityKeyProvider=/tmp/e.so h`, `ssh -I /tmp/e.so h`, `ssh -X -o XAuthLocation=/tmp/evil h`,
