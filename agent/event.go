@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -95,7 +96,32 @@ const (
 	// OutputRetries corrections (Final.Err wraps ErrInvalidOutput). Final.Text
 	// is the last reply.
 	ReasonInvalidOutput TerminalReason = "invalid_output"
+	// ReasonInternalError: code the run calls on its own goroutine (the
+	// provider, a ModelWrapper, the Checkpointer or its lease) panicked.
+	// Final.Err is a *PanicError. The end-of-run save is still attempted,
+	// the lease released and the RunWrappers' end functions called;
+	// Final.Version is the version of the last save that succeeded.
+	ReasonInternalError TerminalReason = "internal_error"
 )
+
+// PanicError is the error of a run that ended with ReasonInternalError: it
+// carries the value the run's code panicked with and the stack of the
+// goroutine at the time.
+type PanicError struct {
+	Value any
+	Stack []byte
+}
+
+func (e *PanicError) Error() string {
+	return fmt.Sprintf("agent: panic: %v", e.Value)
+}
+
+// Unwrap returns Value when it is an error, so errors.Is and errors.As see
+// through the panic.
+func (e *PanicError) Unwrap() error {
+	err, _ := e.Value.(error)
+	return err
+}
 
 // Event is one item of a run's output stream. Kind selects which of the other
 // fields are set; see the EventKind constants.

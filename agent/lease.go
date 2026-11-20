@@ -50,7 +50,8 @@ func (r *run) acquireLease() *Final {
 	return nil
 }
 
-// releaseLease stops renewing and gives the lease up.
+// releaseLease stops renewing and gives the lease up. A failed or
+// panicking release is dropped: the lease then expires after its TTL.
 func (r *run) releaseLease() {
 	l := r.lease
 	if l == nil {
@@ -58,13 +59,14 @@ func (r *run) releaseLease() {
 	}
 	close(l.stop)
 	<-l.done
+	defer func() { _ = recover() }()
 	_ = l.release(context.WithoutCancel(r.ctx))
 }
 
 // keep renews the lease every ttl/3 until stop is closed. A renewal that
 // finds the lease held by another owner records the loss and stops; other
-// renewal errors are retried on the next tick, since the lease may still be
-// valid.
+// renewal errors, and a renewal that panics, are retried on the next tick,
+// since the lease may still be valid.
 func (l *runLease) keep(ctx context.Context, renew func(context.Context) error, ttl time.Duration) {
 	defer close(l.done)
 	interval := max(ttl/3, time.Millisecond)
@@ -75,7 +77,7 @@ func (l *runLease) keep(ctx context.Context, renew func(context.Context) error, 
 		case <-l.stop:
 			return
 		case <-ticker.C:
-			err := renew(ctx)
+			err := renewGuarded(ctx, renew)
 			if errors.Is(err, checkpoint.ErrLeaseHeld) {
 				l.mu.Lock()
 				l.err = err
@@ -84,6 +86,16 @@ func (l *runLease) keep(ctx context.Context, renew func(context.Context) error, 
 			}
 		}
 	}
+}
+
+// renewGuarded calls renew, turning a panic into an error.
+func renewGuarded(ctx context.Context, renew func(context.Context) error) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = &PanicError{Value: v}
+		}
+	}()
+	return renew(ctx)
 }
 
 // lost returns the error of a lease another owner took over, nil while the

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -183,13 +184,17 @@ func (a *Agent) backendFor(in Input) backend.Backend {
 	}
 }
 
-// drive executes the run and closes the event channel when it is over.
+// drive executes the run and closes the event channel when it is over. A
+// panic in the code the run calls on this goroutine (the provider, a
+// ModelWrapper, the Checkpointer) ends the run with ReasonInternalError
+// rather than the process; see guarded.
 func (r *run) drive(input []llm.Message) {
 	defer close(r.events)
 	defer r.seal()
 	defer r.budget.stopClock()
 
-	if final := r.acquireLease(); final != nil {
+	if final := r.guarded(r.acquireLease); final != nil {
+		final.Version = r.version
 		r.seal()
 		r.endRun(final)
 		r.send(Event{Kind: KindFinal, Final: final})
@@ -197,25 +202,43 @@ func (r *run) drive(input []llm.Message) {
 	}
 	defer r.releaseLease()
 
-	if r.resume == nil {
-		// A new run abandons an interrupt left in State; repairHistory
-		// answers the calls it left unanswered in the model's view.
-		pendingKey.Delete(r.state)
-	}
-	r.state.AppendMessages(input...)
-	final := r.loop()
+	final := r.guarded(func() *Final {
+		if r.resume == nil {
+			// A new run abandons an interrupt left in State; repairHistory
+			// answers the calls it left unanswered in the model's view.
+			pendingKey.Delete(r.state)
+		}
+		r.state.AppendMessages(input...)
+		return r.loop()
+	})
 	if r.abandoned() {
 		final.Version = r.version
 		r.seal()
 		r.endRun(final)
 		return
 	}
-	r.runAfterAgent(final)
-	r.finalCheckpoint(final)
+	if panicked := r.guarded(func() *Final {
+		r.runAfterAgent(final)
+		r.finalCheckpoint(final)
+		return nil
+	}); panicked != nil {
+		final = panicked
+	}
 	final.Version = r.version
 	r.seal()
 	r.endRun(final)
 	r.send(Event{Kind: KindFinal, Final: final})
+}
+
+// guarded runs step and returns its Final, or, when step panics, the Final
+// of a run ended with ReasonInternalError whose Err is a *PanicError.
+func (r *run) guarded(step func() *Final) (final *Final) {
+	defer func() {
+		if v := recover(); v != nil {
+			final = r.finish(ReasonInternalError, &PanicError{Value: v, Stack: debug.Stack()})
+		}
+	}()
+	return step()
 }
 
 // loop runs turns until the model is done, a run limit is reached, or

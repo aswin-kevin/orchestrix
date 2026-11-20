@@ -9,11 +9,14 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/checkpoint"
+	cpmemory "github.com/aswin-kevin/orchestrix/checkpoint/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -882,5 +885,191 @@ func TestAfterAgentContextOutlivesCancellation(t *testing.T) {
 	}
 	if gotErr != nil || gotValue != "kept" {
 		t.Fatalf("AfterAgent context: err %v, value %v; want a live context carrying the run's values", gotErr, gotValue)
+	}
+}
+
+// panickingProvider answers its first after calls from the scripted provider
+// it embeds, then panics while streaming.
+type panickingProvider struct {
+	llm.Provider
+	after int32
+	calls atomic.Int32
+}
+
+func (p *panickingProvider) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.StreamEvent, error] {
+	if p.calls.Add(1) <= p.after {
+		return p.Provider.Stream(ctx, req)
+	}
+	return func(func(llm.StreamEvent, error) bool) { panic("provider exploded") }
+}
+
+func (p *panickingProvider) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
+	return llm.Collect(ctx, p, req)
+}
+
+// requirePanicFinal fails the test unless final ended the run on a recovered
+// panic carrying its stack.
+func requirePanicFinal(t *testing.T, final *Final) *PanicError {
+	t.Helper()
+	if final.Reason != ReasonInternalError {
+		t.Fatalf("reason = %s (err %v), want %s", final.Reason, final.Err, ReasonInternalError)
+	}
+	var pe *PanicError
+	if !errors.As(final.Err, &pe) {
+		t.Fatalf("err = %v, want a *PanicError", final.Err)
+	}
+	if len(pe.Stack) == 0 {
+		t.Fatal("PanicError.Stack is empty")
+	}
+	return pe
+}
+
+func TestProviderPanicEndsRun(t *testing.T) {
+	a := mustNew(t, Config{Provider: &panickingProvider{Provider: llmtest.New()}})
+	_, final := collect(t, a.Run(context.Background(), userInput("hi")))
+	pe := requirePanicFinal(t, final)
+	if pe.Value != "provider exploded" || pe.Error() != "agent: panic: provider exploded" {
+		t.Fatalf("PanicError = %v (value %v)", pe, pe.Value)
+	}
+}
+
+// panickingWrapper is a ModelWrapper that panics instead of calling the model.
+type panickingWrapper struct{}
+
+func (panickingWrapper) Name() string { return "panicky" }
+
+func (panickingWrapper) WrapModel(context.Context, *ModelRequest, ModelHandler) (*llm.Response, error) {
+	panic(errors.New("wrapper exploded"))
+}
+
+func TestWrapModelPanicEndsRun(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{Text: "never"})
+	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{panickingWrapper{}}})
+	_, final := collect(t, a.Run(context.Background(), userInput("hi")))
+	requirePanicFinal(t, final)
+	if p.Calls() != 0 {
+		t.Fatalf("provider called %d times", p.Calls())
+	}
+}
+
+// panickingSaver is a Checkpointer (without a lease) whose Save panics.
+type panickingSaver struct{ checkpoint.Checkpointer }
+
+func (panickingSaver) Save(context.Context, string, *state.State, checkpoint.Version) (checkpoint.Version, error) {
+	panic("save exploded")
+}
+
+func TestCheckpointerPanicEndsRun(t *testing.T) {
+	a := mustNew(t, Config{
+		Provider:     llmtest.New(llmtest.Turn{Text: "done"}),
+		Checkpointer: panickingSaver{cpmemory.New()},
+	})
+	_, final := collect(t, a.Run(context.Background(), threadInput("hi")))
+	requirePanicFinal(t, final)
+}
+
+// countingLeaser is a memory checkpointer whose leases count their releases.
+type countingLeaser struct {
+	*cpmemory.Checkpointer
+	releases atomic.Int32
+}
+
+func (l *countingLeaser) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (func(context.Context) error, func(context.Context) error, error) {
+	renew, release, err := l.Checkpointer.Acquire(ctx, threadID, owner, ttl)
+	if err != nil {
+		return nil, nil, err
+	}
+	return renew, func(ctx context.Context) error {
+		l.releases.Add(1)
+		return release(ctx)
+	}, nil
+}
+
+func TestPanicReleasesLeaseAndKeepsVersion(t *testing.T) {
+	ctx := context.Background()
+	cp := &countingLeaser{Checkpointer: cpmemory.New()}
+	ends := 0
+	a := mustNew(t, Config{
+		Provider:     &panickingProvider{Provider: llmtest.New(toolTurn("e1")), after: 1},
+		Tools:        []tool.Tool{echoTool()},
+		Checkpointer: cp,
+		Middleware:   []Middleware{endCounter{&ends}},
+	})
+	_, final := collect(t, a.Run(ctx, threadInput("hi")))
+	requirePanicFinal(t, final)
+	if n := cp.releases.Load(); n != 1 {
+		t.Fatalf("lease released %d times, want 1", n)
+	}
+	if ends != 1 {
+		t.Fatalf("RunWrapper end ran %d times, want 1", ends)
+	}
+	_, v, err := cp.Load(ctx, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v == "" || final.Version != v {
+		t.Fatalf("Final.Version = %q, stored version %q", final.Version, v)
+	}
+	if final.Turns != 1 {
+		t.Fatalf("turns = %d, want 1", final.Turns)
+	}
+	// The released lease lets the next run of the thread start.
+	a2 := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "ok"}), Checkpointer: cp})
+	in := threadInput("again")
+	in.State, in.Version = final.State, final.Version
+	if _, f := collect(t, a2.Run(ctx, in)); f.Reason != ReasonCompleted {
+		t.Fatalf("next run: %+v", f)
+	}
+}
+
+// endCounter is a RunWrapper counting the calls of its end function.
+type endCounter struct{ n *int }
+
+func (endCounter) Name() string { return "ends" }
+
+func (e endCounter) WrapRun(ctx context.Context, _ RunInfo) (context.Context, func(*Final)) {
+	return ctx, func(*Final) { *e.n++ }
+}
+
+// panickingRenewer is a memory checkpointer whose lease renewals panic.
+type panickingRenewer struct {
+	*cpmemory.Checkpointer
+	renews atomic.Int32
+}
+
+func (l *panickingRenewer) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (func(context.Context) error, func(context.Context) error, error) {
+	_, release, err := l.Checkpointer.Acquire(ctx, threadID, owner, ttl)
+	renew := func(context.Context) error {
+		l.renews.Add(1)
+		panic("renew exploded")
+	}
+	return renew, release, err
+}
+
+func TestLeaseRenewPanicIsAFailedRenewal(t *testing.T) {
+	cp := &panickingRenewer{Checkpointer: cpmemory.New()}
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	a := mustNew(t, Config{
+		Provider:     llmtest.New(toolTurn("e1"), llmtest.Turn{Text: "done"}),
+		Tools:        []tool.Tool{blockingTool(started, release)},
+		Checkpointer: cp,
+		LeaseTTL:     9 * time.Millisecond,
+	})
+	done := make(chan *Final)
+	go func() {
+		_, final := collect(t, a.Run(context.Background(), threadInput("go")))
+		done <- final
+	}()
+	<-started
+	deadline := time.Now().Add(5 * time.Second)
+	for cp.renews.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(release)
+	if final := <-done; final.Reason != ReasonCompleted {
+		t.Fatalf("final = %+v, want completed", final)
+	}
+	if cp.renews.Load() < 2 {
+		t.Fatal("renewals stopped after the first panic")
 	}
 }
