@@ -41,7 +41,9 @@ func newManager(maxRunning, maxFinished int) *manager {
 
 // startJob launches command as the next job of threadID. recorded lists the
 // jobs the run's State already knows, so a thread resumed in a new process
-// never reuses the id of a job it recorded before.
+// never reuses the id of a job it recorded before. The backend's Start runs
+// outside the registry's lock (see jobs.Manager.Start), so a slow start
+// stalls no other thread.
 func startJob(ctx context.Context, mg *manager, starter backend.Starter, threadID, command string, timeout time.Duration, recorded []JobRecord) (*job, error) {
 	ids := make([]string, len(recorded))
 	for i, r := range recorded {
@@ -60,8 +62,17 @@ func startJob(ctx context.Context, mg *manager, starter backend.Starter, threadI
 		return nil, errShutdown
 	case errors.As(err, &limit):
 		return nil, fmt.Errorf("too many background tasks running (limit %d); stop one with %s or wait for one to finish", limit.Limit, ToolTaskStop)
+	case err != nil:
+		return nil, err
 	}
-	return j, err
+	if j.Stopped() {
+		// Shutdown came while the backend started the command, and the
+		// registry stopped it as it committed. No record is kept: this error
+		// is all the model hears of it, so the thread may be released.
+		mg.MarkNotified(threadID, j.ID)
+		return nil, errShutdown
+	}
+	return j, nil
 }
 
 // outcome returns the job's status and exit code; the exit code is 0 while

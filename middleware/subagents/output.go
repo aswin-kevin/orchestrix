@@ -14,10 +14,11 @@ import (
 // error, up to DefaultOutputRetries times. It returns the last Final and the
 // task result: the compact JSON once valid, an error result once the
 // retries are spent. The result is nil when a run did not complete (or the
-// call was cancelled); that Final is then reported as any other run's.
+// call was cancelled, or a run gave no Final); that Final is then reported
+// as any other run's.
 func structuredOutput(ctx context.Context, child *agent.Agent, in agent.Input, final *agent.Final, schema map[string]any) (*agent.Final, *tool.Result) {
 	for retry := 0; ; retry++ {
-		if final.Reason != agent.ReasonCompleted || ctx.Err() != nil {
+		if final == nil || final.Reason != agent.ReasonCompleted || ctx.Err() != nil {
 			return final, nil
 		}
 		answer, err := tool.ParseObject(schema, final.Text)

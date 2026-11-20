@@ -158,10 +158,18 @@ func (m *middleware) subagent(parent *agent.Agent, typ string) (*agent.Agent, ma
 // settle turns a child's Final into the task result: it checks a structured
 // answer, suspends a child waiting for a decision, and otherwise merges the
 // child's state back. A suspended child's state is merged once it finishes.
+// A child whose stream ended without a Final (nil) gives an error result, or
+// the context's error when the call was cancelled.
 func (m *middleware) settle(ctx context.Context, c *tool.Call, run childRun, final *agent.Final) (tool.Result, error) {
 	var structured *tool.Result
 	if run.schema != nil {
 		final, structured = structuredOutput(ctx, run.agent, run.in, final, run.schema)
+	}
+	if final == nil {
+		if err := ctx.Err(); err != nil {
+			return tool.Result{}, err
+		}
+		return tool.Errorf("subagent %s ended without a result", run.typ), nil
 	}
 	if final.Reason == agent.ReasonInterrupted && ctx.Err() == nil {
 		return suspend(c, run, final)
@@ -181,9 +189,10 @@ func runChild(ctx context.Context, child *agent.Agent, in agent.Input) *agent.Fi
 }
 
 // drain consumes a child's event stream, forwarding its events to the
-// parent's stream, and returns the Final. The Final becomes the task result,
-// and a KindInterrupt is not forwarded either: the parent raises its own
-// interrupt for the task call, so consumers see exactly one per call. drain
+// parent's stream, and returns the Final (nil when the stream ended without
+// one). The Final becomes the task result, and a KindInterrupt is not
+// forwarded either: the parent raises its own interrupt for the task call, so
+// consumers see exactly one per call. drain
 // always consumes the whole stream, so the child's goroutines have stopped
 // when it returns; cancelling ctx (the parent's call context) stops the
 // child.

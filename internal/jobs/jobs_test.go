@@ -341,3 +341,144 @@ func TestNewManagerRejectsBadLimits(t *testing.T) {
 		}()
 	}
 }
+
+// startOutcome is what a Start returned.
+type startOutcome struct {
+	j   *Job[*fake]
+	err error
+}
+
+// blockedStart calls Start on thread in a goroutine; its start function
+// closes entered and waits for release, then returns f, or an error when f is
+// nil. out yields Start's outcome.
+func blockedStart(m *Manager[*fake], thread string, f *fake) (entered, release chan struct{}, out chan startOutcome) {
+	entered, release, out = make(chan struct{}), make(chan struct{}), make(chan startOutcome, 1)
+	go func() {
+		j, err := m.Start(thread, nil, func() (*fake, error) {
+			close(entered)
+			<-release
+			if f == nil {
+				return nil, errors.New("boom")
+			}
+			return f, nil
+		})
+		out <- startOutcome{j, err}
+	}()
+	return entered, release, out
+}
+
+func TestSlowStartDoesNotBlockOtherThreads(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	entered, release, out := blockedStart(m, "a", newFake())
+	defer func() { close(release); <-out }()
+	waitFor(t, entered)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := m.Start("b", nil, func() (*fake, error) { return newFake(), nil }); err != nil {
+			t.Errorf("Start on thread b: %v", err)
+		}
+		m.Get("a", "x_1")
+		m.ThreadCount()
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("a slow start on thread a blocked the Manager")
+	}
+}
+
+func TestReservedSlotCountsTowardLimit(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 1, MaxFinished: 5})
+	f := newFake()
+	entered, release, out := blockedStart(m, "t", f)
+	waitFor(t, entered)
+
+	var le *LimitError
+	if _, err := m.Start("t", nil, func() (*fake, error) { return newFake(), nil }); !errors.As(err, &le) {
+		t.Fatalf("second start during a reserved slot: err = %v", err)
+	}
+	m.Release("t")
+	if m.ThreadCount() != 1 {
+		t.Fatal("Release dropped a thread with a start in flight")
+	}
+	close(release)
+	o := <-out
+	if o.err != nil || o.j.ID != "x_1" || m.Get("t", "x_1") != o.j {
+		t.Fatalf("committed start = %+v", o)
+	}
+	f.end()
+}
+
+func TestFailedReservationRollsBack(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 1, MaxFinished: 5})
+	entered, release, out := blockedStart(m, "t", nil)
+	waitFor(t, entered)
+	close(release)
+	if o := <-out; o.err == nil {
+		t.Fatal("failed start returned no error")
+	}
+	// The slot is free again and the unused number is taken by the next job.
+	if j, _ := startFake(t, m, "t"); j.ID != "x_1" {
+		t.Fatalf("id = %s", j.ID)
+	}
+}
+
+func TestShutdownDuringStart(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	f := newFake()
+	entered, release, out := blockedStart(m, "t", f)
+	waitFor(t, entered)
+
+	shut := make(chan struct{})
+	go func() { m.Shutdown(2 * time.Second); close(shut) }()
+	select {
+	case <-shut:
+		t.Fatal("Shutdown returned while a start was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	waitFor(t, shut)
+	o := <-out
+	if o.err != nil {
+		t.Fatalf("start committed during Shutdown: err = %v", o.err)
+	}
+	if !o.j.Stopped() || !o.j.Ended() {
+		t.Fatalf("job started during Shutdown survived it: stopped %v, ended %v", o.j.Stopped(), o.j.Ended())
+	}
+	if _, err := m.Start("t", nil, func() (*fake, error) { return newFake(), nil }); !errors.Is(err, ErrShutdown) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestShutdownWaitForStartIsBounded(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	f := newFake()
+	entered, release, out := blockedStart(m, "t", f)
+	waitFor(t, entered)
+	const wait = 50 * time.Millisecond
+	begin := time.Now()
+	m.Shutdown(wait)
+	if d := time.Since(begin); d > wait+100*time.Millisecond {
+		t.Fatalf("Shutdown took %s", d)
+	}
+	close(release)
+	o := <-out
+	// The late job is stopped as it commits.
+	if o.err != nil || !o.j.Stopped() || !o.j.Ended() {
+		t.Fatalf("late start = %+v", o)
+	}
+}
+
+func TestPanickingStartRollsBack(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 1, MaxFinished: 5})
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = m.Start("t", nil, func() (*fake, error) { panic("boom") })
+	}()
+	if j, _ := startFake(t, m, "t"); j.ID != "x_1" {
+		t.Fatalf("id = %s", j.ID)
+	}
+	m.Shutdown(time.Second) // returns at once: no start is left in flight
+}

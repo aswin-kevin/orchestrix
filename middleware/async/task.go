@@ -7,9 +7,10 @@ import (
 )
 
 // task is what the job registry holds for one background task. It is
-// registered before the Runner starts the work, because the registry assigns
-// the task's id under its lock while a Runner's Start may block; attach then
-// hands it the Runner's Handle, or fail ends it when the start failed.
+// registered before the Runner starts the work, because the Runner's Start
+// needs the task's id, which the registry hands out only with the registered
+// job; attach then hands it the Runner's Handle, or fail ends it when the
+// start failed.
 //
 // Its outcome is published before done closes, so a job seen as ended always
 // has one.

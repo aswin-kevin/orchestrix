@@ -89,9 +89,13 @@ func (j *Job[H]) Notified() bool { return j.notified.Load() }
 
 // thread holds the jobs of one thread.
 type thread[H Handle] struct {
-	// next is the number of the last job started in the thread.
+	// next is the number of the last job started in the thread, including
+	// one whose start is still in flight.
 	next int
-	jobs map[string]*Job[H]
+	// starting counts the starts in flight: each holds a slot of the
+	// running limit and keeps the entry from being dropped.
+	starting int
+	jobs     map[string]*Job[H]
 	// finished lists the ids of ended jobs still remembered, oldest first.
 	finished []string
 	// changed is closed, and replaced, whenever a job of the thread ends;
@@ -144,6 +148,9 @@ type Manager[H Handle] struct {
 	threads  map[string]*thread[H]
 	closed   bool
 	watchers sync.WaitGroup
+	// starting tracks the starts in flight, so Shutdown can wait for them.
+	// Add happens under mu and only before closed is set.
+	starting sync.WaitGroup
 }
 
 // NewManager returns a Manager that numbers ids prefix+N per thread. It panics
@@ -178,30 +185,67 @@ func (m *Manager[H]) thread(threadID string) *thread[H] {
 // Start registers the handle start returns as the next job of threadID.
 // recordedIDs lists the ids the caller already recorded, so a thread resumed in
 // a new process never reuses one: numbering continues after the highest number
-// among them. start runs under the Manager's lock, so the running limit and
-// Shutdown cannot be raced; it must not call the Manager and must not block:
-// it only spawns the work, never waits for it. Start returns
-// ErrShutdown after Shutdown and a *LimitError when the thread runs MaxRunning
-// jobs; an error from start is returned as is and registers nothing.
+// among them.
+//
+// Start first reserves the job under the Manager's lock: the reservation
+// takes the job's number and holds a slot of the thread's running limit. It
+// then calls start without the lock, so a slow start (a container spawn, say)
+// stalls no other caller; start may block, but must not call the Manager.
+// Once start returns, the job is committed or, when start failed, the
+// reservation is rolled back: the slot is freed and the number is given to
+// the next job unless a later reservation already took a higher one, in which
+// case it is skipped. A job committed after Shutdown began is stopped at once
+// and returned with Stopped set, so no work outlives Shutdown.
+//
+// Start returns ErrShutdown after Shutdown and a *LimitError when the thread
+// runs or is starting MaxRunning jobs; an error from start is returned as is
+// and registers nothing.
 func (m *Manager[H]) Start(threadID string, recordedIDs []string, start func() (H, error)) (*Job[H], error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return nil, ErrShutdown
 	}
 	t := m.thread(threadID)
-	if t.running() >= m.limits.MaxRunning {
+	if t.running()+t.starting >= m.limits.MaxRunning {
+		m.mu.Unlock()
 		return nil, &LimitError{Limit: m.limits.MaxRunning}
 	}
+	t.next = max(t.next, m.highestNumber(recordedIDs)) + 1
+	n := t.next
+	t.starting++
+	m.starting.Add(1)
+	m.mu.Unlock()
+	committed := false
+	defer func() {
+		if !committed { // start failed or panicked
+			m.mu.Lock()
+			t.starting--
+			if t.next == n {
+				t.next-- // nothing took a later number: hand this one out again
+			}
+			m.mu.Unlock()
+		}
+		m.starting.Done()
+	}()
+
 	h, err := start()
 	if err != nil {
 		return nil, err
 	}
-	t.next = max(t.next, m.highestNumber(recordedIDs)) + 1
-	j := &Job[H]{ID: m.prefix + strconv.Itoa(t.next), ThreadID: threadID, Started: time.Now(), Handle: h}
+
+	m.mu.Lock()
+	t.starting--
+	committed = true
+	j := &Job[H]{ID: m.prefix + strconv.Itoa(n), ThreadID: threadID, Started: time.Now(), Handle: h}
 	t.jobs[j.ID] = j
 	m.watchers.Add(1)
 	go m.watch(t, j)
+	closed := m.closed
+	m.mu.Unlock()
+	if closed {
+		_, _ = RequestStop(j) // a failed signal still ends in Done via the handle's own escalation
+	}
 	return j, nil
 }
 
@@ -280,7 +324,7 @@ func (m *Manager[H]) MarkNotified(threadID string, ids ...string) {
 func (m *Manager[H]) Release(threadID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if t, ok := m.threads[threadID]; ok && t.running() == 0 && t.settled() {
+	if t, ok := m.threads[threadID]; ok && t.running() == 0 && t.starting == 0 && t.settled() {
 		delete(m.threads, threadID)
 	}
 }
@@ -337,9 +381,9 @@ func stopAll[H Handle](list []*Job[H], wait time.Duration) bool {
 }
 
 // StopAndForget stops the jobs with ids in threadID, waits for them up to wait,
-// and then drops them, and the thread once it has no jobs left. refresh runs
-// after the jobs ended (or wait passed) but before they are dropped, so it can
-// still read their outcome.
+// and then drops them, and the thread once it has no jobs left and none
+// starting. refresh runs after the jobs ended (or wait passed) but before they
+// are dropped, so it can still read their outcome.
 func (m *Manager[H]) StopAndForget(threadID string, ids []string, wait time.Duration, refresh func()) {
 	var list []*Job[H]
 	for _, id := range ids {
@@ -359,17 +403,32 @@ func (m *Manager[H]) StopAndForget(threadID string, ids []string, wait time.Dura
 		delete(t.jobs, j.ID)
 		t.finished = slices.DeleteFunc(t.finished, func(id string) bool { return id == j.ID })
 	}
-	if len(t.jobs) == 0 {
+	if len(t.jobs) == 0 && t.starting == 0 {
 		delete(m.threads, threadID)
 	}
 }
 
 // Shutdown refuses new jobs, stops every job and waits for them, up to wait.
-// The entries are kept, so records refreshed afterwards show the jobs as
-// stopped rather than lost.
+// It first waits, within the same wait, for the starts in flight: each one
+// commits its job and stops it at once (see Start), so it is stopped and
+// waited for with the others. A start still in flight when wait passes stops
+// its job as it commits, after Shutdown returned. The entries are kept, so
+// records refreshed afterwards show the jobs as stopped rather than lost.
 func (m *Manager[H]) Shutdown(wait time.Duration) {
+	deadline := time.Now().Add(wait)
 	m.mu.Lock()
 	m.closed = true
+	m.mu.Unlock()
+	started := make(chan struct{})
+	go func() { m.starting.Wait(); close(started) }()
+	timer := time.NewTimer(wait)
+	select {
+	case <-started:
+	case <-timer.C:
+	}
+	timer.Stop()
+
+	m.mu.Lock()
 	var list []*Job[H]
 	for _, t := range m.threads {
 		for _, j := range t.jobs {
@@ -377,7 +436,7 @@ func (m *Manager[H]) Shutdown(wait time.Duration) {
 		}
 	}
 	m.mu.Unlock()
-	if stopAll(list, wait) {
+	if stopAll(list, time.Until(deadline)) {
 		m.watchers.Wait()
 	}
 }

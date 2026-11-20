@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/pathsafe"
@@ -15,6 +16,11 @@ import (
 
 // minTailMessages is the fewest messages a compaction keeps verbatim.
 const minTailMessages = 2
+
+// maxSummaryInputChars bounds the rendered conversation one summarizer
+// request carries; the newest part of a longer one is sent (see
+// boundedRender).
+const maxSummaryInputChars = 400_000
 
 // observed is what the last model response reported about the request it
 // answered.
@@ -91,7 +97,7 @@ func (m *middleware) compact(ctx context.Context, req *agent.ModelRequest, keepT
 		return false, nil
 	}
 	older := msgs[prev.Index:k]
-	summary, err := m.summarize(ctx, req, prev.Summary, render(older, DefaultMaxBlockChars))
+	summary, err := m.summarize(ctx, req, prev.Summary, boundedRender(older, maxSummaryInputChars))
 	if err != nil {
 		m.fail(req.State, err)
 		return false, err
@@ -136,6 +142,61 @@ func (m *middleware) compactCounted(ctx context.Context, req *agent.ModelRequest
 		m.fail(req.State, errNoProgress)
 	}
 	return moved
+}
+
+// boundedRender renders msgs for the summarizer, each block capped at
+// DefaultMaxBlockChars, keeping the newest messages whose rendering fits in
+// limit characters. When messages are left out, a first line
+// "[earlier conversation omitted: N messages]" says how many. The kept part
+// never starts with a tool result, so no result is separated from its call.
+// When not even the newest message with its call fits, that part is cut from
+// the front to limit and starts with "…".
+func boundedRender(msgs []llm.Message, limit int) string {
+	parts := make([]string, len(msgs))
+	for i, m := range msgs {
+		parts[i] = renderMessage(m, DefaultMaxBlockChars)
+	}
+	start, size := -1, 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		size += len(parts[i])
+		if i < len(msgs)-1 {
+			size += len("\n\n")
+		}
+		if size > limit {
+			break
+		}
+		if i == 0 || !carriesToolResult(msgs[i]) {
+			start = i
+		}
+	}
+	if start == 0 || len(msgs) == 0 {
+		return strings.Join(parts, "\n\n")
+	}
+	var text string
+	if start > 0 {
+		text = strings.Join(parts[start:], "\n\n")
+	} else {
+		start = SafeCut(msgs, 0, len(msgs)-1)
+		text = cutFront(strings.Join(parts[start:], "\n\n"), limit)
+	}
+	if start == 0 {
+		return text
+	}
+	return fmt.Sprintf("[earlier conversation omitted: %d messages]\n\n%s", start, text)
+}
+
+// cutFront returns the last limit bytes of s, at a rune boundary, starting
+// with "…" when s was longer.
+func cutFront(s string, limit int) string {
+	const mark = "…"
+	if len(s) <= limit {
+		return s
+	}
+	cut := len(s) - (limit - len(mark))
+	for cut < len(s) && !utf8.RuneStart(s[cut]) {
+		cut++
+	}
+	return mark + s[cut:]
 }
 
 // tailCount returns the length of the shortest suffix of msgs whose
