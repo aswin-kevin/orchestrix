@@ -54,14 +54,16 @@ type word struct {
 	// or escaped, or notQuoted. Quoting turns a reserved word, a brace or an
 	// assignment back into an ordinary word.
 	quotedAt int
-	// expands is true when the word contains an unquoted '$', brace, glob
-	// character or leading '~', or a '$' inside double quotes: the shell may
-	// turn it into other words (or options), so its text is not what runs.
+	// expands is true when the word contains an unquoted '$', glob
+	// character or leading '~', an unquoted brace followed by an unquoted
+	// ',' or "..", or a '$' inside double quotes: the shell may turn it into
+	// other words (or options), so its text is not what runs.
 	expands bool
 }
 
-// expansionChars expand to other text when unquoted.
-const expansionChars = "${}*?["
+// expansionChars expand to other text when unquoted. Braces expand only
+// around an unquoted ',' or ".." (see commandParser.braceOpen).
+const expansionChars = "$*?["
 
 // commandParser tokenizes a command line into segments of words. It never
 // stops early: on input it cannot vouch for it sets unsafe and carries on, so
@@ -72,6 +74,9 @@ type commandParser struct {
 	unsafe   bool
 	segments [][]word
 	current  []word
+	// commentSegments are the comments split as commands: a best effort for
+	// deny rules, added to segments only when the line is not vouched for.
+	commentSegments [][]word
 	// bothRedirected is set by "&>", and bothRedirectedAt is then the
 	// number of words in current before it.
 	bothRedirected   bool
@@ -83,6 +88,12 @@ type commandParser struct {
 	quotedAt int
 	// wordExpands becomes word.expands.
 	wordExpands bool
+	// braceOpen is set by an unquoted '{' in the word; an unquoted ',' or
+	// ".." after it makes the word a brace expansion. Bash also needs a
+	// closing '}', which is not checked: erring towards expands is safe.
+	braceOpen bool
+	// afterDollar is set when the previous character was an unquoted '$'.
+	afterDollar bool
 }
 
 func (p *commandParser) parse() {
@@ -90,11 +101,16 @@ func (p *commandParser) parse() {
 		p.step()
 	}
 	p.endSegment()
+	if p.unsafe {
+		p.segments = append(p.segments, p.commentSegments...)
+	}
 }
 
 // step consumes the token at p.pos.
 func (p *commandParser) step() {
 	c := p.src[p.pos]
+	afterDollar := p.afterDollar
+	p.afterDollar = false
 	switch {
 	case c == ' ' || c == '\t':
 		p.endWord()
@@ -140,8 +156,18 @@ func (p *commandParser) step() {
 		if strings.IndexByte(expansionChars, c) >= 0 || (c == '~' && !p.inWord) {
 			p.wordExpands = true
 		}
+		switch {
+		case c == '{' && afterDollar:
+			// ${...}, not a brace expansion.
+		case c == '{':
+			p.braceOpen = true
+		case p.braceOpen && (c == ',' || (c == '.' && p.peek(1) == '.')):
+			p.wordExpands = true
+		}
 		if c == '$' {
+			p.afterDollar = true
 			p.checkArithmetic()
+			p.checkParameterBlanks()
 		}
 		p.inWord = true
 		p.buf.WriteByte(c)
@@ -181,6 +207,7 @@ func (p *commandParser) endWord() {
 	p.inWord = false
 	p.quotedAt = notQuoted
 	p.wordExpands = false
+	p.braceOpen = false
 }
 
 // endSegment ends the current command. Words after an "&>" target belong
@@ -278,12 +305,13 @@ func (p *commandParser) target() string {
 	return p.src[start:p.pos]
 }
 
-// comment consumes a comment, which runs to the next newline. A comment is
-// never vouched for: a quote inside it would be read differently by a
-// parser that does not know it is a comment. Its text is still split, as a
-// best effort for deny rules, and the newline is left to end the segment.
+// comment consumes a comment: a '#' at the start of a word runs to the next
+// newline, which is left to end the segment. Every shell the backends run
+// commands with (/bin/sh -c: dash, bash, and zsh too) ignores it, so it is
+// dropped. Its text is still split as commands, a best effort for deny rules
+// that is used only when the line is not vouched for (see parse): there a
+// quote may hide where the comment really starts.
 func (p *commandParser) comment() {
-	p.reject()
 	p.endSegment()
 	end := strings.IndexByte(p.src[p.pos:], '\n')
 	if end < 0 {
@@ -291,7 +319,7 @@ func (p *commandParser) comment() {
 	}
 	sub := commandParser{src: p.src[p.pos+1 : p.pos+end], quotedAt: notQuoted}
 	sub.parse()
-	p.segments = append(p.segments, sub.segments...)
+	p.commentSegments = append(p.commentSegments, sub.segments...)
 	p.pos += end
 }
 
@@ -381,6 +409,24 @@ func (p *commandParser) checkArithmetic() {
 		if !plainParameterExpansion(p.src[p.pos+2:]) {
 			p.reject()
 		}
+	}
+}
+
+// checkParameterBlanks rejects an unquoted ${...}, starting at the '$' at
+// p.pos, whose body holds a blank or a nested brace. The shell reads the
+// whole expansion as one word, blanks included, so a '#' after a blank in
+// it is not a comment (echo ${x:-a #}; cmd runs cmd), while this parser
+// would end the word there; and a nested brace hides where the body ends.
+func (p *commandParser) checkParameterBlanks() {
+	if p.peek(1) != '{' {
+		return
+	}
+	rest := p.src[p.pos+2:]
+	if end := strings.IndexByte(rest, '}'); end >= 0 {
+		rest = rest[:end]
+	}
+	if strings.ContainsAny(rest, " \t\n{") {
+		p.reject()
 	}
 }
 

@@ -36,6 +36,8 @@ A hardening pass ahead of v1.0.0: security fixes in the permission parser, bound
 - The summarizer's request holds at most the newest 400,000 characters of the span it compacts.
 - Permission rules see the paths of filesystem tool calls with backslashes converted to slashes and cleaned, on every OS, so `x\..\secrets\key` no longer slips past a deny rule on `/secrets/**`.
 - The MCP client answers server requests through one bounded queue, and the MCP HTTP handler evicts sessions that never finish the handshake after 30 seconds.
+- The permission parser vouches for fewer lines, so an allow rule no longer approves them and, when deny or ask rules have patterns for the tool, they now ask a human (in `bypassPermissions` and the other prompting modes) or are denied (in `dontAsk`, `auto` and `plan`): a `$` expansion, even inside double quotes, or a glob or brace list (`{a,b}`, `{1..3}`) in the arguments of a command whose options are checked (`git`, `sed`, `tar`, `find`, `ssh`, `scp`, `sftp`, `rsync`, `man`, `printf`, `test`, `[`, `wait`, `hash`); `[[` with an arithmetic operator (`-eq`, `-lt`, …) or `-v`, and `test`/`[` with `-v`; and `${…}` outside the plain grammar (substrings, `@` transforms, indirection, subscripts, assignments, or a blank or nested brace in an unquoted one).
+- The permission parser vouches for a comment (a `#` that starts a word runs to the end of the line and is dropped, as `/bin/sh` does) and for braces with no unquoted `,` or `..` inside, which are literal (`stash@{0}`, `HEAD@{1}`).
 - The MCP client info and the web User-Agent report the release from `internal/version` instead of a fixed old string.
 
 ### Added

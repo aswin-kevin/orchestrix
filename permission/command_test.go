@@ -604,10 +604,13 @@ func TestSplitCommandHiddenCommandOptions(t *testing.T) {
 
 func TestCommentSmuggling(t *testing.T) {
 	shell := func(cmd string) Request { return Request{Tool: "execute", Subject: cmd, Shell: true} }
+	// Every shell the backends run (/bin/sh: dash, bash; zsh too) drops a
+	// comment, so the quote inside it is not a quote and the next line is
+	// a command of its own.
 	smuggle := "echo a # '\ntouch pwned # '"
 	segs, ok := SplitCommand(smuggle)
-	if ok || !slices.Contains(segs, "touch pwned") {
-		t.Fatalf("SplitCommand(%q) = %q, %v; want ok=false with segment %q", smuggle, segs, ok, "touch pwned")
+	if !ok || !slices.Equal(segs, []string{"echo a", "touch pwned"}) {
+		t.Fatalf("SplitCommand(%q) = %q, %v; want [echo a touch pwned], true", smuggle, segs, ok)
 	}
 	allowEcho := Context{Mode: ModeDontAsk, Rules: Rules{Allow: []Rule{mustRule(t, "execute(echo:*)")}}}
 	if got := Evaluate(shell(smuggle), allowEcho); got.Behavior == Allow {
@@ -618,9 +621,73 @@ func TestCommentSmuggling(t *testing.T) {
 		t.Fatalf("Evaluate(%q) = %+v, want Deny", smuggle, got)
 	}
 
-	segs, ok = SplitCommand("echo a # x")
-	if ok || !slices.Contains(segs, "echo a") {
-		t.Fatalf("SplitCommand(comment) = %q, %v; want ok=false with segment %q", segs, ok, "echo a")
+	for _, tt := range []struct {
+		cmd  string
+		want []string
+	}{
+		{"echo a # x", []string{"echo a"}},
+		{"echo a #x; touch pwned", []string{"echo a"}},
+		{"# only a comment\nls", []string{"ls"}},
+		{"ls;#x", []string{"ls"}},
+	} {
+		if segs, ok := SplitCommand(tt.cmd); !ok || !slices.Equal(segs, tt.want) {
+			t.Errorf("SplitCommand(%q) = %q, %v; want %q, true", tt.cmd, segs, ok, tt.want)
+		}
+	}
+}
+
+// A '#' inside an unquoted ${...} is part of the word, even after a blank:
+// the shell runs touch in echo ${x:-a #}; touch pwned.
+func TestCommentInsideParameterExpansion(t *testing.T) {
+	shell := func(cmd string) Request { return Request{Tool: "execute", Subject: cmd, Shell: true} }
+	denyTouch := Context{Mode: ModeBypass, Rules: Rules{Deny: []Rule{mustRule(t, "execute(touch:*)")}}}
+	for _, cmd := range []string{
+		"echo ${x:-a #}; touch pwned",
+		"echo ${x:-${y} #}; touch pwned",
+		"echo ${x:-a\t#}; touch pwned",
+	} {
+		segs, ok := SplitCommand(cmd)
+		if ok || !slices.Contains(segs, "touch pwned") {
+			t.Errorf("SplitCommand(%q) = %q, %v; want ok=false with segment %q", cmd, segs, ok, "touch pwned")
+		}
+		if got := Evaluate(shell(cmd), denyTouch); got.Behavior != Deny {
+			t.Errorf("Evaluate(%q) = %+v, want Deny", cmd, got)
+		}
+	}
+	// A comment in a line that is not vouched for is still split for deny
+	// rules.
+	cmd := "echo $(x) # ; touch pwned"
+	if segs, ok := SplitCommand(cmd); ok || !slices.Contains(segs, "touch pwned") {
+		t.Errorf("SplitCommand(%q) = %q, %v; want ok=false with segment %q", cmd, segs, ok, "touch pwned")
+	}
+	if _, ok := SplitCommand(`echo "${x:-a #b}"`); !ok {
+		t.Errorf("SplitCommand(quoted ${x:-a #b}) ok = false, want true")
+	}
+}
+
+// Braces without an unquoted comma or ".." are literal, so reflog
+// selectors do not count as an expansion for option-checked commands.
+func TestBraceWithoutListIsLiteral(t *testing.T) {
+	for _, tt := range []struct {
+		cmd    string
+		wantOK bool
+	}{
+		{`git stash show stash@{0}`, true},
+		{`git log -1 HEAD@{1}`, true},
+		{`git reset HEAD@{upstream}`, true},
+		{`git show {a,b}`, false},
+		{`git show {1..3}`, false},
+		{`git show x{-c,y}`, false},
+		{`git {-c,alias.x=!touch\ pwned} x`, false},
+		{`git show {a}{b,c}`, false},
+		{`git show '{a,b}'`, true},
+		{`git show {a\,b}`, true},
+		{`git show \${-c,x}`, false},
+		{`git show ${x}{-c,y}`, false},
+	} {
+		if _, ok := SplitCommand(tt.cmd); ok != tt.wantOK {
+			t.Errorf("SplitCommand(%q) ok = %v, want %v", tt.cmd, ok, tt.wantOK)
+		}
 	}
 }
 
