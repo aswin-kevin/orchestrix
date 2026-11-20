@@ -222,20 +222,20 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request) iter.Seq2[S
 		// Closing on every exit, including the consumer breaking out of the
 		// loop, releases the connection promptly.
 		defer resp.Body.Close()
-		streamAnthropicEvents(ctx, resp.Body, yield)
+		streamAnthropicEvents(ctx, p.cfg, resp.Body, yield)
 	}
 }
 
 // streamAnthropicEvents translates the SSE body into stream events. A body
 // that ends before message_stop is reported as an error so truncated replies
 // are never mistaken for complete ones.
-func streamAnthropicEvents(ctx context.Context, body io.Reader, yield func(StreamEvent, error) bool) {
+func streamAnthropicEvents(ctx context.Context, cfg *Config, body io.Reader, yield func(StreamEvent, error) bool) {
 	for sse, err := range readSSE(body) {
 		if err != nil {
 			yield(StreamEvent{}, streamReadError(ctx, err))
 			return
 		}
-		events, done, err := translateAnthropicEvent(sse)
+		events, done, err := translateAnthropicEvent(cfg, sse)
 		for _, ev := range events {
 			if !yield(ev, nil) {
 				return
@@ -254,7 +254,7 @@ func streamAnthropicEvents(ctx context.Context, body io.Reader, yield func(Strea
 
 // translateAnthropicEvent maps one SSE event to zero or more stream events.
 // done is true once the message is complete.
-func translateAnthropicEvent(sse sseEvent) (events []StreamEvent, done bool, err error) {
+func translateAnthropicEvent(cfg *Config, sse sseEvent) (events []StreamEvent, done bool, err error) {
 	var ev anthropicEvent
 	if err := json.Unmarshal([]byte(sse.Data), &ev); err != nil {
 		return nil, false, fmt.Errorf("llm: decode anthropic event: %w", err)
@@ -272,7 +272,7 @@ func translateAnthropicEvent(sse sseEvent) (events []StreamEvent, done bool, err
 		return []StreamEvent{{Type: EvMessageStop}}, true, nil
 	case "error":
 		// Status 0: the HTTP exchange itself succeeded.
-		return nil, false, &APIError{Body: sse.Data}
+		return nil, false, cfg.streamError(sse.Data)
 	}
 	// ping and unknown event types carry nothing we need.
 	return nil, false, nil

@@ -228,7 +228,7 @@ func (p *openAIProvider) streamAttempt(ctx context.Context, body []byte, gate *e
 		return err
 	}
 	defer resp.Body.Close()
-	return streamOpenAIChunks(ctx, resp.Body, gate.emit)
+	return streamOpenAIChunks(ctx, p.cfg, resp.Body, gate.emit)
 }
 
 // emptyReplyGate holds back events until the reply proves non-empty. Until
@@ -297,8 +297,8 @@ func (g *emptyReplyGate) flush() bool {
 // body that ends with neither [DONE] nor a finish_reason is reported as an
 // error so truncated replies are never mistaken for complete ones. It returns
 // nil without further reading once emit reports the consumer is gone.
-func streamOpenAIChunks(ctx context.Context, body io.Reader, emit func(StreamEvent) bool) error {
-	state := newOpenAIStreamState()
+func streamOpenAIChunks(ctx context.Context, cfg *Config, body io.Reader, emit func(StreamEvent) bool) error {
+	state := newOpenAIStreamState(cfg)
 	if !emit(StreamEvent{Type: EvMessageStart}) {
 		return nil
 	}
@@ -331,6 +331,8 @@ func streamOpenAIChunks(ctx context.Context, body io.Reader, emit func(StreamEve
 // stop reason are held until the stream ends because they may arrive in
 // separate chunks and some servers repeat usage in every chunk.
 type openAIStreamState struct {
+	// cfg redacts credentials from errors reported in the stream.
+	cfg *Config
 	// slots maps a wire tool-call index to the call currently open there.
 	slots map[int]*toolSlot
 	// next is the number of calls started so far.
@@ -353,10 +355,10 @@ type toolSlot struct {
 	index     int
 }
 
-func newOpenAIStreamState() *openAIStreamState {
+func newOpenAIStreamState(cfg *Config) *openAIStreamState {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
-	return &openAIStreamState{slots: make(map[int]*toolSlot), runID: hex.EncodeToString(b[:])}
+	return &openAIStreamState{cfg: cfg, slots: make(map[int]*toolSlot), runID: hex.EncodeToString(b[:])}
 }
 
 // translate maps one chunk to stream events.
@@ -367,7 +369,7 @@ func (s *openAIStreamState) translate(data string) ([]StreamEvent, error) {
 	}
 	if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
 		// Status 0: the HTTP exchange itself succeeded.
-		return nil, &APIError{Body: data}
+		return nil, s.cfg.streamError(data)
 	}
 	s.model = firstNonEmpty(s.model, chunk.Model)
 	s.id = firstNonEmpty(s.id, chunk.ID)

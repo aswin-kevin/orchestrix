@@ -7,7 +7,6 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -75,15 +74,16 @@ func (c *Config) attempt(ctx context.Context, build func() (*http.Request, error
 		// %v, not %w: a malformed URL surfaces as *url.Error, which would
 		// otherwise be mistaken for a retryable network failure. Its URL is
 		// redacted because BaseURL may carry a key.
-		return nil, fmt.Errorf("llm: build request: %v", redactURLError(err))
+		return nil, c.redactError(fmt.Errorf("llm: build request: %v", redactURLError(err)))
 	}
 	resp, err := c.httpClient().Do(req.WithContext(ctx))
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		// The URL may carry a key in its query or userinfo.
-		return nil, fmt.Errorf("llm: send request: %w", redactURLError(err))
+		// The URL may carry a key in its query or userinfo, and a proxy may
+		// echo a credential in its error.
+		return nil, c.redactError(fmt.Errorf("llm: send request: %w", redactURLError(err)))
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return resp, nil
@@ -93,30 +93,18 @@ func (c *Config) attempt(ctx context.Context, build func() (*http.Request, error
 	// needs, so the partial body is kept and the read error dropped.
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 	retryAfter, hasRetryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	header := resp.Header.Clone()
+	header.Del("Set-Cookie")
+	header.Del("Set-Cookie2")
 	return nil, &APIError{
 		Status:        resp.StatusCode,
-		Body:          c.redactKey(string(body)),
+		Body:          c.redact(string(body)),
 		RequestID:     firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("request-id")),
-		Header:        resp.Header,
+		Header:        header,
 		RetryAfter:    retryAfter,
 		hasRetryAfter: hasRetryAfter,
 	}
 }
-
-// minRedactedKeyLen is the shortest API key redactKey replaces; a shorter
-// one could match ordinary words in the body.
-const minRedactedKeyLen = 8
-
-// redactKey replaces echoes of the API key, which some servers include in
-// an authentication error, so the key does not reach logs through the
-// error.
-func (c *Config) redactKey(body string) string {
-	if len(c.APIKey) < minRedactedKeyLen {
-		return body
-	}
-	return strings.ReplaceAll(body, c.APIKey, "[REDACTED]")
-}
-
 func (c *Config) maxRetries() int {
 	switch {
 	case c.MaxRetries == 0:

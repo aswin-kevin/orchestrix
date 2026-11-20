@@ -19,7 +19,9 @@ func TestBaseURLQueryKeyNotLeaked(t *testing.T) {
 	var requestURI atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestURI.Store(r.URL.RequestURI())
-		w.WriteHeader(http.StatusInternalServerError)
+		// Echo the request URI, as some gateways do, so the body carries the
+		// query key.
+		http.Error(w, "upstream failed for "+r.URL.RequestURI(), http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
@@ -218,16 +220,16 @@ func TestEndpoint(t *testing.T) {
 
 func TestVersionedEndpoints(t *testing.T) {
 	anth := &anthropicProvider{cfg: &Config{BaseURL: "https://h?key=k"}}
-	if got, _ := anth.messagesURL(); got != "https://h/v1/messages?key=k" {
-		t.Errorf("anthropic URL = %q", got)
+	if got, err := anth.messagesURL(); err != nil || got != "https://h/v1/messages?key=k" {
+		t.Errorf("anthropic URL = %q, %v", got, err)
 	}
 	anth.cfg.BaseURL = "https://h/v1/?key=k"
-	if got, _ := anth.messagesURL(); got != "https://h/v1/messages?key=k" {
-		t.Errorf("anthropic /v1 URL = %q", got)
+	if got, err := anth.messagesURL(); err != nil || got != "https://h/v1/messages?key=k" {
+		t.Errorf("anthropic /v1 URL = %q, %v", got, err)
 	}
 	s1 := &systemOne{cfg: &Config{BaseURL: "https://h/v1?key=k"}}
-	if got, _ := s1.url(); got != "https://h/v1/systemone?key=k" {
-		t.Errorf("systemone URL = %q", got)
+	if got, err := s1.url(); err != nil || got != "https://h/v1/systemone?key=k" {
+		t.Errorf("systemone URL = %q, %v", got, err)
 	}
 }
 
@@ -247,5 +249,164 @@ func TestRedactURL(t *testing.T) {
 	}
 	if got := redactURL("http://h/\x7f?key=" + testSecret); strings.Contains(got, testSecret) {
 		t.Errorf("redactURL leaks from an unparsable URL: %q", got)
+	}
+}
+
+// secretConfig returns a prepared Config whose API key, sensitive headers
+// and BaseURL password all hold distinct secrets.
+func secretConfig(t *testing.T, base string) (*Config, []string) {
+	t.Helper()
+	secrets := []string{"SECRET-apikey-1", "SECRET-bearer-2", "SECRET-header-3", "SECRET-token-4", "SECRET-password-5"}
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword("user", secrets[4])
+	cfg := &Config{
+		BaseURL:    u.String(),
+		APIKey:     secrets[0],
+		MaxRetries: -1,
+		Headers: map[string]string{
+			"Proxy-Authorization": "Bearer " + secrets[1],
+			"X-Goog-Api-Key":      secrets[2],
+			"X-Session-Token":     secrets[3],
+			"X-Trace":             "not-a-secret-value",
+		},
+	}
+	if err := cfg.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	return cfg, secrets
+}
+
+func TestAPIErrorRedactsConfiguredSecrets(t *testing.T) {
+	var echo atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, echo.Load().(string), http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	cfg, secrets := secretConfig(t, srv.URL)
+	echo.Store("got " + strings.Join(secrets, " ") + " and not-a-secret-value")
+	_, err := cfg.Do(context.Background(), requestTo(srv.URL))
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err = %v, want *APIError", err)
+	}
+	for _, secret := range secrets {
+		if strings.Contains(apiErr.Body, secret) || strings.Contains(err.Error(), secret) {
+			t.Errorf("error leaks %q: %v", secret, err)
+		}
+	}
+	if !strings.Contains(apiErr.Body, "not-a-secret-value") {
+		t.Errorf("Body = %q, an ordinary header value was redacted", apiErr.Body)
+	}
+}
+
+func TestTransportErrorRedactsConfiguredSecrets(t *testing.T) {
+	cfg, secrets := secretConfig(t, "http://h")
+	failing := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("proxy said: " + strings.Join(secrets, " "))
+	})}
+	cfg.HTTPClient = failing
+	if err := cfg.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := cfg.Do(context.Background(), requestTo("http://h/x"))
+	if err == nil {
+		t.Fatal("want a transport error")
+	}
+	for _, secret := range secrets {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("transport error leaks %q: %v", secret, err)
+		}
+	}
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) || !IsRetryable(err) {
+		t.Errorf("err = %v, want a retryable *url.Error underneath", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestStreamErrorRedactsConfiguredSecrets(t *testing.T) {
+	const key = "SECRET-apikey-1"
+	tests := []struct {
+		name string
+		body string
+		run  func(t *testing.T, base string) error
+	}{
+		{
+			name: "anthropic",
+			body: "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"bad " + key + "\"}}\n\n",
+			run: func(t *testing.T, base string) error {
+				p, err := newAnthropic(Config{BaseURL: base, APIKey: key, Model: "m", MaxRetries: -1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+				return err
+			},
+		},
+		{
+			name: "openai chat",
+			body: chunks(`{"error":{"message":"bad ` + key + `"}}`),
+			run: func(t *testing.T, base string) error {
+				p := newTestOpenAI(t, base, func(c *Config) { c.APIKey = key })
+				_, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+				return err
+			},
+		},
+		{
+			name: "responses",
+			body: responsesBody(`{"type":"error","code":"invalid_api_key","message":"bad ` + key + `"}`),
+			run: func(t *testing.T, base string) error {
+				p := newTestResponses(t, base, func(c *Config) { c.APIKey = key })
+				_, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := newSSEServer(t, 200, "text/event-stream", tt.body)
+			err := tt.run(t, srv.URL)
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.Status != 0 {
+				t.Fatalf("err = %v, want an in-stream *APIError", err)
+			}
+			if strings.Contains(apiErr.Body, key) || strings.Contains(err.Error(), key) {
+				t.Errorf("stream error leaks the key: %v", err)
+			}
+			if !strings.Contains(apiErr.Body, "[REDACTED]") {
+				t.Errorf("Body = %q, want the key replaced", apiErr.Body)
+			}
+		})
+	}
+}
+
+func TestAPIErrorHeaderDropsCookies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Set-Cookie", "session=abc")
+		w.Header().Add("Set-Cookie2", "old=def")
+		w.Header().Set("X-Ratelimit-Remaining", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig(t)
+	cfg.MaxRetries = -1
+	_, err := cfg.Do(context.Background(), requestTo(srv.URL))
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err = %v, want *APIError", err)
+	}
+	if apiErr.Header.Get("Set-Cookie") != "" || apiErr.Header.Get("Set-Cookie2") != "" {
+		t.Errorf("Header keeps cookies: %v", apiErr.Header)
+	}
+	if apiErr.Header.Get("X-Ratelimit-Remaining") != "0" {
+		t.Errorf("Header = %v, want other headers kept", apiErr.Header)
 	}
 }

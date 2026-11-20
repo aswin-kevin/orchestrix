@@ -73,13 +73,15 @@ const (
 type APIError struct {
 	// Status is the HTTP status code.
 	Status int
-	// Body is the (possibly truncated) response body, with any echo of the
-	// configured API key replaced by [REDACTED].
+	// Body is the (possibly truncated) response body, with any echo of a
+	// configured credential (API key, sensitive header, BaseURL password or
+	// query value) replaced by [REDACTED].
 	Body string
 	// RequestID is the provider's id for the request, from the x-request-id
 	// or request-id header, for quoting to the provider's support.
 	RequestID string
-	// Header holds the response headers.
+	// Header is the response header minus Set-Cookie and Set-Cookie2; nil
+	// for an error inside a stream.
 	Header http.Header
 	// RetryAfter is the delay requested by the Retry-After header; see
 	// hasRetryAfter to tell an explicit zero from an absent header.

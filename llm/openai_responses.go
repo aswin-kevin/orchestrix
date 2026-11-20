@@ -70,7 +70,7 @@ func (p *responsesProvider) Stream(ctx context.Context, req Request) iter.Seq2[S
 		// loop, which releases the connection promptly.
 		defer resp.Body.Close()
 		emit := func(ev StreamEvent) bool { return yield(ev, nil) }
-		if err := streamResponsesEvents(ctx, resp.Body, emit); err != nil {
+		if err := streamResponsesEvents(ctx, p.cfg, resp.Body, emit); err != nil {
 			yield(StreamEvent{}, err)
 		}
 	}
@@ -136,8 +136,8 @@ type responsesEvent struct {
 // A body that ends without a terminal event is reported as an error so
 // truncated replies are never mistaken for complete ones. It returns nil
 // without further reading once emit reports the consumer is gone.
-func streamResponsesEvents(ctx context.Context, body io.Reader, emit func(StreamEvent) bool) error {
-	state := &responsesStreamState{argumentsSeen: make(map[int]bool), startedTools: make(map[int]bool)}
+func streamResponsesEvents(ctx context.Context, cfg *Config, body io.Reader, emit func(StreamEvent) bool) error {
+	state := &responsesStreamState{cfg: cfg, argumentsSeen: make(map[int]bool), startedTools: make(map[int]bool)}
 	if !emit(StreamEvent{Type: EvMessageStart}) {
 		return nil
 	}
@@ -163,6 +163,8 @@ func streamResponsesEvents(ctx context.Context, body io.Reader, emit func(Stream
 
 // responsesStreamState carries what must survive between events.
 type responsesStreamState struct {
+	// cfg redacts credentials from errors reported in the stream.
+	cfg *Config
 	// argumentsSeen records tool calls whose arguments streamed as deltas, so
 	// the full text on the finished item is not applied twice.
 	argumentsSeen map[int]bool
@@ -200,7 +202,7 @@ func (s *responsesStreamState) translate(data string) (events []StreamEvent, don
 		return s.closingEvents(ev), true, nil
 	case respEvFailed, respEvError:
 		// Status 0: the HTTP exchange itself succeeded.
-		return nil, false, &APIError{Body: data}
+		return nil, false, s.cfg.streamError(data)
 	}
 	return nil, false, nil
 }
