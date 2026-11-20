@@ -67,7 +67,13 @@ func TestSplitCommand(t *testing.T) {
 		{"ls 2>/dev/null", []string{"ls"}, true},
 		{"ls 2> /dev/null", []string{"ls"}, true},
 		{"ls &>/dev/null", []string{"ls"}, true},
-		{"ls &> /dev/null x", []string{"ls x"}, true},
+		// sh without bash's &> reads "a &>f b" as "a &" and ">f b": words
+		// after the target are another command there.
+		{"ls &> /dev/null x", []string{"ls x", "x"}, false},
+		{"0&>/dev/null aa", []string{"0 aa", "aa"}, false},
+		{"git status &>/dev/null rm -rf x", []string{"git status rm -rf x", "rm -rf x"}, false},
+		{"ls &>/dev/null 2>&1", []string{"ls"}, true},
+		{"ls &>/dev/null; rm x", []string{"ls", "rm x"}, true},
 		{"echo a>/dev/null", []string{"echo a"}, true},
 		{"ls 2>& 1", []string{"ls"}, true},
 		{"ls 2 >/dev/null", []string{"ls 2"}, true},
@@ -758,6 +764,13 @@ func TestDenyEvasion(t *testing.T) {
 		"pkexec rm -rf x",
 		"RM -rf x",
 		"Rm -rf x",
+		// Found by FuzzSplitCommandShell: bash re-runs history entries
+		// (fc -s, or fc -e with the edited text) and runs compgen -C's
+		// command; history -w writes the entries to any file.
+		"history -s 'rm -rf x'; fc -s",
+		"history -s 'rm -rf x'; fc -e true",
+		"compgen -C 'rm -rf x' y",
+		"history -s 'rm -rf x'; history -w .git/hooks/pre-commit",
 	} {
 		t.Run(cmd, func(t *testing.T) {
 			if got := Evaluate(shell(cmd), denyRm); got.Behavior == Allow {
@@ -852,14 +865,34 @@ func TestArithmeticHidesCommands(t *testing.T) {
 	}
 	for _, cmd := range []string{
 		`echo ${HOME}`, `echo ${x:-default}`, `echo ${@} ${#} ${*} ${$} ${?} ${!} ${10} ${#@}`,
-		`echo ${x-a} ${x=a} ${x?a} ${x+a} ${x##a} ${x%%b} ${x//a/b} ${x^} ${x^^} ${x,} ${x,,}`,
-		`echo ${x:-a:b}`, `echo ${x:=d} ${x:?e} ${x:+a}`,
+		`echo ${x-a} ${x?a} ${x+a} ${x##a} ${x%%b} ${x//a/b} ${x^} ${x^^} ${x,} ${x,,}`,
+		`echo ${x:-a:b}`, `echo ${x:?e} ${x:+a}`,
 		`echo "${HOME}/x"`, `echo ${#x} ${x#a} ${x%b} ${x/a/b}`,
 		`[[ -f x ]]`, `[[ $a == b ]]`, `[[ -f x ]] && [[ -d y ]]`,
 		`[ -f x ]`, `test -n x`, `[ 1 -eq 1 ]`,
 	} {
 		if _, ok := SplitCommand(cmd); !ok {
 			t.Errorf("SplitCommand(%q) ok = false, want true", cmd)
+		}
+	}
+}
+
+// ${x=...} and ${x:=...} assign a variable, and no assignment is vouched for
+// (EXECIGNORE, for one, changes which program a later command runs).
+func TestParameterExpansionAssigns(t *testing.T) {
+	for _, tt := range []struct {
+		cmd    string
+		wantOK bool
+	}{
+		{`echo ${EXECIGNORE=x}; ls`, false},
+		{`echo ${x:=1}`, false},
+		{`echo ${x=a}`, false},
+		{`echo "${x:=1}"`, false},
+		{`echo ${x:-d}`, true},
+		{`echo ${x-d}`, true},
+	} {
+		if _, ok := SplitCommand(tt.cmd); ok != tt.wantOK {
+			t.Errorf("SplitCommand(%q) ok = %v, want %v", tt.cmd, ok, tt.wantOK)
 		}
 	}
 }

@@ -21,15 +21,15 @@ const devNull = "/dev/null"
 // programs their names suggest: command or process substitution, grouping,
 // heredocs, redirections other than discarding output to /dev/null,
 // unbalanced quotes, shells, script interpreters, editors and other commands
-// that run hidden code (sh, eval, xargs, sudo, awk, python, vim, find -exec,
+// that run hidden code (sh, eval, xargs, sudo, fc, awk, python, vim, find -exec,
 // ...), options that make an ordinary command run one (git -c, sed's e, tar
 // --to-command; see commandOptionChecks), arithmetic, which runs commands
 // hidden in array subscripts ($[...], let, ${a[i]}, ${x:offset}, [[ -eq ]],
 // test -v), parameter expansions other than plain ones (${!x}, ${x@P}),
 // compound commands, a command word that depends on expansion, contains
 // whitespace or names a path (./npm), any variable assignment (PATH=... or
-// LD_PRELOAD=... can change which program runs or what it does), and an
-// empty line. Normalization is for deny rules:
+// LD_PRELOAD=... can change which program runs or what it does; ${x:=...}
+// assigns too), and an empty line. Normalization is for deny rules:
 // /bin/rm x still reads as rm x, but never vouches for the line. Even when ok
 // is false the segments are a best effort that deny rules can still match.
 func SplitCommand(cmd string) (segments []string, ok bool) {
@@ -72,6 +72,10 @@ type commandParser struct {
 	unsafe   bool
 	segments [][]word
 	current  []word
+	// bothRedirected is set by "&>", and bothRedirectedAt is then the
+	// number of words in current before it.
+	bothRedirected   bool
+	bothRedirectedAt int
 
 	// The word being built.
 	buf      strings.Builder
@@ -179,12 +183,21 @@ func (p *commandParser) endWord() {
 	p.wordExpands = false
 }
 
+// endSegment ends the current command. Words after an "&>" target belong
+// to it in bash but are a command of their own in a sh without "&>" (dash
+// reads "a &>f b" as "a &" and ">f b"), so such a line is never vouched for
+// and both readings are split for deny rules.
 func (p *commandParser) endSegment() {
 	p.endWord()
 	if len(p.current) > 0 {
 		p.segments = append(p.segments, p.current)
 	}
+	if p.bothRedirected && p.bothRedirectedAt < len(p.current) {
+		p.reject()
+		p.segments = append(p.segments, p.current[p.bothRedirectedAt:])
+	}
 	p.current = nil
+	p.bothRedirected = false
 }
 
 // ampersand handles "&>" (redirect both streams) and otherwise "&" or "&&",
@@ -192,6 +205,9 @@ func (p *commandParser) endSegment() {
 func (p *commandParser) ampersand() {
 	if p.peek(1) == '>' {
 		p.endWord()
+		if !p.bothRedirected {
+			p.bothRedirected, p.bothRedirectedAt = true, len(p.current)
+		}
 		p.pos++
 		p.redirect("&")
 		return
@@ -374,11 +390,12 @@ const specialParameters = "@*#?-$!_"
 
 // parameterOperators may follow the parameter in ${...}, longest first, and
 // are followed by a word (a default value or a pattern). Any other text
-// there is rejected: a ':' with an offset is arithmetic, and an @ transform
-// (${x@P}) runs command substitution found in the value.
+// there is rejected: a ':' with an offset is arithmetic, an @ transform
+// (${x@P}) runs command substitution found in the value, and = and :=
+// assign the variable, which no vouched line may do.
 var parameterOperators = []string{
-	":-", ":=", ":?", ":+", "##", "%%", "//", "^^", ",,",
-	"-", "=", "?", "+", "#", "%", "/", "^", ",",
+	":-", ":?", ":+", "##", "%%", "//", "^^", ",,",
+	"-", "?", "+", "#", "%", "/", "^", ",",
 }
 
 // plainParameterExpansion reports whether the text after "${" is a parameter

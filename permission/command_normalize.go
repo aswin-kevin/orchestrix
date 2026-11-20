@@ -32,6 +32,9 @@ var opaqueCommands = map[string]bool{
 	"parallel": true, "script": true, "su": true, "runuser": true,
 	"nsenter": true, "unshare": true, "pkexec": true, "systemd-run": true,
 	"firejail": true, "bwrap": true, "proot": true,
+	// bash's fc runs history entries, through an editor named by -e;
+	// compgen -C runs a command and -F a function.
+	"fc": true, "compgen": true,
 	// Wrappers that run their arguments as a command after options or
 	// operands of their own (a CPU mask, a scheduling priority).
 	"caffeinate": true, "arch": true, "taskset": true, "setarch": true,
@@ -145,6 +148,8 @@ var stateBuiltins = map[string]bool{
 	"local": true, "read": true, "unset": true, "alias": true, "trap": true,
 	"enable": true, "shopt": true, "set": true, "mapfile": true, "readarray": true,
 	"let": true, // also evaluates arithmetic, which runs $(...) in subscripts
+	// history -s adds entries that fc runs, and -w writes them to any file.
+	"history": true,
 }
 
 // stateOptionLetters are builtins that change shell state only with one
