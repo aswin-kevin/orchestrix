@@ -3,12 +3,15 @@ package llm
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"iter"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -34,6 +37,10 @@ const (
 	openAITextIndex     = 0
 	openAIThinkingIndex = 1
 	openAIToolIndexBase = 1000
+
+	// openAIHost is the host of the OpenAI API itself, whose reasoning
+	// models reject max_tokens.
+	openAIHost = "api.openai.com"
 )
 
 // openAIProvider speaks the OpenAI Chat Completions API, which many other
@@ -172,8 +179,11 @@ func (p *openAIProvider) Stream(ctx context.Context, req Request) iter.Seq2[Stre
 			yield(StreamEvent{}, fmt.Errorf("llm: encode openai request: %w", err))
 			return
 		}
+		// discarded totals the usage of empty attempts, which were billed
+		// even though the consumer never sees them.
+		var discarded Usage
 		for attempt := 0; ; attempt++ {
-			gate := &emptyReplyGate{yield: yield}
+			gate := &emptyReplyGate{yield: yield, carried: discarded}
 			err := p.streamAttempt(ctx, body, gate)
 			if gate.consumerStopped {
 				return
@@ -183,10 +193,11 @@ func (p *openAIProvider) Stream(ctx context.Context, req Request) iter.Seq2[Stre
 				yield(StreamEvent{}, err)
 				return
 			}
-			if gate.opened || attempt >= p.emptyRetries() {
+			if gate.opened || !gate.retryable() || attempt >= p.emptyRetries() {
 				gate.flush()
 				return
 			}
+			discarded = gate.usage
 			if err := sleepContext(ctx, p.cfg.retryDelay(attempt, nil)); err != nil {
 				yield(StreamEvent{}, err)
 				return
@@ -226,11 +237,30 @@ type emptyReplyGate struct {
 	pending         []StreamEvent
 	opened          bool
 	consumerStopped bool
+
+	// carried is the usage of earlier discarded attempts, added to this
+	// attempt's message delta.
+	carried Usage
+	// stopReason and usage are those of this attempt's message delta, with
+	// carried included in usage.
+	stopReason string
+	usage      Usage
+}
+
+// retryable reports whether an empty reply may be requested again. Only a
+// reply that ended normally qualifies: one cut off by the output limit or a
+// filter would most likely end the same way, and be billed again.
+func (g *emptyReplyGate) retryable() bool {
+	return g.stopReason == StopEndTurn || g.stopReason == ""
 }
 
 // emit forwards ev, or buffers it while the reply is still empty. It reports
 // whether the consumer wants more events.
 func (g *emptyReplyGate) emit(ev StreamEvent) bool {
+	if ev.Type == EvMessageDelta {
+		ev.Usage.Add(g.carried)
+		g.stopReason, g.usage = ev.StopReason, ev.Usage
+	}
 	if !g.opened && (ev.Type == EvTextDelta || ev.Type == EvToolStart) {
 		g.opened = true
 		if !g.flush() {
@@ -299,13 +329,27 @@ func streamOpenAIChunks(ctx context.Context, body io.Reader, emit func(StreamEve
 // stop reason are held until the stream ends because they may arrive in
 // separate chunks and some servers repeat usage in every chunk.
 type openAIStreamState struct {
-	startedTools map[int]bool
+	// slots maps a wire tool-call index to the call currently open there.
+	slots map[int]*toolSlot
+	// next is the number of calls started so far.
+	next int
+	// runID makes synthesised call ids unique across streams.
+	runID        string
 	finishReason string
 	usage        Usage
 }
 
+// toolSlot is one started tool call: the id it was given and its stream
+// block index.
+type toolSlot struct {
+	id    string
+	index int
+}
+
 func newOpenAIStreamState() *openAIStreamState {
-	return &openAIStreamState{startedTools: make(map[int]bool)}
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return &openAIStreamState{slots: make(map[int]*toolSlot), runID: hex.EncodeToString(b[:])}
 }
 
 // translate maps one chunk to stream events.
@@ -350,16 +394,23 @@ func (s *openAIStreamState) deltaEvents(d openAIDelta) []StreamEvent {
 	return events
 }
 
+// toolCallEvents maps one tool-call delta. Some servers omit the wire index,
+// so every parallel call arrives at index 0: a new, different id at an index
+// therefore starts a new call, while a delta without an id continues the
+// call open there.
 func (s *openAIStreamState) toolCallEvents(call openAIToolCallDelta) []StreamEvent {
-	index := openAIToolIndexBase + call.Index
 	var events []StreamEvent
-	if !s.startedTools[call.Index] {
-		s.startedTools[call.Index] = true
+	slot := s.slots[call.Index]
+	if slot == nil || (call.ID != "" && call.ID != slot.id) {
 		// Some servers omit call ids, yet a result can only be matched to
-		// its call by id.
-		id := firstNonEmpty(call.ID, fmt.Sprintf("call_%d", call.Index))
-		events = append(events, StreamEvent{Type: EvToolStart, Index: index, ToolID: id, ToolName: call.Function.Name})
+		// its call by id, and ids must not repeat across turns.
+		id := firstNonEmpty(call.ID, fmt.Sprintf("call_%s_%d", s.runID, s.next))
+		slot = &toolSlot{id: id, index: openAIToolIndexBase + s.next}
+		s.slots[call.Index] = slot
+		s.next++
+		events = append(events, StreamEvent{Type: EvToolStart, Index: slot.index, ToolID: id, ToolName: call.Function.Name})
 	}
+	index := slot.index
 	if extra := call.ExtraContent; len(extra) > 0 && string(extra) != "null" {
 		events = append(events, StreamEvent{
 			Type: EvProviderData, Index: index, Key: openAIExtraContentKey, Value: string(extra),
@@ -385,11 +436,12 @@ func (s *openAIStreamState) complete(emit func(StreamEvent) bool) {
 
 // stopReason maps the wire finish_reason to a StopReason constant. Some
 // servers report "stop" even when the model called tools, which would hide
-// the calls from a loop keyed on the stop reason.
+// the calls from a loop keyed on the stop reason, and some end with [DONE]
+// and no finish_reason at all.
 func (s *openAIStreamState) stopReason() string {
 	switch s.finishReason {
-	case "stop":
-		if len(s.startedTools) > 0 {
+	case "stop", "":
+		if s.next > 0 {
 			return StopToolUse
 		}
 		return StopEndTurn
@@ -441,7 +493,7 @@ func (p *openAIProvider) buildRequest(req Request) openAIRequest {
 		Stream:          true,
 		StreamOptions:   openAIStreamOptions{IncludeUsage: true},
 	}
-	if firstNonEmpty(p.cfg.MaxTokensField, DefaultMaxTokensField) == openAIMaxCompletionsField {
+	if p.maxTokensField() == openAIMaxCompletionsField {
 		wire.MaxCompletionTokens = maxTokens
 	} else {
 		wire.MaxTokens = maxTokens
@@ -450,6 +502,19 @@ func (p *openAIProvider) buildRequest(req Request) openAIRequest {
 		wire.Thinking = &openAIThinking{Type: thinking}
 	}
 	return wire
+}
+
+// maxTokensField is the configured output-limit field. Unset, it is
+// max_completion_tokens for the OpenAI API itself, whose reasoning models
+// reject max_tokens, and DefaultMaxTokensField elsewhere.
+func (p *openAIProvider) maxTokensField() string {
+	if p.cfg.MaxTokensField != "" {
+		return p.cfg.MaxTokensField
+	}
+	if u, err := url.Parse(p.cfg.BaseURL); err == nil && strings.EqualFold(u.Hostname(), openAIHost) {
+		return openAIMaxCompletionsField
+	}
+	return DefaultMaxTokensField
 }
 
 func toOpenAITools(tools []ToolSchema) []openAITool {

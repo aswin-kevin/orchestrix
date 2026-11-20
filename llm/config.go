@@ -3,6 +3,7 @@ package llm
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -74,6 +75,12 @@ type Config struct {
 	RetryInterval time.Duration
 	// EmptyResponseRetries applies to OpenAI chat only: 0 selects
 	// DefaultEmptyResponseRetries and a negative value disables the retry.
+	// A reply is retried only when it ends normally with neither text nor
+	// tool calls; one stopped by the output limit or a filter is returned
+	// as is. To keep a reply retryable, its thinking deltas are held back
+	// until text or a tool call arrives, so a streaming consumer sees
+	// thinking late. The usage of discarded attempts is added to the
+	// reported usage.
 	EmptyResponseRetries int
 	// RateLimit throttles request starts; nil means unlimited.
 	RateLimit *RateLimit
@@ -81,7 +88,8 @@ type Config struct {
 	Thinking        string
 	ReasoningEffort string
 	// MaxTokensField names the OpenAI chat output-limit field; empty selects
-	// DefaultMaxTokensField.
+	// max_completion_tokens when BaseURL's host is api.openai.com and
+	// DefaultMaxTokensField otherwise.
 	MaxTokensField string
 	// DefaultMaxTokens is used when a request sets no limit; 0 selects
 	// DefaultMaxTokens.
@@ -125,10 +133,12 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
-// Prepare builds the HTTP client and rate limiter. Call it once before Do
-// (adapters do so from their constructor); it is not safe to call
+// Prepare builds the HTTP client and rate limiter and takes a private copy
+// of Headers, so the caller's map may change afterwards. Call it once before
+// Do (adapters do so from their constructor); it is not safe to call
 // concurrently with Do.
 func (c *Config) Prepare() error {
+	c.Headers = maps.Clone(c.Headers)
 	client, err := c.newHTTPClient()
 	if err != nil {
 		return err

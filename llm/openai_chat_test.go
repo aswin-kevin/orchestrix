@@ -250,7 +250,7 @@ func TestOpenAIChatToolCallExtraContentAndMissingID(t *testing.T) {
 	if use.ProviderData[openAIExtraContentKey] != `{"k":"v"}` {
 		t.Errorf("provider data = %v", use.ProviderData)
 	}
-	if use.ID != "call_0" {
+	if !strings.HasPrefix(use.ID, "call_") || !strings.HasSuffix(use.ID, "_0") || len(use.ID) != len("call_12345678_0") {
 		t.Errorf("synthesised id = %q", use.ID)
 	}
 	if resp.StopReason != StopToolUse {
@@ -505,5 +505,170 @@ func TestOpenAIChatNoAuthHeaderWithoutKey(t *testing.T) {
 
 	if got := srv.headers.Get("Authorization"); got != "" {
 		t.Errorf("Authorization = %q", got)
+	}
+}
+
+func TestParallelToolCallsWithoutIndex(t *testing.T) {
+	stream := chunks(
+		`{"choices":[{"delta":{"tool_calls":[{"id":"a","function":{"name":"one","arguments":"{\"p\":1}"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"id":"b","function":{"name":"two","arguments":"{\"q\":2}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectOpenAI(t, newTestOpenAI(t, srv.URL), Request{})
+
+	uses := resp.Message.ToolUses()
+	if len(uses) != 2 {
+		t.Fatalf("tool uses = %+v", resp.Message.Content)
+	}
+	if uses[0].ID != "a" || uses[0].Name != "one" || string(uses[0].Input) != `{"p":1}` {
+		t.Errorf("first = %+v", uses[0])
+	}
+	if uses[1].ID != "b" || uses[1].Name != "two" || string(uses[1].Input) != `{"q":2}` {
+		t.Errorf("second = %+v", uses[1])
+	}
+}
+
+func TestParallelToolCallsWithIndexUnchanged(t *testing.T) {
+	stream := chunks(
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"x","function":{"name":"one","arguments":"{\"a\":"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"y","function":{"name":"two","arguments":"{\"b\":"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"1}"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"2}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectOpenAI(t, newTestOpenAI(t, srv.URL), Request{})
+
+	uses := resp.Message.ToolUses()
+	if len(uses) != 2 {
+		t.Fatalf("tool uses = %+v", resp.Message.Content)
+	}
+	if uses[0].ID != "x" || string(uses[0].Input) != `{"a":1}` {
+		t.Errorf("first = %+v", uses[0])
+	}
+	if uses[1].ID != "y" || string(uses[1].Input) != `{"b":2}` {
+		t.Errorf("second = %+v", uses[1])
+	}
+}
+
+func TestSyntheticToolIDsUniqueAcrossResponses(t *testing.T) {
+	stream := chunks(
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read","arguments":"{}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	p := newTestOpenAI(t, srv.URL)
+
+	first := collectOpenAI(t, p, Request{}).Message.ToolUses()[0].ID
+	second := collectOpenAI(t, p, Request{}).Message.ToolUses()[0].ID
+	if first == "" || first == second {
+		t.Errorf("synthetic ids %q and %q must be non-empty and distinct", first, second)
+	}
+}
+
+func TestDoneWithoutFinishReason(t *testing.T) {
+	for name, tc := range map[string]struct {
+		payload string
+		want    string
+	}{
+		"text": {`{"choices":[{"delta":{"content":"hi"}}]}`, StopEndTurn},
+		"tool": {`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"n","arguments":"{}"}}]}}]}`, StopToolUse},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := newSSEServer(t, 200, "text/event-stream", chunks(tc.payload))
+			resp := collectOpenAI(t, newTestOpenAI(t, srv.URL), Request{})
+			if resp.StopReason != tc.want {
+				t.Errorf("stop = %q, want %q", resp.StopReason, tc.want)
+			}
+		})
+	}
+}
+
+func TestEmptyReplyLengthNotRetried(t *testing.T) {
+	stream := chunks(
+		`{"choices":[{"delta":{"reasoning_content":"long thought"}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"length"}]}`,
+	)
+	srv, hits := newSequenceServer(t, stream, openAIHelloStream)
+	resp := collectOpenAI(t, newTestOpenAI(t, srv.URL), Request{})
+
+	if got := hits.Load(); got != 1 {
+		t.Errorf("hits = %d, want 1", got)
+	}
+	if resp.StopReason != StopMaxTokens {
+		t.Errorf("stop = %q, want %q", resp.StopReason, StopMaxTokens)
+	}
+}
+
+func TestEmptyReplyRetryUsageSummed(t *testing.T) {
+	empty := chunks(
+		`{"choices":[{"delta":{"content":""},"finish_reason":"stop"}]}`,
+		`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":1}}`,
+	)
+	text := chunks(
+		`{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`,
+		`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}`,
+	)
+	srv, hits := newSequenceServer(t, empty, empty, text)
+	resp := collectOpenAI(t, newTestOpenAI(t, srv.URL), Request{})
+
+	if got := hits.Load(); got != 3 {
+		t.Errorf("hits = %d, want 3", got)
+	}
+	if want := (Usage{Input: 30, Output: 7}); resp.Usage != want {
+		t.Errorf("usage = %+v, want %+v", resp.Usage, want)
+	}
+}
+
+func TestHeadersCopied(t *testing.T) {
+	srv := newSSEServer(t, 200, "text/event-stream", openAIHelloStream)
+	headers := map[string]string{"X-Extra": "yes"}
+	p, err := New(Config{Format: FormatOpenAI, BaseURL: srv.URL, Model: "m", MaxRetries: -1, Headers: headers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers["X-Extra"] = "mutated"
+	headers["X-Added"] = "late"
+
+	if _, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv.headers.Get("X-Extra"); got != "yes" {
+		t.Errorf("X-Extra = %q, want yes", got)
+	}
+	if got := srv.headers.Get("X-Added"); got != "" {
+		t.Errorf("X-Added = %q, want unset", got)
+	}
+}
+
+func TestOpenAIDefaultsToMaxCompletionTokens(t *testing.T) {
+	for _, tc := range []struct {
+		baseURL, field string
+		want           string
+	}{
+		{"https://api.openai.com/v1", "", "max_completion_tokens"},
+		{"https://api.openai.com/v1", "max_tokens", "max_tokens"},
+		{"https://llm.example.com/v1", "", "max_tokens"},
+	} {
+		p := newTestOpenAI(t, tc.baseURL, func(c *Config) { c.MaxTokensField = tc.field })
+		raw, err := json.Marshal(p.buildRequest(Request{MaxTokens: 50}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Fatal(err)
+		}
+		other := "max_tokens"
+		if tc.want == other {
+			other = "max_completion_tokens"
+		}
+		if body[tc.want] != float64(50) {
+			t.Errorf("%s field=%q: %s = %v", tc.baseURL, tc.field, tc.want, body[tc.want])
+		}
+		if _, ok := body[other]; ok {
+			t.Errorf("%s field=%q: %s must not be sent", tc.baseURL, tc.field, other)
+		}
 	}
 }
