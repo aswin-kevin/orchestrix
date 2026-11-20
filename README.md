@@ -53,7 +53,7 @@ Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and 
 - **Workspaces.** In-memory, disk, shell with background jobs, key/value, remote sandbox, and composite mounts (for example, memories that persist across threads).
 - **Decision models.** Typed yes/no, choice and score answers with probabilities from a fast decision model, used for rubric grading and a guard that blocks unsafe input and tool calls.
 - **Quality.** A self-grading rubric that sends the model back to revise, a validated typed final answer, structured questions to the user, and per-model profiles.
-- **Extensible.** Every behavior is a middleware; write your own or replace any built-in one. OpenTelemetry tracing is an optional module (`orxotel`).
+- **Extensible.** Every behavior is a middleware; write your own or replace any built-in one. OpenTelemetry tracing is an optional module (`orxotel`), and so is running tools in hardened Docker containers (`orxdocker`).
 
 ## Install
 
@@ -325,7 +325,7 @@ A backend is the file system the file tools operate on.
 - **`backend/shell`**: a disk backend that can also run commands; see "Shell and background tasks".
 - **`backend/kv`**: files kept in a namespaced key/value `kv.Store`, for state that must outlive a thread. `kv.NewMemoryStore` keeps it in memory; `kv.NewDirStore` keeps it on disk, where several processes can share it. A `DirStore` names each file by the hex SHA-256 of its key and keeps the key in a header inside the file, so no key can name a path outside the store and two keys never collide on a case-insensitive file system (macOS, Windows). Implement `kv.Store` to keep files in a database, add `Stat` (`kv.Stater`) so existence and size checks don't fetch the value, and run `kvtest.Run` against it.
 - **`backend/composite`**: routes each path to a backend by its longest mounted prefix and merges listings, globs and greps across them. `composite.New(def, composite.Route{Prefix: "/memories", Backend: kvb})` serves `/memories/a.md` from `kvb` as `/a.md` and every other path from `def`. Commands run only in `def`: files under a mount are invisible to them, and files of `def` that a mount shadows stay visible to them. Deleting a mount point, or any directory above one, is refused.
-- **`backend/sandbox`**: a backend for a remote container or VM whose only primitive is running a shell command. You supply a `backend.Executor` (only `Execute`); every file operation is a POSIX `sh` script sent through it, with paths single-quoted and content sent as base64. The sandbox needs `sh` with `base64` (and `base64 -d`), `find` (with `-H`, `-mindepth`, `-maxdepth` and `-exec ... {} +`), `wc`, `date -r FILE`, `mkdir`, `mv`, `rm`, `tail -c` and a `true` executable: GNU, busybox, macOS and FreeBSD userlands work; OpenBSD and NetBSD do not. File names that are not valid UTF-8 need tools that accept such arguments (`date -r` has no argument-free form): the Rust coreutils that recent Ubuntu ships by default refuse them, and the sandbox then reports `this userland cannot handle non-UTF-8 file names` for that path. The sandbox itself is the security boundary. For development, `sandbox.New(shellBackend, sandbox.Options{Root: dir})` runs one on the host over a `backend/shell` backend.
+- **`backend/sandbox`**: a backend for a remote container or VM whose only primitive is running a shell command. You supply a `backend.Executor` (only `Execute`); every file operation is a POSIX `sh` script sent through it, with paths single-quoted and content sent as base64. The sandbox needs `sh` with `base64` (and `base64 -d`), `find` (with `-H`, `-mindepth`, `-maxdepth` and `-exec ... {} +`), `wc`, `date -r FILE`, `mkdir`, `mv`, `rm`, `tail -c` and a `true` executable: GNU, busybox, macOS and FreeBSD userlands work; OpenBSD and NetBSD do not. File names that are not valid UTF-8 need tools that accept such arguments (`date -r` has no argument-free form): the Rust coreutils that recent Ubuntu ships by default refuse them, and the sandbox then reports `this userland cannot handle non-UTF-8 file names` for that path. The sandbox itself is the security boundary. When the executor also implements `backend.Starter`, `sandbox.NewStarter` returns a backend that can run background jobs too, for `WithTasks`. For development, `sandbox.New(shellBackend, sandbox.Options{Root: dir})` runs one on the host over a `backend/shell` backend. For a real boundary, use `orxdocker` (see "Untrusted tools in containers").
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -709,9 +709,39 @@ _, _ = a, err
 
 Command rules are matched on the parsed command line, not the raw text. An allow rule such as `execute(git:*)` must cover every command in a line, so `git status && rm -rf x` is not allowed by it, while a deny or ask rule applies if it matches any one command. A line the parser cannot vouch for (command substitution, piping into a shell, a leading `VAR=value`, a program run by path) is never allowed by a pattern rule, and when deny or ask rules exist it needs a human even in `bypassPermissions` mode. Rules still name programs, not behavior: an allowed program that runs others can reach anything.
 
-**The shell backend is not a sandbox.** Commands run as your process, with its privileges and, by default, a small allowlist of its environment variables. A command's process group is killed when it ends, but a process that leaves the group (`setsid`, a daemonizing double fork) is not tracked and keeps running. Run agents that execute untrusted instructions inside a container or VM.
+**The shell backend is not a sandbox.** Commands run as your process, with its privileges and, by default, a small allowlist of its environment variables. A command's process group is killed when it ends, but a process that leaves the group (`setsid`, a daemonizing double fork) is not tracked and keeps running. Run agents that execute untrusted instructions inside a container or VM; `orxdocker` does that (next section).
 
 The agent writes transcripts and oversized outputs under `.orchestrix/` in the workspace (see "Offload" above). They may contain secrets that passed through the conversation; add `.orchestrix/` to `.gitignore`.
+
+## Untrusted tools in containers
+
+When tools run commands an attacker can influence (untrusted repositories, prompt-injected content, scans of hosts you don't control), run them in containers with the separate module `orxdocker`. It talks to the Docker Engine API over its Unix socket using only the standard library, and gives each thread its own container, created on first use, reused across runs of the thread, and removed after an idle period, by `Delete`, or by `Close`:
+
+```sh
+go get github.com/aswin-kevin/orchestrix/orxdocker
+```
+
+```go
+// Imports omitted; model comes from surrounding code.
+m, err := orxdocker.NewManager(orxdocker.Options{}) // alpine:3.22 by default
+if err != nil {
+	log.Fatal(err)
+}
+defer m.Close() // removes this process's containers
+
+tm := tasks.New(tasks.Config{})
+defer tm.Shutdown()
+
+a, err := orchestrix.New(model,
+	orchestrix.WithBackendFactory(m.Backend), // file tools and execute run in the container
+	orchestrix.WithTasks(tm),                 // background jobs too
+)
+_, _ = a, err
+```
+
+Containers are hardened by default, and every field that weakens this is an explicit opt-out: commands run as `nobody`, the root file system is read-only with only the workspace (`/workspace`) and `/tmp` writable (both size-limited tmpfs, so the workspace lives as long as the container), all capabilities are dropped, `no-new-privileges` and Docker's default seccomp profile apply, processes, memory and CPU are limited, there is no network, and commands see no host environment, only `Options.Env` and `ExecOptions.Env`. `Options.Network` joins a named network instead; filtering its traffic, the cloud metadata address included, is then up to that network (for instance an internal network whose only exit is a filtering proxy). Each command runs in its own process group: a timeout or stop kills the group from a second exec (Docker cannot stop an exec), and a backstop inside the container kills it shortly after the timeout even if your process is gone. Output is capped while it streams.
+
+Every container is labeled (`dev.orchestrix.orxdocker`, its scope, thread id and creation time). `m.Reap(ctx, orxdocker.ReapOptions{OlderThan: ..., Keep: ...})` removes containers orphaned by a crashed process or left for deleted threads. The image needs `/bin/sh`, `setsid`, `sleep`, `kill`, `cat`, `rm` and the tools `backend/sandbox` lists; alpine (busybox) and Debian images work. Workspace files are not captured by checkpoints.
 
 ## Memory
 
