@@ -223,12 +223,14 @@ func (p *openAIProvider) emptyRetries() int {
 // closed on every exit, including the consumer breaking out of the loop,
 // which releases the connection promptly.
 func (p *openAIProvider) streamAttempt(ctx context.Context, body []byte, gate *emptyReplyGate) error {
+	ctx, idle, release := p.cfg.watchIdle(ctx)
+	defer release()
 	resp, err := p.send(ctx, body)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	return streamOpenAIChunks(ctx, p.cfg, resp.Body, gate.emit)
+	return streamOpenAIChunks(ctx, p.cfg, resp.Body, idle, gate.emit)
 }
 
 // emptyReplyGate holds back events until the reply proves non-empty. Until
@@ -297,12 +299,12 @@ func (g *emptyReplyGate) flush() bool {
 // body that ends with neither [DONE] nor a finish_reason is reported as an
 // error so truncated replies are never mistaken for complete ones. It returns
 // nil without further reading once emit reports the consumer is gone.
-func streamOpenAIChunks(ctx context.Context, cfg *Config, body io.Reader, emit func(StreamEvent) bool) error {
+func streamOpenAIChunks(ctx context.Context, cfg *Config, body io.Reader, idle *idleTimer, emit func(StreamEvent) bool) error {
 	state := newOpenAIStreamState(cfg)
 	if !emit(StreamEvent{Type: EvMessageStart}) {
 		return nil
 	}
-	for sse, err := range readSSE(body) {
+	for sse, err := range readSSE(body, idle) {
 		if err != nil {
 			return streamReadError(ctx, err)
 		}

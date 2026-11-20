@@ -153,6 +153,12 @@ func WithMaxDuration(d time.Duration) Option {
 	return func(s *settings) { s.cfg.MaxDuration = d }
 }
 
+// WithModelTimeout bounds each model call, retries included; zero means no
+// limit beyond the run's own (see agent.Config.ModelTimeout).
+func WithModelTimeout(d time.Duration) Option {
+	return func(s *settings) { s.cfg.ModelTimeout = d }
+}
+
 // WithMaxTokens caps the output tokens of each model response; zero uses the
 // model profile's output limit (see agent.Config.MaxTokens).
 func WithMaxTokens(n int) Option {

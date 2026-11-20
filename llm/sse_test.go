@@ -1,9 +1,15 @@
 package llm
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/internal/sse"
 )
@@ -15,7 +21,7 @@ func TestReadSSEParsesEventsAndMultilineData(t *testing.T) {
 		"event: last\ndata: tail"
 
 	var got []sseEvent
-	for ev, err := range readSSE(strings.NewReader(input)) {
+	for ev, err := range readSSE(strings.NewReader(input), nil) {
 		if err != nil {
 			t.Fatalf("readSSE error: %v", err)
 		}
@@ -40,7 +46,7 @@ func TestReadSSEParsesEventsAndMultilineData(t *testing.T) {
 func TestReadSSECapsEventSize(t *testing.T) {
 	input := "data: " + strings.Repeat("x", maxSSEEventBytes) + "\n\n"
 	var err error
-	for _, e := range readSSE(strings.NewReader(input)) {
+	for _, e := range readSSE(strings.NewReader(input), nil) {
 		if e != nil {
 			err = e
 			break
@@ -49,4 +55,178 @@ func TestReadSSECapsEventSize(t *testing.T) {
 	if !errors.Is(err, sse.ErrTooLarge) || !strings.HasPrefix(err.Error(), "llm: read event stream:") {
 		t.Fatalf("error = %v, want an llm read error wrapping sse.ErrTooLarge", err)
 	}
+}
+
+// newStallServer answers every request with first and then holds the
+// connection open, sending nothing more, until the client goes away. hits
+// counts the requests.
+func newStallServer(t *testing.T, contentType, first string) (url string, hits *atomic.Int32) {
+	t.Helper()
+	hits = new(atomic.Int32)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, first)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, hits
+}
+
+const (
+	testIdle  = 100 * time.Millisecond
+	idleLimit = time.Second
+)
+
+// lastStreamError drains a stream and returns its error.
+func lastStreamError(ctx context.Context, p Provider) error {
+	var last error
+	for _, err := range p.Stream(ctx, Request{Messages: []Message{UserText("x")}}) {
+		if err != nil {
+			last = err
+		}
+	}
+	return last
+}
+
+func TestStreamIdleTimeout(t *testing.T) {
+	idle := func(c *Config) { c.StreamIdleTimeout = testIdle }
+	cases := []struct {
+		name  string
+		first string
+		build func(t *testing.T, url string) Provider
+	}{
+		{"anthropic", anthropicFirstDelta, func(t *testing.T, url string) Provider {
+			return newTestProviderWith(t, FormatAnthropic, url, idle)
+		}},
+		{"openai", openAIFirstDelta, func(t *testing.T, url string) Provider {
+			return newTestOpenAI(t, url, idle)
+		}},
+		{"responses", "data: " + responsesTextDelta + "\n\n", func(t *testing.T, url string) Provider {
+			return newTestResponses(t, url, idle)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			url, _ := newStallServer(t, "text/event-stream", tc.first)
+			start := time.Now()
+			err := lastStreamError(context.Background(), tc.build(t, url))
+			if !errors.Is(err, ErrStreamIdle) {
+				t.Fatalf("err = %v, want ErrStreamIdle", err)
+			}
+			if elapsed := time.Since(start); elapsed > idleLimit {
+				t.Errorf("idle stream ended after %v, want within %v", elapsed, idleLimit)
+			}
+		})
+	}
+}
+
+func TestStreamIdleTimeoutBeforeFirstEvent(t *testing.T) {
+	url, _ := newStallServer(t, "text/event-stream", "")
+	err := lastStreamError(context.Background(), newTestOpenAI(t, url, func(c *Config) { c.StreamIdleTimeout = testIdle }))
+	if !errors.Is(err, ErrStreamIdle) {
+		t.Fatalf("err = %v, want ErrStreamIdle", err)
+	}
+}
+
+func TestIdleTimeoutAfterContentNotRetried(t *testing.T) {
+	url, hits := newStallServer(t, "text/event-stream", openAIFirstDelta)
+	p := newTestOpenAI(t, url, func(c *Config) {
+		c.StreamIdleTimeout = testIdle
+		c.MaxRetries = 3
+	})
+
+	var text strings.Builder
+	var last error
+	for ev, err := range p.Stream(context.Background(), Request{Messages: []Message{UserText("x")}}) {
+		if err != nil {
+			last = err
+			continue
+		}
+		text.WriteString(ev.Text)
+	}
+	if !errors.Is(last, ErrStreamIdle) {
+		t.Fatalf("err = %v, want ErrStreamIdle", last)
+	}
+	if text.String() != "a" {
+		t.Errorf("text = %q, want the delivered content once", text.String())
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("server hit %d times, want 1", got)
+	}
+}
+
+func TestCallerDeadlineBeatsIdleTimeout(t *testing.T) {
+	url, _ := newStallServer(t, "text/event-stream", openAIFirstDelta)
+	p := newTestOpenAI(t, url, func(c *Config) { c.StreamIdleTimeout = 10 * time.Second })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	if err := lastStreamError(ctx, p); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestStreamIdleIsRetryable(t *testing.T) {
+	if !IsRetryable(ErrStreamIdle) || !DefaultShouldFallback(ErrStreamIdle) {
+		t.Error("ErrStreamIdle should be retryable and switch a fallback chain")
+	}
+}
+
+func TestFallbackSwitchesOnIdleBeforeContent(t *testing.T) {
+	stalled, _ := newStallServer(t, "text/event-stream", "")
+	healthy := newSSEServer(t, 200, "text/event-stream", openAIHelloStream)
+	f, err := NewFallback(FallbackConfig{Entries: []FallbackEntry{
+		{Name: "stalled", Provider: newTestOpenAI(t, stalled, func(c *Config) { c.StreamIdleTimeout = testIdle })},
+		{Name: "healthy", Provider: newTestOpenAI(t, healthy.URL)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := Collect(context.Background(), f, Request{Messages: []Message{UserText("x")}})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if resp.Message.Text() != "hi" {
+		t.Errorf("text = %q, want the healthy entry's reply", resp.Message.Text())
+	}
+}
+
+func TestAnthropicCompleteIdleTimeout(t *testing.T) {
+	url, _ := newStallServer(t, "application/json", `{"id":"m","content":[`)
+	p := newTestProviderWith(t, FormatAnthropic, url, func(c *Config) { c.StreamIdleTimeout = testIdle })
+	start := time.Now()
+	_, err := p.Complete(context.Background(), Request{Messages: []Message{UserText("x")}})
+	if !errors.Is(err, ErrStreamIdle) {
+		t.Fatalf("err = %v, want ErrStreamIdle", err)
+	}
+	if elapsed := time.Since(start); elapsed > idleLimit {
+		t.Errorf("stalled body read ended after %v, want within %v", elapsed, idleLimit)
+	}
+}
+
+func TestStreamIdleTimeoutDefault(t *testing.T) {
+	for _, tc := range []struct {
+		set, want time.Duration
+	}{{0, DefaultStreamIdleTimeout}, {-1, 0}, {time.Second, time.Second}} {
+		c := Config{StreamIdleTimeout: tc.set}
+		if got := c.streamIdleTimeout(); got != tc.want {
+			t.Errorf("streamIdleTimeout(%v) = %v, want %v", tc.set, got, tc.want)
+		}
+	}
+}
+
+// newTestProviderWith builds a provider of format f against url without
+// retries, after applying mutate to its Config.
+func newTestProviderWith(t *testing.T, f Format, url string, mutate func(*Config)) Provider {
+	t.Helper()
+	cfg := Config{Format: f, BaseURL: url, APIKey: "key-1", Model: "test-model", MaxRetries: -1}
+	mutate(&cfg)
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

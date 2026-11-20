@@ -61,6 +61,8 @@ func (p *responsesProvider) Stream(ctx context.Context, req Request) iter.Seq2[S
 			yield(StreamEvent{}, fmt.Errorf("llm: encode responses request: %w", err))
 			return
 		}
+		ctx, idle, release := p.cfg.watchIdle(ctx)
+		defer release()
 		resp, err := p.send(ctx, body)
 		if err != nil {
 			yield(StreamEvent{}, err)
@@ -70,7 +72,7 @@ func (p *responsesProvider) Stream(ctx context.Context, req Request) iter.Seq2[S
 		// loop, which releases the connection promptly.
 		defer resp.Body.Close()
 		emit := func(ev StreamEvent) bool { return yield(ev, nil) }
-		if err := streamResponsesEvents(ctx, p.cfg, resp.Body, emit); err != nil {
+		if err := streamResponsesEvents(ctx, p.cfg, resp.Body, idle, emit); err != nil {
 			yield(StreamEvent{}, err)
 		}
 	}
@@ -136,12 +138,12 @@ type responsesEvent struct {
 // A body that ends without a terminal event is reported as an error so
 // truncated replies are never mistaken for complete ones. It returns nil
 // without further reading once emit reports the consumer is gone.
-func streamResponsesEvents(ctx context.Context, cfg *Config, body io.Reader, emit func(StreamEvent) bool) error {
+func streamResponsesEvents(ctx context.Context, cfg *Config, body io.Reader, idle *idleTimer, emit func(StreamEvent) bool) error {
 	state := &responsesStreamState{cfg: cfg, argumentsSeen: make(map[int]bool), startedTools: make(map[int]bool)}
 	if !emit(StreamEvent{Type: EvMessageStart}) {
 		return nil
 	}
-	for sse, err := range readSSE(body) {
+	for sse, err := range readSSE(body, idle) {
 		if err != nil {
 			return streamReadError(ctx, err)
 		}

@@ -159,6 +159,8 @@ type anthropicEvent struct {
 
 // Complete implements Provider with a non-streaming request.
 func (p *anthropicProvider) Complete(ctx context.Context, req Request) (*Response, error) {
+	ctx, idle, release := p.cfg.watchIdle(ctx)
+	defer release()
 	resp, err := p.send(ctx, req, false)
 	if err != nil {
 		return nil, err
@@ -166,7 +168,11 @@ func (p *anthropicProvider) Complete(ctx context.Context, req Request) (*Respons
 	defer resp.Body.Close()
 
 	var wire anthropicResponse
-	if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
+	idle.resume()
+	if err := json.NewDecoder(idleReader{resp.Body, idle}).Decode(&wire); err != nil {
+		if cause := idleCause(ctx); cause != nil {
+			return nil, cause
+		}
 		return nil, fmt.Errorf("llm: decode anthropic response: %w", err)
 	}
 	return wire.toResponse(), nil
@@ -214,6 +220,8 @@ func fromAnthropicBlock(b anthropicBlock) (Block, bool) {
 // the consumer has already seen part of it.
 func (p *anthropicProvider) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
+		ctx, idle, release := p.cfg.watchIdle(ctx)
+		defer release()
 		resp, err := p.send(ctx, req, true)
 		if err != nil {
 			yield(StreamEvent{}, err)
@@ -222,15 +230,15 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request) iter.Seq2[S
 		// Closing on every exit, including the consumer breaking out of the
 		// loop, releases the connection promptly.
 		defer resp.Body.Close()
-		streamAnthropicEvents(ctx, p.cfg, resp.Body, yield)
+		streamAnthropicEvents(ctx, p.cfg, resp.Body, idle, yield)
 	}
 }
 
 // streamAnthropicEvents translates the SSE body into stream events. A body
 // that ends before message_stop is reported as an error so truncated replies
 // are never mistaken for complete ones.
-func streamAnthropicEvents(ctx context.Context, cfg *Config, body io.Reader, yield func(StreamEvent, error) bool) {
-	for sse, err := range readSSE(body) {
+func streamAnthropicEvents(ctx context.Context, cfg *Config, body io.Reader, idle *idleTimer, yield func(StreamEvent, error) bool) {
+	for sse, err := range readSSE(body, idle) {
 		if err != nil {
 			yield(StreamEvent{}, streamReadError(ctx, err))
 			return

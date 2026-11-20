@@ -427,6 +427,29 @@ func TestCancelDuringStreaming(t *testing.T) {
 	}
 }
 
+func TestModelTimeoutEndsTurn(t *testing.T) {
+	p := &blockingProvider{}
+	a := mustNew(t, Config{Provider: p, ModelTimeout: 100 * time.Millisecond})
+
+	start := time.Now()
+	var final *Final
+	for ev := range a.Run(context.Background(), userInput("hi")) {
+		if ev.Kind == KindFinal {
+			final = ev.Final
+		}
+	}
+
+	if final == nil || final.Reason != ReasonModelError {
+		t.Fatalf("final = %+v, want model_error", final)
+	}
+	if !errors.Is(final.Err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want context.DeadlineExceeded", final.Err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("run ended after %v, want soon after the 100ms model timeout", elapsed)
+	}
+}
+
 func TestOverflowReason(t *testing.T) {
 	overflow := &llm.APIError{Status: 400, Body: "prompt is too long"}
 	p := llmtest.New(llmtest.Turn{Err: overflow})

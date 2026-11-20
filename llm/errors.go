@@ -203,10 +203,15 @@ func transientType(v any) ErrorKind {
 }
 
 // IsRetryable reports whether repeating the request may succeed: transient
-// HTTP statuses and network failures qualify, cancellation never does.
+// HTTP statuses, network failures and ErrStreamIdle qualify, cancellation
+// never does. A stream that has delivered content is never replayed,
+// whatever its error.
 func IsRetryable(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
+	}
+	if errors.Is(err, ErrStreamIdle) {
+		return true
 	}
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {

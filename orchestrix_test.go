@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -238,6 +239,16 @@ func TestInvalidModel(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "model must be a model spec string or an llm.Provider") {
 			t.Errorf("%s: err = %v, want model type error", name, err)
 		}
+	}
+}
+
+func TestModelTimeoutReachesConfig(t *testing.T) {
+	a, err := orchestrix.New(llmtest.New(), orchestrix.WithModelTimeout(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Config().ModelTimeout; got != time.Minute {
+		t.Errorf("Config.ModelTimeout = %v, want 1m", got)
 	}
 }
 

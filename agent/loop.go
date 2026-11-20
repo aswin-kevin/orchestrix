@@ -328,9 +328,18 @@ func (r *run) modelTurn() (*llm.Response, *Final) {
 	return resp, nil
 }
 
+// callModel runs the model handler chain once, bounded by
+// Config.ModelTimeout when set. The timeout's context is derived from the
+// run's, so modelFailure tells it apart from the run being cancelled.
 func (r *run) callModel() (*llm.Response, error) {
 	r.attempts.Store(0)
-	resp, err := r.model(r.ctx, r.modelRequest())
+	ctx := r.ctx
+	if d := r.agent.cfg.ModelTimeout; d > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, d)
+		defer cancel()
+	}
+	resp, err := r.model(ctx, r.modelRequest())
 	if err == nil && resp == nil {
 		err = errNoResponse
 	}

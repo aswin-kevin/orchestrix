@@ -38,6 +38,9 @@ const (
 	DefaultMaxTokensField = "max_tokens"
 	// DefaultMaxTokens is the output limit used when a request sets none.
 	DefaultMaxTokens = 8192
+	// DefaultStreamIdleTimeout is how long a model reply may go without
+	// sending anything before the call fails with ErrStreamIdle.
+	DefaultStreamIdleTimeout = 5 * time.Minute
 
 	defaultAnthropicBaseURL = "https://api.anthropic.com"
 	defaultOpenAIBaseURL    = "https://api.openai.com/v1"
@@ -82,6 +85,16 @@ type Config struct {
 	// thinking late. The usage of discarded attempts is added to the
 	// reported usage.
 	EmptyResponseRetries int
+	// StreamIdleTimeout bounds how long a model reply may go silent once its
+	// response headers have arrived: the wait for each stream event,
+	// including the first, and for each read of a non-streaming Anthropic
+	// reply body. When it runs out the call fails with ErrStreamIdle. 0
+	// selects DefaultStreamIdleTimeout and a negative value disables it. The
+	// time the consumer spends handling an event does not count. It does not
+	// bound the wait for response headers or the call as a whole; use the
+	// context's deadline for that. A decision format (NewDecider) does not
+	// use it.
+	StreamIdleTimeout time.Duration
 	// RateLimit throttles request starts; nil means unlimited.
 	RateLimit *RateLimit
 
@@ -97,6 +110,17 @@ type Config struct {
 
 	client  *http.Client
 	limiter *limiter
+}
+
+// streamIdleTimeout is the effective StreamIdleTimeout; zero means none.
+func (c *Config) streamIdleTimeout() time.Duration {
+	switch {
+	case c.StreamIdleTimeout == 0:
+		return DefaultStreamIdleTimeout
+	case c.StreamIdleTimeout < 0:
+		return 0
+	}
+	return c.StreamIdleTimeout
 }
 
 // ParseModel builds a Config from a "format:model" spec such as
