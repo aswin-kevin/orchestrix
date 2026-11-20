@@ -33,6 +33,12 @@ jobs:
       - name: Test (orxotel)
         working-directory: orxotel
         run: go test -race ./...
+      - name: Vet (evals)
+        working-directory: evals
+        run: go vet ./...
+      - name: Test (evals, offline)
+        working-directory: evals
+        run: go test -race ./...
 
   vulncheck:
     name: Vulnerability check
@@ -49,4 +55,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
       - name: govulncheck (orxotel)
         working-directory: orxotel
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+      - name: govulncheck (evals)
+        working-directory: evals
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...

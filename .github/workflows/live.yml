@@ -1,0 +1,118 @@
+name: Live
+
+# Runs the live-model tests and the evals against real models. It needs
+# secrets, so it never runs for pull requests (fork PRs get no secrets).
+#
+# Each matrix slot n is configured with repository variables or secrets:
+#   ORX_LIVE_MODEL_<n>     model spec: anthropic:<model>, openai:<model> or
+#                          openai-responses:<model> (variable or secret)
+#   ORX_LIVE_BASE_URL_<n>  endpoint base URL; empty uses the provider's
+#                          default (variable or secret)
+#   ORX_LIVE_API_KEY_<n>   API key (secret)
+#   ORX_LIVE_BASELINE_<n>  eval baseline file in evals/baselines to compare
+#                          against; empty only fails on harness violations
+#                          (variable)
+# A slot without a model is skipped. TestLiveDecide runs in its own job when
+# ORX_TEST_DECIDER_MODEL, ORX_TEST_DECIDER_BASE_URL and
+# ORX_TEST_DECIDER_API_KEY are set.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      trials:
+        description: Trials per eval scenario
+        default: "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: Live (slot ${{ matrix.slot }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2, 3, 4]
+    env:
+      ORX_TEST_MODEL: ${{ vars[format('ORX_LIVE_MODEL_{0}', matrix.slot)] || secrets[format('ORX_LIVE_MODEL_{0}', matrix.slot)] }}
+      ORX_TEST_BASE_URL: ${{ vars[format('ORX_LIVE_BASE_URL_{0}', matrix.slot)] || secrets[format('ORX_LIVE_BASE_URL_{0}', matrix.slot)] }}
+      ORX_TEST_API_KEY: ${{ secrets[format('ORX_LIVE_API_KEY_{0}', matrix.slot)] }}
+      BASELINE: ${{ vars[format('ORX_LIVE_BASELINE_{0}', matrix.slot)] }}
+      TRIALS: ${{ inputs.trials || '5' }}
+    steps:
+      - name: Check configuration
+        id: cfg
+        run: |
+          if [ -z "$ORX_TEST_MODEL" ]; then
+            echo "Slot ${{ matrix.slot }} has no model configured; skipping."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.enabled == 'true'
+      - uses: actions/setup-go@v5
+        if: steps.cfg.outputs.enabled == 'true'
+        with:
+          go-version-file: go.mod
+      - name: Live tests
+        if: steps.cfg.outputs.enabled == 'true'
+        run: |
+          mkdir -p live-results
+          set -o pipefail
+          status=0
+          go test -run Live -count=1 -timeout 30m -v . 2>&1 | tee live-results/live-tests.txt || status=$?
+          go tool test2json -t < live-results/live-tests.txt > live-results/live-tests.json || true
+          exit "$status"
+      - name: Evals
+        if: ${{ !cancelled() && steps.cfg.outputs.enabled == 'true' }}
+        working-directory: evals
+        run: |
+          args=(-n "$TRIALS" -out ../live-results/evals.json -timeout 25m)
+          if [ -n "$BASELINE" ]; then
+            args+=(-baseline "baselines/$BASELINE")
+          fi
+          go run ./cmd/orxeval "${args[@]}"
+      - name: Upload results
+        if: ${{ always() && steps.cfg.outputs.enabled == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-results-slot-${{ matrix.slot }}
+          path: live-results/
+          if-no-files-found: ignore
+
+  decider:
+    name: Live decider
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ORX_TEST_DECIDER_MODEL: ${{ vars.ORX_TEST_DECIDER_MODEL || secrets.ORX_TEST_DECIDER_MODEL }}
+      ORX_TEST_DECIDER_BASE_URL: ${{ vars.ORX_TEST_DECIDER_BASE_URL || secrets.ORX_TEST_DECIDER_BASE_URL }}
+      ORX_TEST_DECIDER_API_KEY: ${{ secrets.ORX_TEST_DECIDER_API_KEY }}
+    steps:
+      - name: Check configuration
+        id: cfg
+        run: |
+          if [ -z "$ORX_TEST_DECIDER_MODEL" ] || [ -z "$ORX_TEST_DECIDER_BASE_URL" ] || [ -z "$ORX_TEST_DECIDER_API_KEY" ]; then
+            echo "No decision model configured; skipping."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.cfg.outputs.enabled == 'true'
+      - uses: actions/setup-go@v5
+        if: steps.cfg.outputs.enabled == 'true'
+        with:
+          go-version-file: go.mod
+      - name: TestLiveDecide
+        if: steps.cfg.outputs.enabled == 'true'
+        run: go test -run TestLiveDecide -count=1 -v .
