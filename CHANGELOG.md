@@ -71,6 +71,7 @@ A hardening pass ahead of v1.0.0: security fixes in the permission parser, bound
 - A subagent run that ends without a Final no longer panics the `task` tool.
 - `Shutdown` of `tasks` and `async` no longer races a background start that is still committing.
 - orxotel and subagents treat `token_limit` as a soft stop like `max_turns`.
+- `web_fetch` markdown: cells of tables nested up to four deep are converted as markdown and keep their links (deeper ones are plain text), and a table row that reaches the output cap keeps the cells rendered so far instead of being dropped.
 
 ### Modules and release
 

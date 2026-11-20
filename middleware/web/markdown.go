@@ -41,9 +41,11 @@ const (
 	// DefaultMaxMarkdownBytes is how much markdown HTMLToMarkdown writes.
 	DefaultMaxMarkdownBytes = 1 << 20
 	// maxNesting is how many quote markers and list indents a line takes
-	// at most; deeper blockquotes and lists add no further prefix. Tables
-	// nested in a table cell render their cells as plain text.
+	// at most; deeper blockquotes and lists add no further prefix.
 	maxNesting = 16
+	// maxTableNesting is how many tables deep cells are converted as
+	// markdown, links included; cells of deeper tables are plain text.
+	maxTableNesting = 4
 	// checkEvery is how many nodes are converted between checks of the
 	// context.
 	checkEvery = 1024
@@ -327,26 +329,42 @@ func (c *converter) table(n *html.Node) {
 	defer func() { c.tables-- }()
 	for i, row := range rows {
 		// A row is written once all its cells are rendered, so each cell
-		// gets only the room its siblings left.
-		cells := make([]string, len(row))
+		// gets only the room its siblings left. When the room runs out, the
+		// cells rendered so far, the cut one included, are still written.
+		cells := make([]string, 0, len(row))
 		used := len("| ")
-		for j, cell := range row {
+		cut := false
+		for _, cell := range row {
 			room := c.limit - len(c.buf) - used
 			if room <= 0 {
-				c.full, c.truncated = true, true
+				cut = true
+				break
 			}
-			if c.full {
+			s, cellCut := c.cell(cell, room)
+			if c.err != nil {
 				return
 			}
-			cells[j] = c.cell(cell, room)
-			used += len(cells[j]) + len(" | ")
+			cells = append(cells, s)
+			used += len(s) + len(" | ")
+			if cellCut {
+				cut = true
+				break
+			}
 		}
-		c.block(lineBreak)
-		c.word("|")
-		for _, s := range cells {
-			c.write(" ")
-			c.write(s)
-			c.write(" |")
+		if len(cells) > 0 {
+			c.block(lineBreak)
+			c.word("|")
+			for _, s := range cells {
+				c.write(" ")
+				c.write(s)
+				c.write(" |")
+			}
+		}
+		if cut {
+			c.full, c.truncated = true, true
+		}
+		if c.full {
+			return
 		}
 		if i == 0 {
 			c.block(lineBreak)
@@ -357,22 +375,23 @@ func (c *converter) table(n *html.Node) {
 }
 
 // cell renders a table cell on one line in at most room bytes before
-// escaping, escaping the column separator. A cell of a table nested in
-// another table's cell is plain text: the outer cell escapes its
-// separators once.
-func (c *converter) cell(n *html.Node, room int) string {
-	if c.tables > 1 {
-		return collapse(rawText(n))
+// escaping, and reports whether it was cut at room. Only a cell of the
+// outermost table escapes its column separators, so the separators of a
+// table nested in it are escaped once. Cells of tables nested deeper than
+// maxTableNesting are plain text.
+func (c *converter) cell(n *html.Node, room int) (string, bool) {
+	if c.tables > maxTableNesting {
+		return collapse(rawText(n)), false
 	}
 	sub := c.sub(room)
 	sub.children(n)
 	c.adopt(sub)
-	return collapseCell(sub.buf)
+	return collapseCell(sub.buf, c.tables == 1), sub.truncated
 }
 
-// collapseCell returns b on one line with its whitespace collapsed and its
-// column separators escaped.
-func collapseCell(b []byte) string {
+// collapseCell returns b on one line with its whitespace collapsed and,
+// when escape is set, its column separators escaped.
+func collapseCell(b []byte, escape bool) string {
 	var sb strings.Builder
 	sb.Grow(len(b))
 	space := false
@@ -388,7 +407,7 @@ func collapseCell(b []byte) string {
 			sb.WriteByte(' ')
 			space = false
 		}
-		if r == '|' {
+		if escape && r == '|' {
 			sb.WriteByte('\\')
 		}
 		sb.Write(ch)

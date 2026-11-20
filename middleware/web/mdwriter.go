@@ -61,14 +61,12 @@ func (c *converter) sub(room int) *converter {
 	return s
 }
 
-// adopt takes back the node count and stop state of sub.
+// adopt takes back the node count and context error of sub. Whether sub
+// was cut is left to the caller, which may still write what sub rendered.
 func (c *converter) adopt(sub *converter) {
 	c.nodes = sub.nodes
 	if sub.err != nil {
 		c.err, c.full = sub.err, true
-	}
-	if sub.truncated {
-		c.truncated, c.full = true, true
 	}
 }
 
@@ -84,6 +82,13 @@ func (c *converter) write(s string) {
 		}
 		s = s[:room]
 		c.full, c.truncated = true, true
+	}
+	if need := len(c.buf) + len(s); need > cap(c.buf) {
+		// Grow by doubling, up to limit: append grows large slices by
+		// only a quarter, which allocates about five times the final size.
+		grown := make([]byte, len(c.buf), min(max(need, 2*cap(c.buf)), c.limit))
+		copy(grown, c.buf)
+		c.buf = grown
 	}
 	c.buf = append(c.buf, s...)
 }

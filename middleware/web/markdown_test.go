@@ -324,11 +324,46 @@ func TestMarkdownWideTableRowBounded(t *testing.T) {
 	if len(md) > limit || !truncated {
 		t.Fatalf("markdown is %d bytes, truncated = %v; want at most %d, truncated", len(md), truncated, limit)
 	}
-	// The cell's buffer and the output each grow by doubling to at most
-	// limit, and the cell is copied once collapsed: about 6 × limit.
-	// Before cells shared the room of their row this was over 100 × limit.
+	// The cells' buffers and the output each grow by doubling to at most
+	// limit, the cells are copied once collapsed, and the cut row is
+	// written to the output, which is copied once more when returned:
+	// about 9 × limit. Before cells shared the room of their row this was
+	// over 100 × limit.
 	t.Logf("parse allocated %d MB, conversion %d MB more", parse>>20, (int64(all)-int64(parse))>>20)
-	if conv := int64(all) - int64(parse); conv > 8*int64(limit) {
-		t.Fatalf("conversion allocated %d MB beyond the parse, want under %d MB", conv>>20, 8*limit>>20)
+	if conv := int64(all) - int64(parse); conv > 12*int64(limit) {
+		t.Fatalf("conversion allocated %d MB beyond the parse, want under %d MB", conv>>20, 12*limit>>20)
+	}
+}
+
+func TestMarkdownNestedTableKeepsLinks(t *testing.T) {
+	doc := `<table><tr><td>outer</td><td><table><tr><td><a href="https://example.com/in">inner link</a></td><td>x|y</td></tr></table></td></tr></table>`
+	_, md, truncated, err := HTMLToMarkdownContext(context.Background(), strings.NewReader(doc), nil, DefaultMaxMarkdownBytes)
+	if err != nil || truncated {
+		t.Fatalf("err = %v, truncated = %v", err, truncated)
+	}
+	if !strings.Contains(md, "[inner link](https://example.com/in)") {
+		t.Fatalf("markdown = %q, want the nested cell's link", md)
+	}
+	if !strings.Contains(md, `x\|y`) || strings.Contains(md, `\\`) {
+		t.Fatalf("markdown = %q, want the nested cell's separator escaped exactly once", md)
+	}
+}
+
+func TestMarkdownOverflowingRowKeepsCells(t *testing.T) {
+	const limit = 200
+	for name, doc := range map[string]string{
+		"one cell":    "<table><tr><td>" + strings.Repeat("word ", 1000) + "</td></tr></table>",
+		"second cell": "<table><tr><td>first</td><td>" + strings.Repeat("word ", 1000) + "</td></tr></table>",
+	} {
+		_, md, truncated, err := HTMLToMarkdownContext(context.Background(), strings.NewReader(doc), nil, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if md == "" || len(md) > limit || !truncated || !strings.Contains(md, "word word") {
+			t.Errorf("%s: markdown = %q (%d bytes), truncated = %v; want the cut row within %d bytes, truncated", name, md, len(md), truncated, limit)
+		}
+		if name == "second cell" && !strings.HasPrefix(md, "| first | word") {
+			t.Errorf("%s: markdown = %q, want it to start with the first cell", name, md)
+		}
 	}
 }
