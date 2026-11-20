@@ -62,22 +62,32 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rpcMethod = m.Method
 		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
-	rw := &recordingWriter{ResponseWriter: w}
-	if r.Method == http.MethodGet {
-		rw.onHeader = func(status int) {
-			if status == http.StatusOK {
-				select {
-				case rec.getOpen <- struct{}{}:
-				default: // nobody is counting this many streams
-				}
-			}
-		}
-	}
 	entry := recorded{method: r.Method, rpcMethod: rpcMethod, header: r.Header.Clone()}
 	rec.mu.Lock()
 	i := len(rec.reqs)
 	rec.reqs = append(rec.reqs, entry)
 	rec.mu.Unlock()
+
+	// The response facts are recorded when the header is written: a client
+	// can read a streamed reply, and a test inspect the recording, before
+	// the handler returns.
+	recordFacts := func(status int) {
+		rec.mu.Lock()
+		rec.reqs[i].status = status
+		rec.reqs[i].contentType = w.Header().Get("Content-Type")
+		rec.reqs[i].sessionID = w.Header().Get("Mcp-Session-Id")
+		rec.mu.Unlock()
+	}
+	rw := &recordingWriter{ResponseWriter: w}
+	rw.onHeader = func(status int) {
+		recordFacts(status)
+		if r.Method == http.MethodGet && status == http.StatusOK {
+			select {
+			case rec.getOpen <- struct{}{}:
+			default: // nobody is counting this many streams
+			}
+		}
+	}
 
 	rec.mu.Lock()
 	intercept := rec.intercept
@@ -85,12 +95,10 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if intercept == nil || !intercept(rw, r, rpcMethod) {
 		rec.next.ServeHTTP(rw, r)
 	}
-
-	rec.mu.Lock()
-	rec.reqs[i].status = rw.status
-	rec.reqs[i].contentType = w.Header().Get("Content-Type")
-	rec.reqs[i].sessionID = w.Header().Get("Mcp-Session-Id")
-	rec.mu.Unlock()
+	if rw.status == 0 {
+		// The handler wrote nothing; net/http sends 200 on its return.
+		recordFacts(http.StatusOK)
+	}
 }
 
 func (rec *recorder) requests() []recorded {
