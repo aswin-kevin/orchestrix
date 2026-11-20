@@ -100,6 +100,10 @@ kill -"$2" "-$p" 2>/dev/null
 exit 0
 `
 
+// errEnded is signal's error when the command ended before a signal
+// reached it.
+var errEnded = errors.New("orxdocker: the command ended before it was signalled")
+
 // exitNoPid is signalScript's status when no pid file exists.
 const exitNoPid = 3
 
@@ -128,9 +132,12 @@ var errNoPid = errors.New("orxdocker: the command's pid file is missing")
 //
 // The pid file and the backstop run as the command's user, so a command can
 // defeat them. When the kill cannot end a stopped command within the grace
-// periods, or a command still runs 10 seconds after its timeout, the
-// container is force-removed, ending every command of the thread, and the
-// next command starts with a new container.
+// periods, when a timed-out or stopped command's kill cannot be confirmed
+// (no signal reached its group and its wrapper died of a signal, or
+// something still holds its output a grace period after it exited), or when
+// a command still runs 10 seconds after its timeout, the container is
+// force-removed, ending every command of the thread and discarding the
+// workspace tmpfs, and the next command starts with a new container.
 type Executor struct {
 	m      *Manager
 	thread string
@@ -184,6 +191,13 @@ func (e *Executor) forget(id string) string {
 	old := e.id
 	e.id = ""
 	return old
+}
+
+// uses reports whether the executor still runs commands in container id.
+func (e *Executor) uses(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.id == id
 }
 
 // forgetIdle clears and returns the container id if no command is running
@@ -370,6 +384,8 @@ func (e *Executor) start(ctx context.Context, token string, argv, env []string, 
 		execID:    execID,
 		out:       newCapture(maxOutput),
 		done:      make(chan struct{}),
+		termSent:  make(chan struct{}),
+		exited:    make(chan struct{}),
 	}
 	go p.follow(body, timeout)
 	return p, nil
@@ -432,7 +448,7 @@ func (e *Executor) inspectExec(ctx context.Context, execID string) (execState, e
 // signal sends sig ("TERM" or "KILL") to the process group of the command
 // recorded under token in container id, through a short exec. It retries
 // while the pid is not recorded and done is open, for up to about a second,
-// then returns errNoPid.
+// then returns errNoPid; it returns errEnded when done closes first.
 func (e *Executor) signal(id, token, sig string, done <-chan struct{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), signalTimeout)
 	defer cancel()
@@ -450,7 +466,7 @@ func (e *Executor) signal(id, token, sig string, done <-chan struct{}) error {
 		}
 		select {
 		case <-done:
-			return nil
+			return errEnded
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -540,6 +556,14 @@ type process struct {
 	timedOut atomic.Bool
 	stopOnce sync.Once
 	stopErr  error
+	// stopping is set when stop begins; termSent is closed once its
+	// first signal has been sent or has failed, and unconfirmed records
+	// that no signal reached the command's group.
+	stopping    atomic.Bool
+	termSent    chan struct{}
+	unconfirmed atomic.Bool
+	// exited is closed once the exec has reported its exit (or is gone).
+	exited chan struct{}
 
 	done   chan struct{}
 	result backend.ExecResult // written before done is closed
@@ -581,14 +605,27 @@ func (p *process) Stop() error {
 	return nil
 }
 
-// stop acts only on its first call.
+// stop acts only on its first call. A TERM that reaches no group (the pid
+// file is missing, or the exec exited first) leaves the kill unconfirmed,
+// which follow acts on (see confirmKill).
 func (p *process) stop() error {
 	p.stopOnce.Do(func() {
+		p.stopping.Store(true)
+		defer close(p.termSent)
 		grace := p.e.m.killGrace
-		err := p.e.signal(p.container, p.token, "TERM", p.done)
-		if err != nil && !errors.Is(err, errNoPid) {
-			kerr := p.e.signal(p.container, p.token, "KILL", p.done)
-			if kerr != nil && !errors.Is(kerr, errNoPid) {
+		notSent := func(err error) bool { return errors.Is(err, errNoPid) || errors.Is(err, errEnded) }
+		err := p.e.signal(p.container, p.token, "TERM", p.exited)
+		switch {
+		case err == nil:
+		case notSent(err):
+			p.unconfirmed.Store(true)
+		default:
+			kerr := p.e.signal(p.container, p.token, "KILL", p.exited)
+			switch {
+			case kerr == nil:
+			case notSent(kerr):
+				p.unconfirmed.Store(true)
+			default:
 				// No signal can be sent: only removing the container is left.
 				if rerr := p.remove(); rerr != nil {
 					p.stopErr = errors.Join(err, kerr, rerr)
@@ -666,7 +703,9 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 	})
 
 	exitCode, err := p.waitExit(copied, removed)
-	if !hard.Stop() { // whatever waitExit saw, the container is going
+	close(p.exited)
+	hardFired := !hard.Stop()
+	if hardFired { // whatever waitExit saw, the container is going
 		<-removed
 		err = hardErr
 	} else if errors.Is(err, errStillRunning) {
@@ -674,12 +713,19 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 		// ends Stop's escalation; the backstop covers the rest).
 		_ = p.stop()
 	}
+	held := false
 	select {
 	case <-copied:
 	case <-time.After(m.killGrace):
+		held = true // something still holds the command's output
 	}
 	_ = body.Close()
 	<-copied
+	if !hardFired && (!timer.Stop() || p.stopping.Load()) {
+		if cerr := p.confirmKill(held, exitCode, err); cerr != nil {
+			err = cerr
+		}
+	}
 
 	res := backend.ExecResult{Output: p.out.String(), Truncated: p.out.truncated(), ExitCode: exitCode}
 	if err != nil {
@@ -692,6 +738,29 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 	}
 	p.result = res
 	close(p.done)
+}
+
+// confirmKill runs once the exec of a timed-out or stopped command has
+// exited: unless the kill is confirmed, it removes the container, as the
+// hard deadline would, and returns the error to report. The kill is
+// unconfirmed when something still holds the command's output (held), or
+// when no signal reached its group and the wrapper did not exit on its own
+// (it died of a signal, status 128 and up, or its status is lost): the
+// command, which runs as the same user, may have killed the wrapper and
+// deleted its pid file.
+func (p *process) confirmKill(held bool, exitCode int, err error) error {
+	<-p.termSent // stop is running or about to: the timer fired or Stop was called
+	wrapperKilled := err != nil || exitCode >= 128
+	if !held && !(p.unconfirmed.Load() && wrapperKilled) {
+		return nil
+	}
+	if !p.e.uses(p.container) {
+		return nil // already removed (by Stop's escalation, say)
+	}
+	if rerr := p.remove(); rerr != nil {
+		return fmt.Errorf("orxdocker: the command's kill could not be confirmed after it was stopped; removing its container: %w", rerr)
+	}
+	return errors.New("orxdocker: the command's kill could not be confirmed after it was stopped; its container was removed")
 }
 
 // errStillRunning is waitExit's error for an exec that does not report its

@@ -635,3 +635,83 @@ func TestEvictedContainerNotAdopted(t *testing.T) {
 	release()
 	waitFor(t, "c1's removal", func() bool { return slices.Contains(f.removedIDs(), "c1") })
 }
+
+// exitedAfter reports a command running until d after its exec started
+// streaming, then exited with code.
+func exitedAfter(started *sync.Map, d time.Duration, code int) func(*fakeExec, int) (bool, *int) {
+	return func(x *fakeExec, _ int) (bool, *int) {
+		t0, ok := started.Load(x.id)
+		if !ok || time.Since(t0.(time.Time)) < d {
+			return true, nil
+		}
+		return false, &code
+	}
+}
+
+// A timed-out command whose kill cannot be confirmed has its container
+// removed at once, without waiting for the hard deadline: its wrapper died
+// (killed by the command, which deleted its pid file) or something still
+// holds its output after it exited.
+func TestTimeoutUnconfirmedKillRemovesContainer(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		holdStream bool // the stream stays open after the exec exits
+		pidStatus  int  // the signal exec's status: 0 or exitNoPid
+		exit       int
+		wantRemove bool
+	}{
+		{"no pid, wrapper killed", false, exitNoPid, 137, true},
+		{"no pid, output still held", true, exitNoPid, 137, true},
+		{"signalled, output still held", true, 0, 143, true},
+		{"no pid, finished at the timeout", false, exitNoPid, 0, false},
+		{"signalled and ended", false, 0, 143, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeEngine(t)
+			var started sync.Map
+			f.stream = func(x *fakeExec, w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write(frame(streamStdout, "started\n"))
+				w.(http.Flusher).Flush()
+				started.Store(x.id, time.Now())
+				if tc.holdStream {
+					hang(x, w, r)
+					return
+				}
+				select {
+				case <-time.After(200 * time.Millisecond):
+				case <-x.gone:
+				case <-r.Context().Done():
+				}
+			}
+			f.state = exitedAfter(&started, 200*time.Millisecond, tc.exit)
+			f.signalStatus = tc.pidStatus
+			m := f.manager(Options{})
+			m.killGrace = 300 * time.Millisecond
+			m.hardGrace = time.Hour
+			e := m.Executor("t1")
+
+			res, err := e.Execute(t.Context(), "cmd", execOpts(100*time.Millisecond))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.TimedOut || res.ExitCode != -1 {
+				t.Fatalf("result = %+v, want timed out", res)
+			}
+			removed := f.removedIDs()
+			if tc.wantRemove {
+				if len(removed) != 1 || removed[0] != "c1" || !strings.Contains(res.Output, "container was removed") {
+					t.Fatalf("removed = %v, output %q; want c1 removed and reported", removed, res.Output)
+				}
+				f.stream, f.state = nil, nil
+				if res, err := e.Execute(t.Context(), "true", execOpts(time.Minute)); err != nil || res.Output != "ok\n" {
+					t.Fatalf("next command: %+v, %v", res, err)
+				}
+				if got := f.createdIDs(); len(got) != 2 {
+					t.Fatalf("created containers = %v, want a new one", got)
+				}
+			} else if len(removed) != 0 {
+				t.Fatalf("removed = %v, want the container kept", removed)
+			}
+		})
+	}
+}

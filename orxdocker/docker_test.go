@@ -370,9 +370,10 @@ func TestDockerTimeoutKillsProcess(t *testing.T) {
 	}
 }
 
-// A command that removes its pid file and kills the backstop defeats the
-// in-container kill; the container is removed instead and the next command
-// gets a new one.
+// A command that removes its pid file and kills the backstop (and with it
+// the wrapper, whose script names the backstop) defeats the in-container
+// kill; its kill cannot be confirmed, so the container is removed instead
+// and the next command gets a new one.
 func TestDockerHostileCommandCannotOutliveTimeout(t *testing.T) {
 	m := newTestManager(t, Options{})
 	e := m.Executor("hostile")

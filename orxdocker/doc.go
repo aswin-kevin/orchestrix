@@ -58,9 +58,11 @@
 // backend.DefaultKillGrace. A backstop process inside the container kills
 // the group a few seconds after the timeout even if the host process died.
 // The pid file and the backstop run as the command's user, so a hostile
-// command can defeat them; when a stop does not end the command, or it still
-// runs 10 seconds after its timeout, the container is force-removed and the
-// thread's next command starts with a new one.
+// command can defeat them; when a stop does not end the command, when a
+// timed-out or stopped command's kill cannot be confirmed, or when it still
+// runs 10 seconds after its timeout, the container is force-removed (ending
+// the thread's other commands and its workspace) and the thread's next
+// command starts with a new one.
 // When a command's shell exits, whatever it left running in its group is
 // killed too. Output (stdout and stderr interleaved) is capped while it
 // streams at ExecOptions.MaxOutputBytes, keeping the first and last halves.
