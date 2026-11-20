@@ -179,7 +179,7 @@ func checkSkills(spec Subagent, mws []agent.Middleware) error {
 		}
 	}
 	if sk == nil {
-		return errors.New("Skills and PinnedSkills need a skills middleware in the subagent's stack")
+		return errors.New("a skills middleware in the subagent's stack is required by Skills and PinnedSkills")
 	}
 	for _, name := range wanted {
 		if !sk.Has(name) {

@@ -160,7 +160,7 @@ type Event struct {
 	// RunID identifies the run that produced the event (RunInfo.RunID). An
 	// event forwarded from a nested run keeps the nested run's id. Empty on
 	// the KindFinal of a run that never started (ReasonBusy from Thread,
-	// ReasonInvalidResume).
+	// ReasonInvalidResume, or a run after Agent.Close).
 	RunID string
 	// Text is the delta or message of a KindText, KindThinking or
 	// KindProgress event.

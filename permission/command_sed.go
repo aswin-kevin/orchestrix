@@ -287,7 +287,10 @@ func (s *sedScanner) substitution(flags bool) bool {
 	}
 	delim := s.peek()
 	s.pos++
-	if !s.through(delim) || !s.through(delim) { // pattern, then replacement
+	if !s.through(delim) { // pattern
+		return false
+	}
+	if !s.through(delim) { // replacement
 		return false
 	}
 	for flags && !s.done() {

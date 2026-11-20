@@ -146,6 +146,9 @@ func TestRunAfterClose(t *testing.T) {
 	if events[0].Time.IsZero() {
 		t.Error("closed Final has no Time")
 	}
+	if events[0].RunID != "" || events[0].Turn != 0 {
+		t.Errorf("closed Final RunID = %q, Turn = %d, want empty and 0", events[0].RunID, events[0].Turn)
+	}
 	if len(p.Requests) != 0 {
 		t.Errorf("provider got %d requests after Close", len(p.Requests))
 	}

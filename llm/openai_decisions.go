@@ -207,7 +207,7 @@ func toOpenAIDecisionQuestion(q Question) openAIDecisionQuestion {
 	case Choice:
 		wq.Type = openAIChoice
 		for _, o := range q.Options {
-			wq.Choices = append(wq.Choices, openAIDecisionChoice{Value: o.Value, Description: o.Description})
+			wq.Choices = append(wq.Choices, openAIDecisionChoice(o))
 		}
 	case Score:
 		wq.Type = openAIScore

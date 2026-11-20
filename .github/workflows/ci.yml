@@ -8,38 +8,95 @@ on:
 permissions:
   contents: read
 
+# Actions are pinned by full commit SHA; the trailing comment names the tag.
+# To update one, resolve the new tag to its commit (dereferencing an
+# annotated tag): gh api repos/<owner>/<repo>/git/ref/tags/<tag>
+
 jobs:
   test:
-    name: Test (${{ matrix.os }})
+    name: Test (Go ${{ matrix.go }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        go: ['1.26.x', 'stable']
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      # Keep LF line endings on Windows so test data and golden files match.
+      - name: Disable line-ending conversion
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version-file: go.mod
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Vet
+        run: go vet ./...
+      - name: Test (race detector)
+        if: runner.os != 'Windows'
+        run: go test -race ./...
+      # The race detector needs cgo and a C toolchain, so the Windows legs
+      # run without it. The tests that run real shells are unix-only
+      # (//go:build unix).
+      - name: Test
+        if: runner.os == 'Windows'
+        run: go test ./...
+      - name: Fuzz the shell parser against sh and bash
+        if: runner.os == 'Linux' && matrix.go == '1.26.x'
+        run: go test ./permission -run '^$' -fuzz FuzzSplitCommandShell -fuzztime 60s
+
+  lint:
+    name: Lint (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [., orxotel, orxpg, orxdocker, evals]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
+      - name: Vet (windows)
+        run: GOOS=windows go vet ./...
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy -diff
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./... # 2026.2.2
+
+  satellites:
+    name: Test (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [orxotel, evals]
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+      # evals runs offline here: without a configured model the live
+      # scenarios skip.
       - name: Test
-        run: go test -race ./...
-      - name: Fuzz the shell parser against sh and bash
-        run: go test ./permission -run '^$' -fuzz FuzzSplitCommandShell -fuzztime 60s
-      - name: Vet (orxotel)
-        working-directory: orxotel
-        run: go vet ./...
-      - name: Test (orxotel)
-        working-directory: orxotel
-        run: go test -race ./...
-      - name: Vet (evals)
-        working-directory: evals
-        run: go vet ./...
-      - name: Test (evals, offline)
-        working-directory: evals
         run: go test -race ./...
 
   postgres:
@@ -62,13 +119,12 @@ jobs:
     env:
       ORX_TEST_PG_DSN: postgres://orx:orx@localhost:5432/orx?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: orxpg/go.mod
-      - name: Vet (orxpg)
-        working-directory: orxpg
-        run: go vet ./...
       - name: Test (orxpg)
         working-directory: orxpg
         run: go test -race ./...
@@ -77,13 +133,12 @@ jobs:
     name: Test (orxdocker, Docker)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: orxdocker/go.mod
-      - name: Vet
-        working-directory: orxdocker
-        run: go vet ./... && GOOS=windows go vet ./...
       - name: Test against the runner's Docker daemon
         working-directory: orxdocker
         env:
@@ -96,8 +151,10 @@ jobs:
     name: Vulnerability check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # The newest patch release, so standard-library findings reflect a
           # toolchain users can actually install.

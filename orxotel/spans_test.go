@@ -505,7 +505,7 @@ func errorTexts(s sdktrace.ReadOnlySpan) string {
 	out := s.Status().Description
 	for _, ev := range s.Events() {
 		for _, kv := range ev.Attributes {
-			out += " " + kv.Value.Emit()
+			out += " " + kv.Value.String()
 		}
 	}
 	return out
@@ -579,7 +579,7 @@ func TestNoEmptyFinishReason(t *testing.T) {
 	s := oneSpan(t, rec, "chat m")
 	for _, kv := range s.Attributes() {
 		if kv.Key == "gen_ai.response.finish_reasons" {
-			t.Errorf("finish_reasons = %v, want omitted for an empty stop reason", kv.Value.Emit())
+			t.Errorf("finish_reasons = %v, want omitted for an empty stop reason", kv.Value.String())
 		}
 	}
 }

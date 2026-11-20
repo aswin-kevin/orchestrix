@@ -22,7 +22,7 @@ func TestSegmentSanitizesAndDisambiguates(t *testing.T) {
 	if Segment("a/b") == Segment("a_b") {
 		t.Fatalf("a/b and a_b map to the same segment %q", Segment("a/b"))
 	}
-	if Segment("a/b") != Segment("a/b") {
+	if first, second := Segment("a/b"), Segment("a/b"); first != second {
 		t.Fatal("Segment is not deterministic")
 	}
 }

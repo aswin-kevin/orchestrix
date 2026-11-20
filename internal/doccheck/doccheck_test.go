@@ -41,17 +41,21 @@ func TestExportedFieldsDocumented(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil && path != root {
 			return filepath.SkipDir
 		}
-		fset := token.NewFileSet()
-		pkgs, err := parser.ParseDir(fset, path, func(fi fs.FileInfo) bool {
-			return !strings.HasSuffix(fi.Name(), "_test.go")
-		}, parser.ParseComments)
+		entries, err := os.ReadDir(path)
 		if err != nil {
 			return err
 		}
-		for _, pkg := range pkgs {
-			for _, f := range pkg.Files {
-				missing = append(missing, undocumented(pkg.Name, f)...)
+		fset := token.NewFileSet()
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
 			}
+			f, err := parser.ParseFile(fset, filepath.Join(path, name), nil, parser.ParseComments)
+			if err != nil {
+				return err
+			}
+			missing = append(missing, undocumented(f.Name.Name, f)...)
 		}
 		return nil
 	})

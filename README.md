@@ -87,6 +87,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer a.Close(context.Background()) // releases what the agent holds
 
 	prompt := "Create /notes/hello.txt saying hello, then read it back."
 	for ev, err := range a.Run(context.Background(), orchestrix.Text(prompt)) {
@@ -106,7 +107,7 @@ func main() {
 }
 ```
 
-`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTokens`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithOutputType`/`WithOutputSchema`, `WithFallback`/`WithFallbackConfig`, `WithProfiles`, `WithMount`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
+`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTotalTokens`, `WithModelTimeout`, `WithMaxTokens`, `WithLogger`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithOutputType`/`WithOutputSchema`, `WithFallback`/`WithFallbackConfig`, `WithProfiles`, `WithMount`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
 
 ## Examples
 
@@ -163,7 +164,61 @@ orchestrix.New("openai-responses:gpt-4o")
 
 Decision-model formats (`systemone`, `openai-decisions`) are listed under "Decision models".
 
-Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. For full control (proxy, headers, retries, rate limits), build an `llm.Config`, create a provider with `llm.New`, and pass it to `orchestrix.NewWithProvider` instead.
+Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. For full control (proxy, headers, retries, rate limits, the stream idle timeout), build an `llm.Config`, create a provider with `llm.New`, and pass it to `orchestrix.NewWithProvider` instead.
+
+```go
+// Imports omitted.
+p, err := llm.New(llm.Config{
+	Format:            llm.FormatAnthropic,
+	Model:             "claude-sonnet-4-5",
+	APIKey:            os.Getenv("ANTHROPIC_API_KEY"),
+	StreamIdleTimeout: 2 * time.Minute, // default 5 minutes; negative disables
+})
+if err != nil {
+	log.Fatal(err)
+}
+a, err := orchestrix.NewWithProvider(p)
+_, _ = a, err
+```
+
+A failed call returns an `*llm.APIError` for an error status: `Kind()` tells rate limits, authentication failures, overload, invalid requests, context overflow and server errors apart, and `RequestID` holds the provider's request id. Credentials (the API key, sensitive headers, and the password and query values of `BaseURL`) are replaced with `[REDACTED]` in every error message.
+
+## Limits, timeouts and logging
+
+Every run is bounded. A run that reaches a limit ends with the matching reason on its `KindFinal` event:
+
+| Option | Limit | Reason |
+| --- | --- | --- |
+| `WithMaxTurns(n)` | Tool-calling model turns per run. Zero means `agent.DefaultMaxTurns` (100), a negative value unbounded. | `max_turns` |
+| `WithMaxTotalTokens(n)` | Input, output and cache tokens one run may spend in total; zero means no cap. The tools of the reply that reached the cap do not run. Nested subagent runs count only their own tokens. | `token_limit` |
+| `WithMaxDuration(d)` | Wall-clock time of one run. | `timeout` |
+| `WithModelTimeout(d)` | Each model call, retries included. | `model_error`, wrapping `context.DeadlineExceeded` |
+| `WithMaxTokens(n)` | Output tokens of each model response (default: the model profile's limit). | |
+
+A provider stream that goes silent fails with `llm.ErrStreamIdle` after `llm.Config.StreamIdleTimeout` (default `llm.DefaultStreamIdleTimeout`, 5 minutes) without receiving any bytes; the error is retryable, so a fallback chain moves to its next entry when nothing has been shown yet. `agent.Config.TokenBudget` only nudges the model towards a token target; `MaxTotalTokens` is the hard stop.
+
+`WithLogger` gives the agent an `*slog.Logger` for the errors its loop recovers from or drops: failed checkpoint saves, lease errors, panics (logged by type with the stack, never the value), dynamic tools it skipped. Records carry `run_id`, `thread_id` and `agent`. Message content and tool inputs are never logged, but an `err` attribute holds the error text of a store, provider or middleware, which may echo their data, so install a redacting handler if that matters. Nil logs nothing.
+
+Every event carries `Turn` (1-based model turn, 0 before the first), `Time` and `RunID` (16 hex characters, new for every run, nested runs and resumes included), for tracing and ordering in a UI.
+
+## Shutting down
+
+`Agent.Close(ctx)` releases what an agent holds, once, when the host is done with it. It first drains every middleware that runs work beside the agent's runs (`agent.Drainer`; `WithAsync` stops its background subagents), then closes, in reverse stack order, every middleware that implements `agent.Closer` (MCP connections, `WithTasks` background jobs, `WithAsync`), then the backend and checkpointer when they implement it, and finally drops the default per-thread workspaces. `ctx` bounds how long it waits. Runs already started are neither waited for nor stopped, so cancel their contexts first for a clean stop; a run started after `Close` ends at once with reason `internal_error` and an error wrapping `agent.ErrClosed`. Close only the top-level agent: subagents share its resources. A backend returned by `WithBackendFactory` and satellite resources such as an `orxdocker.Manager` or a `pgxpool.Pool` stay with the host.
+
+```go
+// Imports omitted; tm is a *tasks.Middleware and m an *mcp.Middleware.
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithTasks(tm), orchestrix.WithMCP(m))
+if err != nil {
+	log.Fatal(err)
+}
+defer func() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := a.Close(ctx); err != nil {
+		log.Printf("close: %v", err)
+	}
+}()
+```
 
 ## Model fallback
 
@@ -320,7 +375,7 @@ Git runs commands named in a repository's config (`core.fsmonitor`, aliases, hoo
 
 A backend is the file system the file tools operate on.
 
-- **`backend/memory`**: in-memory and safe for concurrent use. This is the default, with one separate workspace per thread ID that lives as long as the agent.
+- **`backend/memory`**: in-memory and safe for concurrent use. This is the default, with one separate workspace per thread ID that lives until the agent is closed. A run without a thread ID gets a fresh, empty workspace of its own that is not kept after the run, so threadless runs never see each other's files (paths mounted with `WithMount` stay shared).
 - **`backend/disk`**: a real directory. Paths the model sees are relative to the root, and access outside it is refused.
 - **`backend/shell`**: a disk backend that can also run commands; see "Shell and background tasks".
 - **`backend/kv`**: files kept in a namespaced key/value `kv.Store`, for state that must outlive a thread. `kv.NewMemoryStore` keeps it in memory; `kv.NewDirStore` keeps it on disk, where several processes can share it. A `DirStore` names each file by the hex SHA-256 of its key and keeps the key in a header inside the file, so no key can name a path outside the store and two keys never collide on a case-insensitive file system (macOS, Windows). Implement `kv.Store` to keep files in a database, add `Stat` (`kv.Stater`) so existence and size checks don't fetch the value, and run `kvtest.Run` against it.
@@ -466,7 +521,7 @@ _, _ = a, err
 - **Approvals.** A background run has nobody to ask in-band. With a `WithApprover`, the subagent inherits it; without one, a subagent that needs a decision ends as `blocked`, naming the tools it wanted to call. A task's permission mode is fixed when it starts: switching the parent to plan mode or a stricter mode later does not change the mode of tasks already running.
 - **Runner.** By default tasks run as subagents in this process, with `TaskTimeout` (30 minutes) each and up to `MaxRunning` (4) at once per thread. Implement `async.Runner` to run them elsewhere.
 - **Restarts.** Task records are saved in the thread's state, but live tasks are not re-attached in a new process: a task recorded as running that this process does not know is reported to the model as `lost`.
-- **Shutdown.** The host owns the `async.Middleware`; `Shutdown` stops every task and must be called before the program exits.
+- **Shutdown.** The host owns the `async.Middleware`; `Shutdown`, or `Close` of the agent (see "Shutting down"), stops every task and must be called before the program exits.
 
 A background subagent's state is not merged into the parent's; files are shared through the backend.
 
@@ -505,7 +560,7 @@ for ev, err := range c.Run(ctx, in) {
 
 `New` fails when the options replace or remove the coordinator's async middleware, since its workers and `Shutdown` depend on it. That check reads the configured stack, so it cannot see a model profile whose `ExcludeMiddleware` names `async`: for the matching models such a profile removes `start_task`, leaving the coordinator only the `task` tool.
 
-`coordinator.RunParallel` runs many agent runs at once, with bounded concurrency, and returns one result per job in input order. Jobs may share an agent; give each its own thread ID. Jobs without one share the agent's thread-less workspace (with the default per-thread backend, one in-memory workspace, so their files mix), and they cannot start background tasks. One failing job does not stop the others, and cancelling the context stops the running jobs and fails those not started. `ParallelOptions.OnEvent` sees every event of every job, one call at a time; if it panics, every job is cancelled and `RunParallel` re-panics on the caller's goroutine once they have ended.
+`coordinator.RunParallel` runs many agent runs at once, with bounded concurrency, and returns one result per job in input order. Jobs may share an agent; give each its own thread ID. Jobs without one each get a fresh workspace with the default per-thread backend (a shared `WithBackend` stays shared), and they cannot start background tasks. One failing job does not stop the others, and cancelling the context stops the running jobs and fails those not started. `ParallelOptions.OnEvent` sees every event of every job, one call at a time; if it panics, every job is cancelled and `RunParallel` re-panics on the caller's goroutine once they have ended.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -599,7 +654,7 @@ A `Stop` hook's `Continue` is one of the `agent.MaxStopContinuations` (3) contin
 
 ## Tracing
 
-The separate module `orxotel` traces agents with OpenTelemetry. It lives in its own module so the core keeps two dependencies; it needs `orchestrix` v0.5.0 or later (`orxotel/v0.1.0` requires it).
+The separate module `orxotel` traces agents with OpenTelemetry. It lives in its own module so the core keeps two dependencies; its `go.mod` names the core release it needs.
 
 ```sh
 go get github.com/aswin-kevin/orchestrix/orxotel
@@ -717,7 +772,7 @@ A checkpointed workspace is stored whole in the thread's state, so for large wor
 
 `WithShell(root, shell.Options{})` runs the agent on the real directory `root` and adds the `execute` tool. Commands run with a minimal environment, timeouts and output limits; `shell.Options` adjusts them. `WithShell` cannot be combined with `WithBackend` or `WithBackendFactory`, and the one backend is shared by all threads.
 
-`WithTasks` lets `execute` start a command in the background (`run_in_background`) and gives the model `task_output`, `task_stop`, `task_list`, `sleep` and `monitor` to follow it. Finished jobs are announced to the model on its next turn. The host owns the `tasks.Middleware` and must call `Shutdown` to stop jobs still running:
+`WithTasks` lets `execute` start a command in the background (`run_in_background`) and gives the model `task_output`, `task_stop`, `task_list`, `sleep` and `monitor` to follow it. Finished jobs are announced to the model on its next turn. The host owns the `tasks.Middleware` and must call `Shutdown`, or `Close` the agent, to stop jobs still running:
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -767,7 +822,7 @@ _, _ = a, err
 
 Containers are hardened by default, and every field that weakens this is an explicit opt-out: commands run as `nobody`, the root file system is read-only with only the workspace (`/workspace`) and `/tmp` writable (both size-limited tmpfs, so the workspace lives as long as the container), all capabilities are dropped, `no-new-privileges` and Docker's default seccomp profile apply, processes, memory and CPU are limited, there is no network, and commands see no host environment, only `Options.Env` and `ExecOptions.Env`. `Options.Network` joins a named network instead; filtering its traffic, the cloud metadata address included, is then up to that network (for instance an internal network whose only exit is a filtering proxy). Each command runs in its own process group: a timeout or stop kills the group from a second exec (Docker cannot stop an exec), and a backstop inside the container kills it shortly after the timeout even if your process is gone. Output is capped while it streams.
 
-Every container is labeled (`dev.orchestrix.orxdocker`, its scope, thread id and creation time). `m.Reap(ctx, orxdocker.ReapOptions{OlderThan: ..., Keep: ...})` removes containers orphaned by a crashed process or left for deleted threads. The image needs `/bin/sh`, `setsid`, `sleep`, `kill`, `cat`, `rm` and the tools `backend/sandbox` lists; alpine (busybox) and Debian images work. Workspace files are not captured by checkpoints.
+Every container is labeled (`dev.orchestrix.orxdocker`, its scope, thread id and creation time). `m.Reap(ctx, orxdocker.ReapOptions{OlderThan: ..., Keep: ...})` removes containers orphaned by a crashed process or left for deleted threads. The image needs `/bin/sh`, `setsid`, `sleep`, `kill`, `cat`, `rm` and the tools `backend/sandbox` lists; alpine (busybox) and Debian images work. Workspace files are not captured by checkpoints. A command of a run without a thread ID fails with `orxdocker.ErrNoThread`: threadless runs never share a container.
 
 ## Memory
 
@@ -1201,7 +1256,7 @@ Next is a stabilization pass toward v1.0.0: settling the public API (the contrac
 
 ## Contributing
 
-Issues and pull requests are welcome. Before sending a change, make sure `gofmt -l .` prints nothing and `go vet ./...` and `go test -race ./...` pass. The live tests are skipped unless `ORX_TEST_MODEL` is set; see "Live tests and evals".
+Issues and pull requests are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) lists the checks a change must pass, the module layout and how to run the live, Docker and PostgreSQL tests. Report security issues privately as described in [SECURITY.md](SECURITY.md). Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
 ## Live tests and evals
 

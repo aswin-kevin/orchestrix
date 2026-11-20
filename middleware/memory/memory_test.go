@@ -37,12 +37,6 @@ func mustNew(t *testing.T, cfg Config) agent.Middleware {
 
 type noopInput struct{}
 
-func noopTool() tool.Tool {
-	return tool.New("noop", "Does nothing.",
-		func(context.Context, noopInput, *tool.Call) (tool.Result, error) { return tool.Text("ok"), nil },
-		tool.WithReadOnly(), tool.WithConcurrent())
-}
-
 // run drives one run to completion and returns the final state.
 func run(t *testing.T, a *agent.Agent, in agent.Input) *state.State {
 	t.Helper()
