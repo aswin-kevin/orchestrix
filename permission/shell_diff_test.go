@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -25,6 +26,10 @@ var unsafeToRun = map[string]bool{"kill": true, "suspend": true}
 
 // shellDiffTimeout bounds one shell run.
 const shellDiffTimeout = 2 * time.Second
+
+// backgroundGrace is how long a background job that outlives the shell may
+// keep running before its process group is killed.
+const backgroundGrace = 200 * time.Millisecond
 
 // shellDiffSeeds are the inputs of the comment, ANSI-C quoting, expansion,
 // git and ssh option, deny evasion and arithmetic tests, plus lines that
@@ -110,6 +115,13 @@ func FuzzSplitCommandShell(f *testing.F) {
 			f.Fatal(err)
 		}
 	}
+	// A positive control: if the shims cannot run or log (a noexec temp
+	// directory, a broken shebang), every input would pass unnoticed.
+	for _, shell := range shells {
+		if got := runTraced(f, shell, bin, "aa; bb"); !slices.Equal(got, []string{"aa", "bb"}) {
+			f.Fatalf("%s -c %q logged %q, want [aa bb]: the shims do not run", shell, "aa; bb", got)
+		}
+	}
 	for _, seed := range shellDiffSeeds {
 		f.Add(seed)
 	}
@@ -153,7 +165,7 @@ func containsFold(names []string, name string) bool {
 
 // runTraced runs cmd with shell -c in a fresh directory with only bin on
 // PATH and returns the names of the shims it ran, in order.
-func runTraced(t *testing.T, shell, bin, cmd string) []string {
+func runTraced(t testing.TB, shell, bin, cmd string) []string {
 	t.Helper()
 	tmp := t.TempDir()
 	work := filepath.Join(tmp, "work")
@@ -174,8 +186,15 @@ func runTraced(t *testing.T, shell, bin, cmd string) []string {
 	c.WaitDelay = time.Second
 	err := c.Run()
 	if c.Process != nil {
-		// A background job may outlive the shell; it must not write to the
-		// log while the directory is removed.
+		// A background job may outlive the shell: give it a moment to log
+		// what it ran, then kill it so it cannot write to the log while
+		// the directory is removed.
+		for deadline := time.Now().Add(backgroundGrace); time.Now().Before(deadline) && ctx.Err() == nil; {
+			if syscall.Kill(-c.Process.Pid, 0) != nil {
+				break // the group is gone
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 		_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
 	}
 	var exitErr *exec.ExitError
