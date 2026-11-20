@@ -117,7 +117,8 @@ type Options struct {
 	// executor that runs no command and removes its container (its
 	// workspace is lost; a later command of that thread starts a new one).
 	// When every executor is running a command the cap is exceeded rather
-	// than waiting.
+	// than waiting, and the count stays above it until later creations
+	// find idle executors to evict.
 	MaxThreads int
 	// OpTimeout bounds each command a sandbox file operation sends; 0 means
 	// sandbox.DefaultOpTimeout.

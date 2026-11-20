@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,11 +29,18 @@ type fakeEngine struct {
 	mu           sync.Mutex
 	nextID       int
 	containers   map[string]chan struct{} // closed when the container is removed
+	labels       map[string]map[string]string
 	execs        map[string]*fakeExec
 	created      []string // container ids, in creation order
 	removed      []string // force-removed container ids
 	signals      int      // signal execs started
 	signalStatus int
+
+	// signal, when set, answers a signal exec instead of signalStatus.
+	signal func(sig string) int
+	// deleteGate, when set, holds every container removal until it is
+	// closed.
+	deleteGate chan struct{}
 
 	// stream writes a command exec's output; returning ends the stream.
 	// nil writes "ok\n" and returns.
@@ -47,6 +55,8 @@ type fakeEngine struct {
 type fakeExec struct {
 	id, container string
 	signal        bool
+	sig           string // a signal exec's signal
+	status        int    // a signal exec's exit status
 	inspections   int
 	gone          chan struct{} // the container's removal
 }
@@ -62,6 +72,7 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 		socket:     filepath.Join(dir, "e.sock"),
 		closed:     make(chan struct{}),
 		containers: map[string]chan struct{}{},
+		labels:     map[string]map[string]string{},
 		execs:      map[string]*fakeExec{},
 	}
 	ln, err := net.Listen("unix", f.socket)
@@ -70,9 +81,7 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 	}
 	mux := http.NewServeMux()
 	const v = "/v" + DefaultAPIVersion
-	mux.HandleFunc("GET "+v+"/containers/json", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("[]"))
-	})
+	mux.HandleFunc("GET "+v+"/containers/json", f.list)
 	mux.HandleFunc("GET "+v+"/images/{ref...}", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("{}"))
 	})
@@ -112,20 +121,57 @@ func (f *fakeEngine) manager(opts Options) *Manager {
 	return m
 }
 
-func (f *fakeEngine) create(w http.ResponseWriter, _ *http.Request) {
+func (f *fakeEngine) create(w http.ResponseWriter, r *http.Request) {
+	var spec struct{ Labels map[string]string }
+	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	f.mu.Lock()
 	f.nextID++
 	id := fmt.Sprintf("c%d", f.nextID)
 	f.containers[id] = make(chan struct{})
+	f.labels[id] = spec.Labels
 	f.created = append(f.created, id)
 	f.mu.Unlock()
 	writeJSON(w, map[string]string{"Id": id})
+}
+
+// list returns the running containers carrying every label filter.
+func (f *fakeEngine) list(w http.ResponseWriter, r *http.Request) {
+	var filters struct{ Label []string }
+	_ = json.Unmarshal([]byte(r.URL.Query().Get("filters")), &filters)
+	f.mu.Lock()
+	out := []containerSummary{}
+	for id := range f.containers {
+		match := true
+		for _, l := range filters.Label {
+			k, v, _ := strings.Cut(l, "=")
+			if got, ok := f.labels[id][k]; !ok || got != v {
+				match = false
+			}
+		}
+		if match {
+			out = append(out, containerSummary{ID: id, State: "running", Labels: f.labels[id]})
+		}
+	}
+	f.mu.Unlock()
+	writeJSON(w, out)
 }
 
 func (f *fakeEngine) remove(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if r.URL.Query().Get("force") != "true" {
 		f.t.Errorf("DELETE %s without force", r.URL)
+	}
+	f.mu.Lock()
+	gate := f.deleteGate
+	f.mu.Unlock()
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-f.closed:
+		}
 	}
 	f.mu.Lock()
 	gone, ok := f.containers[id]
@@ -159,8 +205,11 @@ func (f *fakeEngine) createExec(w http.ResponseWriter, r *http.Request) {
 	x := &fakeExec{
 		id:        fmt.Sprintf("x%d", f.nextID),
 		container: r.PathValue("id"),
-		signal:    len(body.Cmd) > 3 && body.Cmd[3] == "orx-signal",
+		signal:    len(body.Cmd) > 5 && body.Cmd[3] == "orx-signal",
 		gone:      gone,
+	}
+	if x.signal {
+		x.sig = body.Cmd[5]
 	}
 	f.execs[x.id] = x
 	f.mu.Unlock()
@@ -190,7 +239,15 @@ func (f *fakeEngine) startExec(w http.ResponseWriter, r *http.Request) {
 	if x.signal {
 		f.mu.Lock()
 		f.signals++
+		x.status = f.signalStatus
+		hook := f.signal
 		f.mu.Unlock()
+		if hook != nil {
+			status := hook(x.sig)
+			f.mu.Lock()
+			x.status = status
+			f.mu.Unlock()
+		}
 	} else if f.hangStart {
 		select {
 		case <-r.Context().Done():
@@ -218,7 +275,7 @@ func (f *fakeEngine) inspectExec(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	x.inspections++
 	n := x.inspections
-	status := f.signalStatus
+	status := x.status
 	f.mu.Unlock()
 	running, exit := false, &status
 	switch {
@@ -245,6 +302,17 @@ func hang(x *fakeExec, w http.ResponseWriter, r *http.Request) {
 	case <-x.gone:
 	case <-r.Context().Done():
 	}
+}
+
+// waitGate makes container removals wait until the returned release is
+// called.
+func (f *fakeEngine) waitGate() (release func()) {
+	gate := make(chan struct{})
+	f.mu.Lock()
+	f.deleteGate = gate
+	f.mu.Unlock()
+	var once sync.Once
+	return func() { once.Do(func() { close(gate) }) }
 }
 
 // runningUntilGone reports a command running until its container is gone
@@ -442,4 +510,128 @@ func TestMaxThreadsDefault(t *testing.T) {
 	if err != nil || o.MaxThreads != DefaultMaxThreads || DefaultMaxThreads != 1024 {
 		t.Fatalf("MaxThreads = %d, %v", o.MaxThreads, err)
 	}
+}
+
+// When TERM cannot be sent, Stop tries KILL before removing the container;
+// only when both fail does the container go.
+func TestStopTermFailureTriesKill(t *testing.T) {
+	f := newFakeEngine(t)
+	killed := make(chan struct{})
+	var once sync.Once
+	f.stream = func(x *fakeExec, w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(frame(streamStdout, "started\n"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-killed:
+		case <-x.gone:
+		case <-r.Context().Done():
+		}
+	}
+	nine := 137
+	f.state = func(*fakeExec, int) (bool, *int) {
+		select {
+		case <-killed:
+			return false, &nine
+		default:
+			return true, nil
+		}
+	}
+	f.signal = func(sig string) int {
+		if sig == "KILL" {
+			once.Do(func() { close(killed) })
+			return 0
+		}
+		return 1 // TERM fails
+	}
+	m := f.manager(Options{})
+	m.hardGrace = time.Hour
+	p, err := m.Executor("t1").Start(t.Context(), "cmd", execOpts(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("command still running after Stop")
+	}
+	if got := f.removedIDs(); len(got) != 0 {
+		t.Fatalf("KILL worked but containers were removed: %v", got)
+	}
+
+	// Both signals fail: the container is removed.
+	f.mu.Lock()
+	f.signal = func(string) int { return 1 }
+	f.mu.Unlock()
+	f.stream, f.state = hang, runningUntilGone
+	p, err = m.Executor("t1").Start(t.Context(), "cmd", execOpts(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("command still running after Stop")
+	}
+	if got := f.removedIDs(); len(got) != 1 || got[0] != "c1" {
+		t.Fatalf("removed containers = %v, want c1", got)
+	}
+}
+
+// Close waits for the removal of an evicted container, and a closed
+// Manager neither keeps nor evicts executors.
+func TestCloseWaitsForEvictions(t *testing.T) {
+	f := newFakeEngine(t)
+	m := f.manager(Options{MaxThreads: 1})
+	if _, err := m.Executor("t1").Execute(t.Context(), "true", execOpts(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	release := f.waitGate()
+	m.Executor("t2") // evicts t1; its removal waits on the gate
+	time.AfterFunc(200*time.Millisecond, release)
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.removedIDs(); len(got) != 1 || got[0] != "c1" {
+		t.Fatalf("after Close, removed containers = %v, want c1", got)
+	}
+
+	m.Executor("t3")
+	m.Executor("t4")
+	m.mu.Lock()
+	n := len(m.threads)
+	m.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("closed Manager keeps %d executors, want the 1 it had", n)
+	}
+	if _, err := m.Executor("t3").Execute(t.Context(), "true", execOpts(time.Minute)); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Execute after Close = %v, want ErrClosed", err)
+	}
+}
+
+// A container being removed after eviction is not adopted again: the
+// thread's next executor creates a new one.
+func TestEvictedContainerNotAdopted(t *testing.T) {
+	f := newFakeEngine(t)
+	m := f.manager(Options{MaxThreads: 1})
+	if _, err := m.Executor("t1").Execute(t.Context(), "true", execOpts(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	release := f.waitGate()
+	defer release()
+	m.Executor("t2") // evicts t1; c1 stays listed until the gate opens
+	id, err := m.Executor("t1").ContainerID(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == "c1" {
+		t.Fatal("adopted the container being removed")
+	}
+	release()
+	waitFor(t, "c1's removal", func() bool { return slices.Contains(f.removedIDs(), "c1") })
 }

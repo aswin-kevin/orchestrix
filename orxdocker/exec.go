@@ -248,9 +248,17 @@ func (e *Executor) ensure(ctx context.Context) (string, error) {
 			return "", err
 		}
 	}
-	if !m.track(e) {
+	err = m.track(e, id)
+	if errors.Is(err, errRemoving) {
+		// The adopted container started being removed meanwhile.
+		if id, err = m.c.createContainer(ctx, m.spec, e.thread); err != nil {
+			return "", err
+		}
+		err = m.track(e, id)
+	}
+	if err != nil {
 		_ = m.c.removeContainer(context.WithoutCancel(ctx), id)
-		return "", ErrClosed
+		return "", err
 	}
 	e.mu.Lock()
 	e.id = id
@@ -268,7 +276,7 @@ func (e *Executor) adopt(ctx context.Context) (string, error) {
 		return "", err
 	}
 	for _, s := range list {
-		if s.State == "running" {
+		if s.State == "running" && !m.isRemoving(s.ID) {
 			return s.ID, nil
 		}
 	}
@@ -579,11 +587,14 @@ func (p *process) stop() error {
 		grace := p.e.m.killGrace
 		err := p.e.signal(p.container, p.token, "TERM", p.done)
 		if err != nil && !errors.Is(err, errNoPid) {
-			// The signal could not be sent: only removing the container is left.
-			if rerr := p.remove(); rerr != nil {
-				p.stopErr = errors.Join(err, rerr)
+			kerr := p.e.signal(p.container, p.token, "KILL", p.done)
+			if kerr != nil && !errors.Is(kerr, errNoPid) {
+				// No signal can be sent: only removing the container is left.
+				if rerr := p.remove(); rerr != nil {
+					p.stopErr = errors.Join(err, kerr, rerr)
+				}
+				return
 			}
-			return
 		}
 		// A missing pid file may only be late, so the kill gets its grace
 		// periods before the container goes.
@@ -615,11 +626,14 @@ func (p *process) ended(d time.Duration) bool {
 // it, and forgets it so that the next command creates a new one.
 func (p *process) remove() error {
 	m := p.e.m
+	m.mu.Lock()
+	m.removing[p.container]++
+	m.mu.Unlock()
 	p.e.forget(p.container)
 	m.forgetContainer(p.container)
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
-	return m.c.removeContainer(ctx, p.container)
+	return m.finishRemoval(ctx, p.container)
 }
 
 // follow copies the output stream into the capture, waits for the exec to
@@ -641,10 +655,8 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 	})
 	defer timer.Stop()
 	var hardErr error // written before removed is closed
-	var fired atomic.Bool
 	removed := make(chan struct{})
 	hard := time.AfterFunc(timeout+m.hardGrace, func() {
-		fired.Store(true)
 		p.timedOut.Store(true)
 		hardErr = fmt.Errorf("orxdocker: the command still ran %s after its timeout; its container was removed", m.hardGrace)
 		if err := p.remove(); err != nil {
@@ -652,14 +664,15 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 		}
 		close(removed)
 	})
-	defer hard.Stop()
 
 	exitCode, err := p.waitExit(copied, removed)
-	if fired.Load() { // whatever waitExit saw, the container is going
+	if !hard.Stop() { // whatever waitExit saw, the container is going
 		<-removed
 		err = hardErr
 	} else if errors.Is(err, errStillRunning) {
-		_ = p.stop() // its status is lost; do not leave it running
+		// Its status is lost: send SIGTERM (done closes right after, which
+		// ends Stop's escalation; the backstop covers the rest).
+		_ = p.stop()
 	}
 	select {
 	case <-copied:

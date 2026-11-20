@@ -20,6 +20,8 @@ var (
 	// stopped behind the Manager's back. The next command creates a new,
 	// empty container.
 	ErrContainerGone = errors.New("orxdocker: container is gone")
+	// errRemoving is track's error for a container being removed.
+	errRemoving = errors.New("orxdocker: container is being removed")
 	// ErrNoThread is returned by an executor of the empty thread id. Every
 	// run needs its own Input.ThreadID: the thread id names the container,
 	// so an empty one would put unrelated runs in one container.
@@ -47,6 +49,10 @@ type Manager struct {
 	closed  bool
 	threads map[string]*Executor   // the executor Executor and Backend return
 	live    map[*Executor]struct{} // executors that may own a container
+	// removing counts the removals in flight per container id; adopt and
+	// track skip those containers.
+	removing  map[string]int
+	evictions sync.WaitGroup // background removals of evicted containers
 
 	stop        chan struct{}
 	janitorDone chan struct{}
@@ -74,6 +80,7 @@ func NewManager(opts Options) (*Manager, error) {
 		c:           newClient(o.Socket, o.APIVersion),
 		threads:     map[string]*Executor{},
 		live:        map[*Executor]struct{}{},
+		removing:    map[string]int{},
 		stop:        make(chan struct{}),
 		janitorDone: make(chan struct{}),
 		killGrace:   killGrace,
@@ -116,31 +123,51 @@ func (m *Manager) Backend(threadID string) backend.Backend {
 // command and removes its container in the background.
 func (m *Manager) Executor(threadID string) *Executor {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if e, ok := m.threads[threadID]; ok {
-		m.mu.Unlock()
 		return e
-	}
-	var evicted string
-	if len(m.threads) >= m.opts.MaxThreads {
-		evicted = m.evictLocked()
 	}
 	e := &Executor{m: m, thread: threadID, lastUsed: time.Now()}
 	sb, err := sandbox.NewStarter(e, sandbox.Options{Root: m.opts.WorkDir, OpTimeout: m.opts.OpTimeout})
 	if err != nil {
-		m.mu.Unlock()
 		panic("orxdocker: sandbox options checked by NewManager: " + err.Error()) // unreachable
 	}
 	e.sb = sb
-	m.threads[threadID] = e
-	m.mu.Unlock()
-	if evicted != "" {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-			defer cancel()
-			_ = m.c.removeContainer(ctx, evicted) // a failure leaves it to Reap
-		}()
+	if m.closed {
+		return e // its commands fail with ErrClosed; nothing to keep or evict
 	}
+	if len(m.threads) >= m.opts.MaxThreads {
+		if id := m.evictLocked(); id != "" {
+			m.removing[id]++
+			m.evictions.Add(1)
+			go func() {
+				defer m.evictions.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+				defer cancel()
+				_ = m.finishRemoval(ctx, id) // a failure leaves it to Reap
+			}()
+		}
+	}
+	m.threads[threadID] = e
 	return e
+}
+
+// finishRemoval removes container id, which the caller marked in
+// m.removing, and clears the mark.
+func (m *Manager) finishRemoval(ctx context.Context, id string) error {
+	err := m.c.removeContainer(ctx, id)
+	m.mu.Lock()
+	if m.removing[id]--; m.removing[id] <= 0 {
+		delete(m.removing, id)
+	}
+	m.mu.Unlock()
+	return err
+}
+
+func (m *Manager) isRemoving(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.removing[id] > 0
 }
 
 // evictLocked drops the least recently used executor that runs no command
@@ -168,16 +195,20 @@ func (m *Manager) evictLocked() string {
 	return id
 }
 
-// track records that e owns a container. It reports false once the Manager
-// is closed; the caller then removes the container.
-func (m *Manager) track(e *Executor) bool {
+// track records that e owns container id. It fails with ErrClosed once
+// the Manager is closed (the caller then removes the container) and with
+// errRemoving while id is being removed.
+func (m *Manager) track(e *Executor, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return false
+		return ErrClosed
+	}
+	if m.removing[id] > 0 {
+		return errRemoving
 	}
 	m.live[e] = struct{}{}
-	return true
+	return nil
 }
 
 func (m *Manager) isClosed() bool {
@@ -328,6 +359,17 @@ func (m *Manager) Close() error {
 		if id := e.forget(""); id != "" {
 			errs = append(errs, m.c.removeContainer(ctx, id))
 		}
+	}
+	// No eviction starts once closed is set: wait for those in flight.
+	evicted := make(chan struct{})
+	go func() {
+		m.evictions.Wait()
+		close(evicted)
+	}()
+	select {
+	case <-evicted:
+	case <-ctx.Done():
+		errs = append(errs, fmt.Errorf("orxdocker: removing evicted containers: %w", ctx.Err()))
 	}
 	return errors.Join(errs...)
 }
