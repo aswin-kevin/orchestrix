@@ -52,9 +52,6 @@ func TestDirStoreKeyEncoding(t *testing.T) {
 }
 
 func TestDirStoreAtomicWrite(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("concurrent rename-over can fail on Windows")
-	}
 	dir := t.TempDir()
 	s := newDirStore(t, dir)
 	if err := s.Put(ctx, "ns", "/k", []byte("x")); err != nil {

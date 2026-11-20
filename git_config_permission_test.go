@@ -8,6 +8,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
@@ -16,6 +17,7 @@ import (
 // config runs a command, with edits auto-approved, then runs an allowed git
 // command over it: either the planting or the git command must need a human.
 func TestGitConfigCannotRunCommandsWithoutApproval(t *testing.T) {
+	testutil.RequireUnixShell(t)
 	for _, tt := range []struct{ gitDir, cmd, rule string }{
 		{"/.git", "git status", "execute(git status)"},
 		{"/sub/.git", "git -C sub status", "execute(git:*)"},

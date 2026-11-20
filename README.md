@@ -378,7 +378,7 @@ Git runs commands named in a repository's config (`core.fsmonitor`, aliases, hoo
 A backend is the file system the file tools operate on.
 
 - **`backend/memory`**: in-memory and safe for concurrent use. This is the default, with one separate workspace per thread ID that lives until the agent is closed. A run without a thread ID gets a fresh, empty workspace of its own that is not kept after the run, so threadless runs never see each other's files (paths mounted with `WithMount` stay shared).
-- **`backend/disk`**: a real directory. Paths the model sees are relative to the root, and access outside it is refused.
+- **`backend/disk`**: a real directory. Paths the model sees are relative to the root, and access outside it is refused. The backend keeps the directory open until `Close` (which `Agent.Close` calls for `WithBackend` and `WithShell` backends); on Windows the directory cannot be deleted or renamed before that.
 - **`backend/shell`**: a disk backend that can also run commands; see "Shell and background tasks".
 - **`backend/kv`**: files kept in a namespaced key/value `kv.Store`, for state that must outlive a thread. `kv.NewMemoryStore` keeps it in memory; `kv.NewDirStore` keeps it on disk, where several processes can share it. A `DirStore` names each file by the hex SHA-256 of its key and keeps the key in a header inside the file, so no key can name a path outside the store and two keys never collide on a case-insensitive file system (macOS, Windows). Implement `kv.Store` to keep files in a database, add `Stat` (`kv.Stater`) so existence and size checks don't fetch the value, and run `kvtest.Run` against it.
 - **`backend/composite`**: routes each path to a backend by its longest mounted prefix and merges listings, globs and greps across them. `composite.New(def, composite.Route{Prefix: "/memories", Backend: kvb})` serves `/memories/a.md` from `kvb` as `/a.md` and every other path from `def`. Commands run only in `def`: files under a mount are invisible to them, and files of `def` that a mount shadows stay visible to them. Deleting a mount point, or any directory above one, is refused.
@@ -772,7 +772,7 @@ A checkpointed workspace is stored whole in the thread's state, so for large wor
 
 ## Shell and background tasks
 
-`WithShell(root, shell.Options{})` runs the agent on the real directory `root` and adds the `execute` tool. Commands run with a minimal environment, timeouts and output limits; `shell.Options` adjusts them. `WithShell` cannot be combined with `WithBackend` or `WithBackendFactory`, and the one backend is shared by all threads.
+`WithShell(root, shell.Options{})` runs the agent on the real directory `root` and adds the `execute` tool. Commands run with a minimal environment, timeouts and output limits; `shell.Options` adjusts them. `WithShell` cannot be combined with `WithBackend` or `WithBackendFactory`, and the one backend is shared by all threads. Commands run under `/bin/sh`, so `execute` works on Unix (Linux, macOS, the BSDs) only: on Windows the file tools work but every command fails to start; run commands in a container there (`orxdocker`).
 
 `WithTasks` lets `execute` start a command in the background (`run_in_background`) and gives the model `task_output`, `task_stop`, `task_list`, `sleep` and `monitor` to follow it. Finished jobs are announced to the model on its next turn. The host owns the `tasks.Middleware` and must call `Shutdown`, or `Close` the agent, to stop jobs still running:
 
@@ -1232,7 +1232,7 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 | `-mode` | Permission mode name; wins over `-yes`. |
 | `-system` | File holding the system prompt. |
 | `-dir` | Root directory of the workspace (default `.`). |
-| `-no-shell` | Use the plain disk workspace: no `execute` tool and no background tasks. |
+| `-no-shell` | Use the plain disk workspace: no `execute` tool and no background tasks. Commands need `/bin/sh`, so on Windows pass it. |
 | `-store` | Directory for saved conversations (file checkpointer); enables persistence. |
 | `-thread` | Conversation name inside `-store` (default `cli`); the same name continues an earlier session. |
 | `-max-turns` | Maximum model turns per prompt (default 50). |

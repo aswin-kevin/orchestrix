@@ -35,6 +35,9 @@ import (
 type shellSpec struct {
 	root string
 	opts shell.Options
+	// built is the backend useShell opened; New closes it when it fails,
+	// since no agent will.
+	built *shell.Backend
 }
 
 // WithCheckpointer saves every thread's state with c after each state change,
@@ -104,7 +107,9 @@ func WithHooks(cfg hooks.Config) Option {
 
 // WithShell gives the agent a shell backend rooted at root, which must be an
 // existing directory, and the execute tool. The backend is shared by all
-// threads. It cannot be combined with WithBackend or WithBackendFactory.
+// threads, and Agent.Close releases it. It cannot be combined with
+// WithBackend or WithBackendFactory. Commands run with /bin/sh, so execute
+// works on Unix only; on Windows every command fails to start.
 //
 // The shell backend runs commands as the host process, with its privileges;
 // it is not a sandbox. Processes that leave a command's process group
@@ -155,7 +160,15 @@ func (s *settings) useShell(cfg *agent.Config) {
 		s.errs = append(s.errs, fmt.Errorf("WithShell: %w", err))
 		return
 	}
+	s.shell.built = b
 	cfg.Backend = b
+}
+
+// closeBuilt releases what build opened, for a New that fails after it.
+func (s *settings) closeBuilt() {
+	if s.shell != nil && s.shell.built != nil {
+		_ = s.shell.built.Close()
+	}
 }
 
 // baseStack returns the preset's middleware in its fixed order (see New).

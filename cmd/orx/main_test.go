@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/mcp"
@@ -290,6 +291,7 @@ func executeTurns() *llmtest.Scripted {
 }
 
 func TestShellExecuteAvailable(t *testing.T) {
+	testutil.RequireUnixShell(t)
 	code, _, stderr := invoke(t, "", executeTurns(), "-model", "openai:test", "-dir", t.TempDir(), "-yes", "-p", "run it")
 
 	if code != 0 {

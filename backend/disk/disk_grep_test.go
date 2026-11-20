@@ -19,10 +19,7 @@ func TestDiskRipgrepParity(t *testing.T) {
 	}
 	ctx := context.Background()
 	withRg, root := newDisk(t, disk.WithRipgrep(true))
-	pureGo, err := disk.New(root, disk.WithRipgrep(false))
-	if err != nil {
-		t.Fatal(err)
-	}
+	pureGo := openDisk(t, root, disk.WithRipgrep(false))
 	files := map[string]string{
 		"a.go":                  "package a\nfunc Hello() {}\nfunc hello2() {}\n",
 		"b.txt":                 "Hello world\r\nhello again\r\n\r\nno newline at end hello",

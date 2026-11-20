@@ -1,8 +1,10 @@
 package orchestrix
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -111,14 +113,32 @@ func (s *settings) mountWrapper() func(backend.Backend) backend.Backend {
 }
 
 // applyMounts puts mount over cfg's backend: Backend is wrapped once and every
-// backend the factory returns is wrapped. A nil mount changes nothing.
+// backend the factory returns is wrapped. A nil mount changes nothing. The
+// wrapper has no Close, so Agent.Close would no longer reach a wrapped
+// Backend's: an OnClose function closes it instead.
 func applyMounts(cfg *agent.Config, mount func(backend.Backend) backend.Backend) {
 	switch {
 	case mount == nil:
 	case cfg.Backend != nil:
-		cfg.Backend = mount(cfg.Backend)
+		inner := cfg.Backend
+		cfg.Backend = mount(inner)
+		if closeInner := backendCloser(inner); closeInner != nil {
+			cfg.OnClose = append(cfg.OnClose, closeInner)
+		}
 	case cfg.BackendFactory != nil:
 		factory := cfg.BackendFactory
 		cfg.BackendFactory = func(threadID string) backend.Backend { return mount(factory(threadID)) }
 	}
+}
+
+// backendCloser returns how Agent.Close releases b (agent.Closer, else
+// io.Closer), or nil when b has nothing to release.
+func backendCloser(b backend.Backend) func(context.Context) error {
+	switch c := b.(type) {
+	case agent.Closer:
+		return c.Close
+	case io.Closer:
+		return func(context.Context) error { return c.Close() }
+	}
+	return nil
 }

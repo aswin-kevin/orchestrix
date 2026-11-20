@@ -27,6 +27,9 @@ const (
 	staleTempAge = time.Hour
 	// maxHeaderBytes bounds the key header at the front of every file.
 	maxHeaderBytes = binary.MaxVarintLen64 + MaxKeyBytes
+	// transientWait bounds how long a file operation is retried while
+	// another handle keeps it from succeeding (see isTransient).
+	transientWait = 2 * time.Second
 )
 
 // nsEncoding names namespace directories: lowercase unpadded base32hex, whose
@@ -42,8 +45,10 @@ var errCorrupt = errors.New("corrupt key file")
 // so no namespace or key can name a path outside the store's directory and
 // names never differ only in case. Each file holds uvarint(len(key)) + key +
 // value; the stored key is what List reports and what Get verifies. Writes
-// are atomic; across processes the last write wins (on Windows a concurrent
-// Put from another process can fail with an access error).
+// are atomic; across processes the last write wins. On Windows an open file
+// cannot be replaced or removed, so an operation that meets another one's
+// handle is retried for up to two seconds; under heavier contention it can
+// still fail with an access error.
 type DirStore struct {
 	dir string
 	now func() time.Time
@@ -155,7 +160,7 @@ func (d *DirStore) Get(ctx context.Context, namespace, key string) (Item, error)
 	if checkKey(key) != nil {
 		return Item{}, backend.ErrNotFound // such a key can never have been stored
 	}
-	f, err := os.Open(filepath.Join(nsDir, fileName(key)))
+	f, err := openKeyFile(filepath.Join(nsDir, fileName(key)))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return Item{}, backend.ErrNotFound
@@ -196,7 +201,7 @@ func (d *DirStore) Stat(ctx context.Context, namespace, key string) (ItemInfo, e
 	if checkKey(key) != nil {
 		return ItemInfo{}, backend.ErrNotFound
 	}
-	f, err := os.Open(filepath.Join(nsDir, fileName(key)))
+	f, err := openKeyFile(filepath.Join(nsDir, fileName(key)))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return ItemInfo{}, backend.ErrNotFound
@@ -276,11 +281,37 @@ func (d *DirStore) Put(ctx context.Context, namespace, key string, value []byte)
 	if err = os.Chtimes(tmp.Name(), stamp, stamp); err != nil {
 		return err
 	}
-	if err = os.Rename(tmp.Name(), filepath.Join(nsDir, fileName(key))); err != nil {
+	target := filepath.Join(nsDir, fileName(key))
+	if err = retryTransient(func() error { return os.Rename(tmp.Name(), target) }); err != nil {
 		return err
 	}
 	syncDir(nsDir)
 	return nil
+}
+
+// openKeyFile opens a key file for reading, retrying while a concurrent
+// Put or Delete holds it (see isTransient).
+func openKeyFile(p string) (f *os.File, err error) {
+	err = retryTransient(func() error {
+		f, err = os.Open(p)
+		return err
+	})
+	return f, err
+}
+
+// retryTransient runs op until it succeeds, fails with an error that is not
+// transient, or transientWait has passed.
+func retryTransient(op func() error) error {
+	deadline := time.Now().Add(transientWait)
+	delay := time.Millisecond
+	for {
+		err := op()
+		if err == nil || !isTransient(err) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(delay)
+		delay = min(2*delay, 50*time.Millisecond)
+	}
 }
 
 // syncDir makes a rename durable. It is best effort: the rename already
@@ -304,7 +335,8 @@ func (d *DirStore) Delete(ctx context.Context, namespace, key string) error {
 	if checkKey(key) != nil {
 		return nil
 	}
-	err = os.Remove(filepath.Join(nsDir, fileName(key)))
+	target := filepath.Join(nsDir, fileName(key))
+	err = retryTransient(func() error { return os.Remove(target) })
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
@@ -347,7 +379,7 @@ func (d *DirStore) List(ctx context.Context, namespace, prefix string) ([]ItemIn
 // readEntry reads one key file's metadata; ok is false for anything that is
 // not a well-formed key file under its own name.
 func readEntry(p, name string) (info ItemInfo, ok bool) {
-	f, err := os.Open(p)
+	f, err := openKeyFile(p)
 	if err != nil {
 		return ItemInfo{}, false
 	}

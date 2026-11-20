@@ -71,6 +71,7 @@ func TestStackOrderM3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, a)
 	want := []string{"summarize", "cache", "hooks", "hitl", "memory", "skills", "planmode",
 		"filesystem", "planning", "subagents", "deferred", "mcp", "web", "askuser", "tasks"}
 	if got := stackNames(a); !slices.Equal(got, want) {

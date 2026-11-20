@@ -49,7 +49,7 @@ const (
 var skippedDirs = map[string]bool{".git": true, "node_modules": true}
 
 // Backend is a backend.Backend rooted at a directory. The directory stays open
-// for the Backend's lifetime.
+// until Close; on Windows it cannot be deleted or renamed while it is open.
 type Backend struct {
 	root    string   // symlink-free path of the root directory
 	fsRoot  *os.Root // every file operation goes through it
@@ -65,7 +65,10 @@ type Option func(*Backend)
 
 // WithVirtual chooses how paths map to the file system. When true (the
 // default) "/a/b" means <root>/a/b. When false, paths are real file-system
-// paths, which must still lie inside the root.
+// paths, which must still lie inside the root. On Windows such a path starts
+// with its drive ("C:\work\a.txt" or "C:/work/a.txt"), and the paths the
+// backend returns use forward slashes ("C:/work/a.txt"); a root on a UNC
+// share (\\server\share) needs the default, virtual paths.
 func WithVirtual(virtual bool) Option {
 	return func(b *Backend) { b.virtual = virtual }
 }
@@ -107,12 +110,34 @@ func New(root string, opts ...Option) (*Backend, error) {
 	return b, nil
 }
 
-// rootPath is the virtual path that denotes the root directory.
+// Close releases the root directory. Operations after Close fail. Close is
+// idempotent. Agent.Close calls it for a backend given with WithBackend or
+// WithShell.
+func (b *Backend) Close() error {
+	return b.fsRoot.Close()
+}
+
+// rootPath is the path that denotes the root directory.
 func (b *Backend) rootPath() string {
 	if b.virtual {
 		return virtualRoot
 	}
-	return b.root
+	return filepath.ToSlash(b.root)
+}
+
+// clean cleans p as backend.Clean does, except for a non-virtual backend's
+// host path with a volume name (on Windows, "C:\work\a.txt"), which keeps
+// its volume and comes back slash-separated ("C:/work/a.txt"), the form of
+// every path the backend returns. backend.Clean would turn it into
+// "/C:\work\a.txt", which names nothing.
+func (b *Backend) clean(p string) (string, error) {
+	if b.virtual || filepath.VolumeName(p) == "" {
+		return backend.Clean(p)
+	}
+	if strings.ContainsRune(p, 0) {
+		return "", fmt.Errorf("%w: contains NUL byte", backend.ErrInvalidPath)
+	}
+	return filepath.ToSlash(filepath.Clean(p)), nil
 }
 
 // resolve cleans p and returns it together with the symlink-free real path it
@@ -120,7 +145,7 @@ func (b *Backend) rootPath() string {
 // real path is what callers must operate on, so a symlink inside the root
 // cannot redirect an operation after the check.
 func (b *Backend) resolve(op, p string) (clean, realPath string, err error) {
-	clean, err = backend.Clean(p)
+	clean, err = b.clean(p)
 	if err != nil {
 		return "", "", err
 	}
@@ -425,6 +450,11 @@ func (b *Backend) replaceFile(rel string, content []byte) error {
 	}
 	dir := filepath.Dir(rel)
 	if err := b.fsRoot.MkdirAll(dir, newDirMode); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			// A parent exists but is not a directory. Unix reports ENOTDIR,
+			// Windows "file exists"; report ENOTDIR on both.
+			return &fs.PathError{Op: "mkdir", Path: dir, Err: syscall.ENOTDIR}
+		}
 		return err
 	}
 	tmpName := filepath.Join(dir, tempPrefix+rand.Text())
@@ -462,7 +492,7 @@ func (b *Backend) replaceFile(rel string, content []byte) error {
 // Delete removes the file or directory tree at p. A symlink is removed
 // itself, never its target. The root cannot be deleted.
 func (b *Backend) Delete(_ context.Context, p string) error {
-	clean, err := backend.Clean(p)
+	clean, err := b.clean(p)
 	if err != nil {
 		return err
 	}

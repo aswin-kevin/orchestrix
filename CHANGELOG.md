@@ -50,6 +50,7 @@ A hardening pass ahead of v1.0.0: security fixes in the permission parser, bound
 - `agent.Event` carries `Turn`, `Time` and `RunID`; `agent.RunInfo.RunID` identifies each run.
 - `llm.APIError` gains `Kind()` (rate limit, auth, overload, invalid request, context overflow, server), `RequestID` and `Header` (without cookies). `llm.Response` and `llm.StreamEvent` carry the reply's `Model` and id. New stop reasons `llm.StopRefusal`, `llm.StopPauseTurn` and `llm.StopContentFilter`.
 - `web.HTMLToMarkdownContext`, with a context and an output byte limit.
+- `disk.Backend.Close` (and so `shell.Backend.Close`) releases the root directory, which the backend keeps open; `Agent.Close` calls it for a `WithBackend` or `WithShell` backend, also when `WithMount` wraps it. `orchestrix.New` closes the shell backend it opened when it fails.
 - orxdocker: `Options.MaxThreads` (default 1024) evicts the least recently used idle executor and removes its container.
 
 ### Security
@@ -71,6 +72,7 @@ A hardening pass ahead of v1.0.0: security fixes in the permission parser, bound
 - A subagent run that ends without a Final no longer panics the `task` tool.
 - `Shutdown` of `tasks` and `async` no longer races a background start that is still committing.
 - orxotel and subagents treat `token_limit` as a soft stop like `max_turns`.
+- Windows: `checkpoint/file` no longer fails every save with "Access is denied" (it tried to fsync the directory, which Windows cannot do; it now skips that step there). `kv.DirStore` retries, for up to two seconds, an open, rename or remove that meets another operation's handle on the same file instead of failing it. A non-virtual `disk` backend accepts drive-letter paths and returns them slash-separated, and writing below a file reports `backend.ErrNotDir` as on Unix. `orx` releases its workspace directory when it exits. The shell backend's commands need `/bin/sh` and so run on Unix only; this is now documented.
 - `web_fetch` markdown: cells of tables nested up to four deep are converted as markdown and keep their links (deeper ones are plain text), and a table row that reaches the output cap keeps the cells rendered so far instead of being dropped.
 
 ### Known limitations

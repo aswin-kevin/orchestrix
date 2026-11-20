@@ -13,6 +13,7 @@ func TestApprovalOffline(t *testing.T) {
 	t.Setenv("ORX_MODEL", "")
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TMP", tmp) // os.TempDir on Windows
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

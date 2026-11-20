@@ -76,9 +76,15 @@ func newAgent(opts []Option, named bool, resolve func(*settings) error) (*agent.
 	s.validate()
 	cfg := s.build()
 	if err := errors.Join(s.errs...); err != nil {
+		s.closeBuilt()
 		return nil, fmt.Errorf("orchestrix: %w", err)
 	}
-	return agent.New(cfg)
+	a, err := agent.New(cfg)
+	if err != nil {
+		s.closeBuilt()
+		return nil, err
+	}
+	return a, nil
 }
 
 // resolveSpec sets the provider and model name from a spec string.

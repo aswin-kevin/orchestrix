@@ -241,6 +241,8 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		if err != nil {
 			return fail(exitError, "%v", err)
 		}
+		// Released last, after everything that may still use it.
+		cleanups = append(cleanups, func() { _ = ws.Close() })
 		agentOpts = append(agentOpts, orchestrix.WithBackend(ws))
 	} else {
 		// The tasks middleware keeps background jobs alive beyond a single
@@ -308,6 +310,14 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 	ag, err = orchestrix.NewWithProvider(provider, agentOpts...)
 	if err != nil {
 		return fail(exitUsage, "%v", err)
+	}
+	if !o.noShell {
+		// The shell workspace keeps its directory open (on Windows that
+		// directory cannot be removed meanwhile): release it last, once the
+		// jobs and servers that may still use it have stopped.
+		if ws, ok := ag.Config().Backend.(io.Closer); ok {
+			cleanups = slices.Insert(cleanups, 0, func() { _ = ws.Close() })
+		}
 	}
 	return ag, shutdown, exitOK
 }

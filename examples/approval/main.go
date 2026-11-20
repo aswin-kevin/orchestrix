@@ -84,6 +84,9 @@ func run(ctx context.Context, w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Close releases what the agent holds, the workspace directory among
+	// them, before the deferred RemoveAll deletes it.
+	defer a.Close(context.WithoutCancel(ctx))
 
 	th, err := a.Thread(ctx, threadID)
 	if err != nil {

@@ -26,13 +26,15 @@
 // WithSync(false) is set, fsynced before Save returns; a thread's first save
 // also fsyncs the directory so the new file's entry survives a crash. After
 // Save returns nil the checkpoint survives process and OS crashes (subject
-// to the storage device honoring fsync). A crash mid-write can leave a torn
-// final line, one without its newline: readers ignore it, and the next Save
-// truncates it away before appending. A newline-terminated line that does
-// not parse, even the last one, cannot come from a crash and is reported as
-// corruption. A compaction writes a temporary file in the same directory,
-// fsyncs it and renames it over the thread file, so a reader sees either the
-// old file or the new one, never a mix.
+// to the storage device honoring fsync). Windows has no directory fsync, so
+// there the directory step is skipped and a new or compacted file's entry is
+// as durable as the file system makes it on its own. A crash mid-write can
+// leave a torn final line, one without its newline: readers ignore it, and
+// the next Save truncates it away before appending. A newline-terminated
+// line that does not parse, even the last one, cannot come from a crash and
+// is reported as corruption. A compaction writes a temporary file in the
+// same directory, fsyncs it and renames it over the thread file, so a reader
+// sees either the old file or the new one, never a mix.
 //
 // # Versions
 //
@@ -65,6 +67,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -395,8 +398,11 @@ func finish(f *os.File, sync bool) error {
 }
 
 // syncDir fsyncs the directory so created or removed entries are durable.
+// On Windows it does nothing: Go opens a directory read-only there, and
+// FlushFileBuffers on a read-only handle fails with "Access is denied", so
+// every Save would fail; Windows offers no directory fsync to use instead.
 func (c *Checkpointer) syncDir() error {
-	if !c.sync {
+	if !c.sync || runtime.GOOS == "windows" {
 		return nil
 	}
 	d, err := os.Open(c.dir)

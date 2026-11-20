@@ -20,9 +20,10 @@
 // keys, is not inherited unless Options.InheritEnv is set), and output capped
 // at a head and a tail so memory stays bounded.
 //
-// On platforms without POSIX process groups (Windows) execution is
-// best-effort: only the shell process is killed, and the memory limit is
-// enforced on Linux only.
+// Commands need Shell (/bin/sh), so they run on Unix only. On Windows the
+// file operations work, but every command fails to start; use a disk
+// backend there, or run commands in a container (orxdocker). The memory
+// limit is enforced on Linux only.
 package shell
 
 import (

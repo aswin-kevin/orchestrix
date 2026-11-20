@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/kv"
 	backendmemory "github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 	"github.com/aswin-kevin/orchestrix/middleware/async"
@@ -96,6 +96,7 @@ func TestStackOrderM4(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, a)
 	want := []string{"summarize", "compress", "cache", "hooks", "hitl", "rubric", "memory", "skills", "planmode",
 		"filesystem", "planning", "subagents", "async", "deferred", "mcp", "web", "askuser", "tasks", "profiles"}
 	if got := stackNames(a); !slices.Equal(got, want) {
@@ -206,9 +207,7 @@ func TestWithMountPersistsMemoriesAcrossThreads(t *testing.T) {
 }
 
 func TestWithMountKeepsShellExecute(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("spawns sh")
-	}
+	testutil.RequireUnixShell(t)
 	root := t.TempDir()
 	kvb := kvBackend(t)
 	p := llmtest.New(
@@ -226,6 +225,7 @@ func TestWithMountKeepsShellExecute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, a)
 	finalOf(t, a, orchestrix.Text("go"))
 	if !slices.Contains(toolNames(p), "execute") {
 		t.Fatalf("tools %v lack execute", toolNames(p))
@@ -262,6 +262,33 @@ func TestWithMountWrapsBackendAndFactory(t *testing.T) {
 		if _, err := kvb.Read(ctx, "/a.txt", 0, 0); err != nil {
 			t.Errorf("%s: /kv/a.txt did not reach the mounted backend: %v", name, err)
 		}
+	}
+}
+
+// closeCounter is an in-memory backend that counts its Close calls.
+type closeCounter struct {
+	*backendmemory.Backend
+	closed int
+}
+
+func (c *closeCounter) Close() error {
+	c.closed++
+	return nil
+}
+
+// Agent.Close still closes a WithBackend backend that WithMount wrapped.
+func TestWithMountKeepsBackendClose(t *testing.T) {
+	inner := &closeCounter{Backend: backendmemory.New()}
+	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithBackend(inner),
+		orchestrix.WithMount("/kv", kvBackend(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if inner.closed != 1 {
+		t.Errorf("backend closed %d times, want 1", inner.closed)
 	}
 }
 

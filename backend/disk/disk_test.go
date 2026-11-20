@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -16,11 +17,52 @@ import (
 func newDisk(t *testing.T, opts ...disk.Option) (*disk.Backend, string) {
 	t.Helper()
 	root := t.TempDir()
+	return openDisk(t, root, opts...), root
+}
+
+// openDisk opens a backend on root and closes it when the test ends, before
+// t.TempDir's cleanup, which cannot remove a directory still open on
+// Windows.
+func openDisk(t *testing.T, root string, opts ...disk.Option) *disk.Backend {
+	t.Helper()
 	b, err := disk.New(root, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b, root
+	t.Cleanup(func() {
+		if err := b.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	return b
+}
+
+func TestDiskCloseReleasesRoot(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "ws")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b, err := disk.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write(ctx, "/a.txt", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if _, err := b.Read(ctx, "/a.txt", 0, 0); err == nil {
+		t.Error("Read after Close succeeded")
+	}
+	// Windows refuses to remove a directory that is still open.
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatalf("remove the root after Close: %v", err)
+	}
 }
 
 func TestDiskConformance(t *testing.T) {
@@ -115,10 +157,7 @@ func TestDiskRejectsSymlinkEscape(t *testing.T) {
 
 	// Walks silently skip escaping entries.
 	for _, rg := range []bool{true, false} {
-		walker, err := disk.New(root, disk.WithRipgrep(rg))
-		if err != nil {
-			t.Fatal(err)
-		}
+		walker := openDisk(t, root, disk.WithRipgrep(rg))
 		ls, err := walker.Ls(ctx, "/")
 		if err != nil {
 			t.Fatal(err)
@@ -207,8 +246,9 @@ func TestDiskNonVirtualMode(t *testing.T) {
 		t.Fatalf("file not at the real path: %v", err)
 	}
 	ls, err := b.Ls(ctx, filepath.Join(root, "dir"))
-	if err != nil || len(ls) != 1 || ls[0].Path != real {
-		t.Fatalf("Ls = %+v, %v; want real path %s", ls, err, real)
+	// Returned paths are slash-separated, also on Windows.
+	if want := filepath.ToSlash(real); err != nil || len(ls) != 1 || ls[0].Path != want {
+		t.Fatalf("Ls = %+v, %v; want real path %s", ls, err, want)
 	}
 	if _, err := b.Read(ctx, "/etc/passwd", 0, 0); !errors.Is(err, backend.ErrOutsideRoot) {
 		t.Fatalf("path outside root = %v, want ErrOutsideRoot", err)
@@ -225,8 +265,12 @@ func mustSymlink(t *testing.T, target, link string) {
 	}
 }
 
+// assertMode checks path's permission bits; Windows has none to check.
 func assertMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -294,10 +338,7 @@ func TestDiskRealPath(t *testing.T) {
 		t.Errorf("RealPath below outward symlink = %v, want ErrOutsideRoot", err)
 	}
 
-	host, err := disk.New(root, disk.WithVirtual(false))
-	if err != nil {
-		t.Fatal(err)
-	}
+	host := openDisk(t, root, disk.WithVirtual(false))
 	if got, err := host.RealPath(""); err != nil || got != root {
 		t.Errorf("host RealPath(\"\") = %q, %v; want root %q", got, err, root)
 	}

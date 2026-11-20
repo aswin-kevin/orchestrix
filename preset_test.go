@@ -13,6 +13,7 @@ import (
 	membackend "github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/checkpoint/file"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
@@ -55,6 +56,7 @@ func TestFullStackOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, a)
 	want := []string{"summarize", "cache", "hooks", "hitl", "filesystem", "planning", "subagents", "tasks"}
 	if got := stackNames(a); !slices.Equal(got, want) {
 		t.Errorf("full stack = %v, want %v", got, want)
@@ -155,6 +157,7 @@ func TestWithShellRegistersExecute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, a)
 	finalOf(t, a, orchestrix.Text("hi"))
 	if !slices.Contains(toolNames(p), "execute") {
 		t.Errorf("tools %v lack execute", toolNames(p))
@@ -212,6 +215,7 @@ func TestWithTasksOffersBackgroundTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, a)
 	finalOf(t, a, orchestrix.Text("hi"))
 	if !slices.Contains(toolNames(p), "task_output") {
 		t.Errorf("tools %v lack task_output", toolNames(p))
@@ -245,6 +249,7 @@ func shellBackend(t *testing.T) backend.Backend {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = b.Close() })
 	return b
 }
 
@@ -287,6 +292,7 @@ func TestWithSummarizeReplacesDefault(t *testing.T) {
 }
 
 func TestWithTasksOnFactoryBackendOffersBackgroundExecute(t *testing.T) {
+	testutil.RequireUnixShell(t)
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown()
 	p := llmtest.New(

@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +16,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/backendtest"
 	"github.com/aswin-kevin/orchestrix/backend/sandbox"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 )
 
 var ctx = context.Background()
@@ -30,9 +30,7 @@ var (
 // skipWithoutSh skips tests that spawn /bin/sh on Windows.
 func skipWithoutSh(t *testing.T) {
 	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("spawns /bin/sh")
-	}
+	testutil.RequireUnixShell(t)
 }
 
 // localExec runs commands with /bin/sh in a private temp directory, so a

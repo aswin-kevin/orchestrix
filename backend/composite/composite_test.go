@@ -3,7 +3,6 @@ package composite_test
 import (
 	"context"
 	"errors"
-	"runtime"
 	"slices"
 	"testing"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/kv"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	memmw "github.com/aswin-kevin/orchestrix/middleware/memory"
 )
 
@@ -237,9 +237,7 @@ func TestEditAndMultiEditRoute(t *testing.T) {
 type noMulti struct{ backend.Backend }
 
 func TestCapabilitiesFollowDefault(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("spawns sh")
-	}
+	testutil.RequireUnixShell(t)
 	sh, err := shell.New(t.TempDir(), shell.Options{})
 	if err != nil {
 		t.Fatal(err)

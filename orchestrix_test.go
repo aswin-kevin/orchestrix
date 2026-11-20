@@ -36,6 +36,18 @@ func finalOf(t *testing.T, a *agent.Agent, in agent.Input) *agent.Final {
 	return last.Final
 }
 
+// closeAtEnd closes a when the test ends, releasing its backend before
+// t.TempDir's cleanup, which cannot remove a directory still open on
+// Windows.
+func closeAtEnd(t *testing.T, a *agent.Agent) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := a.Close(context.Background()); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+}
+
 func writeThenAnswer(path, content string) *llmtest.Scripted {
 	return llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{{

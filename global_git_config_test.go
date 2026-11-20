@@ -10,6 +10,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
@@ -19,6 +20,7 @@ import (
 // it: planting a command there must need a human even with edits
 // auto-approved.
 func TestGlobalGitConfigInWorkspaceNeedsApproval(t *testing.T) {
+	testutil.RequireUnixShell(t)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -70,6 +72,7 @@ func TestGlobalGitConfigInWorkspaceNeedsApproval(t *testing.T) {
 // user's ~/.gitconfig includes ~/.gitconfig.local, and the workspace is the
 // home folder.
 func TestIncludedGitConfigNeedsApproval(t *testing.T) {
+	testutil.RequireUnixShell(t)
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}

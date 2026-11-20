@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -342,7 +343,8 @@ func TestFileNewCreatesPrivateDir(t *testing.T) {
 	if err != nil || !info.IsDir() {
 		t.Fatalf("dir not created: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o700 {
+	// Windows has no unix permission bits: Go reports every directory 0o777.
+	if perm := info.Mode().Perm(); perm != 0o700 && runtime.GOOS != "windows" {
 		t.Fatalf("dir perm = %o, want 700", perm)
 	}
 }
