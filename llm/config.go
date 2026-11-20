@@ -39,7 +39,7 @@ const (
 	// DefaultMaxTokens is the output limit used when a request sets none.
 	DefaultMaxTokens = 8192
 	// DefaultStreamIdleTimeout is how long a model reply may go without
-	// sending anything before the call fails with ErrStreamIdle.
+	// sending any bytes before the call fails with ErrStreamIdle.
 	DefaultStreamIdleTimeout = 5 * time.Minute
 
 	defaultAnthropicBaseURL = "https://api.anthropic.com"
@@ -86,9 +86,10 @@ type Config struct {
 	// reported usage.
 	EmptyResponseRetries int
 	// StreamIdleTimeout bounds how long a model reply may go silent once its
-	// response headers have arrived: the wait for each stream event,
-	// including the first, and for each read of a non-streaming Anthropic
-	// reply body. When it runs out the call fails with ErrStreamIdle. 0
+	// response headers have arrived: any bytes received, keep-alive
+	// comments included, count as activity, for a stream and for a
+	// non-streaming Anthropic reply body alike. When it runs out the call
+	// fails with ErrStreamIdle. 0
 	// selects DefaultStreamIdleTimeout and a negative value disables it. The
 	// time the consumer spends handling an event does not count. It does not
 	// bound the wait for response headers or the call as a whole; use the

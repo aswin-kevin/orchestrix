@@ -60,10 +60,12 @@ type FallbackConfig struct {
 
 // DefaultShouldFallback reports whether err means the provider cannot serve
 // right now: a retryable failure (408, 409, 429, 5xx, 529 or a network
-// error), or an error reported inside a stream (an *APIError with Status 0)
-// whose JSON body has a "type" or "code" of overloaded_error,
+// error), ErrStreamIdle, or an error reported inside a stream (an *APIError
+// with Status 0) whose JSON body has a "type" or "code" of overloaded_error,
 // rate_limit_error, api_error, server_error or rate_limit_exceeded. A context
-// overflow and a cancelled or expired context never qualify.
+// overflow and a cancelled or expired context never qualify. Like any
+// fallback error, an idle stream starts the entry's cool-down, and it
+// switches entries only before the stream showed content.
 func DefaultShouldFallback(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || IsContextOverflow(err) {
 		return false

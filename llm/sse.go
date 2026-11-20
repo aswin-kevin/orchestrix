@@ -27,14 +27,14 @@ type sseEvent = sse.Event
 
 // readSSE yields the events of a text/event-stream body (see sse.Events). An
 // event over maxSSEEventBytes or a read failure ends the sequence with an
-// error. idle, when not nil, runs while the body is being waited on and is
-// paused while the consumer handles an event, so it measures only the
-// silence of the stream.
+// error. idle, when not nil, restarts whenever bytes arrive, so keep-alive
+// comments count as activity, and is paused while the consumer handles an
+// event, so it measures only the silence of the stream.
 func readSSE(r io.Reader, idle *idleTimer) iter.Seq2[sseEvent, error] {
 	return func(yield func(sseEvent, error) bool) {
 		idle.resume()
 		defer idle.pause()
-		for ev, err := range sse.Events(r, maxSSEEventBytes) {
+		for ev, err := range sse.Events(idleReader{r, idle}, maxSSEEventBytes) {
 			idle.pause()
 			if err != nil {
 				yield(sseEvent{}, fmt.Errorf("llm: read event stream: %w", err))
@@ -119,8 +119,8 @@ func (t *idleTimer) pause() {
 	}
 }
 
-// idleReader restarts idle whenever a read returns data, for bodies that are
-// not read event by event.
+// idleReader restarts idle whenever a read returns data: any bytes received
+// count as activity.
 type idleReader struct {
 	r    io.Reader
 	idle *idleTimer

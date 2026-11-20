@@ -230,3 +230,49 @@ func newTestProviderWith(t *testing.T, f Format, url string, mutate func(*Config
 	}
 	return p
 }
+
+func TestStreamKeepAliveCommentsResetIdleTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		for range 10 {
+			_, _ = io.WriteString(w, ": keep-alive\n\n")
+			flusher.Flush()
+			select {
+			case <-time.After(30 * time.Millisecond):
+			case <-r.Context().Done():
+				return
+			}
+		}
+		_, _ = io.WriteString(w, openAIHelloStream)
+	}))
+	t.Cleanup(srv.Close)
+	p := newTestOpenAI(t, srv.URL, func(c *Config) { c.StreamIdleTimeout = testIdle })
+
+	resp, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if resp.Message.Text() != "hi" {
+		t.Errorf("text = %q, want hi", resp.Message.Text())
+	}
+}
+
+func TestCallerCancelWithIdleTimerIsCanceled(t *testing.T) {
+	url, _ := newStallServer(t, "text/event-stream", openAIFirstDelta)
+	p := newTestOpenAI(t, url, func(c *Config) { c.StreamIdleTimeout = 10 * time.Second })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var last error
+	for _, err := range p.Stream(ctx, Request{Messages: []Message{UserText("x")}}) {
+		if err == nil {
+			cancel()
+		}
+		last = err
+	}
+	if !errors.Is(last, context.Canceled) || errors.Is(last, ErrStreamIdle) {
+		t.Fatalf("err = %v, want context.Canceled and not ErrStreamIdle", last)
+	}
+}

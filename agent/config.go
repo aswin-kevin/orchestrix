@@ -123,8 +123,9 @@ type Config struct {
 	MaxTurns    int
 	MaxDuration time.Duration
 	// ModelTimeout bounds each model call, including any retries made by
-	// the provider or by model middleware; zero means no limit beyond the
-	// run's own. A call that runs out ends the run with ReasonModelError
+	// the provider or by model middleware and any extra model calls a
+	// middleware makes within it (such as summarization); zero means no
+	// limit beyond the run's own. A call that runs out ends the run with ReasonModelError
 	// and an error matching context.DeadlineExceeded.
 	ModelTimeout time.Duration
 	// MaxConcurrency bounds parallel tool calls; zero means
