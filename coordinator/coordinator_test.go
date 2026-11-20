@@ -30,9 +30,9 @@ func workers() []subagents.Subagent {
 	}
 }
 
-func newCoordinator(t *testing.T, model any, cfg Config, opts ...orchestrix.Option) *Coordinator {
+func newCoordinator(t *testing.T, model llm.Provider, cfg Config, opts ...orchestrix.Option) *Coordinator {
 	t.Helper()
-	c, err := New(model, cfg, opts...)
+	c, err := NewWithProvider(model, cfg, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,19 +209,19 @@ func TestCoordinatorOffersOnlyWorkers(t *testing.T) {
 }
 
 func TestCoordinatorRequiresWorkers(t *testing.T) {
-	if _, err := New(llmtest.New(), Config{}); err == nil {
+	if _, err := NewWithProvider(llmtest.New(), Config{}); err == nil {
 		t.Error("New without workers succeeded")
 	}
-	if _, err := New(llmtest.New(), Config{Workers: workers(), MaxConcurrency: -1}); err == nil {
+	if _, err := NewWithProvider(llmtest.New(), Config{Workers: workers(), MaxConcurrency: -1}); err == nil {
 		t.Error("New with a negative MaxConcurrency succeeded")
 	}
 	bad := worker("researcher", llmtest.New())
 	bad.Description = ""
-	if _, err := New(llmtest.New(), Config{Workers: []subagents.Subagent{bad}}); err == nil {
+	if _, err := NewWithProvider(llmtest.New(), Config{Workers: []subagents.Subagent{bad}}); err == nil {
 		t.Error("New with an invalid worker succeeded")
 	}
-	if _, err := New(42, Config{Workers: workers()}); err == nil {
-		t.Error("New with an invalid model succeeded")
+	if _, err := New("nocolon", Config{Workers: workers()}); err == nil {
+		t.Error("New with an invalid spec succeeded")
 	}
 }
 
@@ -252,9 +252,19 @@ func TestCoordinatorRejectsReplacedAsync(t *testing.T) {
 		"WithoutMiddleware": orchestrix.WithoutMiddleware("async"),
 		"WithMiddleware":    orchestrix.WithMiddleware(other),
 	} {
-		c, err := New(llmtest.New(), Config{Workers: workers()}, opt)
+		c, err := NewWithProvider(llmtest.New(), Config{Workers: workers()}, opt)
 		if err == nil || !strings.Contains(err.Error(), "must not replace or remove the async middleware") {
 			t.Errorf("%s: New = %v, %v; want the replaced-async error", name, c, err)
 		}
+	}
+}
+
+func TestNewWithProviderNil(t *testing.T) {
+	c, err := NewWithProvider(nil, Config{Workers: []subagents.Subagent{{Name: "w", Description: "d", SystemPrompt: "p"}}})
+	if err == nil || !strings.Contains(err.Error(), "provider must not be nil") {
+		t.Fatalf("err = %v, want nil-provider error", err)
+	}
+	if c != nil {
+		t.Error("coordinator returned alongside the error")
 	}
 }

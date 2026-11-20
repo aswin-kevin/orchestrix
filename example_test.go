@@ -359,7 +359,7 @@ func ExampleWithAsync() {
 
 func Example_coordinator() {
 	ctx := context.Background()
-	c, err := coordinator.New(model, coordinator.Config{
+	c, err := coordinator.NewWithProvider(model, coordinator.Config{
 		Workers: []subagents.Subagent{
 			{Name: "researcher", Description: "Finds facts on a topic and lists their sources.",
 				SystemPrompt: "You research a topic and report facts with sources."},

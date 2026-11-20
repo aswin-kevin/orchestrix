@@ -44,8 +44,7 @@ type Coordinator struct {
 	shutdown sync.Once
 }
 
-// New builds it with orchestrix.New (a spec string) or
-// orchestrix.NewWithProvider (an llm.Provider), as model is: the system prompt, subagents
+// New builds it with orchestrix.New(spec, …): the system prompt, subagents
 // with Workers only (no general-purpose, no fork), async with the same
 // Workers (MaxRunning = MaxConcurrency), then opts (later options win).
 // A worker leaving Middleware nil
@@ -63,7 +62,23 @@ type Coordinator struct {
 // adjustment (orchestrix.WithProfiles) whose ExcludeMiddleware names "async":
 // that removes start_task for the matching models when the agent is built, and
 // the coordinator is then left with the task tool only.
-func New(model any, cfg Config, opts ...orchestrix.Option) (*Coordinator, error) {
+func New(spec string, cfg Config, opts ...orchestrix.Option) (*Coordinator, error) {
+	return build(cfg, func(all []orchestrix.Option) (*agent.Agent, error) {
+		return orchestrix.New(spec, all...)
+	}, opts)
+}
+
+// NewWithProvider is New for a ready llm.Provider instead of a spec string.
+// A nil p is an error.
+func NewWithProvider(p llm.Provider, cfg Config, opts ...orchestrix.Option) (*Coordinator, error) {
+	return build(cfg, func(all []orchestrix.Option) (*agent.Agent, error) {
+		return orchestrix.NewWithProvider(p, all...)
+	}, opts)
+}
+
+// build is the shared body of New and NewWithProvider; newAgent builds the
+// agent from the coordinator's options followed by opts.
+func build(cfg Config, newAgent func([]orchestrix.Option) (*agent.Agent, error), opts []orchestrix.Option) (*Coordinator, error) {
 	if len(cfg.Workers) == 0 {
 		return nil, errors.New("coordinator: at least one worker is required")
 	}
@@ -96,15 +111,7 @@ func New(model any, cfg Config, opts ...orchestrix.Option) (*Coordinator, error)
 		orchestrix.WithAsync(tasks),
 	}
 	all := append(base, opts...)
-	var a *agent.Agent
-	switch m := model.(type) {
-	case string:
-		a, err = orchestrix.New(m, all...)
-	case llm.Provider:
-		a, err = orchestrix.NewWithProvider(m, all...)
-	default:
-		err = fmt.Errorf("model must be a model spec string or an llm.Provider, got %T", model)
-	}
+	a, err := newAgent(all)
 	if err == nil && !owns(a, tasks) {
 		err = errReplacedAsync
 	}

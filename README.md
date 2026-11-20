@@ -167,7 +167,7 @@ Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. 
 
 ## Model fallback
 
-`WithFallback` lists backup models behind the one given to `New` or `NewWithProvider`. Each backup is a model spec string or an `llm.Provider`:
+`WithFallback` lists backup models behind the one given to `New` or `NewWithProvider`. Each backup is a model spec string; for a backup that is an `llm.Provider`, use `WithFallbackConfig`:
 
 ```go
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
@@ -472,12 +472,12 @@ A background subagent's state is not merged into the parent's; files are shared 
 
 ## Coordinator
 
-`coordinator.New` builds a coordinator agent: it breaks a request into subtasks, delegates them to the workers you define and combines their results. Its system prompt describes that role, its `task` tool offers only the workers (for results it needs before planning further), and `start_task` runs them in parallel, at most `MaxConcurrency` (default 4) at once per thread. Run it with a thread ID: `start_task` cannot start workers in a run without one. A worker that leaves `Middleware` nil inherits the coordinator's stack. Further `orchestrix` options are passed after `Config`.
+`coordinator.New` (or `coordinator.NewWithProvider` for an `llm.Provider`) builds a coordinator agent: it breaks a request into subtasks, delegates them to the workers you define and combines their results. Its system prompt describes that role, its `task` tool offers only the workers (for results it needs before planning further), and `start_task` runs them in parallel, at most `MaxConcurrency` (default 4) at once per thread. Run it with a thread ID: `start_task` cannot start workers in a run without one. A worker that leaves `Middleware` nil inherits the coordinator's stack. Further `orchestrix` options are passed after `Config`.
 
 ```go
-// Imports omitted; model comes from surrounding code.
+// Imports omitted.
 ctx := context.Background()
-c, err := coordinator.New(model, coordinator.Config{
+c, err := coordinator.New("anthropic:claude-sonnet-4-5", coordinator.Config{
 	Workers: []subagents.Subagent{
 		{Name: "researcher", Description: "Finds facts on a topic and lists their sources.",
 			SystemPrompt: "You research a topic and report facts with sources."},

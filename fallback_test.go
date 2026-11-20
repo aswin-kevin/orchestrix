@@ -66,28 +66,17 @@ func TestWithFallbackSpecs(t *testing.T) {
 	}
 }
 
-func TestWithFallbackProviders(t *testing.T) {
-	backup := llmtest.New(llmtest.Turn{Text: "hi"})
-	got := runText(t, llmtest.New(overloaded()), orchestrix.WithFallback(backup),
-		orchestrix.WithoutMiddleware("filesystem", "planning", "subagents"))
-	if got != "hi" {
-		t.Errorf("answer = %q, want hi", got)
-	}
-}
-
 func TestWithFallbackRejects(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-fake-a")
 	ok := llmtest.New()
-	var nilProvider llm.Provider
 	cfg := llm.FallbackConfig{Entries: []llm.FallbackEntry{{Provider: llmtest.New()}}}
 	for name, opts := range map[string][]orchestrix.Option{
 		"invalid spec":  {orchestrix.WithFallback("nocolon")},
-		"nil provider":  {orchestrix.WithFallback(nilProvider)},
-		"nil":           {orchestrix.WithFallback(nil)},
-		"wrong type":    {orchestrix.WithFallback(42)},
+		"empty spec":    {orchestrix.WithFallback("")},
+		"nil provider":  {orchestrix.WithFallbackConfig(llm.FallbackConfig{Entries: []llm.FallbackEntry{{}}})},
 		"no backups":    {orchestrix.WithFallback()},
-		"both options":  {orchestrix.WithFallback(llmtest.New()), orchestrix.WithFallbackConfig(cfg)},
-		"both reversed": {orchestrix.WithFallbackConfig(cfg), orchestrix.WithFallback(llmtest.New())},
+		"both options":  {orchestrix.WithFallback("openai:y"), orchestrix.WithFallbackConfig(cfg)},
+		"both reversed": {orchestrix.WithFallbackConfig(cfg), orchestrix.WithFallback("openai:y")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := orchestrix.NewWithProvider(ok, opts...); err == nil {

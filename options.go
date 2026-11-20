@@ -50,7 +50,7 @@ type settings struct {
 
 	// fallbackSpecs and fallbackCfg are the WithFallback and
 	// WithFallbackConfig inputs, applied after the model is resolved.
-	fallbackSpecs []any
+	fallbackSpecs []string
 	fallbackSet   bool
 	fallbackCfg   *llm.FallbackConfig
 

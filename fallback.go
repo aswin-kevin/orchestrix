@@ -7,27 +7,23 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 )
 
-// WithFallback adds backup models behind the model given to New or NewWithProvider. When the
-// primary cannot serve (a rate limit, an overload, a server or network
-// error; see llm.DefaultShouldFallback), the call moves to the first backup,
-// then the next. Each backup is a model spec string such as
-// "openai:gpt-4o", parsed like New's own, or an llm.Provider. The agent
-// keeps the primary's model name and profile. See llm.NewFallback for the
-// switching rules, and WithFallbackConfig for control over the cool-down,
-// the trigger and a switch callback.
+// WithFallback adds backup models behind the model given to New or
+// NewWithProvider. When the primary cannot serve (a rate limit, an overload,
+// a server or network error; see llm.DefaultShouldFallback), the call moves to
+// the first backup, then the next. Each backup is a model spec string such as
+// "openai:gpt-4o", parsed like New's own. For a backup that is a ready
+// llm.Provider, use WithFallbackConfig. The agent keeps the primary's model
+// name and profile. See llm.NewFallback for the switching rules.
 //
 // The primary entry is named "primary"; a backup is named after its model
 // (with "-<index>" appended when two backups share a model). MaxTokens is
-// lowered to a backup's output limit when its model has a registered
-// profile. That works for spec strings and for providers built by llm.New;
-// a custom llm.Provider is not clamped, so use WithFallbackConfig and set
-// FallbackEntry.Model, or set WithMaxTokens to a limit every backup accepts.
+// lowered to a backup's output limit when its model has a registered profile.
 //
 // New fails when a backup is invalid, when none is given, or when
 // WithFallbackConfig is also used.
-func WithFallback(models ...any) Option {
+func WithFallback(specs ...string) Option {
 	return func(s *settings) {
-		s.fallbackSpecs = append(s.fallbackSpecs, models...)
+		s.fallbackSpecs = append(s.fallbackSpecs, specs...)
 		s.fallbackSet = true
 	}
 }
@@ -87,25 +83,15 @@ func (s *settings) applyFallback(named bool) error {
 	return nil
 }
 
-// backupEntry turns a WithFallback argument into a chain entry.
-func backupEntry(spec any) (llm.FallbackEntry, error) {
-	switch m := spec.(type) {
-	case string:
-		cfg, err := llm.ParseModel(m)
-		if err != nil {
-			return llm.FallbackEntry{}, err
-		}
-		p, err := llm.New(cfg)
-		if err != nil {
-			return llm.FallbackEntry{}, err
-		}
-		return llm.FallbackEntry{Provider: p, Model: cfg.Model}, nil
-	case llm.Provider:
-		if m == nil {
-			return llm.FallbackEntry{}, errors.New("backup must not be a nil llm.Provider")
-		}
-		return llm.FallbackEntry{Provider: m}, nil
-	default:
-		return llm.FallbackEntry{}, fmt.Errorf("backup must be a model spec string or an llm.Provider, got %T", spec)
+// backupEntry turns a WithFallback spec into a chain entry.
+func backupEntry(spec string) (llm.FallbackEntry, error) {
+	cfg, err := llm.ParseModel(spec)
+	if err != nil {
+		return llm.FallbackEntry{}, err
 	}
+	p, err := llm.New(cfg)
+	if err != nil {
+		return llm.FallbackEntry{}, err
+	}
+	return llm.FallbackEntry{Provider: p, Model: cfg.Model}, nil
 }

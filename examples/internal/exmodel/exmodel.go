@@ -9,7 +9,7 @@
 //
 // Copying an example out of this repository: this package and the termsafe
 // package it uses are internal, so they cannot be imported from another
-// module. Replace exmodel.Model(...) and exmodel.New(model, ...) with
+// module. Replace exmodel.Model(...), exmodel.New(model, ...) and exmodel.Coordinator(model, ...) with
 // orchestrix.New("anthropic:claude-sonnet-4-5", ...) or
 // orchestrix.NewWithProvider(provider, ...), drop exmodel.Sub and
 // exmodel.SubHeld (a subagent without a Provider uses its parent's model),
@@ -28,6 +28,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/coordinator"
 	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
@@ -88,6 +89,18 @@ func New(model any, opts ...orchestrix.Option) (*agent.Agent, error) {
 		return nil, fmt.Errorf("exmodel: model must be a spec string or an llm.Provider, got %T", model)
 	}
 	return orchestrix.NewWithProvider(p, opts...)
+}
+
+// Coordinator is New for coordinator.New and coordinator.NewWithProvider.
+func Coordinator(model any, cfg coordinator.Config, opts ...orchestrix.Option) (*coordinator.Coordinator, error) {
+	if spec, ok := model.(string); ok {
+		return coordinator.New(spec, cfg, opts...)
+	}
+	p, ok := model.(llm.Provider)
+	if !ok {
+		return nil, fmt.Errorf("exmodel: model must be a spec string or an llm.Provider, got %T", model)
+	}
+	return coordinator.NewWithProvider(p, cfg, opts...)
 }
 
 // Sub returns nil when live (a subagent then inherits the parent's model),

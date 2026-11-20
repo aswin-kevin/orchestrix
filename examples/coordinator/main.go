@@ -72,7 +72,7 @@ func delegate(ctx context.Context, w io.Writer) error {
 		// ...and combines their results.
 		llmtest.Turn{Text: "Keep the lights on when the grid goes dark: a home battery stores 5 to 15 kWh and lasts about ten years."},
 	)
-	c, err := coordinator.New(model, coordinator.Config{Workers: workers, MaxConcurrency: 2},
+	c, err := exmodel.Coordinator(model, coordinator.Config{Workers: workers, MaxConcurrency: 2},
 		orchestrix.WithMaxTurns(20))
 	if err != nil {
 		return err
