@@ -685,7 +685,33 @@ for ev, err := range th.Prompt(ctx, "Continue where we left off.") {
 
 Saves are conditional. Every checkpoint has a version, and a save only succeeds over the version the run loaded, so two handles on the same ID (in one process or several) never overwrite each other: the run that finds the thread changed ends with `checkpoint_error` wrapping `checkpoint.ErrConflict`, and you reopen the thread with `Agent.Thread` to continue from what the other run saved. A run started from an outdated version ends before its first model call. A checkpointer that also implements `checkpoint.Leaser` (both built-in ones do, within one process) keeps two runs of one thread from overlapping at all: the second ends at once with reason `busy`. If you drive `Agent.Run` yourself instead of a `Thread`, pass `Final.Version` back as `Input.Version`.
 
-`checkpoint/file` is for one process per directory. Workers on several machines need a shared store; implement `checkpoint.Checkpointer` on a database and run `checkpointtest.Run` against it. A checkpointed workspace is stored whole in the thread's state, so for large workspaces prefer a disk or shell backend (which `WithCheckpointer` leaves alone).
+`checkpoint/file` is for one process per directory. Workers on several machines need a shared store. The separate module `orxpg` stores checkpoints and kv data in PostgreSQL (with `pgx/v5`, kept out of the core module):
+
+```go
+// Imports omitted; model comes from surrounding code.
+ctx := context.Background()
+pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+if err != nil {
+	log.Fatal(err)
+}
+if err := orxpg.Migrate(ctx, pool); err != nil { // CREATE TABLE IF NOT EXISTS
+	log.Fatal(err)
+}
+cp, err := orxpg.NewCheckpointer(pool, "acme") // bound to tenant "acme"
+if err != nil {
+	log.Fatal(err)
+}
+store, err := orxpg.NewStore(pool, "acme") // a kv.Store for kv.New
+if err != nil {
+	log.Fatal(err)
+}
+a, err := orchestrix.New(model, orchestrix.WithCheckpointer(cp))
+_, _, _ = a, store, err
+```
+
+`orxpg.Checkpointer` implements `checkpoint.Leaser` across every process that shares the database, so two workers never run one thread at once. Each save is one conditional statement, and state is stored as the exact bytes of `State.MarshalJSON`. The tenant id is part of every key and query; when tenants reach a shared database with their own credentials, add row-level security too. `orxpg.Schema` returns the DDL for migration tools. For another database, implement `checkpoint.Checkpointer` (and `kv.Store`) and run `checkpointtest.Run` (and `kvtest.Run`) against it.
+
+A checkpointed workspace is stored whole in the thread's state, so for large workspaces prefer a disk or shell backend (which `WithCheckpointer` leaves alone).
 
 ## Shell and background tasks
 
