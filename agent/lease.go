@@ -37,6 +37,9 @@ var leaseCallTimeout = func(ttl time.Duration) time.Duration {
 // acquireLease takes the thread's lease when the run is persisted and its
 // Checkpointer is a Leaser. It returns the Final of a run that cannot start
 // because another run holds the lease (or taking it failed).
+// The call is bounded by leaseCallTimeout: max(ttl/2, 5s). A timed-out
+// Acquire may still have taken the lease in the store, which then holds the
+// thread until the TTL expires (later runs see ReasonBusy until then).
 func (r *run) acquireLease() *Final {
 	leaser, ok := r.store.(checkpoint.Leaser)
 	if !ok {

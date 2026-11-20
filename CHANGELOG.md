@@ -42,7 +42,7 @@ A hardening pass ahead of v1.0.0: security fixes in the permission parser, bound
 
 ### Added
 
-- `agent.Agent.Close(ctx)`: one shutdown entry point that drains background work, then closes middleware, the backend and the checkpointer that implement the new `agent.Closer`, then `agent.Config.OnClose` functions. Runs started afterwards end with `ReasonInternalError` wrapping `agent.ErrClosed`. The new `agent.Drainer` interface (`Drain(ctx) error`) is implemented by `middleware/async`; `mcp`, `middleware/tasks` and `middleware/async` implement `Closer`.
+- `agent.Agent.Close(ctx)`: one shutdown entry point that drains background work, then closes middleware that implements the new `agent.Closer`, the backend and the checkpointer that implement it (or else `io.Closer`), then `agent.Config.OnClose` functions. A panicking drain or close function is recovered, joined into the error as a `*agent.PanicError` and logged by type, and the rest still run. Runs started afterwards end with `ReasonInternalError` wrapping `agent.ErrClosed`. The new `agent.Drainer` interface (`Drain(ctx) error`) is implemented by `middleware/async`; `mcp`, `middleware/tasks` and `middleware/async` implement `Closer`.
 - `agent.Config.MaxTotalTokens` and `orchestrix.WithMaxTotalTokens`: a hard token cap per run, ending it with the new `agent.ReasonTokenLimit`.
 - `agent.Config.ModelTimeout` and `orchestrix.WithModelTimeout`: a bound on each model call, retries included.
 - `llm.Config.StreamIdleTimeout`, `llm.DefaultStreamIdleTimeout` and `llm.ErrStreamIdle`.

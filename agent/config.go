@@ -75,7 +75,8 @@ type Config struct {
 	Middleware []Middleware
 
 	// Backend is the workspace tools operate on. BackendFactory, when set,
-	// takes precedence and builds one backend per thread.
+	// takes precedence and builds one backend per thread. Agent.Close
+	// closes it when it implements Closer, or else io.Closer.
 	Backend backend.Backend
 	// BackendFactory builds the backend for a thread from its ThreadID; when
 	// set it takes precedence over Backend.
@@ -109,11 +110,16 @@ type Config struct {
 	// run takes the thread's lease before the BeforeAgent hooks, renews it
 	// every LeaseTTL/3 and gives it up when it ends. A lease held by another
 	// run ends the run at once with ReasonBusy, and a lease lost while the
-	// run is going fails its next save.
+	// run is going fails its next save. Agent.Close closes it when it
+	// implements Closer, or else io.Closer.
 	Checkpointer checkpoint.Checkpointer
 	// LeaseTTL is how long a run's lease lasts without renewal; zero means
 	// DefaultLeaseTTL. It applies only when Checkpointer implements
-	// checkpoint.Leaser.
+	// checkpoint.Leaser. Each Acquire, renew and release call is bounded by
+	// max(LeaseTTL/2, 5s). An Acquire that times out ends the run with
+	// ReasonCheckpointError, but the store may still have granted the lease:
+	// it then holds the thread until LeaseTTL expires, and later runs end
+	// with ReasonBusy until then.
 	LeaseTTL time.Duration
 
 	// OnClose functions release resources the agent does not otherwise own,
@@ -125,7 +131,8 @@ type Config struct {
 	// errors returned while closing (Agent.Close), lease release and renew
 	// errors, recovered panics in RunWrapper end
 	// functions and lease calls, dynamic tools that were skipped, and failed
-	// checkpoint saves. A panic that ends a run is logged at Error. Records
+	// checkpoint saves. A panic that ends a run, or one recovered from a
+	// drain or close function in Agent.Close, is logged at Error. Records
 	// carry thread_id and agent attributes. The loop adds no message or
 	// tool-input attributes and logs panic values by type only (panic_type
 	// and stack); err attributes carry the error text of stores, providers

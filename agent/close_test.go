@@ -222,3 +222,99 @@ func TestCloseConcurrentWithRun(t *testing.T) {
 		t.Errorf("closed %v, want a once", got)
 	}
 }
+
+// panickingMiddleware panics in Drain or Close.
+type panickingMiddleware struct {
+	name    string
+	inDrain bool
+}
+
+func (m panickingMiddleware) Name() string { return m.name }
+
+func (m panickingMiddleware) Drain(context.Context) error {
+	if m.inDrain {
+		panic("secret drain value")
+	}
+	return nil
+}
+
+func (m panickingMiddleware) Close(context.Context) error {
+	panic(errors.New("secret close value"))
+}
+
+func TestAgentCloseRecoversPanics(t *testing.T) {
+	log := &closeLog{}
+	var buf bytes.Buffer
+	a := mustNew(t, Config{
+		Provider: llmtest.New(),
+		Middleware: []Middleware{
+			&closingMiddleware{name: "first", log: log},
+			panickingMiddleware{name: "boom", inDrain: true},
+			&closingMiddleware{name: "last", log: log},
+		},
+		Backend: closingBackend{Backend: memory.New(), log: log},
+		OnClose: []func(context.Context) error{
+			func(context.Context) error { log.add("hook1"); return nil },
+			func(context.Context) error { panic("secret hook value") },
+		},
+		Logger: slog.New(slog.NewTextHandler(&buf, nil)),
+	})
+	err := a.Close(context.Background())
+	var perr *PanicError
+	if !errors.As(err, &perr) {
+		t.Fatalf("Close = %v, want a *PanicError joined in", err)
+	}
+	// Drain and Close of boom and the second hook panicked: three panics.
+	if n := strings.Count(err.Error(), "agent: panic:"); n != 3 {
+		t.Errorf("Close = %v, want 3 panics joined", err)
+	}
+	want := []string{"last", "first", "backend", "hook1"}
+	if got := log.list(); !slices.Equal(got, want) {
+		t.Errorf("closed %v, want %v: a panic must not stop the rest", got, want)
+	}
+	out := buf.String()
+	if strings.Contains(out, "secret") {
+		t.Errorf("log = %q, want panic values logged by type only", out)
+	}
+	if !strings.Contains(out, "panic_type=string") || !strings.Contains(out, "panic_type=*errors.errorString") || !strings.Contains(out, "middleware=boom") || !strings.Contains(out, "resource=on_close") {
+		t.Errorf("log = %q, want the panics logged by type with what panicked", out)
+	}
+}
+
+// ioClosingBackend and ioClosingCheckpointer implement io.Closer only.
+type ioClosingBackend struct {
+	*memory.Backend
+	log *closeLog
+}
+
+func (b ioClosingBackend) Close() error {
+	b.log.add("io backend")
+	return nil
+}
+
+type ioClosingCheckpointer struct {
+	*cpmemory.Checkpointer
+	log *closeLog
+	err error
+}
+
+func (c ioClosingCheckpointer) Close() error {
+	c.log.add("io checkpointer")
+	return c.err
+}
+
+func TestAgentCloseClosesIOClosers(t *testing.T) {
+	log := &closeLog{}
+	errCP := errors.New("checkpointer failed")
+	a := mustNew(t, Config{
+		Provider:     llmtest.New(),
+		Backend:      ioClosingBackend{Backend: memory.New(), log: log},
+		Checkpointer: ioClosingCheckpointer{Checkpointer: cpmemory.New(), log: log, err: errCP},
+	})
+	if err := a.Close(context.Background()); !errors.Is(err, errCP) {
+		t.Fatalf("Close = %v, want it to wrap %v", err, errCP)
+	}
+	if got, want := log.list(), []string{"io backend", "io checkpointer"}; !slices.Equal(got, want) {
+		t.Errorf("closed %v, want %v", got, want)
+	}
+}

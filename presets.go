@@ -40,9 +40,9 @@ type shellSpec struct {
 // WithCheckpointer saves every thread's state with c after each state change,
 // so a conversation can be continued in another process with Agent.Thread.
 // With the default workspace, the thread's files are saved along with it.
-// Agent.Close closes c when it implements agent.Closer; a checkpointer on a
-// connection pool the host passed in (orxpg, for instance) leaves the pool
-// to the host.
+// Agent.Close closes c when it implements agent.Closer, or else io.Closer;
+// a checkpointer on a connection pool the host passed in (orxpg, for
+// instance) leaves the pool to the host.
 func WithCheckpointer(c checkpoint.Checkpointer) Option {
 	return func(s *settings) { s.cfg.Checkpointer = c }
 }

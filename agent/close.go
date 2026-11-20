@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
+	"runtime/debug"
 	"time"
 )
 
@@ -32,12 +35,15 @@ var ErrClosed = errors.New("agent: closed")
 // stops its own work (background agents, say), which may still use the
 // resources closed next. Then it closes: every middleware of
 // Config.Middleware that implements Closer, in reverse stack order, then
-// Config.Backend and Config.Checkpointer when they implement Closer, then the
-// Config.OnClose functions in reverse order. Both phases include the
-// middleware a MiddlewareExcluder left out of the run's stack. Every one is
-// called even when an earlier one fails; the errors are joined into the result and each is
-// logged at Warn. A backend built by Config.BackendFactory is not closed:
-// release those with an OnClose function.
+// Config.Backend and Config.Checkpointer when they implement Closer (or,
+// failing that, io.Closer, whose Close takes no ctx and so is not bounded by
+// it), then the Config.OnClose functions in reverse order. Both phases
+// include the middleware a MiddlewareExcluder left out of the run's stack.
+// Every one is called even when an earlier one fails or panics: the errors
+// are joined into the result and each is logged at Warn; a panic is
+// recovered, joined as a *PanicError and logged at Error by type and stack
+// only. A backend built by Config.BackendFactory is not closed: release
+// those with an OnClose function.
 //
 // Close is idempotent and safe for concurrent use: the first call does the
 // work, and every call returns its result once it is done. That result is
@@ -68,36 +74,62 @@ func (a *Agent) Close(ctx context.Context) error {
 // and joins the errors.
 func (a *Agent) closeResources(ctx context.Context) error {
 	var errs []error
-	report := func(kind, name string, err error) {
-		if err == nil {
-			return
+	call := func(kind, name string, fn func(context.Context) error) {
+		if err := a.closeStep(ctx, kind, name, fn); err != nil {
+			errs = append(errs, err)
 		}
-		a.logger.Warn("agent: close failed", "agent", a.cfg.Name, kind, name, "err", err)
-		errs = append(errs, err)
 	}
 	mws := a.cfg.Middleware
 	for _, mw := range mws {
 		if d, ok := mw.(Drainer); ok {
-			report("middleware", mw.Name(), d.Drain(ctx))
+			call("middleware", mw.Name(), d.Drain)
 		}
 	}
 	for i := len(mws) - 1; i >= 0; i-- {
 		if c, ok := mws[i].(Closer); ok {
-			report("middleware", mws[i].Name(), c.Close(ctx))
+			call("middleware", mws[i].Name(), c.Close)
 		}
 	}
-	if c, ok := a.cfg.Backend.(Closer); ok {
-		report("resource", "backend", c.Close(ctx))
+	if fn := resourceCloser(a.cfg.Backend); fn != nil {
+		call("resource", "backend", fn)
 	}
-	if c, ok := a.cfg.Checkpointer.(Closer); ok {
-		report("resource", "checkpointer", c.Close(ctx))
+	if fn := resourceCloser(a.cfg.Checkpointer); fn != nil {
+		call("resource", "checkpointer", fn)
 	}
 	for i := len(a.cfg.OnClose) - 1; i >= 0; i-- {
 		if fn := a.cfg.OnClose[i]; fn != nil {
-			report("resource", "on_close", fn(ctx))
+			call("resource", "on_close", fn)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// resourceCloser returns how Close releases v: through Closer, or through
+// io.Closer when v implements only that; nil when it implements neither.
+func resourceCloser(v any) func(context.Context) error {
+	switch c := v.(type) {
+	case Closer:
+		return c.Close
+	case io.Closer:
+		return func(context.Context) error { return c.Close() }
+	}
+	return nil
+}
+
+// closeStep runs one drain or close function of Close and logs its error,
+// recovering a panic as a *PanicError logged by type and stack only.
+func (a *Agent) closeStep(ctx context.Context, kind, name string, fn func(context.Context) error) (err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			perr := &PanicError{Value: v, Stack: debug.Stack()}
+			logPanic(a.logger.With("agent", a.cfg.Name, kind, name), slog.LevelError, "agent: close panicked", v, perr.Stack)
+			err = perr
+		}
+	}()
+	if err = fn(ctx); err != nil {
+		a.logger.Warn("agent: close failed", "agent", a.cfg.Name, kind, name, "err", err)
+	}
+	return err
 }
 
 // closedEvent is the lone KindFinal of a run started after Close.
