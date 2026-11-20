@@ -400,9 +400,16 @@ func (b *Backend) MultiEdit(_ context.Context, p string, edits []backend.EditOp)
 	return backend.EditResult{Occurrences: count}, nil
 }
 
+// tempCreated, when set, runs on each temporary file replaceFile creates,
+// right after creating it. Tests use it to inspect the file mid-rewrite.
+var tempCreated func(*os.File)
+
 // replaceFile atomically replaces the file at rel (relative to the root) with
 // content: it writes a temporary file next to it and renames that over the
 // target, so readers never see a partial file. An existing file keeps its mode.
+// The temporary file is created with that mode, so the new content is never
+// readable more widely than the file it replaces; the umask may narrow it at
+// creation, and the Chmod before the rename restores the exact bits.
 func (b *Backend) replaceFile(rel string, content []byte) error {
 	mode := newFileMode
 	info, err := b.fsRoot.Stat(rel)
@@ -421,9 +428,12 @@ func (b *Backend) replaceFile(rel string, content []byte) error {
 		return err
 	}
 	tmpName := filepath.Join(dir, tempPrefix+rand.Text())
-	tmp, err := b.fsRoot.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, newFileMode)
+	tmp, err := b.fsRoot.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return err
+	}
+	if tempCreated != nil {
+		tempCreated(tmp)
 	}
 	committed := false
 	defer func() {

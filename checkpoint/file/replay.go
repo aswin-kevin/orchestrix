@@ -15,6 +15,7 @@ type replayed struct {
 	gen     string    // generation of the last good record
 	updated time.Time // time of the last good record
 	deltas  int       // delta records since the last snapshot
+	records int       // complete records in the file
 	goodEnd int64     // byte offset just past the last good record
 	size    int64     // file size; larger than goodEnd means a torn tail
 }
@@ -69,7 +70,7 @@ func foldFromLastSnapshot(recs []record, goodEnd, size int64) (*replayed, error)
 	for start > 0 && recs[start].Kind != kindSnapshot {
 		start--
 	}
-	out := &replayed{goodEnd: goodEnd, size: size}
+	out := &replayed{goodEnd: goodEnd, size: size, records: len(recs)}
 	for _, rec := range recs[start:] {
 		img, err := rec.apply(out.img)
 		if err != nil {

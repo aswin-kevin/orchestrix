@@ -15,6 +15,11 @@
 // and every SnapshotEvery-th delta after a snapshot write a snapshot, which
 // bounds replay work.
 //
+// The file does not grow forever: a Save that would take it past
+// compactAfter records instead replaces it, atomically, with a single
+// snapshot of the new state. The snapshot continues the version sequence,
+// so versions issued before the compaction stay stale.
+//
 // # Durability
 //
 // A record is written with a single Write on an O_APPEND handle and, unless
@@ -23,9 +28,11 @@
 // Save returns nil the checkpoint survives process and OS crashes (subject
 // to the storage device honoring fsync). A crash mid-write can leave a torn
 // final line, one without its newline: readers ignore it, and the next Save
-// truncates it away before appending. A newline-terminated line that does not
-// parse, even the last one, cannot come from a crash and is reported as
-// corruption.
+// truncates it away before appending. A newline-terminated line that does
+// not parse, even the last one, cannot come from a crash and is reported as
+// corruption. A compaction writes a temporary file in the same directory,
+// fsyncs it and renames it over the thread file, so a reader sees either the
+// old file or the new one, never a mix.
 //
 // # Versions
 //
@@ -73,6 +80,10 @@ const (
 	// the next snapshot is written.
 	DefaultSnapshotEvery = 50
 
+	// compactAfter is the most records a thread file holds; the Save that
+	// would add one more rewrites the file as a single snapshot instead.
+	compactAfter = 64
+
 	fileSuffix  = ".jsonl"
 	nameHexLen  = 32
 	dirPerm     = 0o700
@@ -103,11 +114,12 @@ func WithSync(sync bool) Option {
 // threadState is what Save needs to diff against: the last state written for
 // a thread and its position in the snapshot cycle.
 type threadState struct {
-	img    *image
-	seq    int
-	gen    string
-	deltas int
-	size   int64 // file size after the last write; a different size on disk means someone else touched the file
+	img     *image
+	seq     int
+	gen     string
+	deltas  int
+	records int   // complete records in the file
+	size    int64 // file size after the last write; a different size on disk means someone else touched the file
 }
 
 // Checkpointer stores threads as JSONL files in one directory. Create it with
@@ -203,9 +215,10 @@ func (c *Checkpointer) save(threadID string, next *image, expected checkpoint.Ve
 	now := time.Now().UTC()
 
 	var (
-		rec   record
-		fresh = prev == nil
-		ts    = &threadState{img: next, seq: 1}
+		rec     record
+		fresh   = prev == nil
+		compact = !fresh && prev.records >= compactAfter
+		ts      = &threadState{img: next, seq: 1, records: 1}
 	)
 	if fresh {
 		ts.gen = revision.NewGeneration()
@@ -213,7 +226,7 @@ func (c *Checkpointer) save(threadID string, next *image, expected checkpoint.Ve
 		ts.gen = prev.gen
 	}
 	switch {
-	case fresh || prev.deltas >= c.snapshotEvery:
+	case fresh || compact || prev.deltas >= c.snapshotEvery:
 		if !fresh {
 			ts.seq = prev.seq + 1
 		}
@@ -224,12 +237,20 @@ func (c *Checkpointer) save(threadID string, next *image, expected checkpoint.Ve
 		ts.seq, ts.deltas = prev.seq+1, prev.deltas+1
 		rec = deltaRecord(ts.seq, now, threadID, ts.gen, prev.img, next)
 	}
+	if compact {
+		if ts.size, err = c.rewriteFile(path, rec); err != nil {
+			return "", err
+		}
+		c.threads[threadID] = ts
+		return ts.version(), nil
+	}
 	written, err := c.appendRecord(path, rec, fresh)
 	if err != nil {
 		return "", err
 	}
 	if !fresh {
 		written += prev.size
+		ts.records = prev.records + 1
 	}
 	ts.size = written
 	c.threads[threadID] = ts
@@ -265,7 +286,7 @@ func (c *Checkpointer) prime(threadID, path string) (*threadState, error) {
 			return nil, err
 		}
 	}
-	ts := &threadState{img: r.img, seq: r.seq, gen: r.gen, deltas: r.deltas, size: r.goodEnd}
+	ts := &threadState{img: r.img, seq: r.seq, gen: r.gen, deltas: r.deltas, records: r.records, size: r.goodEnd}
 	c.threads[threadID] = ts
 	return ts, nil
 }
@@ -288,11 +309,10 @@ func truncateFile(path string, size int64, sync bool) error {
 // unusable leftovers, and the directory is synced so the file itself is
 // durable. It returns the number of bytes appended.
 func (c *Checkpointer) appendRecord(path string, rec record, fresh bool) (int64, error) {
-	line, err := json.Marshal(rec)
+	line, err := encodeLine(rec)
 	if err != nil {
-		return 0, fmt.Errorf("encode record: %w", err)
+		return 0, err
 	}
-	line = append(line, '\n')
 
 	flags := appendFlags
 	if fresh {
@@ -315,6 +335,51 @@ func (c *Checkpointer) appendRecord(path string, rec record, fresh bool) (int64,
 		}
 	}
 	return int64(len(line)), nil
+}
+
+// rewriteFile replaces the file at path with one holding only rec: it writes
+// a temporary file in the same directory, syncs it and renames it over path,
+// so readers see the old file or the new one, never a partial one. It returns
+// the new file's size.
+func (c *Checkpointer) rewriteFile(path string, rec record) (int64, error) {
+	line, err := encodeLine(rec)
+	if err != nil {
+		return 0, err
+	}
+	tmp, err := os.CreateTemp(c.dir, filepath.Base(path)+".tmp-*") // mode 0o600, never matches fileSuffix
+	if err != nil {
+		return 0, err
+	}
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+	if _, err := tmp.Write(line); err != nil {
+		tmp.Close()
+		return 0, err
+	}
+	if err := finish(tmp, c.sync); err != nil {
+		return 0, err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return 0, err
+	}
+	renamed = true
+	if err := c.syncDir(); err != nil {
+		return 0, err
+	}
+	return int64(len(line)), nil
+}
+
+// encodeLine returns rec as one JSONL line, newline included.
+func encodeLine(rec record) ([]byte, error) {
+	line, err := json.Marshal(rec)
+	if err != nil {
+		return nil, fmt.Errorf("encode record: %w", err)
+	}
+	return append(line, '\n'), nil
 }
 
 // finish optionally fsyncs f and closes it, reporting the first error.

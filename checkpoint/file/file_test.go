@@ -441,3 +441,66 @@ func TestFileSeesSaveByAnotherCheckpointer(t *testing.T) {
 		t.Fatalf("stale save through another Checkpointer: got %v, want ErrConflict", err)
 	}
 }
+
+func TestThreadFileCompacts(t *testing.T) {
+	dir := t.TempDir()
+	c := newCP(t, dir)
+	s := state.New()
+	var versions []checkpoint.Version
+	var v checkpoint.Version
+	for i := range 100 {
+		evolve(s, i)
+		next, err := c.Save(ctx, "t", s, v)
+		if err != nil {
+			t.Fatalf("save %d: %v", i, err)
+		}
+		v = next
+		versions = append(versions, v)
+		if n := len(readLines(t, onlyFile(t, dir))); n > 64 {
+			t.Fatalf("after save %d the file has %d records, want at most 64", i, n)
+		}
+	}
+	seen := map[checkpoint.Version]bool{}
+	for _, v := range versions {
+		if seen[v] {
+			t.Fatalf("version %q repeats across compaction", v)
+		}
+		seen[v] = true
+	}
+	if matches, _ := filepath.Glob(filepath.Join(dir, "*")); len(matches) != 1 {
+		t.Fatalf("compaction left extra files: %v", matches)
+	}
+
+	for _, cp := range []*file.Checkpointer{c, newCP(t, dir)} {
+		got, gotV, err := cp.Load(ctx, "t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotV != v {
+			t.Errorf("Load version = %q, want %q", gotV, v)
+		}
+		if a, b := stateJSON(t, got), stateJSON(t, s); a != b {
+			t.Errorf("Load after compaction:\n got %s\nwant %s", a, b)
+		}
+		for _, stale := range []checkpoint.Version{versions[0], versions[50], versions[98]} {
+			if _, err := cp.Save(ctx, "t", s, stale); !errors.Is(err, checkpoint.ErrConflict) {
+				t.Errorf("save at stale version %q: got %v, want ErrConflict", stale, err)
+			}
+		}
+	}
+	infos, err := c.List(ctx)
+	if err != nil || len(infos) != 1 || infos[0].Saves != 100 || infos[0].Version != v {
+		t.Fatalf("List = %+v, %v; want one thread with 100 saves at %q", infos, err, v)
+	}
+
+	// Saving continues the sequence, and a torn tail after compaction is
+	// still cut away.
+	appendRaw(t, onlyFile(t, dir), `{"seq":101,"kind":"del`)
+	evolve(s, 100)
+	if _, err := newCP(t, dir).Save(ctx, "t", s, v); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stateJSON(t, load(t, newCP(t, dir), "t")), stateJSON(t, s); got != want {
+		t.Fatalf("after torn tail:\n got %s\nwant %s", got, want)
+	}
+}
