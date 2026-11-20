@@ -3,6 +3,7 @@ package permission
 import (
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // Evaluate decides whether req may run under pc. It applies, in order, the
@@ -136,18 +137,30 @@ func (m matcher) unanalyzed(rules Rules) bool {
 	})
 }
 
-// first returns the first rule that matches the request. A tool rule's
-// pattern matches a shell subject as a whole or any one of its commands, so
-// "ls && rm x" cannot slip past a deny rule for rm.
+// first returns the first deny or ask rule that matches the request. A tool
+// rule's pattern matches a shell subject as a whole or any one of its
+// commands, so "ls && rm x" cannot slip past a deny rule for rm. Commands
+// also match ignoring case, since a case-insensitive file system runs rm
+// for "RM x". Allow rules never fold case (see allowMatch).
 func (m matcher) first(rules []Rule) (Rule, bool) {
 	for _, r := range rules {
-		if r.Matches(m.req) || slices.ContainsFunc(m.segments, func(seg string) bool {
-			return r.matchesCommand(m.req.Tool, seg)
+		folded := r
+		folded.Pattern = strings.ToLower(r.Pattern)
+		if m.matches(r) || slices.ContainsFunc(m.segments, func(seg string) bool {
+			return folded.matchesCommand(m.req.Tool, strings.ToLower(seg))
 		}) {
 			return r, true
 		}
 	}
 	return Rule{}, false
+}
+
+// matches reports whether r matches the request exactly, as a whole or, for
+// a shell subject, any one of its commands.
+func (m matcher) matches(r Rule) bool {
+	return r.Matches(m.req) || slices.ContainsFunc(m.segments, func(seg string) bool {
+		return r.matchesCommand(m.req.Tool, seg)
+	})
 }
 
 // allowMatch reports whether allow rules permit the request. For a shell
@@ -157,8 +170,7 @@ func (m matcher) first(rules []Rule) (Rule, bool) {
 // allowed by execute(git:*). Other rules match as usual.
 func (m matcher) allowMatch(rules []Rule) bool {
 	if !m.req.Shell {
-		_, ok := m.first(rules)
-		return ok
+		return slices.ContainsFunc(rules, m.matches)
 	}
 	var patterned []Rule
 	for _, r := range rules {

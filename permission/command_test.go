@@ -737,3 +737,117 @@ func TestSSHOptionSeparators(t *testing.T) {
 		}
 	}
 }
+
+func TestDenyEvasion(t *testing.T) {
+	shell := func(cmd string) Request { return Request{Tool: "execute", Subject: cmd, Shell: true} }
+	denyRm := Context{Mode: ModeBypass, Rules: Rules{Deny: []Rule{mustRule(t, "execute(rm:*)")}}}
+	for _, cmd := range []string{
+		"A+=1 rm -rf x",
+		"A[0]=1 rm -rf x",
+		"tcsh -c 'rm -rf x'",
+		"csh -c 'rm -rf x'",
+		"ash -c 'rm -rf x'",
+		"mksh -c 'rm -rf x'",
+		"rbash -c 'rm -rf x'",
+		"caffeinate rm -rf x",
+		"arch -arm64 rm -rf x",
+		"taskset 1 rm -rf x",
+		"setarch x86_64 rm -rf x",
+		"chrt 1 rm -rf x",
+		"systemd-run rm -rf x",
+		"pkexec rm -rf x",
+		"RM -rf x",
+		"Rm -rf x",
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			if got := Evaluate(shell(cmd), denyRm); got.Behavior == Allow {
+				t.Fatalf("Evaluate(%q) = %+v, want not Allow", cmd, got)
+			}
+		})
+	}
+}
+
+func TestAssignmentForms(t *testing.T) {
+	for _, tt := range []struct {
+		text string
+		want bool
+	}{
+		{"A=1", true},
+		{"A+=1", true},
+		{"A[0]=1", true},
+		{"A[0]+=1", true},
+		{"A[x y]=1", true},
+		{"+=1", false},
+		{"A+", false},
+		{"1A=1", false},
+		{"A]=1", false},
+		{"A[=1", false},
+	} {
+		if got := isAssignment(word{text: tt.text, quotedAt: notQuoted}); got != tt.want {
+			t.Errorf("isAssignment(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
+// Bash evaluates array subscripts, substring offsets, $[...], let and the
+// operands of [[ -eq ]] (and the names test -v checks) as arithmetic, and
+// arithmetic runs a $(...) hidden in quotes or in a variable's value.
+func TestArithmeticHidesCommands(t *testing.T) {
+	shell := func(cmd string) Request { return Request{Tool: "execute", Subject: cmd, Shell: true} }
+	for _, cmd := range []string{
+		`echo ${a['b[$(touch pwned1)]']}`,
+		`echo ${a["b[\$(touch p7)]"]}`,
+		`[[ 'a[$(touch pwned3)]' -eq 0 ]]`,
+		`[[ 'a[$(touch p)]' -ne 0 ]]`,
+		`[[ 'a[$(touch p)]' -lt 1 ]]`,
+		`[[ 'a[$(touch p)]' -le 1 ]]`,
+		`[[ 'a[$(touch p)]' -gt 1 ]]`,
+		`[[ 'a[$(touch p)]' -ge 1 ]]`,
+		`[[ -v 'PIPESTATUS[$(touch p)]' ]]`,
+		`[[ 1 == 1 && echo -ge _ ]]`,
+		`[[ 1 == 1 || echo -ge _ ]]`,
+		`echo ${x:a[$(touch p)]}`,
+		`echo ${x:'a[$(touch p)]'}`,
+		`echo ${HOME:_}`,
+		`echo ${HOME:0:_}`,
+		`echo ${HOME: _}`,
+		`echo ${@:_}`,
+		`echo "${a['$(touch p)']}"`,
+		`echo ${#a['$(touch p)']}`,
+		`echo ${!a['$(touch p)']}`,
+		"echo ${a[`touch p`]}",
+		`echo ${a[\$(touch p)]}`,
+		`echo ${x`,
+		`echo ${x:0:${y:-'$(touch p)'}}`,
+		`echo $['a[$(touch p)]']`,
+		`echo "$['a[$(touch p)]']"`,
+		`let 'a[$(touch p)]'`,
+		`test -v 'zz[$(touch p)]'`,
+		`[ -v 'zz[$(touch p)]' ]`,
+		`[ ${u:--v} "$_" ]`,
+		`test -v "$_"`,
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			if segs, ok := SplitCommand(cmd); ok {
+				t.Errorf("SplitCommand(%q) = %q, true; want ok=false", cmd, segs)
+			}
+			pc := Context{Mode: ModeDontAsk, Rules: Rules{Allow: []Rule{
+				mustRule(t, "execute(echo:*)"), mustRule(t, "execute(test:*)"),
+				mustRule(t, "execute([:*)"), mustRule(t, "execute([[:*)"), mustRule(t, "execute(let:*)"),
+			}}}
+			if got := Evaluate(shell(cmd), pc); got.Behavior == Allow {
+				t.Errorf("Evaluate(%q) = Allow, want not allowed", cmd)
+			}
+		})
+	}
+	for _, cmd := range []string{
+		`echo ${HOME}`, `echo ${x:-default}`, `echo ${x:=d} ${x:?e} ${x:+a}`,
+		`echo "${HOME}/x"`, `echo ${#x} ${x#a} ${x%b} ${x/a/b}`,
+		`[[ -f x ]]`, `[[ $a == b ]]`, `[[ -f x ]] && [[ -d y ]]`,
+		`[ -f x ]`, `test -n x`, `[ 1 -eq 1 ]`,
+	} {
+		if _, ok := SplitCommand(cmd); !ok {
+			t.Errorf("SplitCommand(%q) ok = false, want true", cmd)
+		}
+	}
+}

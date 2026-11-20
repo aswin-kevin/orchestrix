@@ -2,6 +2,7 @@ package permission
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -23,11 +24,18 @@ var testCommands = map[string]bool{"[": true, "[[": true}
 // a way it does not validate (another user, root directory or namespace).
 var opaqueCommands = map[string]bool{
 	"sh": true, "bash": true, "zsh": true, "dash": true, "ksh": true, "fish": true,
+	"tcsh": true, "csh": true, "ash": true, "mksh": true, "rbash": true, "pdksh": true,
+	"yash": true, "posh": true, "elvish": true, "nu": true, "xonsh": true,
 	"eval": true, "source": true, ".": true, "xargs": true, "sudo": true, "doas": true,
 	"ionice": true, "setsid": true, "chroot": true, "flock": true, "watch": true,
 	"strace": true, "ltrace": true, "busybox": true, "unbuffer": true,
 	"parallel": true, "script": true, "su": true, "runuser": true,
-	"nsenter": true, "unshare": true,
+	"nsenter": true, "unshare": true, "pkexec": true, "systemd-run": true,
+	"firejail": true, "bwrap": true, "proot": true,
+	// Wrappers that run their arguments as a command after options or
+	// operands of their own (a CPU mask, a scheduling priority).
+	"caffeinate": true, "arch": true, "taskset": true, "setarch": true,
+	"chrt": true, "numactl": true, "cpulimit": true,
 	// Editors run commands from options (-c, +cmd, --eval), scripts and
 	// startup files.
 	"vim": true, "vi": true, "nvim": true, "ex": true, "view": true,
@@ -46,6 +54,7 @@ var interpreters = map[string]bool{
 	"node": true, "nodejs": true, "deno": true, "bun": true,
 	"php": true, "lua": true, "luajit": true, "tclsh": true, "wish": true,
 	"expect": true, "Rscript": true, "osascript": true, "pwsh": true,
+	"julia": true, "gdb": true, "ed": true,
 }
 
 // versionChars may trail an interpreter's name, as in python3.12.
@@ -116,6 +125,16 @@ var commandTails = map[string]tailSpec{
 	"runuser":  {valueOptions: []string{"-u", "-g", "-G", "--user", "--group"}},
 	"nsenter":  {valueOptions: []string{"-t", "--target", "-S", "-G", "--setuid", "--setgid"}},
 	"unshare":  {},
+
+	"caffeinate":  {valueOptions: []string{"-t", "-w"}},
+	"arch":        {}, // its -arm64 style options take no value
+	"taskset":     {operands: 1},
+	"setarch":     {operands: 1},
+	"chrt":        {operands: 1},
+	"systemd-run": {valueOptions: []string{"-p", "--property", "-u", "--unit", "-E", "--setenv"}},
+	"pkexec":      {valueOptions: []string{"--user"}},
+	"numactl":     {},
+	"cpulimit":    {valueOptions: []string{"-l", "--limit", "-p", "--pid"}},
 }
 
 // stateBuiltins set variables, aliases, traps or shell options, which can
@@ -125,6 +144,7 @@ var stateBuiltins = map[string]bool{
 	"export": true, "declare": true, "typeset": true, "readonly": true,
 	"local": true, "read": true, "unset": true, "alias": true, "trap": true,
 	"enable": true, "shopt": true, "set": true, "mapfile": true, "readarray": true,
+	"let": true, // also evaluates arithmetic, which runs $(...) in subscripts
 }
 
 // stateOptionLetters are builtins that change shell state only with one
@@ -194,7 +214,8 @@ func normalizeSegment(words []word) (segments []string, ok bool) {
 	}
 	ok = ok && vouchableName(name) && !changesShellState(name, words[1:]) &&
 		!runsCommandThroughOptions(name, words[1:]) &&
-		!(expansionSensitive[name] && anyExpands(words[1:]))
+		!(expansionSensitive[name] && anyExpands(words[1:])) &&
+		!evaluatesArithmetic(name, words[1:])
 	texts := []string{name}
 	for _, w := range words[1:] {
 		texts = append(texts, w.text)
@@ -297,12 +318,38 @@ func changesShellState(name string, args []word) bool {
 // expansionSensitive are the commands whose safety depends on reading their
 // options: an argument that expands (${u:--c}, {-c,x}, a glob) can hide one.
 var expansionSensitive = func() map[string]bool {
-	m := map[string]bool{"find": true, "hash": true, "printf": true}
+	m := map[string]bool{"find": true, "hash": true, "printf": true, "test": true, "[": true}
 	for name := range commandOptionChecks {
 		m[name] = true
 	}
 	return m
 }()
+
+// arithmeticTestOperators make [[ evaluate both operands as arithmetic.
+var arithmeticTestOperators = map[string]bool{
+	"-eq": true, "-ne": true, "-lt": true, "-le": true, "-gt": true, "-ge": true,
+}
+
+// setVariableTest is the test operator that checks whether a variable is
+// set; given NAME[sub], it evaluates sub as arithmetic.
+const setVariableTest = "-v"
+
+// evaluatesArithmetic reports whether a test command evaluates one of its
+// arguments as arithmetic, which runs any $(...) in an array subscript, even
+// one that was quoted or came from a variable ([[ 'a[$(cmd)]' -eq 0 ]],
+// test -v "$_"). A [[ that does not end its segment with ]] had a && or ||
+// inside it, so its words were split into commands that are not what runs.
+func evaluatesArithmetic(name string, args []word) bool {
+	if name != "[[" && name != "[" && name != "test" {
+		return false
+	}
+	if name == "[[" && (len(args) == 0 || args[len(args)-1].text != "]]" || args[len(args)-1].quotedAt != notQuoted) {
+		return true
+	}
+	return slices.ContainsFunc(args, func(a word) bool {
+		return a.text == setVariableTest || (name == "[[" && arithmeticTestOperators[a.text])
+	})
+}
 
 // anyExpands reports whether any word may expand into other words.
 func anyExpands(words []word) bool {
@@ -455,13 +502,18 @@ func dropAssignments(words []word) (rest []word, assigned bool) {
 	return words, assigned
 }
 
-// isAssignment reports whether w is NAME=value with an unquoted NAME=.
+// isAssignment reports whether w is NAME=value, NAME+=value, NAME[sub]=value
+// or NAME[sub]+=value with an unquoted NAME=.
 func isAssignment(w word) bool {
 	eq := strings.IndexByte(w.text, '=')
 	if eq <= 0 || (w.quotedAt != notQuoted && w.quotedAt <= eq) {
 		return false
 	}
-	return isShellName(w.text[:eq])
+	name := strings.TrimSuffix(w.text[:eq], "+")
+	if open := strings.IndexByte(name, '['); open >= 0 && strings.HasSuffix(name, "]") {
+		name = name[:open]
+	}
+	return isShellName(name)
 }
 
 // isShellName reports whether s is a valid shell variable name.

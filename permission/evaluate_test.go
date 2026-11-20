@@ -144,3 +144,31 @@ func TestAcceptEditsAsksForGitMetadata(t *testing.T) {
 		t.Errorf("write with explicit allow rule = %+v, want allow", got)
 	}
 }
+
+func TestAllowRulesStayCaseSensitive(t *testing.T) {
+	pc := Context{Mode: ModeDontAsk, Rules: Rules{Allow: []Rule{mustRule(t, "execute(ls:*)")}}}
+	for _, req := range []Request{
+		{Tool: "execute", Subject: "LS -la", Shell: true},
+		{Tool: "execute", Subject: "LS -la"},
+	} {
+		if got := Evaluate(req, pc); got.Behavior == Allow {
+			t.Errorf("Evaluate(%+v) = Allow, want not allowed", req)
+		}
+	}
+	if got := Evaluate(Request{Tool: "execute", Subject: "ls -la", Shell: true}, pc); got.Behavior != Allow {
+		t.Errorf("Evaluate(ls -la) = %+v, want Allow", got)
+	}
+}
+
+func TestDenyAndAskRulesFoldCase(t *testing.T) {
+	shell := Request{Tool: "execute", Subject: "RM -rf x", Shell: true}
+	deny := Context{Mode: ModeBypass, Rules: Rules{Deny: []Rule{mustRule(t, "execute(rm:*)")}}}
+	if got := Evaluate(shell, deny); got.Behavior != Deny {
+		t.Errorf("deny: Evaluate(RM -rf x) = %+v, want Deny", got)
+	}
+	ask := Context{Rules: Rules{Ask: []Rule{mustRule(t, "execute(RM:*)")}, Allow: []Rule{mustRule(t, "execute")}}}
+	shell.Subject = "rm -rf x"
+	if got := Evaluate(shell, ask); got.Behavior != Ask {
+		t.Errorf("ask: Evaluate(rm -rf x) = %+v, want Ask", got)
+	}
+}

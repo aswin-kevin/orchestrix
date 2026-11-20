@@ -20,7 +20,9 @@ const devNull = "/dev/null"
 // unbalanced quotes, shells, script interpreters, editors and other commands
 // that run hidden code (sh, eval, xargs, sudo, awk, python, vim, find -exec,
 // ...), options that make an ordinary command run one (git -c, sed's e, tar
-// --to-command; see commandOptionChecks), compound commands, a command word
+// --to-command; see commandOptionChecks), arithmetic, which runs commands
+// hidden in array subscripts ($[...], let, ${a[i]}, ${x:offset}, [[ -eq ]],
+// test -v), compound commands, a command word
 // that
 // depends on expansion, contains whitespace or names a path (./npm), any
 // variable assignment (PATH=... or LD_PRELOAD=... can change which program
@@ -130,6 +132,9 @@ func (p *commandParser) step() {
 	default:
 		if strings.IndexByte(expansionChars, c) >= 0 || (c == '~' && !p.inWord) {
 			p.wordExpands = true
+		}
+		if c == '$' {
+			p.checkArithmetic()
 		}
 		p.inWord = true
 		p.buf.WriteByte(c)
@@ -334,11 +339,51 @@ func (p *commandParser) doubleQuoted() {
 		}
 		if c == '$' {
 			p.wordExpands = true
+			p.checkArithmetic()
 		}
 		p.buf.WriteByte(c)
 		p.pos++
 	}
 	p.reject() // unterminated
+}
+
+// checkArithmetic rejects an expansion, starting at the '$' at p.pos, that
+// bash may evaluate as arithmetic: $[...], or a ${...} with an array
+// subscript or a substring offset. Arithmetic runs a $(...) found in a
+// subscript, even one that was quoted ('a[$(cmd)]') or is the value of a
+// variable (${HOME:_} after the last argument was 'a[$(cmd)]'), so the
+// commands the line runs cannot be seen. $((...)) is rejected as a
+// parenthesis.
+func (p *commandParser) checkArithmetic() {
+	switch p.peek(1) {
+	case '[':
+		p.reject()
+	case '{':
+		if !plainParameterExpansion(p.src[p.pos+2:]) {
+			p.reject()
+		}
+	}
+}
+
+// parameterDefaultOps may follow the ':' after a parameter's name; any other
+// character there starts a substring offset, which is arithmetic.
+const parameterDefaultOps = "-=?+"
+
+// plainParameterExpansion reports whether the text after "${" is a parameter
+// expansion that evaluates no arithmetic. The body runs to the first '}'; a
+// quote or backslash in it could hide where it really ends, so either one
+// rejects it, as do subscripts, substitutions and substring offsets.
+func plainParameterExpansion(rest string) bool {
+	end := strings.IndexByte(rest, '}')
+	if end < 0 {
+		return false
+	}
+	body := rest[:end]
+	if strings.ContainsAny(body, "['\"`\\") || strings.Contains(body, "$(") {
+		return false
+	}
+	colon := strings.IndexByte(body, ':')
+	return colon < 0 || (colon+1 < len(body) && strings.IndexByte(parameterDefaultOps, body[colon+1]) >= 0)
 }
 
 // escaped consumes a backslash outside quotes: it quotes the next character,
