@@ -37,7 +37,7 @@ func TestWithAsyncFollowsSubagents(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.Shutdown()
-	a, err := orchestrix.New(llmtest.New(), orchestrix.WithAsync(m))
+	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithAsync(m))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestWithAsyncFollowsSubagents(t *testing.T) {
 }
 
 func TestWithAsyncRejectsNil(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithAsync(nil))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithAsync(nil))
 	if err == nil || !strings.Contains(err.Error(), "WithAsync") {
 		t.Errorf("err = %v, want an error naming WithAsync", err)
 	}
@@ -75,7 +75,7 @@ func TestStackOrderM4(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer am.Shutdown()
-	a, err := orchestrix.New(llmtest.New(),
+	a, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithShell(t.TempDir(), shell.Options{}),
 		orchestrix.WithTasks(tm),
 		orchestrix.WithHooks(hooks.Config{}),
@@ -102,7 +102,7 @@ func TestStackOrderM4(t *testing.T) {
 		t.Errorf("stack = %v, want %v", got, want)
 	}
 
-	def, err := orchestrix.New(llmtest.New())
+	def, err := orchestrix.NewWithProvider(llmtest.New())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestWithMountPersistsMemoriesAcrossThreads(t *testing.T) {
 		}},
 		{Text: "noted"},
 	}
-	a, err := orchestrix.New(llmtest.New(append(turns, recallColor()...)...), opts(dirMemories(t, dir))...)
+	a, err := orchestrix.NewWithProvider(llmtest.New(append(turns, recallColor()...)...), opts(dirMemories(t, dir))...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestWithMountPersistsMemoriesAcrossThreads(t *testing.T) {
 	}
 
 	// A new agent over a fresh DirStore on the same directory, as after a restart.
-	a2, err := orchestrix.New(llmtest.New(recallColor()...), opts(dirMemories(t, dir))...)
+	a2, err := orchestrix.NewWithProvider(llmtest.New(recallColor()...), opts(dirMemories(t, dir))...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestWithMountKeepsShellExecute(t *testing.T) {
 		}},
 		llmtest.Turn{Text: "done"},
 	)
-	a, err := orchestrix.New(p,
+	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithPermissionMode(permission.ModeBypass),
 		orchestrix.WithShell(root, shell.Options{}),
 		orchestrix.WithMount("/kv", kvb),
@@ -248,7 +248,7 @@ func TestWithMountWrapsBackendAndFactory(t *testing.T) {
 		"factory": orchestrix.WithBackendFactory(func(string) backend.Backend { return backendmemory.New() }),
 	} {
 		kvb := kvBackend(t)
-		a, err := orchestrix.New(llmtest.New(), opt, orchestrix.WithMount("/kv", kvb))
+		a, err := orchestrix.NewWithProvider(llmtest.New(), opt, orchestrix.WithMount("/kv", kvb))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -266,21 +266,21 @@ func TestWithMountWrapsBackendAndFactory(t *testing.T) {
 }
 
 func TestWithMountInvalidPrefixFailsNew(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithMount("/", kvBackend(t)))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithMount("/", kvBackend(t)))
 	if err == nil || !strings.Contains(err.Error(), "WithMount") {
 		t.Errorf("err = %v, want an error naming WithMount", err)
 	}
 }
 
 func TestWithRubricNoCriteriaFailsNew(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithRubric(rubric.Config{}))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithRubric(rubric.Config{}))
 	if err == nil || !strings.Contains(err.Error(), "WithRubric") {
 		t.Errorf("err = %v, want an error naming WithRubric", err)
 	}
 }
 
 func TestWithProfilesBadPatternFailsNew(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithProfiles(profiles.Config{
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithProfiles(profiles.Config{
 		Adjustments: []profiles.Adjustment{{Models: []string{""}}},
 	}))
 	if err == nil || !strings.Contains(err.Error(), "WithProfiles") {
@@ -290,7 +290,7 @@ func TestWithProfilesBadPatternFailsNew(t *testing.T) {
 
 func TestWithProfilesExcludesMiddleware(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.New(p,
+	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithConfig(func(c *agent.Config) { c.Model = "small-1" }),
 		orchestrix.WithProfiles(profiles.Config{Adjustments: []profiles.Adjustment{
 			{Models: []string{"small-*"}, ExcludeMiddleware: []string{"planning"}},
@@ -356,7 +356,7 @@ func TestRubricAndAsyncReminderShareContinuations(t *testing.T) {
 		llmtest.Turn{Text: "answer 3"},
 		llmtest.Turn{Text: "spare: must stay unused"},
 	)
-	a, err := orchestrix.New(p,
+	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithAsync(am),
 		orchestrix.WithRubric(rubric.Config{Criteria: []string{"Cites a source."}, Grader: grader}),
 	)

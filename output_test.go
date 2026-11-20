@@ -23,7 +23,7 @@ type verdict struct {
 func runVerdict(t *testing.T, p llm.Provider, opts ...orchestrix.Option) (verdict, *agent.Final, error) {
 	t.Helper()
 	opts = append([]orchestrix.Option{orchestrix.WithOutputType[verdict]()}, opts...)
-	a, err := orchestrix.New(p, opts...)
+	a, err := orchestrix.NewWithProvider(p, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestRunTypedInterrupted(t *testing.T) {
 }
 
 func TestWithOutputSchemaRejectsArray(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(),
+	_, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithOutputSchema(map[string]any{"type": "array"}))
 	if err == nil {
 		t.Error("want error for a non-object schema")

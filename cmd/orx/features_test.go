@@ -394,7 +394,7 @@ func TestSkillsLoadedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := textTurn()
-	a, err := orchestrix.New(provider, opt)
+	a, err := orchestrix.NewWithProvider(provider, opt)
 	if err != nil {
 		t.Fatal(err)
 	}

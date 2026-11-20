@@ -7,7 +7,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 )
 
-// WithFallback adds backup models behind the model given to New. When the
+// WithFallback adds backup models behind the model given to New or NewWithProvider. When the
 // primary cannot serve (a rate limit, an overload, a server or network
 // error; see llm.DefaultShouldFallback), the call moves to the first backup,
 // then the next. Each backup is a model spec string such as
@@ -48,8 +48,9 @@ func WithFallbackConfig(cfg llm.FallbackConfig) Option {
 const primaryEntryName = "primary"
 
 // applyFallback wraps the resolved provider with the configured backups.
-// model is the value passed to New, used to name the primary entry.
-func (s *settings) applyFallback(model any) error {
+// named is true when New resolved a spec string, so the primary entry carries
+// its model name.
+func (s *settings) applyFallback(named bool) error {
 	if s.fallbackCfg != nil && s.fallbackSet {
 		return errors.New("WithFallback and WithFallbackConfig are mutually exclusive")
 	}
@@ -74,7 +75,7 @@ func (s *settings) applyFallback(model any) error {
 	}
 
 	primary := llm.FallbackEntry{Provider: s.cfg.Provider, Name: primaryEntryName}
-	if _, ok := model.(string); ok {
+	if named {
 		primary.Model = s.cfg.Model
 	}
 	cfg.Entries = append([]llm.FallbackEntry{primary}, cfg.Entries...)

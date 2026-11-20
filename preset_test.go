@@ -31,7 +31,7 @@ func stackNames(a *agent.Agent) []string {
 }
 
 func TestDefaultStackOrder(t *testing.T) {
-	a, err := orchestrix.New(llmtest.New())
+	a, err := orchestrix.NewWithProvider(llmtest.New())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestFullStackOrder(t *testing.T) {
 	sh := t.TempDir()
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown()
-	a, err := orchestrix.New(llmtest.New(),
+	a, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithShell(sh, shell.Options{}),
 		orchestrix.WithTasks(tm),
 		orchestrix.WithHooks(hooks.Config{}),
@@ -62,7 +62,7 @@ func TestFullStackOrder(t *testing.T) {
 }
 
 func TestWithoutDefaultMiddleware(t *testing.T) {
-	a, err := orchestrix.New(llmtest.New(), orchestrix.WithoutMiddleware("subagents", "summarize", "cache"))
+	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithoutMiddleware("subagents", "summarize", "cache"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestDefaultWorkspaceSurvivesCheckpoint(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		a, err := orchestrix.New(m, orchestrix.WithCheckpointer(c),
+		a, err := orchestrix.NewWithProvider(m, orchestrix.WithCheckpointer(c),
 			orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
 		if err != nil {
 			t.Fatal(err)
@@ -137,7 +137,7 @@ func TestDefaultWorkspaceSurvivesCheckpoint(t *testing.T) {
 }
 
 func TestWithInterruptOnPauses(t *testing.T) {
-	a, err := orchestrix.New(writeThenAnswer("/a.txt", "x"),
+	a, err := orchestrix.NewWithProvider(writeThenAnswer("/a.txt", "x"),
 		orchestrix.WithInterruptOn("write_file"),
 		orchestrix.WithPermissionMode(permission.ModeBypass),
 	)
@@ -151,7 +151,7 @@ func TestWithInterruptOnPauses(t *testing.T) {
 
 func TestWithShellRegistersExecute(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.New(p, orchestrix.WithShell(t.TempDir(), shell.Options{}))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithShell(t.TempDir(), shell.Options{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestWithBackendExecutorRegistersExecute(t *testing.T) {
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "1", Name: "execute", Input: map[string]any{"command": "echo hi"}}}},
 		llmtest.Turn{Text: "done"},
 	)
-	a, err := orchestrix.New(p, orchestrix.WithBackend(exec), orchestrix.WithPermissionMode(permission.ModeBypass))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackend(exec), orchestrix.WithPermissionMode(permission.ModeBypass))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestWithBackendExecutorRegistersExecute(t *testing.T) {
 	}
 
 	plain := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err = orchestrix.New(plain, orchestrix.WithBackend(membackend.New()))
+	a, err = orchestrix.NewWithProvider(plain, orchestrix.WithBackend(membackend.New()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestWithTasksOffersBackgroundTools(t *testing.T) {
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown()
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.New(p, orchestrix.WithShell(t.TempDir(), shell.Options{}), orchestrix.WithTasks(tm))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithShell(t.TempDir(), shell.Options{}), orchestrix.WithTasks(tm))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestWithTasksOffersBackgroundTools(t *testing.T) {
 func TestWithTasksRequiresShell(t *testing.T) {
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown()
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithTasks(tm))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithTasks(tm))
 	if err == nil || !strings.Contains(err.Error(), "WithTasks") {
 		t.Errorf("err = %v, want an error naming WithTasks", err)
 	}
@@ -232,7 +232,7 @@ func TestWithShellAndBackendExclusive(t *testing.T) {
 		"backend": orchestrix.WithBackend(shellBackend(t)),
 		"factory": orchestrix.WithBackendFactory(func(string) backend.Backend { return shellBackend(t) }),
 	} {
-		_, err := orchestrix.New(llmtest.New(), orchestrix.WithShell(t.TempDir(), shell.Options{}), opt)
+		_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithShell(t.TempDir(), shell.Options{}), opt)
 		if err == nil || !strings.Contains(err.Error(), "WithShell") {
 			t.Errorf("%s: err = %v, want an error naming WithShell", name, err)
 		}
@@ -249,7 +249,7 @@ func shellBackend(t *testing.T) backend.Backend {
 }
 
 func TestInvalidSubagentSpecFailsNew(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithSubagents(subagents.Subagent{Name: "bad name"}))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithSubagents(subagents.Subagent{Name: "bad name"}))
 	if err == nil || !strings.Contains(err.Error(), "bad name") {
 		t.Errorf("err = %v, want the invalid spec reported", err)
 	}
@@ -257,7 +257,7 @@ func TestInvalidSubagentSpecFailsNew(t *testing.T) {
 
 func TestSubagentSpecsAppendToConfig(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.New(p,
+	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithSubagentConfig(subagents.Config{DisableFork: true}),
 		orchestrix.WithSubagents(subagents.Subagent{Name: "reviewer", Description: "reviews code", SystemPrompt: "Review."}),
 	)
@@ -277,7 +277,7 @@ func TestSubagentSpecsAppendToConfig(t *testing.T) {
 }
 
 func TestWithSummarizeReplacesDefault(t *testing.T) {
-	a, err := orchestrix.New(llmtest.New(), orchestrix.WithSummarize(summarize.Config{DisableOffload: true}))
+	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithSummarize(summarize.Config{DisableOffload: true}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestWithTasksOnFactoryBackendOffersBackgroundExecute(t *testing.T) {
 			Input: map[string]any{"command": "echo hi", "run_in_background": true}}}},
 		llmtest.Turn{Text: "ok"},
 	)
-	a, err := orchestrix.New(p,
+	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithBackendFactory(func(string) backend.Backend { return shellBackend(t) }),
 		orchestrix.WithTasks(tm),
 		orchestrix.WithPermissionMode(permission.ModeBypass),

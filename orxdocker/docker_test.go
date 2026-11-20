@@ -483,7 +483,7 @@ func TestDockerWithTasks(t *testing.T) {
 		call("o2", tasks.ToolTaskOutput, map[string]any{"task_id": "bg_1", "block": true, "timeout_seconds": 30}),
 		llmtest.Turn{Text: "ok"},
 	)
-	a, err := orchestrix.New(p, orchestrix.WithBackendFactory(m.Backend), orchestrix.WithTasks(tm),
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackendFactory(m.Backend), orchestrix.WithTasks(tm),
 		orchestrix.WithPermissionMode(permission.ModeBypass))
 	if err != nil {
 		t.Fatal(err)

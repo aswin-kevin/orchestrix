@@ -43,7 +43,7 @@ func Example() {
 	// a spec such as "anthropic:claude-sonnet-4-5" instead.
 	model := llmtest.New(llmtest.Turn{Text: "Hello from Orchestrix!"})
 
-	a, err := orchestrix.New(model, orchestrix.WithSystemPrompt("You are friendly."))
+	a, err := orchestrix.NewWithProvider(model, orchestrix.WithSystemPrompt("You are friendly."))
 	if err != nil {
 		panic(err)
 	}
@@ -64,7 +64,7 @@ func Example() {
 var model llm.Provider = llmtest.New()
 
 func ExampleWithSubagents() {
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithSubagents(subagents.Subagent{
 			Name:           "reviewer",
 			Description:    "Reviews a change for bugs and risky edits.",
@@ -77,7 +77,7 @@ func ExampleWithSubagents() {
 }
 
 func ExampleWithSummarize() {
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithSummarize(summarize.Config{
 			TriggerFraction: 0.7,           // compact earlier than the default 0.85
 			Model:           "small-model", // summarize with a cheaper model
@@ -88,7 +88,7 @@ func ExampleWithSummarize() {
 }
 
 func ExampleWithHooks() {
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithHooks(hooks.Config{
 			PreToolUse: []hooks.PreToolUseHook{{
 				Matcher: hooks.Matcher{Tools: []string{"write_file", "edit_file"}},
@@ -105,7 +105,7 @@ func ExampleWithHooks() {
 }
 
 func ExampleWithInterruptOn() {
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
 		orchestrix.WithInterruptOn("delete"), // pause for a human before every delete
 		orchestrix.WithInterruptConfig(map[string]hitl.InterruptConfig{
@@ -126,7 +126,7 @@ func ExampleWithCheckpointer() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	a, err := orchestrix.New(model, orchestrix.WithCheckpointer(cp))
+	a, err := orchestrix.NewWithProvider(model, orchestrix.WithCheckpointer(cp))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func ExampleWithShell() {
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown() // stops background jobs still running
 
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithShell("./workspace", shell.Options{}),
 		orchestrix.WithTasks(tm),
 		orchestrix.WithAllow("execute(git:*)"),
@@ -163,7 +163,7 @@ func ExampleWithShell() {
 }
 
 func ExampleWithMemory() {
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithMemory(memory.Config{
 			Files: memory.DefaultFiles,   // /AGENTS.md in the workspace
 			Store: &memory.StoreConfig{}, // recall_memory and record_memory
@@ -173,7 +173,7 @@ func ExampleWithMemory() {
 }
 
 func ExampleWithSkills() {
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithSkills(skills.Config{
 			Sources: []skills.Source{skills.DirSource("./skills")},
 			Pinned:  []string{"house-style"}, // always in the system prompt
@@ -199,7 +199,7 @@ func ExampleWithMCP() {
 	}
 	defer m.Close() // stops stdio servers and ends HTTP sessions
 
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithMCP(m),
 		orchestrix.WithAllow("mcp__repo__status"),
 	)
@@ -207,7 +207,7 @@ func ExampleWithMCP() {
 }
 
 func ExampleWithPlanMode() {
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithPlanMode(planmode.Config{}),
 		orchestrix.WithApprover(func(ctx context.Context, req permission.Request, reason string) permission.Decision {
 			// For exit_plan_mode, req.Input holds the plan and req.NoRemember
@@ -232,7 +232,7 @@ func ExampleWithDeferredTools() {
 		func(ctx context.Context, in reportInput, c *tool.Call) (tool.Result, error) {
 			return tool.Text("report for " + in.Quarter), nil
 		})
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithTools(deferred.Defer(report)), // found with search_tools
 		orchestrix.WithDeferredTools(deferred.Config{
 			Tools: []string{"mcp__docs__*"}, // defer by name pattern too
@@ -246,7 +246,7 @@ func ExampleWithWeb() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithWeb(web.Config{Search: search}),
 		orchestrix.WithAllow("web_search", "web_fetch(https://go.dev/*)"),
 		orchestrix.WithDeny("web_fetch(https://internal.example.com/*)"),
@@ -264,13 +264,13 @@ func ExampleWithWeb_searchProxy() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	a, err := orchestrix.New(model, orchestrix.WithWeb(cfg))
+	a, err := orchestrix.NewWithProvider(model, orchestrix.WithWeb(cfg))
 	_, _ = a, err
 }
 
 func ExampleWithAskUser() {
 	ctx := context.Background()
-	a, err := orchestrix.New(model, orchestrix.WithAskUser(askuser.Config{}))
+	a, err := orchestrix.NewWithProvider(model, orchestrix.WithAskUser(askuser.Config{}))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func ExampleWithMount() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}),
 		orchestrix.WithMount(memory.DefaultDir, memories), // shared by every thread
 	)
@@ -342,7 +342,7 @@ func ExampleWithBackend_sandbox() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	a, err := orchestrix.New(model, orchestrix.WithBackend(sb))
+	a, err := orchestrix.NewWithProvider(model, orchestrix.WithBackend(sb))
 	_, _ = a, err
 }
 
@@ -353,7 +353,7 @@ func ExampleWithAsync() {
 	}
 	defer tasks.Shutdown() // stops background subagents still running
 
-	a, err := orchestrix.New(model, orchestrix.WithAsync(tasks))
+	a, err := orchestrix.NewWithProvider(model, orchestrix.WithAsync(tasks))
 	_, _ = a, err
 }
 
@@ -387,7 +387,7 @@ func Example_coordinator() {
 
 func Example_runParallel() {
 	ctx := context.Background()
-	a, err := orchestrix.New(model, orchestrix.WithPermissionMode(permission.ModePlan))
+	a, err := orchestrix.NewWithProvider(model, orchestrix.WithPermissionMode(permission.ModePlan))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func Example_runParallel() {
 }
 
 func ExampleWithRubric() {
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithRubric(rubric.Config{
 			Criteria: []string{
 				"Answers every part of the question.",
@@ -424,7 +424,7 @@ func ExampleWithRubric() {
 func ExampleWithProfiles() {
 	llm.RegisterProfile("small-", llm.Profile{ContextWindow: 32_000, MaxOutput: 4_096}) // what it can do
 
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithProfiles(profiles.Config{Adjustments: []profiles.Adjustment{{
 			Models:            []string{"small-*", "*-mini"}, // how this agent treats it
 			PromptSuffix:      "Take one small step at a time and call one tool per turn.",
@@ -437,7 +437,7 @@ func ExampleWithProfiles() {
 }
 
 func ExampleWithCompress() {
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithCompress(compress.Config{
 			TriggerFraction: 0.5, // propose a range once half the window is used
 			KeepTurns:       4,   // never touch the newest four user turns

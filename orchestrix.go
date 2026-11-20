@@ -34,11 +34,11 @@ import (
 // WithMiddleware replaces a middleware of the same name in place and appends
 // the others after profiles; WithoutMiddleware removes by name.
 //
-// model is either a spec string such as "anthropic:claude-sonnet-4-5" or
+// spec is a model spec string such as "anthropic:claude-sonnet-4-5" or
 // "openai:gpt-4.1" (credentials and base URL come from the environment, see
-// llm.ParseModel), or a ready llm.Provider. When a spec string is given, its
-// model name also selects the model profile. WithFallback and
-// WithFallbackConfig add backup models behind it.
+// llm.ParseModel). Its model name also selects the model profile.
+// WithFallback and WithFallbackConfig add backup models behind it. To use a
+// ready llm.Provider instead, call NewWithProvider.
 //
 // Without WithBackend, WithBackendFactory or WithShell, each thread gets its
 // own in-memory workspace; it lives as long as the agent and, with
@@ -47,14 +47,29 @@ import (
 // to other backends on top of any of these, for example memory.DefaultDir to a
 // kv backend so memories outlive the thread. New never panics on bad
 // options: every problem is returned, joined, as one error.
-func New(model any, opts ...Option) (*agent.Agent, error) {
+func New(spec string, opts ...Option) (*agent.Agent, error) {
+	return newAgent(opts, true, func(s *settings) error { return s.resolveSpec(spec) })
+}
+
+// NewWithProvider is New for a ready llm.Provider instead of a spec string.
+// It builds the same default stack. No model name is set, so no model profile
+// is selected for the primary; WithFallback and
+// WithFallbackConfig add backup models behind p. A nil p is an error.
+func NewWithProvider(p llm.Provider, opts ...Option) (*agent.Agent, error) {
+	return newAgent(opts, false, func(s *settings) error { return s.resolveProvider(p) })
+}
+
+// newAgent is the shared body of New and NewWithProvider. named reports
+// whether resolve sets a model name, which the fallback chain uses to clamp
+// the primary.
+func newAgent(opts []Option, named bool, resolve func(*settings) error) (*agent.Agent, error) {
 	s := &settings{}
 	for _, opt := range opts {
 		opt(s)
 	}
-	if err := s.resolveModel(model); err != nil {
+	if err := resolve(s); err != nil {
 		s.errs = append(s.errs, err)
-	} else if err := s.applyFallback(model); err != nil {
+	} else if err := s.applyFallback(named); err != nil {
 		s.errs = append(s.errs, err)
 	}
 	s.validate()
@@ -65,28 +80,27 @@ func New(model any, opts ...Option) (*agent.Agent, error) {
 	return agent.New(cfg)
 }
 
-// resolveModel sets the provider and model name on the config.
-func (s *settings) resolveModel(model any) error {
-	switch m := model.(type) {
-	case string:
-		cfg, err := llm.ParseModel(m)
-		if err != nil {
-			return err
-		}
-		provider, err := llm.New(cfg)
-		if err != nil {
-			return err
-		}
-		s.cfg.Provider = provider
-		s.cfg.Model = cfg.Model
-	case llm.Provider:
-		if m == nil {
-			return errors.New("model must not be a nil llm.Provider")
-		}
-		s.cfg.Provider = m
-	default:
-		return fmt.Errorf("model must be a model spec string or an llm.Provider, got %T", model)
+// resolveSpec sets the provider and model name from a spec string.
+func (s *settings) resolveSpec(spec string) error {
+	cfg, err := llm.ParseModel(spec)
+	if err != nil {
+		return err
 	}
+	provider, err := llm.New(cfg)
+	if err != nil {
+		return err
+	}
+	s.cfg.Provider = provider
+	s.cfg.Model = cfg.Model
+	return nil
+}
+
+// resolveProvider sets a ready provider on the config.
+func (s *settings) resolveProvider(p llm.Provider) error {
+	if p == nil {
+		return errors.New("provider must not be nil")
+	}
+	s.cfg.Provider = p
 	return nil
 }
 

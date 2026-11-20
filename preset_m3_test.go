@@ -55,7 +55,7 @@ func connectMCP(t *testing.T, gated bool) *mcp.Middleware {
 func TestStackOrderM3(t *testing.T) {
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown()
-	a, err := orchestrix.New(llmtest.New(),
+	a, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithShell(t.TempDir(), shell.Options{}),
 		orchestrix.WithTasks(tm),
 		orchestrix.WithHooks(hooks.Config{}),
@@ -79,7 +79,7 @@ func TestStackOrderM3(t *testing.T) {
 }
 
 func TestMCPWithoutHiddenToolsAddsNoDeferred(t *testing.T) {
-	a, err := orchestrix.New(llmtest.New(), orchestrix.WithMCP(connectMCP(t, false)))
+	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithMCP(connectMCP(t, false)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestSkillsWithToolsAddsDeferred(t *testing.T) {
 	cfg := testSkills()
 	cfg.Tools = []tool.Tool{noopTool("pdf_render")}
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.New(p,
+	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithSkills(cfg),
 		orchestrix.WithMCP(connectMCP(t, false)),
 		orchestrix.WithWeb(web.Config{}),
@@ -118,7 +118,7 @@ func TestSkillsWithToolsAddsDeferred(t *testing.T) {
 func TestFailedSkillsDoNotCascadeToSubagents(t *testing.T) {
 	cfg := testSkills()
 	cfg.Pinned = []string{"nope"}
-	_, err := orchestrix.New(llmtest.New(),
+	_, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithSkills(cfg),
 		orchestrix.WithSubagents(subagents.Subagent{
 			Name: "pdf-helper", Description: "Handles PDFs.", SystemPrompt: "You handle PDFs.",
@@ -135,7 +135,7 @@ func TestFailedSkillsDoNotCascadeToSubagents(t *testing.T) {
 
 func TestMCPHiddenToolsAddsDeferred(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.New(p, orchestrix.WithMCP(connectMCP(t, true)))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithMCP(connectMCP(t, true)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestHiddenWithToolsAddsDeferred(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := llmtest.New(llmtest.Turn{Text: "ok"})
-			a, err := orchestrix.New(p, orchestrix.WithTools(tc.tool))
+			a, err := orchestrix.NewWithProvider(p, orchestrix.WithTools(tc.tool))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -178,7 +178,7 @@ func TestExplicitDeferredConfigKept(t *testing.T) {
 	cfg := testSkills()
 	cfg.Tools = []tool.Tool{noopTool("pdf_render")}
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.New(p,
+	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithSkills(cfg),
 		orchestrix.WithDeferredTools(deferred.Config{Tools: []string{"write_file"}}),
 	)
@@ -195,7 +195,7 @@ func TestExplicitDeferredConfigKept(t *testing.T) {
 }
 
 func TestWithWebBadProxyFailsNew(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithWeb(web.Config{ProxyURL: "ftp://proxy:21"}))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithWeb(web.Config{ProxyURL: "ftp://proxy:21"}))
 	if err == nil || !strings.Contains(err.Error(), "WithWeb") {
 		t.Errorf("err = %v, want a WithWeb error", err)
 	}
@@ -204,21 +204,21 @@ func TestWithWebBadProxyFailsNew(t *testing.T) {
 func TestWithSkillsUnknownPinnedFailsNew(t *testing.T) {
 	cfg := testSkills()
 	cfg.Pinned = []string{"nope"}
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithSkills(cfg))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithSkills(cfg))
 	if err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Errorf("err = %v, want the unknown pinned skill reported", err)
 	}
 }
 
 func TestWithMemoryRelativePathFailsNew(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithMemory(memory.Config{Files: []string{"AGENTS.md"}}))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithMemory(memory.Config{Files: []string{"AGENTS.md"}}))
 	if err == nil || !strings.Contains(err.Error(), "WithMemory") {
 		t.Errorf("err = %v, want a WithMemory error", err)
 	}
 }
 
 func TestWithMCPNilFailsNew(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithMCP(nil))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithMCP(nil))
 	if err == nil || !strings.Contains(err.Error(), "WithMCP") {
 		t.Errorf("err = %v, want a WithMCP error", err)
 	}
@@ -227,7 +227,7 @@ func TestWithMCPNilFailsNew(t *testing.T) {
 func TestM3ConstructorErrorsAreJoined(t *testing.T) {
 	cfg := testSkills()
 	cfg.Pinned = []string{"nope"}
-	_, err := orchestrix.New(llmtest.New(),
+	_, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithMemory(memory.Config{Files: []string{"AGENTS.md"}}),
 		orchestrix.WithSkills(cfg),
 		orchestrix.WithWeb(web.Config{ProxyURL: "ftp://proxy:21"}),
@@ -264,7 +264,7 @@ func requestText(req llm.Request) string {
 
 func TestSubagentSkillsThroughPreset(t *testing.T) {
 	p := delegate("pdf-helper")
-	a, err := orchestrix.New(p,
+	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithSkills(testSkills()),
 		orchestrix.WithSubagents(subagents.Subagent{
 			Name: "pdf-helper", Description: "Handles PDFs.", SystemPrompt: "You handle PDFs.",
@@ -290,7 +290,7 @@ func TestSubagentPinnedSkillInjectedOnce(t *testing.T) {
 	cfg := testSkills()
 	cfg.Pinned = []string{"pdf"} // pinned for the parent too: still once in the child
 	p := delegate("pdf-helper")
-	a, err := orchestrix.New(p,
+	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithSkills(cfg),
 		orchestrix.WithSubagents(subagents.Subagent{
 			Name: "pdf-helper", Description: "Handles PDFs.", SystemPrompt: "You handle PDFs.",
@@ -313,7 +313,7 @@ func TestSubagentUnknownSkillFailsNew(t *testing.T) {
 		"pinned": {PinnedSkills: []string{"nope"}},
 	} {
 		spec.Name, spec.Description, spec.SystemPrompt = "helper", "Helps.", "You help."
-		_, err := orchestrix.New(llmtest.New(), orchestrix.WithSkills(testSkills()), orchestrix.WithSubagents(spec))
+		_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithSkills(testSkills()), orchestrix.WithSubagents(spec))
 		if err == nil || !strings.Contains(err.Error(), "nope") {
 			t.Errorf("%s: err = %v, want the unknown skill reported", name, err)
 		}
@@ -321,7 +321,7 @@ func TestSubagentUnknownSkillFailsNew(t *testing.T) {
 }
 
 func TestSubagentSkillsWithoutSkillsMiddlewareFailNew(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithSubagents(subagents.Subagent{
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithSubagents(subagents.Subagent{
 		Name: "helper", Description: "Helps.", SystemPrompt: "You help.", Skills: []string{"pdf"},
 	}))
 	if err == nil || !strings.Contains(err.Error(), "skills middleware") {

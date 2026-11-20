@@ -55,7 +55,7 @@ func run(ctx context.Context, w io.Writer) error {
 		}
 	}
 
-	a, err := orchestrix.New(primary,
+	a, err := exmodel.New(primary,
 		orchestrix.WithFallbackConfig(llm.FallbackConfig{
 			Entries: []llm.FallbackEntry{backup},
 			OnFallback: func(_ context.Context, ev llm.FallbackEvent) {

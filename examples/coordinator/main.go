@@ -123,7 +123,7 @@ func parallel(ctx context.Context, w io.Writer) error {
 	// its question whichever job reaches the model first.
 	var shared *agent.Agent
 	if exmodel.Live() {
-		a, err := orchestrix.New(exmodel.Model(), orchestrix.WithMaxTurns(5))
+		a, err := exmodel.New(exmodel.Model(), orchestrix.WithMaxTurns(5))
 		if err != nil {
 			return err
 		}
@@ -134,7 +134,7 @@ func parallel(ctx context.Context, w io.Writer) error {
 		a := shared
 		if a == nil {
 			var err error
-			if a, err = orchestrix.New(exmodel.Model(llmtest.Turn{Text: q.offline}), orchestrix.WithMaxTurns(5)); err != nil {
+			if a, err = exmodel.New(exmodel.Model(llmtest.Turn{Text: q.offline}), orchestrix.WithMaxTurns(5)); err != nil {
 				return err
 			}
 		}

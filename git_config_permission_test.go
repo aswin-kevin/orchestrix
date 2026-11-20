@@ -41,7 +41,7 @@ func TestGitConfigCannotRunCommandsWithoutApproval(t *testing.T) {
 					Input: map[string]any{"command": tt.cmd}}}},
 				llmtest.Turn{Text: "done"},
 			)
-			a, err := orchestrix.New(model,
+			a, err := orchestrix.NewWithProvider(model,
 				orchestrix.WithShell(dir, shell.Options{}),
 				orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
 				orchestrix.WithAllow(tt.rule),

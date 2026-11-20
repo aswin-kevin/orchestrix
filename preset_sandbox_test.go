@@ -23,7 +23,7 @@ func TestWithTasksRejectsSandboxWithoutStarter(t *testing.T) {
 	}
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown()
-	if _, err := orchestrix.New(llmtest.New(), orchestrix.WithBackend(sb), orchestrix.WithTasks(tm)); err == nil {
+	if _, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithBackend(sb), orchestrix.WithTasks(tm)); err == nil {
 		t.Fatal("WithTasks accepted a sandbox that cannot start commands")
 	}
 }
@@ -49,7 +49,7 @@ func TestWithTasksRunsJobInSandbox(t *testing.T) {
 		}}}},
 		llmtest.Turn{Text: "ok"},
 	)
-	a, err := orchestrix.New(p, orchestrix.WithBackend(sb), orchestrix.WithTasks(tm),
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackend(sb), orchestrix.WithTasks(tm),
 		orchestrix.WithPermissionMode(permission.ModeBypass))
 	if err != nil {
 		t.Fatal(err)

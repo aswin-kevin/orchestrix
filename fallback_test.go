@@ -16,9 +16,9 @@ func overloaded() llmtest.Turn {
 	return llmtest.Turn{Err: &llm.APIError{Status: 529, Body: "overloaded"}}
 }
 
-func runText(t *testing.T, model any, opts ...orchestrix.Option) string {
+func runText(t *testing.T, model llm.Provider, opts ...orchestrix.Option) string {
 	t.Helper()
-	a, err := orchestrix.New(model, opts...)
+	a, err := orchestrix.NewWithProvider(model, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestWithFallbackRejects(t *testing.T) {
 		"both reversed": {orchestrix.WithFallbackConfig(cfg), orchestrix.WithFallback(llmtest.New())},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := orchestrix.New(ok, opts...); err == nil {
+			if _, err := orchestrix.NewWithProvider(ok, opts...); err == nil {
 				t.Error("New succeeded, want an error")
 			}
 		})
@@ -113,7 +113,7 @@ func TestWithFallbackConfigPrependsPrimary(t *testing.T) {
 		t.Errorf("events = %+v, want one primary -> b", events)
 	}
 
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithFallbackConfig(llm.FallbackConfig{}))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithFallbackConfig(llm.FallbackConfig{}))
 	if err == nil || !strings.Contains(err.Error(), "at least one backup") {
 		t.Errorf("empty Entries: err = %v, want one mentioning at least one backup", err)
 	}

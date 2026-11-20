@@ -39,7 +39,7 @@ func TestGuardSeesDecodedToolArguments(t *testing.T) {
 		llmtest.Turn{RawToolInput: true, ToolCalls: []llmtest.Call{{ID: "1", Name: "write_file", Input: raw}}},
 		llmtest.Turn{Text: "done"},
 	)
-	a, err := orchestrix.New(model, orchestrix.WithMiddleware(g), orchestrix.WithPermissionMode(permission.ModeBypass))
+	a, err := orchestrix.NewWithProvider(model, orchestrix.WithMiddleware(g), orchestrix.WithPermissionMode(permission.ModeBypass))
 	if err != nil {
 		t.Fatal(err)
 	}

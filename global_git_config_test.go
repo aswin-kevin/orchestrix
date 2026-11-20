@@ -43,7 +43,7 @@ func TestGlobalGitConfigInWorkspaceNeedsApproval(t *testing.T) {
 					Input: map[string]any{"command": tt.cmd}}}},
 				llmtest.Turn{Text: "done"},
 			)
-			a, err := orchestrix.New(model,
+			a, err := orchestrix.NewWithProvider(model,
 				orchestrix.WithShell(home, shell.Options{}),
 				orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
 				orchestrix.WithAllow("execute(git:*)"),
@@ -91,7 +91,7 @@ func TestIncludedGitConfigNeedsApproval(t *testing.T) {
 			Input: map[string]any{"command": "git -C project st"}}}},
 		llmtest.Turn{Text: "done"},
 	)
-	a, err := orchestrix.New(model,
+	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithShell(home, shell.Options{}),
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
 		orchestrix.WithAllow("execute(git:*)"),

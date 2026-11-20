@@ -41,7 +41,7 @@ func secretWorkspace(t *testing.T) *memory.Backend {
 func toolResultText(t *testing.T, call llmtest.Call, opts ...orchestrix.Option) string {
 	t.Helper()
 	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{call}}, llmtest.Turn{Text: "done"})
-	a, err := orchestrix.New(p, opts...)
+	a, err := orchestrix.NewWithProvider(p, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestResumeEditIsCheckedAgainstDenyRules(t *testing.T) {
 		}}},
 		llmtest.Turn{Text: "done"},
 	)
-	a, err := orchestrix.New(p, orchestrix.WithBackend(mem), orchestrix.WithDeny("write(/secrets/**)"))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackend(mem), orchestrix.WithDeny("write(/secrets/**)"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestAskRuleWinsOverToolSelfAllow(t *testing.T) {
 		}}},
 		llmtest.Turn{Text: "done"},
 	)
-	a, err := orchestrix.New(p, orchestrix.WithAsk("write_todos"))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithAsk("write_todos"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestWriteTodosAllowedInNonInteractiveModes(t *testing.T) {
 				ID: "t", Name: "write_todos", Input: map[string]any{"todos": []map[string]string{{"content": "a", "status": "pending"}}},
 			}
 			p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{call}}, llmtest.Turn{Text: "done"})
-			a, err := orchestrix.New(p, orchestrix.WithPermissionMode(mode))
+			a, err := orchestrix.NewWithProvider(p, orchestrix.WithPermissionMode(mode))
 			if err != nil {
 				t.Fatal(err)
 			}

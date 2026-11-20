@@ -72,7 +72,7 @@ func run(ctx context.Context, w io.Writer) error {
 			Input: map[string]string{"path": "/hello.txt", "content": "Hello from an approved write!\n"}}}},
 		llmtest.Turn{Text: "Created /hello.txt."},
 	)
-	a, err := orchestrix.New(model,
+	a, err := exmodel.New(model,
 		orchestrix.WithBackend(workspace),
 		orchestrix.WithCheckpointer(checkpoints),
 		// File edits are allowed by the permission mode, but every

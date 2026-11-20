@@ -10,7 +10,7 @@
 //	defer m.Close()
 //	tm := tasks.New(tasks.Config{})
 //	defer tm.Shutdown()
-//	a, err := orchestrix.New(model,
+//	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 //		orchestrix.WithBackendFactory(m.Backend),
 //		orchestrix.WithTasks(tm), // background jobs run in the container too
 //	)

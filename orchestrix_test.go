@@ -42,7 +42,7 @@ func writeThenAnswer(path, content string) *llmtest.Scripted {
 
 func TestNewWithScriptedProviderWritesFile(t *testing.T) {
 	mem := memory.New()
-	a, err := orchestrix.New(writeThenAnswer("/hello.txt", "hi"),
+	a, err := orchestrix.NewWithProvider(writeThenAnswer("/hello.txt", "hi"),
 		orchestrix.WithBackend(mem),
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
 	)
@@ -64,7 +64,7 @@ func TestNewWithScriptedProviderWritesFile(t *testing.T) {
 }
 
 func TestDefaultBackendKeepsFilesPerThread(t *testing.T) {
-	a, err := orchestrix.New(llmtest.New(), orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
+	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func writeThenReadInSeparateRuns(t *testing.T, tid string) llm.Block {
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "r", Name: "read_file", Input: map[string]string{"path": "/secret.txt"}}}},
 		llmtest.Turn{Text: "read"},
 	)
-	a, err := orchestrix.New(p, orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestThreadedRunKeepsFiles(t *testing.T) {
 }
 
 func TestThreadlessFactoryNeverShares(t *testing.T) {
-	a, err := orchestrix.New(llmtest.New(), orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
+	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func toolNames(p *llmtest.Scripted) []string {
 
 func TestWithoutMiddlewarePlanning(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.New(p, orchestrix.WithoutMiddleware("planning"))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithoutMiddleware("planning"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestWithoutMiddlewarePlanning(t *testing.T) {
 
 func TestPlanningIncludedByDefault(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.New(p)
+	a, err := orchestrix.NewWithProvider(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestPlanningIncludedByDefault(t *testing.T) {
 }
 
 func TestBadRuleErrors(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(),
+	_, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithAllow("read_file("),
 		orchestrix.WithDeny(""),
 	)
@@ -200,7 +200,7 @@ func TestBadRuleErrors(t *testing.T) {
 }
 
 func TestRulesReachConfig(t *testing.T) {
-	a, err := orchestrix.New(llmtest.New(),
+	a, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithAllow("read_file"), orchestrix.WithAsk("write_file"), orchestrix.WithDeny("execute"))
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestRulesReachConfig(t *testing.T) {
 }
 
 func TestUnknownPermissionModeErrors(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(), orchestrix.WithPermissionMode("acceptEdit"))
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithPermissionMode("acceptEdit"))
 	if err == nil {
 		t.Fatal("New accepted a mistyped permission mode")
 	}
@@ -224,7 +224,7 @@ func TestUnknownPermissionModeErrors(t *testing.T) {
 }
 
 func TestBackendAndFactoryConflict(t *testing.T) {
-	_, err := orchestrix.New(llmtest.New(),
+	_, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithBackend(memory.New()),
 		orchestrix.WithBackendFactory(func(string) backend.Backend { return memory.New() }),
 	)
@@ -233,17 +233,38 @@ func TestBackendAndFactoryConflict(t *testing.T) {
 	}
 }
 
-func TestInvalidModel(t *testing.T) {
-	for name, model := range map[string]any{"nil": nil, "int": 42} {
-		_, err := orchestrix.New(model)
-		if err == nil || !strings.Contains(err.Error(), "model must be a model spec string or an llm.Provider") {
-			t.Errorf("%s: err = %v, want model type error", name, err)
-		}
+func TestNewWithProvider(t *testing.T) {
+	p := llmtest.New()
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithMaxTurns(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := a.Config()
+	if cfg.Provider != llm.Provider(p) {
+		t.Errorf("Provider = %v, want the one passed in", cfg.Provider)
+	}
+	if cfg.Model != "" || cfg.MaxTurns != 3 {
+		t.Errorf("Model = %q, MaxTurns = %d; want empty model and 3", cfg.Model, cfg.MaxTurns)
+	}
+}
+
+func TestNewWithProviderNil(t *testing.T) {
+	a, err := orchestrix.NewWithProvider(nil)
+	if err == nil || !strings.Contains(err.Error(), "provider must not be nil") {
+		t.Fatalf("err = %v, want nil-provider error", err)
+	}
+	if a != nil {
+		t.Error("agent returned alongside the error")
+	}
+	// Option problems are still joined with it.
+	_, err = orchestrix.NewWithProvider(nil, orchestrix.WithPermissionMode("bogus"))
+	if err == nil || !strings.Contains(err.Error(), "provider must not be nil") || !strings.Contains(err.Error(), "bogus") {
+		t.Errorf("err = %v, want both errors joined", err)
 	}
 }
 
 func TestModelTimeoutReachesConfig(t *testing.T) {
-	a, err := orchestrix.New(llmtest.New(), orchestrix.WithModelTimeout(time.Minute))
+	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithModelTimeout(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +307,7 @@ func TestBadModelSpec(t *testing.T) {
 }
 
 func TestCacheBoundaryCoversSystemSegments(t *testing.T) {
-	a, err := orchestrix.New(llmtest.New(), orchestrix.WithSystemPrompt("one", "two"))
+	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithSystemPrompt("one", "two"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +317,7 @@ func TestCacheBoundaryCoversSystemSegments(t *testing.T) {
 }
 
 func TestLimitOptionsAndWithConfig(t *testing.T) {
-	a, err := orchestrix.New(llmtest.New(),
+	a, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithMaxTurns(7), orchestrix.WithMaxTokens(99), orchestrix.WithWorkingDir("/w"),
 		orchestrix.WithConfig(func(c *agent.Config) { c.MaxTurns = 9 }),
 	)

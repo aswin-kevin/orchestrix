@@ -64,7 +64,7 @@ func run(ctx context.Context, w io.Writer) error {
 		llmtest.Turn{Text: "The Moon is on average 384,400 away from Earth."}, // fails: no unit
 		llmtest.Turn{Text: "The Moon is on average 384,400 km (238,855 miles) away from Earth."},
 	)
-	a, err := orchestrix.New(model, orchestrix.WithRubric(cfg), orchestrix.WithMaxTurns(5))
+	a, err := exmodel.New(model, orchestrix.WithRubric(cfg), orchestrix.WithMaxTurns(5))
 	if err != nil {
 		return err
 	}

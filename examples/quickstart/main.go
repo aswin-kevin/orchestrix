@@ -54,7 +54,7 @@ func run(ctx context.Context, w io.Writer) error {
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "call_1", Name: "add", Input: addInput{A: 2, B: 3}}}},
 		llmtest.Turn{Text: "2 + 3 = 5."},
 	)
-	a, err := orchestrix.New(model,
+	a, err := exmodel.New(model,
 		orchestrix.WithSystemPrompt("You are a calculator. Use the add tool for every sum."),
 		orchestrix.WithTools(add),
 		orchestrix.WithMaxTurns(5),

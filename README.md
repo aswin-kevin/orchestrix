@@ -143,7 +143,7 @@ OPENAI_API_KEY=... ORX_MODEL=openai:gpt-4o go run ./examples/coordinator
 
 A live run stops at once, naming the variable, when the provider's API key is not set. The `fallback` example also needs `ORX_FALLBACK_MODEL`, the backup's spec; a healthy primary answers without any switch, so see the example's doc comment for how to force one.
 
-To copy an example into your own module, replace `exmodel.Model(...)` with your model spec (such as `"anthropic:claude-sonnet-4-5"`) or an `llm.Provider`, leave out `exmodel.Sub` and `exmodel.SubHeld` (a subagent without a `Provider` uses its parent's model) and `exmodel.Check` and `exmodel.WaitTasks` (they only keep the examples predictable), and replace `exmodel.Safe` with your own escaping of model text before printing it: `exmodel` and the `termsafe` package behind it are internal to this repository and cannot be imported from outside it.
+To copy an example into your own module, replace `exmodel.Model(...)` and `exmodel.New(model, ...)` with `orchestrix.New("anthropic:claude-sonnet-4-5", ...)` or `orchestrix.NewWithProvider(provider, ...)`, leave out `exmodel.Sub` and `exmodel.SubHeld` (a subagent without a `Provider` uses its parent's model) and `exmodel.Check` and `exmodel.WaitTasks` (they only keep the examples predictable), and replace `exmodel.Safe` with your own escaping of model text before printing it: `exmodel` and the `termsafe` package behind it are internal to this repository and cannot be imported from outside it.
 
 ## Providers
 
@@ -163,11 +163,11 @@ orchestrix.New("openai-responses:gpt-4o")
 
 Decision-model formats (`systemone`, `openai-decisions`) are listed under "Decision models".
 
-Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. For full control (proxy, headers, retries, rate limits), build an `llm.Config`, create a provider with `llm.New`, and pass it to `orchestrix.New` instead of a string.
+Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. For full control (proxy, headers, retries, rate limits), build an `llm.Config`, create a provider with `llm.New`, and pass it to `orchestrix.NewWithProvider` instead.
 
 ## Model fallback
 
-`WithFallback` lists backup models behind the one given to `New`. Each backup is a model spec string or an `llm.Provider`:
+`WithFallback` lists backup models behind the one given to `New` or `NewWithProvider`. Each backup is a model spec string or an `llm.Provider`:
 
 ```go
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
@@ -249,7 +249,7 @@ g, err := guard.New(guard.Config{
 if err != nil {
 	log.Fatal(err)
 }
-a, err := orchestrix.New(model, orchestrix.WithMiddleware(g))
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithMiddleware(g))
 ```
 
 The guard fails closed: when the decider errors, refuses or leaves a check unanswered, the input or call is blocked (`FailOpen` lets it through). Text longer than `MaxInputBytes` (default 20,000) is never sent to the decider and counts as a failed check, so raise it for tools with large arguments. `guard.Verdicts(final.State)` returns what each check saw.
@@ -279,7 +279,7 @@ func (toolLogger) WrapTool(ctx context.Context, call *agent.ToolCall,
 	return res, err
 }
 
-a, err := orchestrix.New(model, orchestrix.WithMiddleware(toolLogger{}))
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithMiddleware(toolLogger{}))
 ```
 
 An agent is shared by concurrent runs, so keep per-run data in `state.State` (see `state.NewKey`), not in the middleware's fields.
@@ -301,7 +301,7 @@ Rules refine the mode. Deny rules always win, even over `bypassPermissions`, an 
 
 ```go
 // Imports omitted; model comes from surrounding code.
-orchestrix.New(model,
+orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithAllow("read_file", "write(/notes/**)"),
 	orchestrix.WithAsk("delete"),
 	orchestrix.WithDeny("write(/secrets/**)", "execute(rm:*)"),
@@ -333,7 +333,7 @@ ws, err := disk.New("./workspace")
 if err != nil {
 	log.Fatal(err)
 }
-a, err := orchestrix.New(model, orchestrix.WithBackend(ws)) // shared by all threads
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithBackend(ws)) // shared by all threads
 ```
 
 Use `WithBackendFactory(func(threadID string) backend.Backend { ... })` to choose a backend per thread. Implement the `backend.Backend` interface to add your own.
@@ -346,7 +346,7 @@ sb, err := sandbox.New(remote, sandbox.Options{Root: "/workspace"})
 if err != nil {
 	log.Fatal(err)
 }
-a, err := orchestrix.New(model, orchestrix.WithBackend(sb))
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithBackend(sb))
 _, _ = a, err
 ```
 
@@ -358,7 +358,7 @@ Without an approver, a tool call that needs approval pauses the run. The final e
 
 ```go
 // Imports omitted; ctx and model come from surrounding code.
-a, _ := orchestrix.New(model) // default mode: write_file needs approval
+a, _ := orchestrix.New("anthropic:claude-sonnet-4-5") // default mode: write_file needs approval
 
 in := orchestrix.Text("Create /todo.txt with three items.")
 in.ThreadID = "demo"
@@ -404,7 +404,7 @@ To pause for a human before specific tools regardless of the permission mode, us
 
 ```go
 // Imports omitted; model comes from surrounding code.
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
 	orchestrix.WithInterruptOn("delete"), // pause for a human before every delete
 	orchestrix.WithInterruptConfig(map[string]hitl.InterruptConfig{
@@ -429,7 +429,7 @@ The default stack gives the model a `task` tool that starts a subagent: a separa
 A custom subagent that reviews changes read-only (imports omitted):
 
 ```go
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithSubagents(subagents.Subagent{
 		Name:           "reviewer",
 		Description:    "Reviews a change for bugs and risky edits.",
@@ -457,7 +457,7 @@ if err != nil {
 }
 defer tasks.Shutdown() // stops background subagents still running
 
-a, err := orchestrix.New(model, orchestrix.WithAsync(tasks))
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithAsync(tasks))
 _, _ = a, err
 ```
 
@@ -510,7 +510,7 @@ for ev, err := range c.Run(ctx, in) {
 ```go
 // Imports omitted; model comes from surrounding code.
 ctx := context.Background()
-a, err := orchestrix.New(model, orchestrix.WithPermissionMode(permission.ModePlan))
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithPermissionMode(permission.ModePlan))
 if err != nil {
 	log.Fatal(err)
 }
@@ -540,7 +540,7 @@ The `summarize` middleware keeps long conversations inside the model's context w
 
 ```go
 // Imports omitted; model comes from surrounding code.
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithSummarize(summarize.Config{
 		TriggerFraction: 0.7,           // compact earlier than the default 0.85
 		Model:           "small-model", // summarize with a cheaper model
@@ -558,7 +558,7 @@ A proposal never covers the newest `KeepTurns` (3) user turns, so the current tu
 
 ```go
 // Imports omitted; model comes from surrounding code.
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithCompress(compress.Config{
 		TriggerFraction: 0.5, // propose a range once half the window is used
 		KeepTurns:       4,   // never touch the newest four user turns
@@ -577,7 +577,7 @@ Hooks run your code at fixed points: `PreToolUse`, `PostToolUse`, `PostToolUseFa
 
 ```go
 // Imports omitted; model comes from surrounding code.
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithHooks(hooks.Config{
 		PreToolUse: []hooks.PreToolUseHook{{
 			Matcher: hooks.Matcher{Tools: []string{"write_file", "edit_file"}},
@@ -607,7 +607,7 @@ go get github.com/aswin-kevin/orchestrix/orxotel
 
 ```go
 // Imports omitted; model and tp (an OpenTelemetry TracerProvider) come from surrounding code.
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithMiddleware(orxotel.New(orxotel.Config{
 		TracerProvider: tp,          // nil uses otel.GetTracerProvider()
 		ProviderName:   "anthropic", // optional: gen_ai.provider.name
@@ -660,7 +660,7 @@ cp, err := file.New("./checkpoints")
 if err != nil {
 	log.Fatal(err)
 }
-a, err := orchestrix.New(model, orchestrix.WithCheckpointer(cp))
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithCheckpointer(cp))
 if err != nil {
 	log.Fatal(err)
 }
@@ -705,7 +705,7 @@ store, err := orxpg.NewStore(pool, "acme") // a kv.Store for kv.New
 if err != nil {
 	log.Fatal(err)
 }
-a, err := orchestrix.New(model, orchestrix.WithCheckpointer(cp))
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithCheckpointer(cp))
 _, _, _ = a, store, err
 ```
 
@@ -724,7 +724,7 @@ A checkpointed workspace is stored whole in the thread's state, so for large wor
 tm := tasks.New(tasks.Config{})
 defer tm.Shutdown() // stops background jobs still running
 
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithShell("./workspace", shell.Options{}),
 	orchestrix.WithTasks(tm),
 	orchestrix.WithAllow("execute(git:*)"),
@@ -758,7 +758,7 @@ defer m.Close() // removes this process's containers
 tm := tasks.New(tasks.Config{})
 defer tm.Shutdown()
 
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithBackendFactory(m.Backend), // file tools and execute run in the container
 	orchestrix.WithTasks(tm),                 // background jobs too
 )
@@ -777,7 +777,7 @@ Every container is labeled (`dev.orchestrix.orxdocker`, its scope, thread id and
 
 ```go
 // Imports omitted; model comes from surrounding code.
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithMemory(memory.Config{
 		Files: memory.DefaultFiles,   // /AGENTS.md in the workspace
 		Store: &memory.StoreConfig{}, // recall_memory and record_memory
@@ -798,7 +798,7 @@ memories, err := kv.New(store, "memories")
 if err != nil {
 	log.Fatal(err)
 }
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}),
 	orchestrix.WithMount(memory.DefaultDir, memories), // shared by every thread
 )
@@ -845,7 +845,7 @@ A subagent's `Skills` field limits the skills it is offered (never more than its
 
 ```go
 // Imports omitted; model comes from surrounding code.
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithSkills(skills.Config{
 		Sources: []skills.Source{skills.DirSource("./skills")},
 		Pinned:  []string{"house-style"}, // always in the system prompt
@@ -878,7 +878,7 @@ if err != nil {
 }
 defer m.Close() // stops stdio servers and ends HTTP sessions
 
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithMCP(m),
 	orchestrix.WithAllow("mcp__repo__status"),
 )
@@ -917,7 +917,7 @@ Approval restores the mode the run had before it entered plan mode (or `planmode
 
 ```go
 // Imports omitted; model comes from surrounding code.
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithPlanMode(planmode.Config{}),
 	orchestrix.WithApprover(func(ctx context.Context, req permission.Request, reason string) permission.Decision {
 		// For exit_plan_mode, req.Input holds the plan and req.NoRemember
@@ -947,7 +947,7 @@ report := tool.New("quarterly_report", "Builds the quarterly sales report.",
 	func(ctx context.Context, in reportInput, c *tool.Call) (tool.Result, error) {
 		return tool.Text("report for " + in.Quarter), nil
 	})
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithTools(deferred.Defer(report)), // found with search_tools
 	orchestrix.WithDeferredTools(deferred.Config{
 		Tools: []string{"mcp__docs__*"}, // defer by name pattern too
@@ -968,7 +968,7 @@ search, err := web.DuckDuckGo(web.DuckDuckGoConfig{})
 if err != nil {
 	log.Fatal(err)
 }
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithWeb(web.Config{Search: search}),
 	orchestrix.WithAllow("web_search", "web_fetch(https://go.dev/*)"),
 	orchestrix.WithDeny("web_fetch(https://internal.example.com/*)"),
@@ -994,7 +994,7 @@ cfg.Search, err = web.DuckDuckGo(web.DuckDuckGoConfig{Client: client})
 if err != nil {
 	log.Fatal(err)
 }
-a, err := orchestrix.New(model, orchestrix.WithWeb(cfg))
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithWeb(cfg))
 _, _ = a, err
 ```
 
@@ -1007,7 +1007,7 @@ Page content and search results are untrusted text written by third parties; the
 ```go
 // Imports omitted; model comes from surrounding code.
 ctx := context.Background()
-a, err := orchestrix.New(model, orchestrix.WithAskUser(askuser.Config{}))
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithAskUser(askuser.Config{}))
 if err != nil {
 	log.Fatal(err)
 }
@@ -1063,7 +1063,7 @@ for ev, err := range a.Resume(ctx, "setup", final.State, decisions) {
 
 ```go
 // Imports omitted; model comes from surrounding code.
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithRubric(rubric.Config{
 		Criteria: []string{
 			"Answers every part of the question.",
@@ -1090,7 +1090,7 @@ type Triage struct {
 	Files    []string `json:"files"`
 }
 
-a, err := orchestrix.New(model, orchestrix.WithOutputType[Triage]())
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithOutputType[Triage]())
 if err != nil {
 	log.Fatal(err)
 }
@@ -1139,7 +1139,7 @@ The `orx` CLI has no flag for this yet. See [`structured-output`](examples/struc
 // Imports omitted; model comes from surrounding code.
 llm.RegisterProfile("small-", llm.Profile{ContextWindow: 32_000, MaxOutput: 4_096}) // what it can do
 
-a, err := orchestrix.New(model,
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithProfiles(profiles.Config{Adjustments: []profiles.Adjustment{{
 		Models:            []string{"small-*", "*-mini"}, // how this agent treats it
 		PromptSuffix:      "Take one small step at a time and call one tool per turn.",

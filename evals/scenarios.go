@@ -53,7 +53,15 @@ func newAgent(env Env, opts ...orchestrix.Option) (*agent.Agent, error) {
 	if env.MaxTokens > 0 {
 		base = append(base, orchestrix.WithMaxTokens(env.MaxTokens))
 	}
-	return orchestrix.New(env.Model, append(base, opts...)...)
+	all := append(base, opts...)
+	switch m := env.Model.(type) {
+	case string:
+		return orchestrix.New(m, all...)
+	case llm.Provider:
+		return orchestrix.NewWithProvider(m, all...)
+	default:
+		return nil, fmt.Errorf("evals: Model must be a spec string or an llm.Provider, got %T", env.Model)
+	}
 }
 
 // denial: the deny rule refuses every call of delete_records.

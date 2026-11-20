@@ -2,7 +2,7 @@
 //
 // Add the middleware to an agent:
 //
-//	a, err := orchestrix.New(model,
+//	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 //		orchestrix.WithMiddleware(orxotel.New(orxotel.Config{
 //			TracerProvider: tp, // nil uses otel.GetTracerProvider()
 //		})),

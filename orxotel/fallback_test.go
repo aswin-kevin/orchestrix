@@ -26,7 +26,7 @@ func TestRecordFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFallback: %v", err)
 	}
-	a, err := orchestrix.New(provider,
+	a, err := orchestrix.NewWithProvider(provider,
 		orchestrix.WithMiddleware(orxotel.New(orxotel.Config{TracerProvider: tp})),
 		orchestrix.WithConfig(func(c *agent.Config) { c.Name = "worker" }),
 	)
@@ -101,7 +101,7 @@ func TestResponseSourceDuringCooldown(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewFallback: %v", err)
 			}
-			a, err := orchestrix.New(provider,
+			a, err := orchestrix.NewWithProvider(provider,
 				orchestrix.WithMiddleware(orxotel.New(orxotel.Config{TracerProvider: tp})),
 				orchestrix.WithConfig(func(c *agent.Config) {
 					c.Name = "worker"

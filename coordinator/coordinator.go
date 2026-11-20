@@ -11,6 +11,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/async"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 )
@@ -43,10 +44,11 @@ type Coordinator struct {
 	shutdown sync.Once
 }
 
-// New builds it with orchestrix.New(model, …): the system prompt, subagents
+// New builds it with orchestrix.New (a spec string) or
+// orchestrix.NewWithProvider (an llm.Provider), as model is: the system prompt, subagents
 // with Workers only (no general-purpose, no fork), async with the same
 // Workers (MaxRunning = MaxConcurrency), then opts (later options win).
-// model is what orchestrix.New accepts. A worker leaving Middleware nil
+// A worker leaving Middleware nil
 // inherits the coordinator's stack, as with the task tool. Specs given with
 // orchestrix.WithSubagents join the task tool only, not start_task. A host
 // passing its own orchestrix.WithSubagentConfig replaces the coordinator's,
@@ -93,7 +95,16 @@ func New(model any, cfg Config, opts ...orchestrix.Option) (*Coordinator, error)
 		}),
 		orchestrix.WithAsync(tasks),
 	}
-	a, err := orchestrix.New(model, append(base, opts...)...)
+	all := append(base, opts...)
+	var a *agent.Agent
+	switch m := model.(type) {
+	case string:
+		a, err = orchestrix.New(m, all...)
+	case llm.Provider:
+		a, err = orchestrix.NewWithProvider(m, all...)
+	default:
+		err = fmt.Errorf("model must be a model spec string or an llm.Provider, got %T", model)
+	}
 	if err == nil && !owns(a, tasks) {
 		err = errReplacedAsync
 	}

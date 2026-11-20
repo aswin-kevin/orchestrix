@@ -32,7 +32,7 @@ func newAgent(t *testing.T, name string, cfg orxotel.Config, turns []llmtest.Tur
 		orchestrix.WithMiddleware(orxotel.New(cfg)),
 		orchestrix.WithConfig(func(c *agent.Config) { c.Name = name }),
 	}, opts...)
-	a, err := orchestrix.New(llmtest.New(turns...), opts...)
+	a, err := orchestrix.NewWithProvider(llmtest.New(turns...), opts...)
 	if err != nil {
 		t.Fatalf("orchestrix.New: %v", err)
 	}

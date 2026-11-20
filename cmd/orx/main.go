@@ -305,7 +305,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 	cleanups = append(cleanups, stopScale)
 	agentOpts = append(agentOpts, scale...)
 
-	ag, err = orchestrix.New(provider, agentOpts...)
+	ag, err = orchestrix.NewWithProvider(provider, agentOpts...)
 	if err != nil {
 		return fail(exitUsage, "%v", err)
 	}

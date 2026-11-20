@@ -29,7 +29,7 @@ import (
 
 // Env is what a scenario needs to build its agents.
 type Env struct {
-	// Model is handed to orchestrix.New: a model spec string, or an
+	// Model is a model spec string (orchestrix.New) or an
 	// llm.Provider (the offline tests use a scripted one).
 	Model any
 	// MaxTokens caps the output tokens of each model response.

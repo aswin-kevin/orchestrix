@@ -9,8 +9,9 @@
 //
 // Copying an example out of this repository: this package and the termsafe
 // package it uses are internal, so they cannot be imported from another
-// module. Replace exmodel.Model(...) with your model spec (such as
-// "anthropic:claude-sonnet-4-5") or an llm.Provider, drop exmodel.Sub and
+// module. Replace exmodel.Model(...) and exmodel.New(model, ...) with
+// orchestrix.New("anthropic:claude-sonnet-4-5", ...) or
+// orchestrix.NewWithProvider(provider, ...), drop exmodel.Sub and
 // exmodel.SubHeld (a subagent without a Provider uses its parent's model),
 // drop exmodel.WaitTasks and exmodel.Check (they only keep the examples
 // predictable), and replace exmodel.Safe with your own escaping of untrusted
@@ -25,6 +26,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -67,12 +69,25 @@ func Check() error {
 }
 
 // Model returns the ORX_MODEL spec string when live, else a scripted provider
-// replaying turns. Either one can be passed to orchestrix.New.
+// replaying turns. Pass it to New.
 func Model(turns ...llmtest.Turn) any {
 	if Live() {
 		return os.Getenv(ModelEnv)
 	}
 	return llmtest.New(turns...)
+}
+
+// New builds an agent from a value returned by Model: orchestrix.New for the
+// spec string, orchestrix.NewWithProvider for the scripted provider.
+func New(model any, opts ...orchestrix.Option) (*agent.Agent, error) {
+	if spec, ok := model.(string); ok {
+		return orchestrix.New(spec, opts...)
+	}
+	p, ok := model.(llm.Provider)
+	if !ok {
+		return nil, fmt.Errorf("exmodel: model must be a spec string or an llm.Provider, got %T", model)
+	}
+	return orchestrix.NewWithProvider(p, opts...)
 }
 
 // Sub returns nil when live (a subagent then inherits the parent's model),
