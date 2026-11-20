@@ -83,8 +83,8 @@ func (b *Backend) lookup(ctx context.Context, p string) (item Item, ok bool, err
 // exists, with size 0, so it can be overwritten and deleted; reading it
 // reports the corruption.
 func (b *Backend) stat(ctx context.Context, p string) (info ItemInfo, ok bool, err error) {
-	if s, fast := b.store.(stater); fast {
-		info, err = s.stat(ctx, b.namespace, p)
+	if s, fast := b.store.(Stater); fast {
+		info, err = s.Stat(ctx, b.namespace, p)
 	} else {
 		var item Item
 		if item, err = b.store.Get(ctx, b.namespace, p); err == nil {

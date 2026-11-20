@@ -49,7 +49,10 @@ type DirStore struct {
 	now func() time.Time
 }
 
-var _ Store = (*DirStore)(nil)
+var (
+	_ Store  = (*DirStore)(nil)
+	_ Stater = (*DirStore)(nil)
+)
 
 // NewDirStore keeps each namespace in <dir>/<base32hex(namespace)>/ and each
 // key in one file named hex(sha256(key)) holding uvarint(len(key)) + key +
@@ -181,8 +184,8 @@ func (d *DirStore) Get(ctx context.Context, namespace, key string) (Item, error)
 	return Item{Value: raw[n:], ModTime: info.ModTime()}, nil
 }
 
-// stat returns key's metadata without reading its value.
-func (d *DirStore) stat(ctx context.Context, namespace, key string) (ItemInfo, error) {
+// Stat returns key's metadata without reading its value.
+func (d *DirStore) Stat(ctx context.Context, namespace, key string) (ItemInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return ItemInfo{}, err
 	}

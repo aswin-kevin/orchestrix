@@ -29,8 +29,10 @@ var ErrKeyTooLong = errors.New("kv: key too long")
 
 // Store is a namespaced key/value store; keys are cleaned absolute backend
 // paths. Implementations are safe for concurrent use. Backend learns whether
-// a file exists, and its size, with Get for a Store outside this package, so
-// reading a file through Backend costs such a Store two Gets.
+// a file exists, and its size, with Stat when the Store implements Stater
+// and with Get otherwise, so reading a file through Backend costs a Store
+// without Stater two Gets. The kvtest package is a conformance suite for
+// implementations.
 type Store interface {
 	// Get fails with an error wrapping backend.ErrNotFound for a missing key.
 	Get(ctx context.Context, namespace, key string) (Item, error)
@@ -76,10 +78,15 @@ func newStoreOptions(opts []StoreOption) storeOptions {
 	return o
 }
 
-// stater is implemented by the stores in this package so a Backend can test
-// existence and size without reading a value; other stores fall back to Get.
-type stater interface {
-	stat(ctx context.Context, namespace, key string) (ItemInfo, error)
+// Stater is optionally implemented by a Store that can report a key's size
+// and modification time without reading its value. Backend uses it to test
+// existence and size; without it, it calls Get, which fetches the value.
+// MemoryStore and DirStore implement it. kvtest checks that Stat agrees with
+// Get and List.
+type Stater interface {
+	// Stat returns key's metadata, or an error wrapping
+	// backend.ErrNotFound for a missing key.
+	Stat(ctx context.Context, namespace, key string) (ItemInfo, error)
 }
 
 // checkNamespace rejects a namespace no store can hold safely.
@@ -114,7 +121,10 @@ type MemoryStore struct {
 	now  func() time.Time
 }
 
-var _ Store = (*MemoryStore)(nil)
+var (
+	_ Store  = (*MemoryStore)(nil)
+	_ Stater = (*MemoryStore)(nil)
+)
 
 // NewMemoryStore returns an empty MemoryStore.
 func NewMemoryStore(opts ...StoreOption) *MemoryStore {
@@ -135,8 +145,8 @@ func (s *MemoryStore) Get(ctx context.Context, namespace, key string) (Item, err
 	return Item{Value: slices.Clone(e.value), ModTime: e.modTime}, nil
 }
 
-// stat returns key's metadata without copying its value.
-func (s *MemoryStore) stat(ctx context.Context, namespace, key string) (ItemInfo, error) {
+// Stat returns key's metadata without copying its value.
+func (s *MemoryStore) Stat(ctx context.Context, namespace, key string) (ItemInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return ItemInfo{}, err
 	}
