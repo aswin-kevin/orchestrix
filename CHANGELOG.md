@@ -2,7 +2,7 @@
 
 Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `orxdocker`, `evals`). The project is pre-1.0, so a minor release may break the API; every break is listed under "Breaking changes".
 
-## Unreleased
+## v0.8.0 — 2026-11-20
 
 A hardening pass ahead of v1.0.0: security fixes in the permission parser, bounds on everything that could grow or wait without limit, and a tighter public API.
 
