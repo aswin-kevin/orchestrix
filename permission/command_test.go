@@ -595,3 +595,52 @@ func TestSplitCommandHiddenCommandOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestCommentSmuggling(t *testing.T) {
+	shell := func(cmd string) Request { return Request{Tool: "execute", Subject: cmd, Shell: true} }
+	smuggle := "echo a # '\ntouch pwned # '"
+	segs, ok := SplitCommand(smuggle)
+	if ok || !slices.Contains(segs, "touch pwned") {
+		t.Fatalf("SplitCommand(%q) = %q, %v; want ok=false with segment %q", smuggle, segs, ok, "touch pwned")
+	}
+	allowEcho := Context{Mode: ModeDontAsk, Rules: Rules{Allow: []Rule{mustRule(t, "execute(echo:*)")}}}
+	if got := Evaluate(shell(smuggle), allowEcho); got.Behavior == Allow {
+		t.Fatalf("allow echo vouched for %q: %+v", smuggle, got)
+	}
+	denyTouch := Context{Mode: ModeBypass, Rules: Rules{Deny: []Rule{mustRule(t, "execute(touch:*)")}}}
+	if got := Evaluate(shell(smuggle), denyTouch); got.Behavior != Deny {
+		t.Fatalf("Evaluate(%q) = %+v, want Deny", smuggle, got)
+	}
+
+	segs, ok = SplitCommand("echo a # x")
+	if ok || !slices.Contains(segs, "echo a") {
+		t.Fatalf("SplitCommand(comment) = %q, %v; want ok=false with segment %q", segs, ok, "echo a")
+	}
+}
+
+func TestCommentInsideWordIsLiteral(t *testing.T) {
+	segs, ok := SplitCommand("echo a#b")
+	if !ok || !slices.Equal(segs, []string{"echo a#b"}) {
+		t.Fatalf("SplitCommand = %q, %v; want [echo a#b], true", segs, ok)
+	}
+}
+
+func TestANSICQuoting(t *testing.T) {
+	shell := func(cmd string) Request { return Request{Tool: "execute", Subject: cmd, Shell: true} }
+	cmd := `echo $'\'' ; touch pwned ; echo \'`
+	segs, ok := SplitCommand(cmd)
+	if ok || !slices.Contains(segs, "touch pwned") {
+		t.Fatalf("SplitCommand(%q) = %q, %v; want ok=false with segment %q", cmd, segs, ok, "touch pwned")
+	}
+	denyTouch := Context{Mode: ModeBypass, Rules: Rules{Deny: []Rule{mustRule(t, "execute(touch:*)")}}}
+	if got := Evaluate(shell(cmd), denyTouch); got.Behavior != Deny {
+		t.Fatalf("Evaluate(%q) = %+v, want Deny", cmd, got)
+	}
+	allowEcho := Context{Mode: ModeDontAsk, Rules: Rules{Allow: []Rule{mustRule(t, "execute(echo:*)")}}}
+	if got := Evaluate(shell(cmd), allowEcho); got.Behavior == Allow {
+		t.Fatalf("allow echo vouched for %q: %+v", cmd, got)
+	}
+	if _, ok := SplitCommand(`echo $"x"`); ok {
+		t.Fatal(`SplitCommand(echo $"x") ok = true, want false`)
+	}
+}

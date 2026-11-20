@@ -102,6 +102,16 @@ func (p *commandParser) step() {
 		p.reject()
 		p.endSegment()
 		p.pos += 2
+	case c == '#' && !p.inWord:
+		p.comment()
+	case c == '$' && p.peek(1) == '\'':
+		p.reject()
+		p.ansiCQuoted()
+	case c == '$' && p.peek(1) == '"':
+		// Locale translation: the content is not what the shell runs, so
+		// never vouch; the quoting itself is that of a double quote.
+		p.reject()
+		p.pos++
 	case c == '\'':
 		p.singleQuoted()
 	case c == '"':
@@ -229,6 +239,50 @@ func (p *commandParser) target() string {
 		p.reject()
 	}
 	return p.src[start:p.pos]
+}
+
+// comment consumes a comment, which runs to the next newline. A comment is
+// never vouched for: a quote inside it would be read differently by a
+// parser that does not know it is a comment. Its text is still split, as a
+// best effort for deny rules, and the newline is left to end the segment.
+func (p *commandParser) comment() {
+	p.reject()
+	p.endSegment()
+	end := strings.IndexByte(p.src[p.pos:], '\n')
+	if end < 0 {
+		end = len(p.src) - p.pos
+	}
+	sub := commandParser{src: p.src[p.pos+1 : p.pos+end], quotedAt: notQuoted}
+	sub.parse()
+	p.segments = append(p.segments, sub.segments...)
+	p.pos += end
+}
+
+// ansiCQuoted consumes $'...', where a backslash escapes the next character
+// (so \' does not close it). The raw content is written into the word; the
+// escapes are not interpreted, which is why the line is never vouched for.
+func (p *commandParser) ansiCQuoted() {
+	p.markQuoted()
+	p.pos += 2
+	for p.pos < len(p.src) {
+		c := p.src[p.pos]
+		switch c {
+		case '\'':
+			p.pos++
+			return
+		case '\\':
+			p.buf.WriteByte(c)
+			p.pos++
+			if p.pos >= len(p.src) {
+				p.reject()
+				return
+			}
+			c = p.src[p.pos]
+		}
+		p.buf.WriteByte(c)
+		p.pos++
+	}
+	p.reject() // unterminated
 }
 
 // singleQuoted consumes '...', whose content is literal.
