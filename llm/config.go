@@ -52,10 +52,18 @@ const (
 // resulting HTTP client and rate limiter, so a Config must not be copied
 // after that point; adapters keep it by pointer.
 type Config struct {
-	Format     Format
-	BaseURL    string
-	APIKey     string
-	Model      string
+	// Format selects the provider wire protocol; New and ParseModel set it
+	// from the model spec.
+	Format Format
+	// BaseURL is the API endpoint root; empty selects the format's public
+	// default.
+	BaseURL string
+	// APIKey is the credential sent to the provider.
+	APIKey string
+	// Model is the model name sent when a request names none.
+	Model string
+	// APIVersion is the anthropic-version header value for FormatAnthropic;
+	// empty selects the adapter's default.
 	APIVersion string
 	// Headers are extra headers sent with every request.
 	Headers map[string]string
@@ -99,7 +107,11 @@ type Config struct {
 	// RateLimit throttles request starts; nil means unlimited.
 	RateLimit *RateLimit
 
-	Thinking        string
+	// Thinking is the default Request.Thinking for requests that leave it
+	// empty.
+	Thinking string
+	// ReasoningEffort is the default Request.ReasoningEffort for requests
+	// that leave it empty.
 	ReasoningEffort string
 	// MaxTokensField names the OpenAI chat output-limit field; empty selects
 	// max_completion_tokens when BaseURL's host is api.openai.com and

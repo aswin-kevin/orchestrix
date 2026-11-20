@@ -31,33 +31,45 @@ const (
 
 // Source locates binary content such as an image or document.
 type Source struct {
-	Type      string `json:"type"` // "base64" or "url"
+	Type string `json:"type"` // "base64" or "url"
+	// MediaType is the MIME type of the content, such as "image/png".
 	MediaType string `json:"media_type,omitempty"`
-	Data      string `json:"data,omitempty"`
-	URL       string `json:"url,omitempty"`
+	// Data is the base64-encoded content when Type is "base64".
+	Data string `json:"data,omitempty"`
+	// URL is the location of the content when Type is "url".
+	URL string `json:"url,omitempty"`
 }
 
 // Block is one piece of message content. Which fields are meaningful depends
 // on Type; the rest stay zero and are omitted from JSON.
 type Block struct {
+	// Type selects the kind of content and which of the other fields are
+	// meaningful.
 	Type BlockType `json:"type"`
 
 	// Text is set for BlockText.
 	Text string `json:"text,omitempty"`
 
 	// Thinking and Signature are set for BlockThinking.
-	Thinking  string `json:"thinking,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+	// Signature is the provider's signature over the thinking text, replayed
+	// on later requests so the provider accepts the block.
 	Signature string `json:"signature,omitempty"`
 
 	// ID, Name and Input are set for BlockToolUse.
-	ID    string          `json:"id,omitempty"`
-	Name  string          `json:"name,omitempty"`
+	ID string `json:"id,omitempty"`
+	// Name is the called tool's name.
+	Name string `json:"name,omitempty"`
+	// Input is the tool call's arguments as raw JSON.
 	Input json.RawMessage `json:"input,omitempty"`
 
 	// ToolUseID, Content and IsError are set for BlockToolResult.
-	ToolUseID string  `json:"tool_use_id,omitempty"`
-	Content   []Block `json:"content,omitempty"`
-	IsError   bool    `json:"is_error,omitempty"`
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// Content is the tool's result as nested blocks, normally text.
+	Content []Block `json:"content,omitempty"`
+	// IsError reports that the tool call failed and Content describes the
+	// error.
+	IsError bool `json:"is_error,omitempty"`
 
 	// Source is set for BlockImage and BlockDocument.
 	Source *Source `json:"source,omitempty"`
@@ -94,7 +106,9 @@ func foreignThinking(b Block, own Format) bool {
 
 // Message is one turn of a conversation.
 type Message struct {
-	Role    Role    `json:"role"`
+	// Role says who authored the message.
+	Role Role `json:"role"`
+	// Content is the message's blocks, in order.
 	Content []Block `json:"content"`
 
 	// Meta carries local bookkeeping and is never sent to a model.

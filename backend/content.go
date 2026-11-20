@@ -94,8 +94,11 @@ func ApplyEdit(content []byte, old, replacement string, replaceAll bool) ([]byte
 // underlying sentinel (ErrNoMatch, ErrAmbiguous, ErrInvalidEdit).
 type EditStepError struct {
 	Index int // 0-based
+	// Total is the number of edits in the call.
 	Total int
-	Err   error
+	// Err is the underlying sentinel: ErrNoMatch, ErrAmbiguous or
+	// ErrInvalidEdit.
+	Err error
 }
 
 func (e *EditStepError) Error() string {

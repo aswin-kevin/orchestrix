@@ -20,27 +20,35 @@ const (
 
 // Option is a choice option or a score level.
 type Option struct {
-	Value       string
+	// Value is the option's identifier, used as the answer and as a key of
+	// Answer.Probabilities; unique within a question.
+	Value string
+	// Description explains to the model what the option or level means.
 	Description string
 }
 
 // Question is one thing the model is asked to decide about the input.
 type Question struct {
-	Name         string // unique in the request; [A-Za-z0-9_-], 1-64
-	Type         QuestionType
+	Name string // unique in the request; [A-Za-z0-9_-], 1-64
+	// Type selects the shape of the answer: yes/no, choice or score.
+	Type QuestionType
+	// Instructions tell the model what to decide; required.
 	Instructions string
 	Options      []Option // choice: options; score: levels, lowest first
 }
 
 // DecisionRequest asks a decision model to answer Questions about Input.
 type DecisionRequest struct {
-	Model     string  // "" means the Config's model
-	Input     []Block // text, image, document blocks
+	Model string  // "" means the Config's model
+	Input []Block // text, image, document blocks
+	// Questions are the questions to answer about Input.
 	Questions []Question
 }
 
 // Answer is the reply to one question. Only the fields for its Type are set.
 type Answer struct {
+	// Type is the type of the question this answers; it selects which of the
+	// other fields are set.
 	Type          QuestionType
 	Yes           float64            // YesNo: probability of yes
 	Choice        string             // Choice: the chosen option
@@ -52,9 +60,12 @@ type Answer struct {
 
 // DecisionResponse carries one Answer per question, keyed by Question.Name.
 type DecisionResponse struct {
-	Model   string
+	// Model is the model that produced the answers.
+	Model string
+	// Answers holds the answer to each question, keyed by Question.Name.
 	Answers map[string]Answer
-	Usage   Usage
+	// Usage is the token usage of the call.
+	Usage Usage
 }
 
 // Decider answers decision requests. Adapters for specific providers

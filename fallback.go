@@ -31,7 +31,9 @@ func WithFallback(specs ...string) Option {
 // WithFallbackConfig is WithFallback with full control. The model given to
 // New is always the first entry (the primary, named "primary") and
 // cfg.Entries are the backups, at least one, so no backup may be named
-// "primary". Every other field of cfg is used as given.
+// "primary". Every other field of cfg is used as given. MaxTokens is lowered
+// to a backup's output limit only when FallbackEntry.Model names a model with
+// a registered profile; a custom-provider entry without Model is not clamped.
 func WithFallbackConfig(cfg llm.FallbackConfig) Option {
 	return func(s *settings) {
 		c := cfg

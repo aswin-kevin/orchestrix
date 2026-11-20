@@ -180,10 +180,14 @@ const ContinuationMetaValue = "stop"
 
 // ModelRequest is everything a model call needs, as seen by ModelWrappers.
 type ModelRequest struct {
+	// Provider is the provider the innermost handler calls.
 	Provider llm.Provider
 	// Request is a view: editing its Messages never touches State.
 	Request llm.Request
-	State   *state.State
+	// State is the run's conversation state.
+	State *state.State
+	// Profile is the model profile in effect (Config.Profile or the one
+	// looked up for Config.Model).
 	Profile llm.Profile
 	// Turn is the zero-based index of the current model turn.
 	Turn int
@@ -202,15 +206,20 @@ type ModelHandler func(ctx context.Context, req *ModelRequest) (*llm.Response, e
 // ToolCall describes one tool execution as seen by ToolWrappers. Changing
 // Input before calling next changes what the tool receives.
 type ToolCall struct {
+	// ID is the tool_use id of the call.
 	ID string
 	// Name is the tool that runs: for a dispatched call, the target.
 	Name string
 	// Via is the name of the dispatching tool (tool.Dispatcher) when the
 	// model called Name through it; empty when the model called Name
 	// directly.
-	Via   string
+	Via string
+	// Input is the call's raw JSON arguments; a wrapper may replace it
+	// before calling next.
 	Input json.RawMessage
-	Tool  tool.Tool
+	// Tool is the tool that executes the call.
+	Tool tool.Tool
+	// State is the run's conversation state.
 	State *state.State
 	// Call is the per-invocation environment passed to Tool.Call.
 	Call *tool.Call

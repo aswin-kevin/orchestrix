@@ -62,7 +62,9 @@ type Config struct {
 
 	// System holds the system prompt sections. CacheBoundary is the number of
 	// leading sections that are stable enough to be cached.
-	System        []string
+	System []string
+	// CacheBoundary is the number of leading System sections that are stable
+	// enough to be cached; zero marks none.
 	CacheBoundary int
 
 	// Tools are the tools the model may call, in addition to any contributed
@@ -74,7 +76,9 @@ type Config struct {
 
 	// Backend is the workspace tools operate on. BackendFactory, when set,
 	// takes precedence and builds one backend per thread.
-	Backend        backend.Backend
+	Backend backend.Backend
+	// BackendFactory builds the backend for a thread from its ThreadID; when
+	// set it takes precedence over Backend.
 	BackendFactory func(threadID string) backend.Backend
 	// SyncWorkspace stores the content of a run's backend in its State
 	// (WorkspaceKey) and restores it into an empty backend when a run
@@ -132,14 +136,19 @@ type Config struct {
 
 	// PermissionMode, Rules and Approver drive tool permission checks.
 	PermissionMode permission.Mode
-	Rules          permission.Rules
-	Approver       permission.Approver
+	// Rules are the permission rules checked before each tool call.
+	Rules permission.Rules
+	// Approver is asked to decide a call the rules leave undecided; nil
+	// pauses the run with an Interrupt instead.
+	Approver permission.Approver
 
 	// MaxTokens caps the output tokens of each model request; zero means the
 	// profile's MaxOutput (Profile.MaxOutput), and when that is zero too the
 	// provider's own default applies. Temperature is passed through; nil
 	// leaves the provider default.
-	MaxTokens   int
+	MaxTokens int
+	// Temperature is the sampling temperature sent with each request; nil
+	// leaves the provider default.
 	Temperature *float64
 
 	// MaxTurns bounds the model turns of a run that call tools; zero means

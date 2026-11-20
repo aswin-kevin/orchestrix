@@ -45,9 +45,13 @@ const (
 
 // ActionRequest is one action a paused run needs a decision for.
 type ActionRequest struct {
-	ToolUseID string          `json:"tool_use_id"`
-	Tool      string          `json:"tool"`
-	Input     json.RawMessage `json:"input,omitempty"`
+	// ToolUseID is the tool_use id of the pending call; a Decision answers
+	// it by this id.
+	ToolUseID string `json:"tool_use_id"`
+	// Tool is the name of the tool the call targets.
+	Tool string `json:"tool"`
+	// Input is the call's raw JSON arguments.
+	Input json.RawMessage `json:"input,omitempty"`
 	// Reason explains to the human why a decision is needed.
 	Reason string `json:"reason,omitempty"`
 	// Allowed lists the decision types the host may answer with.
@@ -66,6 +70,7 @@ type ActionRequest struct {
 // The run emits KindInterrupt carrying an Interrupt that lists every pending
 // action of the turn, then ends with ReasonInterrupted.
 type Interrupt struct {
+	// Requests lists the pending actions, one per call awaiting a decision.
 	Requests []ActionRequest `json:"requests"`
 	// ReinvokeOnReject, set by a tool or ToolWrapper raising the interrupt,
 	// asks for a Reject decision to re-invoke it with tool.Call.Resume of
@@ -85,8 +90,11 @@ func (i *Interrupt) Error() string {
 
 // Decision is a human's answer to one ActionRequest, matched by ToolUseID.
 type Decision struct {
-	ToolUseID string       `json:"tool_use_id"`
-	Type      DecisionType `json:"type"`
+	// ToolUseID is the tool_use id of the ActionRequest this decision
+	// answers.
+	ToolUseID string `json:"tool_use_id"`
+	// Type is the kind of decision; it must be one the request allows.
+	Type DecisionType `json:"type"`
 	// Input is the replacement input for Edit.
 	Input json.RawMessage `json:"input,omitempty"`
 	// Message is the rejection reason for Reject or the answer for Respond.

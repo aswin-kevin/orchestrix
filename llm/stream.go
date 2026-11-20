@@ -31,16 +31,29 @@ const (
 // latter may also set StopReason. Either may carry Model and ResponseID, the
 // model and reply id the provider reported, once they are known.
 type StreamEvent struct {
-	Type       EventType
-	Index      int
-	Text       string
-	ToolID     string
-	ToolName   string
+	// Type is the kind of the event.
+	Type EventType
+	// Index identifies the content block the event belongs to.
+	Index int
+	// Text is the text, thinking or tool-input fragment of a delta event.
+	Text string
+	// ToolID is the tool_use id, for EvToolStart.
+	ToolID string
+	// ToolName is the tool name, for EvToolStart.
+	ToolName string
+	// StopReason is why generation stopped, set on EvMessageDelta.
 	StopReason string
-	Key        string
-	Value      string
-	Usage      Usage
-	Model      string
+	// Key is the provider-data key, for EvProviderData.
+	Key string
+	// Value is the signature for EvSignature or the provider-data value for
+	// EvProviderData.
+	Value string
+	// Usage is the token usage reported by EvMessageStart and
+	// EvMessageDelta.
+	Usage Usage
+	// Model is the model the provider reported, once known.
+	Model string
+	// ResponseID is the reply id the provider reported, once known.
 	ResponseID string
 }
 

@@ -113,7 +113,9 @@ const (
 // carries the value the run's code panicked with and the stack of the
 // goroutine at the time.
 type PanicError struct {
+	// Value is what the code panicked with.
 	Value any
+	// Stack is the goroutine's stack trace at the time of the panic.
 	Stack []byte
 }
 
@@ -131,6 +133,7 @@ func (e *PanicError) Unwrap() error {
 // Event is one item of a run's output stream. Kind selects which of the other
 // fields are set; see the EventKind constants.
 type Event struct {
+	// Kind says what the event carries.
 	Kind EventKind
 	// Agent is the name of the agent that produced the event: its run's
 	// Input.AgentName or Config.Name. An event forwarded from a nested run
@@ -155,12 +158,21 @@ type Event struct {
 	// nested run keeps the time it had there.
 	Time time.Time
 	// RunID identifies the run that produced the event (RunInfo.RunID). An
-	// event forwarded from a nested run keeps the nested run's id.
-	RunID    string
-	Text     string
-	ToolID   string
+	// event forwarded from a nested run keeps the nested run's id. Empty on
+	// the KindFinal of a run that never started (ReasonBusy from Thread,
+	// ReasonInvalidResume).
+	RunID string
+	// Text is the delta or message of a KindText, KindThinking or
+	// KindProgress event.
+	Text string
+	// ToolID is the tool_use id of the call, set on KindToolUse and
+	// KindToolResult events.
+	ToolID string
+	// ToolName is the name of the tool, set on KindToolUse and
+	// KindToolResult events.
 	ToolName string
-	Input    json.RawMessage
+	// Input is the tool call's raw JSON arguments, set on KindToolUse.
+	Input json.RawMessage
 	// ToolResult is set for KindToolResult.
 	ToolResult *tool.Result
 	// Usage is set for KindUsage.
@@ -173,9 +185,11 @@ type Event struct {
 
 // Final is the outcome of a run, delivered with KindFinal.
 type Final struct {
+	// Reason says why the run ended.
 	Reason TerminalReason
 	// Text is the assistant's last text reply, empty if there was none.
-	Text  string
+	Text string
+	// Usage is the token usage summed over the run's model calls.
 	Usage llm.Usage
 	// Turns is the number of model turns the run took.
 	Turns int

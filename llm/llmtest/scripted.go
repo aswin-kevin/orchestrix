@@ -23,7 +23,9 @@ var errExhausted = errors.New("llmtest: script exhausted")
 
 // Call is one scripted tool call.
 type Call struct {
-	ID   string
+	// ID is the tool_use id of the call.
+	ID string
+	// Name is the name of the tool to call.
 	Name string
 	// Input is marshaled to JSON. When the turn sets RawToolInput it must be
 	// a string and is streamed verbatim, which lets tests send malformed JSON.
@@ -32,13 +34,16 @@ type Call struct {
 
 // Turn is one scripted model reply.
 type Turn struct {
-	Text     string
+	// Text is the text the turn streams first.
+	Text string
+	// Thinking is the reasoning text the turn streams before its text.
 	Thinking string
 	// ToolCalls are emitted after the text, each as its own content block.
 	ToolCalls []Call
 	// StopReason defaults to tool_use when ToolCalls is set, else end_turn.
 	StopReason string
-	Usage      llm.Usage
+	// Usage is the token usage the turn reports.
+	Usage llm.Usage
 	// Err, when set, is returned instead of any events.
 	Err error
 	// RawToolInput makes every Call.Input a string used without marshaling.

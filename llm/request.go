@@ -8,9 +8,13 @@ package llm
 // call (Event.Usage, with Event.Turn and Event.RunID). Final.Usage is the
 // run's total, which is enough only when one model served every call.
 type Usage struct {
-	Input      int
-	Output     int
-	CacheRead  int
+	// Input is the number of input tokens, as the provider reports it.
+	Input int
+	// Output is the number of output tokens generated.
+	Output int
+	// CacheRead is the number of input tokens served from the prompt cache.
+	CacheRead int
+	// CacheWrite is the number of input tokens written to the prompt cache.
 	CacheWrite int
 }
 
@@ -34,7 +38,9 @@ func (u *Usage) MergeEcho(o Usage) {
 
 // ToolSchema describes a tool the model may call.
 type ToolSchema struct {
-	Name        string
+	// Name is the tool's name as the model calls it.
+	Name string
+	// Description tells the model what the tool does.
 	Description string
 	InputSchema map[string]any // JSON Schema for the tool input
 }
@@ -45,11 +51,14 @@ const MaxCacheBreakpoints = 4
 
 // Request is a provider-neutral model call.
 type Request struct {
+	// Model is the model name; empty means the provider's configured model.
 	Model string
 
 	// System holds the system prompt segments. Segments [0, CacheBoundary)
 	// form the cacheable prefix; 0 means nothing is marked cacheable.
-	System        []string
+	System []string
+	// CacheBoundary is the number of leading System segments marked
+	// cacheable; 0 marks none.
 	CacheBoundary int
 
 	// CacheRecent is the number of trailing user messages a provider with
@@ -57,11 +66,17 @@ type Request struct {
 	// Providers without explicit caching ignore it.
 	CacheRecent int
 
-	Messages    []Message
-	Tools       []ToolSchema
-	MaxTokens   int
+	// Messages is the conversation sent to the model.
+	Messages []Message
+	// Tools are the tools the model may call.
+	Tools []ToolSchema
+	// MaxTokens caps the output tokens; 0 selects Config.DefaultMaxTokens.
+	MaxTokens int
+	// Temperature is the sampling temperature; nil leaves the provider
+	// default.
 	Temperature *float64
-	Stop        []string
+	// Stop lists sequences that end generation.
+	Stop []string
 
 	// Thinking is "" to inherit the provider default, or "enabled",
 	// "adaptive" or "disabled".
@@ -88,9 +103,12 @@ const (
 
 // Response is a complete model reply.
 type Response struct {
-	Message    Message
+	// Message is the assistant's reply.
+	Message Message
+	// StopReason is why generation stopped, one of the Stop constants.
 	StopReason string
-	Usage      Usage
+	// Usage is the token usage of the call.
+	Usage Usage
 	// Model is the model that produced the reply, as the provider reported
 	// it; it may be more specific than the model requested.
 	Model string

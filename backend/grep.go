@@ -18,6 +18,7 @@ const MaxGrepFileBytes = 10 << 20
 // LineMatch is one matching line of a file.
 type LineMatch struct {
 	Line int // 1-based
+	// Text is the content of the matching line.
 	Text string
 }
 

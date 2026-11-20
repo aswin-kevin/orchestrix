@@ -19,6 +19,7 @@ const DefaultFallbackCooldown = 30 * time.Second
 
 // FallbackEntry is one provider in a fallback chain.
 type FallbackEntry struct {
+	// Provider is the provider that serves requests for this entry.
 	Provider Provider
 	// Model is the model this provider answers with. When it matches a
 	// registered profile, MaxTokens is lowered to that profile's MaxOutput;

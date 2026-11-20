@@ -11,22 +11,30 @@ import (
 
 // FileInfo describes one directory entry.
 type FileInfo struct {
-	Path    string
-	IsDir   bool
-	Size    int64
+	// Path is the entry's backend path.
+	Path string
+	// IsDir reports whether the entry is a directory.
+	IsDir bool
+	// Size is the size in bytes.
+	Size int64
+	// ModTime is the last modification time.
 	ModTime time.Time
 }
 
 // ReadResult is the outcome of Backend.Read.
 type ReadResult struct {
-	Lines      []string
-	StartLine  int // 0-based index of Lines[0]
+	// Lines are the lines read, without line terminators.
+	Lines     []string
+	StartLine int // 0-based index of Lines[0]
+	// TotalLines is the number of lines in the whole file.
 	TotalLines int
 	// Binary is set for non-text files; Lines is then empty.
-	Binary    bool
+	Binary bool
+	// MediaType is the media type of a binary file.
 	MediaType string
 	Data      []byte // binary files only
-	ModTime   time.Time
+	// ModTime is the file's last modification time.
+	ModTime time.Time
 }
 
 // EditResult is the outcome of Backend.Edit.
@@ -46,9 +54,12 @@ const (
 
 // GrepOptions configures Backend.Grep.
 type GrepOptions struct {
-	Path       string // directory or file to search; empty means the root
-	Glob       string // optional file-name filter
-	Mode       GrepMode
+	Path string // directory or file to search; empty means the root
+	Glob string // optional file-name filter
+	// Mode selects what Grep reports; empty selects the implementation
+	// default.
+	Mode GrepMode
+	// IgnoreCase matches case-insensitively.
 	IgnoreCase bool
 	Literal    bool // treat the pattern as plain text instead of RE2
 	MaxResults int  // 0 means the implementation default (1000)
@@ -57,9 +68,13 @@ type GrepOptions struct {
 // GrepMatch is one result of Backend.Grep. Line and Text are set in content
 // mode, Count in count mode.
 type GrepMatch struct {
-	Path  string
-	Line  int
-	Text  string
+	// Path is the file the result is for.
+	Path string
+	// Line is the 1-based line number, set in content mode.
+	Line int
+	// Text is the matching line, set in content mode.
+	Text string
+	// Count is the number of matching lines in the file, set in count mode.
 	Count int
 }
 
@@ -100,11 +115,16 @@ type ExecOptions struct {
 
 // ExecResult is the outcome of Executor.Execute.
 type ExecResult struct {
-	Output   string
+	// Output is the captured output of the command, cut at
+	// ExecOptions.MaxOutputBytes.
+	Output string
+	// ExitCode is the command's exit status; -1 when it was killed by a
+	// signal or timed out.
 	ExitCode int
 	// Truncated reports that Output was cut at MaxOutputBytes.
 	Truncated bool
-	TimedOut  bool
+	// TimedOut reports that the command was stopped at ExecOptions.Timeout.
+	TimedOut bool
 }
 
 // Executor runs shell commands.
@@ -155,7 +175,11 @@ type Snapshotter interface {
 
 // EditOp is one replacement within a MultiEditor.MultiEdit call.
 type EditOp struct {
-	Old, New   string
+	// Old is the text to replace and New is its replacement; Old must not be
+	// empty or equal to New.
+	Old, New string
+	// ReplaceAll replaces every occurrence of Old; otherwise Old must be
+	// unique in the file.
 	ReplaceAll bool
 }
 

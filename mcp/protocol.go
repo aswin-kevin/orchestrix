@@ -73,9 +73,12 @@ const jsonrpcVersion = "2.0"
 
 // RPCError is a JSON-RPC error returned by the other side.
 type RPCError struct {
-	Code    int             `json:"code"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data,omitempty"`
+	// Code is the JSON-RPC error code.
+	Code int `json:"code"`
+	// Message is the error's description.
+	Message string `json:"message"`
+	// Data is optional extra detail as raw JSON.
+	Data json.RawMessage `json:"data,omitempty"`
 }
 
 // Error implements error.
@@ -122,58 +125,88 @@ func marshalParams(v any) (json.RawMessage, error) {
 
 // Implementation names a client or server and its version.
 type Implementation struct {
-	Name    string `json:"name"`
+	// Name is the name of the client or server.
+	Name string `json:"name"`
+	// Version is its version string.
 	Version string `json:"version"`
 }
 
 // ToolAnnotations are a server's hints about a tool's behavior. They are
 // untrusted: a nil hint is unknown, not false.
 type ToolAnnotations struct {
-	Title           string `json:"title,omitempty"`
-	ReadOnlyHint    *bool  `json:"readOnlyHint,omitempty"`
-	DestructiveHint *bool  `json:"destructiveHint,omitempty"`
-	IdempotentHint  *bool  `json:"idempotentHint,omitempty"`
-	OpenWorldHint   *bool  `json:"openWorldHint,omitempty"`
+	// Title is a human-readable title for the tool.
+	Title string `json:"title,omitempty"`
+	// ReadOnlyHint says the tool does not modify its environment.
+	ReadOnlyHint *bool `json:"readOnlyHint,omitempty"`
+	// DestructiveHint says the tool may perform destructive updates rather
+	// than only additive ones.
+	DestructiveHint *bool `json:"destructiveHint,omitempty"`
+	// IdempotentHint says that calling the tool again with the same
+	// arguments has no further effect.
+	IdempotentHint *bool `json:"idempotentHint,omitempty"`
+	// OpenWorldHint says the tool may interact with entities outside the
+	// server's own domain.
+	OpenWorldHint *bool `json:"openWorldHint,omitempty"`
 }
 
 // ToolInfo describes a tool a server offers.
 type ToolInfo struct {
-	Name        string `json:"name"`
-	Title       string `json:"title,omitempty"`
+	// Name is the tool's name as called.
+	Name string `json:"name"`
+	// Title is a human-readable title.
+	Title string `json:"title,omitempty"`
+	// Description tells the model what the tool does.
 	Description string `json:"description,omitempty"`
 	// InputSchema is the JSON Schema of the arguments; a server always sends
 	// one (nil when serving → {"type":"object"}).
-	InputSchema map[string]any   `json:"inputSchema"`
+	InputSchema map[string]any `json:"inputSchema"`
+	// Annotations are the server's hints about the tool; nil when it sent
+	// none.
 	Annotations *ToolAnnotations `json:"annotations,omitempty"`
 }
 
 // ResourceContent is the content of a resource: Text, or Blob (base64).
 type ResourceContent struct {
-	URI      string `json:"uri"`
+	// URI is the resource's URI.
+	URI string `json:"uri"`
+	// MimeType is the content's MIME type.
 	MimeType string `json:"mimeType,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Blob     string `json:"blob,omitempty"`
+	// Text is the content of a text resource.
+	Text string `json:"text,omitempty"`
+	// Blob is the base64-encoded content of a binary resource.
+	Blob string `json:"blob,omitempty"`
 }
 
 // Content is one block of a tool result. Type is "text" (Text), "image" or
 // "audio" (Data base64 and MimeType), "resource" (Resource) or
 // "resource_link" (URI, Name, MimeType).
 type Content struct {
-	Type     string           `json:"type"`
-	Text     string           `json:"text,omitempty"`
-	Data     string           `json:"data,omitempty"`
-	MimeType string           `json:"mimeType,omitempty"`
-	URI      string           `json:"uri,omitempty"`
-	Name     string           `json:"name,omitempty"`
+	// Type selects the kind of block and which of the other fields are set.
+	Type string `json:"type"`
+	// Text is the text of a "text" block.
+	Text string `json:"text,omitempty"`
+	// Data is the base64 content of an "image" or "audio" block.
+	Data string `json:"data,omitempty"`
+	// MimeType is the MIME type of Data, or of a "resource_link".
+	MimeType string `json:"mimeType,omitempty"`
+	// URI is the target of a "resource_link" block.
+	URI string `json:"uri,omitempty"`
+	// Name is the name of a "resource_link" block.
+	Name string `json:"name,omitempty"`
+	// Resource is the embedded content of a "resource" block.
 	Resource *ResourceContent `json:"resource,omitempty"`
 }
 
 // CallToolResult is the result of a tool call. IsError marks a failure the
 // tool reports (as opposed to a protocol error).
 type CallToolResult struct {
-	Content           []Content       `json:"content"`
+	// Content is the result's blocks.
+	Content []Content `json:"content"`
+	// StructuredContent is the result as raw JSON; it is used as the text
+	// when Content is empty.
 	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
-	IsError           bool            `json:"isError,omitempty"`
+	// IsError marks a failure the tool reports itself.
+	IsError bool `json:"isError,omitempty"`
 }
 
 // TextResult returns a result holding one text block.
@@ -184,12 +217,18 @@ func TextResult(text string) *CallToolResult {
 // Resource describes a resource a server offers. Size is in bytes, 0 when
 // unknown.
 type Resource struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Title       string `json:"title,omitempty"`
+	// URI identifies the resource.
+	URI string `json:"uri"`
+	// Name is the resource's name.
+	Name string `json:"name"`
+	// Title is a human-readable title.
+	Title string `json:"title,omitempty"`
+	// Description describes the resource.
 	Description string `json:"description,omitempty"`
-	MimeType    string `json:"mimeType,omitempty"`
-	Size        int64  `json:"size,omitempty"`
+	// MimeType is the resource's MIME type.
+	MimeType string `json:"mimeType,omitempty"`
+	// Size is the size in bytes; 0 when unknown.
+	Size int64 `json:"size,omitempty"`
 }
 
 // Wire shapes of the requests and results the package exchanges.
