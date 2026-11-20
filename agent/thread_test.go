@@ -254,6 +254,9 @@ func assertBusy(t *testing.T, seq iter.Seq2[Event, error]) {
 	if len(events) != 1 || final.Reason != ReasonBusy || !errors.Is(final.Err, ErrThreadBusy) || final.State != nil {
 		t.Fatalf("busy run: %d events, final = %+v; want a lone busy KindFinal without State", len(events), final)
 	}
+	if events[0].Time.IsZero() {
+		t.Fatal("busy KindFinal has no Time")
+	}
 }
 
 func TestForkRefusesExistingThread(t *testing.T) {

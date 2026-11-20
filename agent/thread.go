@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"sync"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -265,5 +266,5 @@ func (t *Thread) release(s *state.State, v checkpoint.Version) {
 // busyEvent is the lone KindFinal of a run rejected with ReasonBusy.
 func (t *Thread) busyEvent() Event {
 	final := &Final{Reason: ReasonBusy, Err: ErrThreadBusy}
-	return Event{Kind: KindFinal, Agent: t.agent.cfg.Name, Final: final}
+	return Event{Kind: KindFinal, Agent: t.agent.cfg.Name, Time: time.Now(), Final: final}
 }

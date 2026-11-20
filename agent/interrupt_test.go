@@ -777,3 +777,29 @@ func TestResumeWithoutTheInterruptedMessageIsInvalid(t *testing.T) {
 		t.Fatal("call ran although the resume was invalid")
 	}
 }
+
+func TestResumedRunEventsTurnAndInvalidResumeTime(t *testing.T) {
+	log := newCallLog()
+	a, _, final := interruptedRun(t, Config{Tools: []tool.Tool{writeTool(log)}}, writeCall("w"))
+	events, _ := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "w", Type: Approve}}))
+	var sawResult bool
+	for _, ev := range events {
+		if ev.RunID == "" || ev.Time.IsZero() {
+			t.Fatalf("resumed event %+v lacks RunID or Time", ev)
+		}
+		if ev.Kind == KindToolResult {
+			sawResult = true
+			if ev.Turn != 0 {
+				t.Fatalf("resumed tool result Turn = %d, want 0 (before the first model turn)", ev.Turn)
+			}
+		}
+	}
+	if !sawResult {
+		t.Fatal("no tool result from the resumed run")
+	}
+
+	events, bad := collect(t, a.Resume(context.Background(), "", state.New(), nil))
+	if bad.Reason != ReasonInvalidResume || events[0].Time.IsZero() {
+		t.Fatalf("invalid resume: final %+v, Time %v; want invalid_resume with a Time", bad, events[0].Time)
+	}
+}

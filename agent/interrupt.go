@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -144,7 +145,7 @@ func (a *Agent) ResumeWith(ctx context.Context, in Input, decisions []Decision) 
 		resume, err := a.newResumption(in, decisions)
 		if err != nil {
 			final := &Final{Reason: ReasonInvalidResume, Err: err, State: in.State, Version: in.Version}
-			yield(Event{Kind: KindFinal, Agent: a.name(in), Final: final}, err)
+			yield(Event{Kind: KindFinal, Agent: a.name(in), Time: time.Now(), Final: final}, err)
 			return
 		}
 		a.stream(ctx, in, resume)(yield)

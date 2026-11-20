@@ -143,7 +143,11 @@ type Event struct {
 	// usage of the turn, and the events of the tool calls it requested.
 	// Events emitted before the first model turn (such as the results of
 	// calls answered by a resumed run) have Turn 0. KindFinal carries the
-	// number of the last turn, Final.Turns.
+	// number of the last turn, Final.Turns. Events of a model call that
+	// failed carry the number of the turn it attempted, which can exceed
+	// Final.Turns: that counts recorded replies. A resumed run numbers its
+	// own turns from 1. KindFinal of a run that never started (ReasonBusy,
+	// ReasonInvalidResume) has Turn 0.
 	Turn int
 	// Time is when the run emitted the event. An event forwarded from a
 	// nested run keeps the time it had there.

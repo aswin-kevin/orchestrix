@@ -256,3 +256,22 @@ func TestLoggerReportsCheckpointSaveFailure(t *testing.T) {
 	}
 	t.Fatalf("no save failure record: %+v", records())
 }
+
+func TestRunLoggerCarriesRunID(t *testing.T) {
+	log, records := newCapture()
+	a := mustNew(t, Config{
+		Provider:     llmtest.New(llmtest.Turn{Text: "done"}),
+		Checkpointer: failingRelease{cpmemory.New()},
+		Logger:       log,
+	})
+	events, _ := collect(t, a.Run(context.Background(), threadInput("hi")))
+	for _, r := range records() {
+		if r.level == slog.LevelWarn {
+			if r.attrs["run_id"] != events[0].RunID || r.attrs["run_id"] == "" {
+				t.Fatalf("record run_id = %q, want %q", r.attrs["run_id"], events[0].RunID)
+			}
+			return
+		}
+	}
+	t.Fatal("no warn record")
+}

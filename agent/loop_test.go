@@ -1166,7 +1166,7 @@ func TestNestedRunHasOwnRunID(t *testing.T) {
 		if ev.Agent == "child" {
 			want, sawChild = childID, true
 		}
-		if ev.Agent != "grandchild" && ev.RunID != want {
+		if ev.RunID != want {
 			t.Fatalf("event %+v has RunID %q, want %q", ev, ev.RunID, want)
 		}
 	}
