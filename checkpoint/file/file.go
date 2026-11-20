@@ -27,8 +27,9 @@
 // also fsyncs the directory so the new file's entry survives a crash. After
 // Save returns nil the checkpoint survives process and OS crashes (subject
 // to the storage device honoring fsync). Windows has no directory fsync, so
-// there the directory step is skipped and a new or compacted file's entry is
-// as durable as the file system makes it on its own. A crash mid-write can
+// there the directory step is skipped: WithSync(true) covers the records but
+// not a new or compacted file's directory entry, which is as durable as the
+// file system makes it on its own. A crash mid-write can
 // leave a torn final line, one without its newline: readers ignore it, and
 // the next Save truncates it away before appending. A newline-terminated
 // line that does not parse, even the last one, cannot come from a crash and

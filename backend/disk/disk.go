@@ -65,10 +65,13 @@ type Option func(*Backend)
 
 // WithVirtual chooses how paths map to the file system. When true (the
 // default) "/a/b" means <root>/a/b. When false, paths are real file-system
-// paths, which must still lie inside the root. On Windows such a path starts
-// with its drive ("C:\work\a.txt" or "C:/work/a.txt"), and the paths the
-// backend returns use forward slashes ("C:/work/a.txt"); a root on a UNC
-// share (\\server\share) needs the default, virtual paths.
+// paths, which must still lie inside the root. On Windows such a path is
+// absolute with its drive ("C:\work\a.txt" or "C:/work/a.txt"), and the
+// paths the backend returns use forward slashes ("C:/work/a.txt"); a root on
+// a UNC share (\\server\share) needs the default, virtual paths. Drive-letter
+// paths work only when the backend is called directly: the agent's file
+// tools clean every path into "/a/b" form first, so on Windows give an agent
+// a virtual backend.
 func WithVirtual(virtual bool) Option {
 	return func(b *Backend) { b.virtual = virtual }
 }
@@ -110,9 +113,12 @@ func New(root string, opts ...Option) (*Backend, error) {
 	return b, nil
 }
 
-// Close releases the root directory. Operations after Close fail. Close is
-// idempotent. Agent.Close calls it for a backend given with WithBackend or
-// WithShell.
+// Close releases the root directory. File operations (Read, Write, Edit,
+// Ls, Glob, Delete, and Grep without ripgrep) fail after Close; RealPath,
+// Grep through ripgrep and a shell backend's commands do not use the root
+// handle and keep working. Close is idempotent. Agent.Close calls it for a
+// backend given with WithBackend or WithShell, so a host sharing one backend
+// between agents closes only the last of them.
 func (b *Backend) Close() error {
 	return b.fsRoot.Close()
 }
@@ -136,6 +142,11 @@ func (b *Backend) clean(p string) (string, error) {
 	}
 	if strings.ContainsRune(p, 0) {
 		return "", fmt.Errorf("%w: contains NUL byte", backend.ErrInvalidPath)
+	}
+	if !filepath.IsAbs(p) {
+		// A drive-relative path ("C:foo") depends on the process's
+		// current directory on that drive.
+		return "", fmt.Errorf("%w: %q is not absolute", backend.ErrInvalidPath, p)
 	}
 	return filepath.ToSlash(filepath.Clean(p)), nil
 }
