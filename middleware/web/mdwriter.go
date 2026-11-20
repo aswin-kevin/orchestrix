@@ -31,8 +31,9 @@ type converter struct {
 	// tables counts the enclosing tables.
 	tables int
 	// prefix is the stack of line prefixes: quote markers and list
-	// indentation, at most maxNesting deep.
-	prefix []string
+	// indentation, at most maxNesting deep; linePrefix is it joined.
+	prefix     []string
+	linePrefix string
 	// lists holds the item count of each enclosing list; -1 marks an
 	// unordered list.
 	lists []int
@@ -53,9 +54,9 @@ func newConverter(ctx context.Context, base *url.URL, limit int) *converter {
 }
 
 // sub returns a converter for content rendered apart, such as a table
-// cell, sharing c's context, node count and remaining room.
-func (c *converter) sub() *converter {
-	s := newConverter(c.ctx, c.base, c.limit-len(c.buf))
+// cell, writing at most room bytes and sharing c's context and node count.
+func (c *converter) sub(room int) *converter {
+	s := newConverter(c.ctx, c.base, room)
 	s.nodes, s.tables = c.nodes, c.tables
 	return s
 }
@@ -94,12 +95,14 @@ func (c *converter) pushPrefix(p string) bool {
 		return false
 	}
 	c.prefix = append(c.prefix, p)
+	c.linePrefix = strings.Join(c.prefix, "")
 	return true
 }
 
 func (c *converter) popPrefix(pushed bool) {
 	if pushed {
 		c.prefix = c.prefix[:len(c.prefix)-1]
+		c.linePrefix = strings.Join(c.prefix, "")
 	}
 }
 
@@ -177,7 +180,7 @@ func (c *converter) br() {
 // depths takes the prefix of the outer one, so it never shows a stray
 // quote marker.
 func (c *converter) owe(n int) {
-	prefix := strings.TrimRight(strings.Join(c.prefix, ""), " ")
+	prefix := strings.TrimRight(c.linePrefix, " ")
 	if n >= paragraph && (c.pending < paragraph || len(prefix) < len(c.breakPrefix)) {
 		c.breakPrefix = prefix
 	}
@@ -198,7 +201,7 @@ func (c *converter) flush() {
 	}
 	c.pending = 0
 	if c.needPrefix {
-		c.write(strings.Join(c.prefix, ""))
+		c.write(c.linePrefix)
 		c.needPrefix = false
 	}
 }

@@ -361,3 +361,49 @@ func TestFetchMarkdownTruncatedNote(t *testing.T) {
 		t.Fatalf("output = %q, want the truncation note", got)
 	}
 }
+
+// roundTripFunc is an http.RoundTripper calling itself.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// slowClose is a body whose Close waits for d after it has been read.
+type slowClose struct {
+	io.Reader
+	d time.Duration
+}
+
+func (b slowClose) Close() error { time.Sleep(b.d); return nil }
+
+func TestFetchFinishedContentOutlivesDeadline(t *testing.T) {
+	// The body is read whole before the deadline, which passes before
+	// conversion starts: a body that needs no conversion is returned, an
+	// HTML conversion cut short by the deadline is a timeout.
+	for ct, wantErr := range map[string]bool{"text/plain": false, "application/json": false, "text/html": true} {
+		t.Run(ct, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": {ct}},
+					Body:       slowClose{strings.NewReader(`"done"`), 100 * time.Millisecond},
+					Request:    r,
+				}, nil
+			})}
+			f := newFetcher(client, Config{Timeout: 20 * time.Millisecond})
+			res, err := f.fetch(context.Background(), FetchInput{URL: "https://site.test/"}, &tool.Call{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := res.Flatten()
+			if wantErr {
+				if !res.IsError || !strings.Contains(got, "timed out") {
+					t.Fatalf("result = %q, want a timeout", got)
+				}
+				return
+			}
+			if res.IsError || !strings.Contains(got, `"done"`) {
+				t.Fatalf("result = %q, want the content", got)
+			}
+		})
+	}
+}

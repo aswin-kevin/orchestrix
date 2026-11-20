@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/net/html"
 )
@@ -267,7 +269,7 @@ func (c *converter) pre(n *html.Node) {
 	c.markerOnly = false
 	c.block(paragraph)
 	c.word(fence)
-	linePrefix := strings.Join(c.prefix, "")
+	linePrefix := c.linePrefix
 	for line := range strings.SplitSeq(body, "\n") {
 		if c.full {
 			return
@@ -324,15 +326,28 @@ func (c *converter) table(n *html.Node) {
 	c.tables++
 	defer func() { c.tables-- }()
 	for i, row := range rows {
+		// A row is written once all its cells are rendered, so each cell
+		// gets only the room its siblings left.
 		cells := make([]string, len(row))
+		used := len("| ")
 		for j, cell := range row {
+			room := c.limit - len(c.buf) - used
+			if room <= 0 {
+				c.full, c.truncated = true, true
+			}
 			if c.full {
 				return
 			}
-			cells[j] = c.cell(cell)
+			cells[j] = c.cell(cell, room)
+			used += len(cells[j]) + len(" | ")
 		}
 		c.block(lineBreak)
-		c.word("| " + strings.Join(cells, " | ") + " |")
+		c.word("|")
+		for _, s := range cells {
+			c.write(" ")
+			c.write(s)
+			c.write(" |")
+		}
 		if i == 0 {
 			c.block(lineBreak)
 			c.word("|" + strings.Repeat(" --- |", len(row)))
@@ -341,17 +356,44 @@ func (c *converter) table(n *html.Node) {
 	c.block(paragraph)
 }
 
-// cell renders a table cell on one line, escaping the column separator.
-// A cell of a table nested in another table's cell is plain text: the
-// outer cell escapes its separators once.
-func (c *converter) cell(n *html.Node) string {
+// cell renders a table cell on one line in at most room bytes before
+// escaping, escaping the column separator. A cell of a table nested in
+// another table's cell is plain text: the outer cell escapes its
+// separators once.
+func (c *converter) cell(n *html.Node, room int) string {
 	if c.tables > 1 {
 		return collapse(rawText(n))
 	}
-	sub := c.sub()
+	sub := c.sub(room)
 	sub.children(n)
 	c.adopt(sub)
-	return strings.ReplaceAll(collapse(sub.String()), "|", `\|`)
+	return collapseCell(sub.buf)
+}
+
+// collapseCell returns b on one line with its whitespace collapsed and its
+// column separators escaped.
+func collapseCell(b []byte) string {
+	var sb strings.Builder
+	sb.Grow(len(b))
+	space := false
+	for len(b) > 0 {
+		r, size := utf8.DecodeRune(b)
+		ch := b[:size] // as written, even when not valid UTF-8
+		b = b[size:]
+		if unicode.IsSpace(r) {
+			space = sb.Len() > 0
+			continue
+		}
+		if space {
+			sb.WriteByte(' ')
+			space = false
+		}
+		if r == '|' {
+			sb.WriteByte('\\')
+		}
+		sb.Write(ch)
+	}
+	return sb.String()
 }
 
 // tableRows returns the cells of the rows of table n, looking through

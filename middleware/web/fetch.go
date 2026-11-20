@@ -120,8 +120,11 @@ func (f *fetcher) fetch(ctx context.Context, in FetchInput, _ *tool.Call) (tool.
 		}
 		return tool.Errorf("%s", msg), nil
 	}
-	if ctx.Err() != nil {
-		return tool.Errorf("fetching %s failed: %s", u, describe(ctx.Err())), nil
+	if errors.Is(convErr, context.DeadlineExceeded) || errors.Is(convErr, context.Canceled) {
+		// Only a conversion the deadline cut short is a timeout: content
+		// that was ready in time is returned even if the deadline has
+		// passed since.
+		return tool.Errorf("fetching %s failed: %s", u, describe(convErr)), nil
 	}
 	if convErr != nil {
 		return tool.Errorf("%v", convErr), nil

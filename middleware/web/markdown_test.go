@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/net/html"
 )
 
 func TestHTMLToMarkdown(t *testing.T) {
@@ -286,5 +289,46 @@ func TestMarkdownCancelledMidway(t *testing.T) {
 	}
 	if ctx.calls != 2 {
 		t.Fatalf("context checked %d times, want conversion to stop at the first failing check", ctx.calls)
+	}
+}
+
+// totalAlloc returns the bytes f allocates.
+func totalAlloc(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+func TestMarkdownWideTableRowBounded(t *testing.T) {
+	// One row of cells, each rendering to far more markdown than its
+	// HTML: the row is written only once all its cells are rendered, so
+	// each cell must get only the room its siblings left.
+	cell := "<td>" + strings.Repeat("<blockquote>", maxNesting) + strings.Repeat("<p>a</p>", 500) + "</td>"
+	doc := "<table><tr>" + strings.Repeat(cell, 1200) + "</tr></table>"
+	limit := len(doc)
+	var md string
+	var truncated bool
+	var err error
+	// The parse allocates a node per element whatever the converter does;
+	// only what conversion allocates beyond it is bounded here.
+	parse := totalAlloc(func() { _, _ = html.Parse(strings.NewReader(doc)) })
+	all := totalAlloc(func() {
+		_, md, truncated, err = HTMLToMarkdownContext(context.Background(), strings.NewReader(doc), nil, limit)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(md) > limit || !truncated {
+		t.Fatalf("markdown is %d bytes, truncated = %v; want at most %d, truncated", len(md), truncated, limit)
+	}
+	// The cell's buffer and the output each grow by doubling to at most
+	// limit, and the cell is copied once collapsed: about 6 × limit.
+	// Before cells shared the room of their row this was over 100 × limit.
+	t.Logf("parse allocated %d MB, conversion %d MB more", parse>>20, (int64(all)-int64(parse))>>20)
+	if conv := int64(all) - int64(parse); conv > 8*int64(limit) {
+		t.Fatalf("conversion allocated %d MB beyond the parse, want under %d MB", conv>>20, 8*limit>>20)
 	}
 }
