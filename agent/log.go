@@ -22,7 +22,7 @@ func loggerOrDiscard(l *slog.Logger) *slog.Logger {
 }
 
 // Logger returns the agent's logger (Config.Logger) with the attributes
-// that identify the run: thread_id and agent. It never returns nil: without
+// that identify the run: thread_id, agent and run_id. It never returns nil: without
 // a configured logger it drops every record. Middleware can use it to report
 // errors it recovers from next to the loop's own. Log no message content or
 // tool inputs: they are the caller's data.
@@ -30,8 +30,7 @@ func (i RunInfo) Logger() *slog.Logger {
 	if i.Agent == nil {
 		return discardLogger
 	}
-	// Task 22 adds run_id here.
-	return i.Agent.logger.With("thread_id", i.ThreadID, "agent", i.AgentName)
+	return i.Agent.logger.With("thread_id", i.ThreadID, "agent", i.AgentName, "run_id", i.RunID)
 }
 
 // logPanic logs a recovered panic at level: the type of the panic value and

@@ -1,6 +1,12 @@
 package llm
 
 // Usage counts tokens consumed by one or more model calls.
+//
+// Orchestrix has no price table: prices change and differ by account. To
+// cost a run, price each turn's usage by the model that served it:
+// Response.Model names it, and the agent emits one KindUsage event per model
+// call (Event.Usage, with Event.Turn and Event.RunID). Final.Usage is the
+// run's total, which is enough only when one model served every call.
 type Usage struct {
 	Input      int
 	Output     int

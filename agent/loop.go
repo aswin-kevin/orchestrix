@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/checkpoint"
@@ -93,6 +96,9 @@ type run struct {
 	// a retrying wrapper can be reported with KindRetry.
 	attempts atomic.Int32
 	turns    int
+	// turn is the model turn in progress, or the last one; read by emit
+	// from any goroutine.
+	turn     atomic.Int64
 	usage    llm.Usage
 	lastText string
 }
@@ -106,6 +112,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 	}
 	info := &RunInfo{
 		Agent:     a,
+		RunID:     newRunID(),
 		ThreadID:  in.ThreadID,
 		AgentName: a.name(in),
 		Resumed:   resume != nil,
@@ -326,6 +333,7 @@ func (r *run) afterReply(resp *llm.Response) *Final {
 // usage. The turn's tool set is taken after the BeforeModel hooks. It
 // returns a Final when the run must end.
 func (r *run) modelTurn() (*llm.Response, *Final) {
+	r.turn.Store(int64(r.turns) + 1)
 	if err := r.beforeModel(); err != nil {
 		return nil, r.hookFailure(err)
 	}
@@ -554,6 +562,16 @@ func (r *run) send(ev Event) bool {
 	if ev.Agent == "" {
 		ev.Agent = r.name
 	}
+	if ev.RunID == "" {
+		ev.RunID = r.info.RunID
+		ev.Turn = int(r.turn.Load())
+	}
+	if ev.Kind == KindFinal && ev.Final != nil {
+		ev.Turn = ev.Final.Turns
+	}
+	if ev.Time.IsZero() {
+		ev.Time = time.Now()
+	}
 	select {
 	case r.events <- ev:
 		return true
@@ -587,4 +605,13 @@ func (r *run) abandoned() bool {
 	default:
 		return false
 	}
+}
+
+// newRunID returns 16 random hex characters.
+func newRunID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err) // crypto/rand.Read does not fail
+	}
+	return hex.EncodeToString(b[:])
 }

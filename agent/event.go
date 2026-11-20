@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -138,10 +139,22 @@ type Event struct {
 	// produced the event was started. An event forwarded through several
 	// levels keeps the id of the first level. Empty for a run's own events.
 	ParentToolID string
-	Text         string
-	ToolID       string
-	ToolName     string
-	Input        json.RawMessage
+	// Turn is the 1-based model turn the event belongs to: model output and
+	// usage of the turn, and the events of the tool calls it requested.
+	// Events emitted before the first model turn (such as the results of
+	// calls answered by a resumed run) have Turn 0. KindFinal carries the
+	// number of the last turn, Final.Turns.
+	Turn int
+	// Time is when the run emitted the event. An event forwarded from a
+	// nested run keeps the time it had there.
+	Time time.Time
+	// RunID identifies the run that produced the event (RunInfo.RunID). An
+	// event forwarded from a nested run keeps the nested run's id.
+	RunID    string
+	Text     string
+	ToolID   string
+	ToolName string
+	Input    json.RawMessage
 	// ToolResult is set for KindToolResult.
 	ToolResult *tool.Result
 	// Usage is set for KindUsage.

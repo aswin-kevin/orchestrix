@@ -1096,3 +1096,81 @@ func TestLeaseRenewPanicIsAFailedRenewal(t *testing.T) {
 		t.Fatal("renewals stopped after the first panic")
 	}
 }
+
+func TestEventsCarryTurnTimeRunID(t *testing.T) {
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "t1", Name: "echo", Input: map[string]any{"text": "ping"}}}},
+		llmtest.Turn{Text: "done"},
+	)
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}})
+	events, final := collect(t, a.Run(context.Background(), userInput("go")))
+
+	runID := events[0].RunID
+	if len(runID) != 16 {
+		t.Fatalf("RunID = %q, want 16 hex chars", runID)
+	}
+	var prev time.Time
+	turns := map[EventKind]int{}
+	for _, ev := range events {
+		if ev.RunID != runID {
+			t.Fatalf("event %+v has RunID %q, want %q", ev, ev.RunID, runID)
+		}
+		if ev.Time.IsZero() || ev.Time.Before(prev) {
+			t.Fatalf("event %+v: Time zero or earlier than the previous event", ev)
+		}
+		prev = ev.Time
+		switch ev.Kind {
+		case KindToolUse, KindToolResult:
+			if ev.Turn != 1 {
+				t.Fatalf("tool event %+v, want Turn 1", ev)
+			}
+		case KindText:
+			if ev.Turn != 2 {
+				t.Fatalf("text event %+v, want Turn 2", ev)
+			}
+		case KindFinal:
+			if ev.Turn != final.Turns || ev.Turn != 2 {
+				t.Fatalf("final Turn = %d, want 2", ev.Turn)
+			}
+		case KindUsage:
+			turns[KindUsage]++
+			if ev.Turn != turns[KindUsage] {
+				t.Fatalf("usage event #%d has Turn %d", turns[KindUsage], ev.Turn)
+			}
+		}
+	}
+}
+
+func TestNestedRunHasOwnRunID(t *testing.T) {
+	childInfo := newInfoLog()
+	var out nestedOutcome
+	child := mustNew(t, Config{
+		Name:       "child",
+		Provider:   llmtest.New(llmtest.Turn{Text: "hello from child"}),
+		Middleware: []Middleware{infoProbe{childInfo}},
+	})
+	parent := mustNew(t, Config{
+		Provider: llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "d1", Name: "delegate"}}}, llmtest.Turn{Text: "done"}),
+		Tools:    []tool.Tool{delegateTool(child, &out)},
+	})
+	events, _ := collect(t, parent.Run(context.Background(), userInput("go")))
+
+	parentID := events[len(events)-1].RunID
+	childID := childInfo.only(t, "BeforeAgent").RunID
+	if parentID == "" || childID == "" || parentID == childID {
+		t.Fatalf("parent RunID %q, child RunID %q: want two distinct non-empty ids", parentID, childID)
+	}
+	sawChild := false
+	for _, ev := range events {
+		want := parentID
+		if ev.Agent == "child" {
+			want, sawChild = childID, true
+		}
+		if ev.Agent != "grandchild" && ev.RunID != want {
+			t.Fatalf("event %+v has RunID %q, want %q", ev, ev.RunID, want)
+		}
+	}
+	if !sawChild {
+		t.Fatal("no forwarded child events")
+	}
+}

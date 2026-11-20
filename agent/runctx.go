@@ -13,6 +13,10 @@ import (
 type RunInfo struct {
 	// Agent is the agent executing the run; never nil.
 	Agent *Agent
+	// RunID identifies this run: 16 random hex characters, new for every
+	// run, including a nested one and each Resume. Events carry it as
+	// Event.RunID and the run's logger as run_id.
+	RunID string
 	// ThreadID is Input.ThreadID; empty when the run was started without one.
 	ThreadID string
 	// AgentName is the name the run reports in events and tool.Call.AgentID:
