@@ -1,6 +1,9 @@
 package permission
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // devNull is the only file a command may redirect output to and still be
 // vouched for: discarding output cannot change anything.
@@ -22,11 +25,11 @@ const devNull = "/dev/null"
 // ...), options that make an ordinary command run one (git -c, sed's e, tar
 // --to-command; see commandOptionChecks), arithmetic, which runs commands
 // hidden in array subscripts ($[...], let, ${a[i]}, ${x:offset}, [[ -eq ]],
-// test -v), compound commands, a command word
-// that
-// depends on expansion, contains whitespace or names a path (./npm), any
-// variable assignment (PATH=... or LD_PRELOAD=... can change which program
-// runs or what it does), and an empty line. Normalization is for deny rules:
+// test -v), parameter expansions other than plain ones (${!x}, ${x@P}),
+// compound commands, a command word that depends on expansion, contains
+// whitespace or names a path (./npm), any variable assignment (PATH=... or
+// LD_PRELOAD=... can change which program runs or what it does), and an
+// empty line. Normalization is for deny rules:
 // /bin/rm x still reads as rm x, but never vouches for the line. Even when ok
 // is false the segments are a best effort that deny rules can still match.
 func SplitCommand(cmd string) (segments []string, ok bool) {
@@ -365,14 +368,28 @@ func (p *commandParser) checkArithmetic() {
 	}
 }
 
-// parameterDefaultOps may follow the ':' after a parameter's name; any other
-// character there starts a substring offset, which is arithmetic.
-const parameterDefaultOps = "-=?+"
+// specialParameters are the one-character parameters ${@}, ${#}, ${$} and
+// so on.
+const specialParameters = "@*#?-$!_"
+
+// parameterOperators may follow the parameter in ${...}, longest first, and
+// are followed by a word (a default value or a pattern). Any other text
+// there is rejected: a ':' with an offset is arithmetic, and an @ transform
+// (${x@P}) runs command substitution found in the value.
+var parameterOperators = []string{
+	":-", ":=", ":?", ":+", "##", "%%", "//", "^^", ",,",
+	"-", "=", "?", "+", "#", "%", "/", "^", ",",
+}
 
 // plainParameterExpansion reports whether the text after "${" is a parameter
-// expansion that evaluates no arithmetic. The body runs to the first '}'; a
-// quote or backslash in it could hide where it really ends, so either one
-// rejects it, as do subscripts, substitutions and substring offsets.
+// expansion that evaluates no arithmetic and runs nothing hidden in a
+// variable's value. Only an allow-listed grammar passes: an optional '#'
+// (length), then a name, digits or one special parameter, then nothing or
+// one operator and its word. Indirection (${!x}, ${!prefix*}) expands a
+// value the line cannot see as a parameter, subscript included, so a
+// leading '!' followed by anything is rejected. The body runs to the first
+// '}'; a quote or backslash in it could hide where it really ends, so
+// either one rejects it, as do subscripts and substitutions.
 func plainParameterExpansion(rest string) bool {
 	end := strings.IndexByte(rest, '}')
 	if end < 0 {
@@ -382,8 +399,49 @@ func plainParameterExpansion(rest string) bool {
 	if strings.ContainsAny(body, "['\"`\\") || strings.Contains(body, "$(") {
 		return false
 	}
-	colon := strings.IndexByte(body, ':')
-	return colon < 0 || (colon+1 < len(body) && strings.IndexByte(parameterDefaultOps, body[colon+1]) >= 0)
+	if len(body) > 1 && body[0] == '#' {
+		// ${#x} takes no operator.
+		param := parameterLength(body[1:])
+		return param > 0 && param == len(body)-1
+	}
+	if len(body) > 1 && body[0] == '!' {
+		return false
+	}
+	param := parameterLength(body)
+	if param == 0 {
+		return false
+	}
+	if param == len(body) {
+		return true
+	}
+	return slices.ContainsFunc(parameterOperators, func(op string) bool {
+		return strings.HasPrefix(body[param:], op)
+	})
+}
+
+// parameterLength returns the length of the parameter s starts with: a
+// name, digits or one special parameter; 0 if it starts with none.
+func parameterLength(s string) int {
+	n := 0
+	switch {
+	case s == "":
+		return 0
+	case s[0] >= '0' && s[0] <= '9':
+		for n < len(s) && s[n] >= '0' && s[n] <= '9' {
+			n++
+		}
+	case isNameStart(s[0]):
+		for n < len(s) && (isNameStart(s[n]) || (s[n] >= '0' && s[n] <= '9')) {
+			n++
+		}
+	case strings.IndexByte(specialParameters, s[0]) >= 0:
+		n = 1
+	}
+	return n
+}
+
+func isNameStart(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
 // escaped consumes a backslash outside quotes: it quotes the next character,

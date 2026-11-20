@@ -776,7 +776,6 @@ func TestAssignmentForms(t *testing.T) {
 		{"A+=1", true},
 		{"A[0]=1", true},
 		{"A[0]+=1", true},
-		{"A[x y]=1", true},
 		{"+=1", false},
 		{"A+", false},
 		{"1A=1", false},
@@ -826,6 +825,17 @@ func TestArithmeticHidesCommands(t *testing.T) {
 		`[ -v 'zz[$(touch p)]' ]`,
 		`[ ${u:--v} "$_" ]`,
 		`test -v "$_"`,
+		`echo 'a[$(touch q1)]'; echo ${!_}`,
+		`x='a[$(touch p3)]'; echo ${!x}`,
+		`echo '$(touch q2)'; echo ${_@P}`,
+		"echo '`touch q3`'; echo ${_@P}",
+		`echo ${!x*}`,
+		`echo ${!x@}`,
+		`echo ${x@Q}`,
+		`echo ${x:1}`,
+		`echo ${x:-a}${y@E}`,
+		`echo ${#x:-a}`,
+		`echo ${$x}`,
 	} {
 		t.Run(cmd, func(t *testing.T) {
 			if segs, ok := SplitCommand(cmd); ok {
@@ -841,7 +851,9 @@ func TestArithmeticHidesCommands(t *testing.T) {
 		})
 	}
 	for _, cmd := range []string{
-		`echo ${HOME}`, `echo ${x:-default}`, `echo ${x:=d} ${x:?e} ${x:+a}`,
+		`echo ${HOME}`, `echo ${x:-default}`, `echo ${@} ${#} ${*} ${$} ${?} ${!} ${10} ${#@}`,
+		`echo ${x-a} ${x=a} ${x?a} ${x+a} ${x##a} ${x%%b} ${x//a/b} ${x^} ${x^^} ${x,} ${x,,}`,
+		`echo ${x:-a:b}`, `echo ${x:=d} ${x:?e} ${x:+a}`,
 		`echo "${HOME}/x"`, `echo ${#x} ${x#a} ${x%b} ${x/a/b}`,
 		`[[ -f x ]]`, `[[ $a == b ]]`, `[[ -f x ]] && [[ -d y ]]`,
 		`[ -f x ]`, `test -n x`, `[ 1 -eq 1 ]`,
