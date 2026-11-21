@@ -416,9 +416,10 @@ func TestResolverSeesCancellation(t *testing.T) {
 	in.State = crashState("t1")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	var final *Final
 	go func() {
 		defer close(done)
-		collect(t, a.Run(ctx, in))
+		_, final = collect(t, a.Run(ctx, in))
 	}()
 	<-started
 	cancel()
@@ -429,5 +430,58 @@ func TestResolverSeesCancellation(t *testing.T) {
 	}
 	if err := <-seen; err == nil {
 		t.Fatal("resolver did not observe cancellation")
+	}
+	if final.Reason != ReasonMiddlewareError {
+		t.Fatalf("reason = %s, want %s", final.Reason, ReasonMiddlewareError)
+	}
+}
+
+func TestResolverErrorLeavesStateUntouched(t *testing.T) {
+	res := &fakeResolver{name: "ledger", err: errors.New("ledger down")}
+	s := abandonedState()
+	before := len(s.Messages())
+	_, final := runOnce(t, Config{Middleware: []Middleware{res}}, s)
+	if final.Reason != ReasonMiddlewareError {
+		t.Fatalf("reason = %s", final.Reason)
+	}
+	msgs := final.State.Messages()
+	if len(msgs) != before {
+		t.Fatalf("history length = %d, want %d: %+v", len(msgs), before, msgs)
+	}
+	for _, m := range msgs {
+		if m.Text() == "next" {
+			t.Fatal("new input was appended")
+		}
+	}
+	if _, ok := pendingKey.Get(final.State); !ok {
+		t.Fatal("pendingKey was removed")
+	}
+}
+
+// savedMutator edits the Saved result it is given, then declines.
+type savedMutator struct{ pending *pendingTurn }
+
+func (savedMutator) Name() string { return "mutator" }
+
+func (m savedMutator) ResolveOrphan(_ context.Context, s *state.State, o Orphan) (tool.Result, bool, error) {
+	if o.Saved != nil {
+		o.Saved.Content[0].Text = "changed"
+		o.Saved.IsError = true
+		if turn, ok := pendingKey.Get(s); ok {
+			*m.pending = turn
+		}
+	}
+	return tool.Result{}, false, nil
+}
+
+func TestResolverSavedIsACopy(t *testing.T) {
+	var seen pendingTurn
+	runOnce(t, Config{Middleware: []Middleware{savedMutator{pending: &seen}}}, abandonedState())
+	if len(seen.Calls) == 0 || seen.Calls[0].Result == nil {
+		t.Fatalf("pending record = %+v", seen)
+	}
+	r := seen.Calls[0].Result
+	if r.IsError || r.Content[0].Text != "done" {
+		t.Fatalf("stored result changed: %+v", r)
 	}
 }

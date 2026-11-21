@@ -36,7 +36,9 @@ func (r *run) resolveOrphans() error {
 	if turn, ok := pendingKey.Get(r.state); ok {
 		for _, c := range turn.Calls {
 			if c.Result != nil {
-				saved[c.ID] = c.Result
+				cp := *c.Result
+				cp.Content = slices.Clone(cp.Content)
+				saved[c.ID] = &cp
 			}
 		}
 	}

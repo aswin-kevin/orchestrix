@@ -90,13 +90,27 @@ type Config struct {
 	// between threads. False keeps the workspace out of State.
 	SyncWorkspace bool
 
-	// Checkpointer, when set, saves a run's State under Input.ThreadID
-	// after every state change: once the BeforeAgent hooks have run, after
-	// each assistant reply, after each turn's tool results, on interrupt and
-	// at the end of the run. The conversation can then be continued in
-	// another process (see Agent.Thread). A failed save ends the run with
-	// ReasonCheckpointError. Runs without a ThreadID and ephemeral runs
-	// (Input.Ephemeral) are never saved. Nil persists nothing.
+	// Checkpointer, when set, saves a run's State under Input.ThreadID. The
+	// conversation can then be continued in another process (see
+	// Agent.Thread). A failed save ends the run with ReasonCheckpointError.
+	// Runs without a ThreadID and ephemeral runs (Input.Ephemeral) are never
+	// saved. Nil persists nothing.
+	//
+	// A run saves at these points, and each save holds what State holds then:
+	//
+	//  1. After the BeforeAgent hooks: the input they accepted (or
+	//     rewrote), with any orphaned tool calls already resolved (see
+	//     OrphanResolver).
+	//  2. After each assistant reply: its tool_use blocks, with no results.
+	//  3. After all the tool results of a turn.
+	//  4. On interrupt: the results of the calls that finished, and the
+	//     pending record of the turn.
+	//  5. At the end of the run, a cancelled run included.
+	//
+	// A crash during a turn loses every result of that turn, because they
+	// are saved together at point 3. The saved State then ends on the reply
+	// of point 2, and on the next run those calls are orphans (see
+	// OrphanResolver). Nothing is executed again automatically.
 	//
 	// Saves are conditional (see checkpoint.Checkpointer): a run's first
 	// save expects Input.Version, and each later save expects the version

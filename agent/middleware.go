@@ -77,8 +77,9 @@ type Orphan struct {
 	Name string
 	// Input is the raw input, as in the tool_use.
 	Input json.RawMessage
-	// Saved is the result an abandoned interrupted turn recorded for this
-	// call; nil when it has none (crash, token limit, or never started).
+	// Saved is a copy of the result an abandoned interrupted turn recorded
+	// for this call; nil when it has none (crash, token limit, or never
+	// started). Changing it does not change State.
 	Saved *tool.Result
 }
 
@@ -92,8 +93,9 @@ type Orphan struct {
 // appended, so before BeforeAgent. Resolvers are asked in stack order and the
 // first to return ok=true wins; ok=false declines and the next is asked. When
 // none answers, Orphan.Saved is used if set, else an error result saying the
-// call was interrupted. Every orphan thus ends up with a result in State, is
-// checkpointed with it, and is asked about once.
+// call was interrupted. Every orphan thus ends up with a result in State. The
+// answers are stored at the run's next checkpoint; a crash before that
+// checkpoint asks again, so a resolver should be idempotent.
 //
 // Orchestrix never runs an orphaned call again. A host that knows the call
 // never ran returns an error result saying so, and the model re-issues it

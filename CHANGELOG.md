@@ -2,6 +2,17 @@
 
 Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `orxdocker`, `evals`). The project is pre-1.0, so a minor release may break the API; every break is listed under "Breaking changes".
 
+## Unreleased
+
+### Added
+
+- `agent.OrphanResolver` and `agent.Orphan`: a middleware that implements `ResolveOrphan` supplies the result of a tool call whose result never reached State (a crash mid-turn, a token limit after a reply that called tools, an abandoned interrupted turn). It runs at the start of each run that is not a Resume, before the new input is appended. A call no resolver answers gets its saved result, else the interrupted-call error. Orchestrix never runs an orphaned call again.
+- `Config.Checkpointer` now documents each save point and what a crash between them loses.
+
+### Changed
+
+- A new run on a thread with an abandoned interrupt now writes the results of calls that had finished into State instead of showing them as interrupted.
+
 ## v0.8.1 — 2026-11-20
 
 A security fix for path rules on case-insensitive file systems.

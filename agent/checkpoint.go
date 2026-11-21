@@ -16,9 +16,11 @@ import (
 // a subagent nor a fork inherits its parent's workspace through State.
 var WorkspaceKey = state.NewKey[json.RawMessage]("agent.workspace", state.RunLocal[json.RawMessage]())
 
-// A persisted run saves at the points Config.Checkpointer lists. The first
-// save follows the BeforeAgent hooks, so the input is stored only once they
-// have accepted (or rewritten) it. The workspace is captured (Snapshot) only
+// A persisted run saves at the five points Config.Checkpointer lists. The
+// first save follows the BeforeAgent hooks, so the input is stored only once
+// they have accepted (or rewritten) it, and the orphans of an earlier crash
+// are already resolved. A crash between the save after a reply and the save
+// after its results loses that turn's results; OrphanResolver covers them. The workspace is captured (Snapshot) only
 // on the saves that follow tool calls (tool results, interrupt, end of run),
 // because only tools change files; this spares a full backend capture on
 // every save. Once WorkspaceKey is set, every save still writes its value,
