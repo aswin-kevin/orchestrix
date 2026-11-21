@@ -24,9 +24,11 @@ import (
 type Agent struct {
 	cfg Config
 	// logger is Config.Logger, or a discarding logger when that is nil.
-	logger   *slog.Logger
-	stack    []Middleware
-	registry *tool.Registry
+	logger *slog.Logger
+	stack  []Middleware
+	// resolvers are the stack's OrphanResolvers, in stack order.
+	resolvers []orphanResolver
+	registry  *tool.Registry
 	// dynamic are the stack's DynamicToolProviders, in stack order; see
 	// tools.go.
 	dynamic []DynamicToolProvider
@@ -117,6 +119,7 @@ func New(cfg Config) (*Agent, error) {
 		stack:        stack,
 		registry:     registry,
 		dynamic:      dynamicProviders(stack),
+		resolvers:    orphanResolvers(stack),
 		runTool:      chainTool(stack, invokeTool),
 		outputPrompt: format,
 	}, nil

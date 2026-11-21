@@ -8,7 +8,8 @@
 // assertion, so a middleware implements only what it needs.
 //
 // Hooks run in this order: WrapRun once as a run starts, giving the run its
-// context; BeforeAgent once at the start of a run; per turn,
+// context; ResolveOrphan for each unanswered tool call, before BeforeAgent, on
+// runs that are not a Resume; BeforeAgent once at the start of a run; per turn,
 // BeforeModel, the model call (through every ModelWrapper), then AfterModel;
 // each tool call goes through every ToolWrapper; BeforeStop when a reply
 // without tool calls would complete the run; AfterAgent once at the end;
@@ -66,6 +67,45 @@ type Middleware interface {
 // run. It must not emit events.
 type RunWrapper interface {
 	WrapRun(ctx context.Context, info RunInfo) (context.Context, func(final *Final))
+}
+
+// Orphan is a tool_use in State that has no tool_result.
+type Orphan struct {
+	// ID is the tool_use id.
+	ID string
+	// Name is the tool the model called, as in the tool_use.
+	Name string
+	// Input is the raw input, as in the tool_use.
+	Input json.RawMessage
+	// Saved is the result an abandoned interrupted turn recorded for this
+	// call; nil when it has none (crash, token limit, or never started).
+	Saved *tool.Result
+}
+
+// OrphanResolver supplies the result of a tool call whose result never
+// reached State: the process crashed mid-turn, a token limit ended the run
+// after a reply that called tools, or a new run abandoned an interrupted turn.
+//
+// ResolveOrphan runs for every such call in State, in history order, at the
+// start of each run that is not a Resume (Run, Send, Thread.Prompt and
+// Thread.Send), after the lease is taken and before the new input is
+// appended, so before BeforeAgent. Resolvers are asked in stack order and the
+// first to return ok=true wins; ok=false declines and the next is asked. When
+// none answers, Orphan.Saved is used if set, else an error result saying the
+// call was interrupted. Every orphan thus ends up with a result in State, is
+// checkpointed with it, and is asked about once.
+//
+// Orchestrix never runs an orphaned call again. A host that knows the call
+// never ran returns an error result saying so, and the model re-issues it
+// through the normal pipeline.
+//
+// The result is truncated to Config.MaxToolOutputChars like any tool result;
+// its Extra messages are ignored. An error ends the run with
+// ReasonMiddlewareError, or with ReasonHookStopped when it wraps ErrStopRun,
+// and so does a panic, which is recovered. ctx is the run's context, so
+// cancellation reaches the resolver.
+type OrphanResolver interface {
+	ResolveOrphan(ctx context.Context, s *state.State, o Orphan) (res tool.Result, ok bool, err error)
 }
 
 // BeforeAgent runs once before the first turn. A returned error ends the run

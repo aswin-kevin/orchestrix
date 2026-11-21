@@ -4,7 +4,88 @@ import (
 	"slices"
 
 	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
+
+// orphanResolver pairs an OrphanResolver with its middleware, which names it
+// in errors.
+type orphanResolver struct {
+	mw Middleware
+	r  OrphanResolver
+}
+
+// orphanResolvers returns the OrphanResolvers of stack, in stack order.
+func orphanResolvers(stack []Middleware) []orphanResolver {
+	var out []orphanResolver
+	for _, mw := range stack {
+		if res, ok := mw.(OrphanResolver); ok {
+			out = append(out, orphanResolver{mw: mw, r: res})
+		}
+	}
+	return out
+}
+
+// resolveOrphans gives every unanswered tool_use in State a tool_result. It
+// runs only when the stack has an OrphanResolver or the abandoned pending
+// turn holds finished results; otherwise it changes nothing and the model's
+// view is repaired with a placeholder as before. Each orphan is answered by
+// the first resolver that accepts it, else by its saved result, else by the
+// interruptedToolResult error. A Result's Extra messages are dropped.
+func (r *run) resolveOrphans() error {
+	saved := make(map[string]*tool.Result)
+	if turn, ok := pendingKey.Get(r.state); ok {
+		for _, c := range turn.Calls {
+			if c.Result != nil {
+				saved[c.ID] = c.Result
+			}
+		}
+	}
+	if len(r.agent.resolvers) == 0 && len(saved) == 0 {
+		return nil
+	}
+	answers := make(map[int][]llm.Block)
+	for _, site := range findOrphans(r.state.Messages()) {
+		o := Orphan{ID: site.use.ID, Name: site.use.Name, Input: site.use.Input, Saved: saved[site.use.ID]}
+		res, err := r.resolveOne(o)
+		if err != nil {
+			return err
+		}
+		res = truncateResult(res, r.agent.cfg.MaxToolOutputChars)
+		answers[site.assistant] = append(answers[site.assistant], llm.Block{
+			Type:      llm.BlockToolResult,
+			ToolUseID: o.ID,
+			Content:   res.Content,
+			IsError:   res.IsError,
+		})
+	}
+	r.placeResults(answers)
+	return nil
+}
+
+// resolveOne asks the resolvers about o in stack order and falls back to the
+// saved result, then the placeholder.
+func (r *run) resolveOne(o Orphan) (tool.Result, error) {
+	for _, h := range r.agent.resolvers {
+		var (
+			res tool.Result
+			ok  bool
+		)
+		err := guard(func() (err error) {
+			res, ok, err = h.r.ResolveOrphan(r.ctx, r.state, o)
+			return err
+		})
+		if err != nil {
+			return tool.Result{}, hookError(h.mw, "ResolveOrphan", err)
+		}
+		if ok {
+			return res, nil
+		}
+	}
+	if o.Saved != nil {
+		return *o.Saved, nil
+	}
+	return tool.Errorf("%s", interruptedToolResult), nil
+}
 
 // orphanSite is a tool_use that State holds without a tool_result: assistant
 // is the index of its assistant message and use the unanswered block.
@@ -54,6 +135,9 @@ func (r *run) placeResults(answers map[int][]llm.Block) {
 	slices.SortFunc(indices, func(a, b int) int { return b - a })
 	for _, i := range indices {
 		blocks := answers[i]
+		if len(blocks) == 0 {
+			continue
+		}
 		history := r.state.Messages()
 		if i+1 < len(history) && history[i+1].Role == llm.RoleUser {
 			updated := slices.Clone(history)

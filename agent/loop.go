@@ -224,8 +224,12 @@ func (r *run) drive(input []llm.Message) {
 
 	final := r.guarded(func() *Final {
 		if r.resume == nil {
-			// A new run abandons an interrupt left in State; repairHistory
-			// answers the calls it left unanswered in the model's view.
+			// A new run answers the tool calls State holds without a result
+			// (resolvers, then results saved by an interrupt, then a
+			// placeholder), then abandons an interrupt left in State.
+			if err := r.resolveOrphans(); err != nil {
+				return r.hookFailure(err)
+			}
 			pendingKey.Delete(r.state)
 		}
 		r.state.AppendMessages(input...)
