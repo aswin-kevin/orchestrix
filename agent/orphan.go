@@ -47,7 +47,7 @@ func (r *run) resolveOrphans() error {
 	}
 	answers := make(map[int][]llm.Block)
 	for _, site := range findOrphans(r.state.Messages()) {
-		o := Orphan{ID: site.use.ID, Name: site.use.Name, Input: site.use.Input, Saved: saved[site.use.ID]}
+		o := Orphan{ID: site.use.ID, Name: site.use.Name, Input: slices.Clone(site.use.Input), Saved: saved[site.use.ID]}
 		res, err := r.resolveOne(o)
 		if err != nil {
 			return err
@@ -105,6 +105,10 @@ func findOrphans(msgs []llm.Message) []orphanSite {
 		if m.Role != llm.RoleAssistant {
 			continue
 		}
+		uses := m.ToolUses()
+		if len(uses) == 0 {
+			continue
+		}
 		answered := make(map[string]bool)
 		if i+1 < len(msgs) && msgs[i+1].Role == llm.RoleUser {
 			for _, b := range msgs[i+1].Content {
@@ -113,7 +117,7 @@ func findOrphans(msgs []llm.Message) []orphanSite {
 				}
 			}
 		}
-		for _, use := range m.ToolUses() {
+		for _, use := range uses {
 			if !answered[use.ID] {
 				sites = append(sites, orphanSite{assistant: i, use: use})
 			}

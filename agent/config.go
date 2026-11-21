@@ -99,8 +99,8 @@ type Config struct {
 	// A run saves at these points, and each save holds what State holds then:
 	//
 	//  1. After the BeforeAgent hooks: the input they accepted (or
-	//     rewrote), with any orphaned tool calls already resolved (see
-	//     OrphanResolver).
+	//     rewrote), with orphaned tool calls resolved when the pass runs
+	//     (see OrphanResolver).
 	//  2. After each assistant reply: its tool_use blocks, with no results.
 	//  3. After all the tool results of a turn.
 	//  4. On interrupt: the results of the calls that finished, and the
@@ -190,7 +190,8 @@ type Config struct {
 	// the cap is reached the run ends with ReasonTokenLimit instead of taking
 	// another turn or continuation. When the reply that reached it contains
 	// tool calls they do not run; the next run on the same State answers
-	// them as interrupted through history repair. A reply without tool calls
+	// them as interrupted through history repair, or an OrphanResolver
+	// answers them. A reply without tool calls
 	// that reaches the cap still completes normally. If the turn limit is
 	// reached on the same turn, ReasonTokenLimit wins, and no settlement
 	// phase follows it. Unlike TokenBudget, which only nudges the model,

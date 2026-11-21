@@ -141,8 +141,9 @@ func (a *Agent) Config() Config {
 // end-of-run checkpoint; the checkpoints saved before the break remain.
 //
 // When in.State holds a run that ended interrupted, Run abandons that
-// interrupt and starts afresh: the model sees the calls it left unanswered
-// as interrupted. Use Resume to continue it instead.
+// interrupt and starts afresh: the calls it left unanswered are answered from
+// their saved results or an OrphanResolver, else the model sees them as
+// interrupted. Use Resume to continue it instead.
 //
 // After Close, the stream is a single KindFinal with ReasonInternalError
 // wrapping ErrClosed.

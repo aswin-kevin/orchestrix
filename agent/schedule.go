@@ -132,7 +132,8 @@ func (c *toolCall) pending() bool { return c.interrupt != nil }
 // insertAfter puts msgs right after the message at index. Tool results must
 // directly follow their assistant message, and a BeforeAgent hook of a
 // resumed run may have appended messages after it; elisions over those
-// shift with them. An index past the end (a tool or wrapper shrank the
+// shift with them (a summarize Boundary index does not, and the agent
+// package cannot reach it). An index past the end (a tool or wrapper shrank the
 // history during the turn) appends.
 //
 // SetMessages and shiftElisions are two steps, not one atomic update: this

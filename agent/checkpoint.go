@@ -20,10 +20,10 @@ var WorkspaceKey = state.NewKey[json.RawMessage]("agent.workspace", state.RunLoc
 // first save follows the BeforeAgent hooks, so the input is stored only once
 // they have accepted (or rewritten) it, and the orphans of an earlier crash
 // are already resolved. A crash between the save after a reply and the save
-// after its results loses that turn's results; OrphanResolver covers them. The workspace is captured (Snapshot) only
-// on the saves that follow tool calls (tool results, interrupt, end of run),
-// because only tools change files; this spares a full backend capture on
-// every save. Once WorkspaceKey is set, every save still writes its value,
+// after its results loses that turn's results; OrphanResolver covers them.
+// The workspace is captured (Snapshot) only on the saves that follow tool
+// calls (tool results, interrupt, end of run), because only tools change
+// files; this spares a full backend capture on every save. Once WorkspaceKey is set, every save still writes its value,
 // the latest capture, along with the rest of State.
 //
 // Saves run under a context that is not cancelled with the run, so a

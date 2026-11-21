@@ -223,6 +223,11 @@ func (r *run) drive(input []llm.Message) {
 	defer r.releaseLease()
 
 	final := r.guarded(func() *Final {
+		// Restore first: a failure after this point still snapshots the
+		// restored backend, never an empty one, and resolvers see it.
+		if err := r.restoreWorkspace(); err != nil {
+			return r.checkpointFailure(err)
+		}
 		if r.resume == nil {
 			// A new run answers the tool calls State holds without a result
 			// (resolvers, then results saved by an interrupt, then a
@@ -283,9 +288,6 @@ func (r *run) guarded(step func() *Final) (final *Final) {
 // something ends the run early. A resumed run first finishes the interrupted
 // turn.
 func (r *run) loop() *Final {
-	if err := r.restoreWorkspace(); err != nil {
-		return r.checkpointFailure(err)
-	}
 	if err := r.beforeAgent(); err != nil {
 		return r.hookFailure(err)
 	}
@@ -323,7 +325,7 @@ func (r *run) afterReply(resp *llm.Response) *Final {
 		return r.afterNoToolTurn(resp)
 	}
 	if r.tokenLimitReached() {
-		// The tools do not run; history repair answers them next run.
+		// The tools do not run; the next run answers them (an OrphanResolver, else history repair).
 		return r.finish(ReasonTokenLimit, nil)
 	}
 	assistantIndex := len(r.state.Messages()) - 1 // record just appended it

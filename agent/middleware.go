@@ -79,7 +79,8 @@ type Orphan struct {
 	Input json.RawMessage
 	// Saved is a copy of the result an abandoned interrupted turn recorded
 	// for this call; nil when it has none (crash, token limit, or never
-	// started). Changing it does not change State.
+	// started). Its Content slice is a copy; nested block data may be shared
+	// with State, so do not modify it.
 	Saved *tool.Result
 }
 
@@ -96,6 +97,10 @@ type Orphan struct {
 // call was interrupted. Every orphan thus ends up with a result in State. The
 // answers are stored at the run's next checkpoint; a crash before that
 // checkpoint asks again, so a resolver should be idempotent.
+//
+// Results are normally appended, since the orphan is the last message. An
+// insertion before older messages shifts the indices after it, which
+// elisions follow but a summarize Boundary does not.
 //
 // Orchestrix never runs an orphaned call again. A host that knows the call
 // never ran returns an error result saying so, and the model re-issues it

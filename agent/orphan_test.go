@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -483,5 +484,47 @@ func TestResolverSavedIsACopy(t *testing.T) {
 	r := seen.Calls[0].Result
 	if r.IsError || r.Content[0].Text != "done" {
 		t.Fatalf("stored result changed: %+v", r)
+	}
+}
+
+// A resolver failure ends the run before the loop; the workspace restored
+// from State must survive into the final snapshot.
+func TestResolverErrorKeepsWorkspace(t *testing.T) {
+	ctx := context.Background()
+	old := memory.New()
+	if err := old.Write(ctx, "/old.txt", []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := old.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := crashState("t1")
+	WorkspaceKey.Set(s, snap)
+
+	res := &fakeResolver{name: "ledger", err: errors.New("ledger down")}
+	a := mustNew(t, Config{
+		Provider:       llmtest.New(llmtest.Turn{Text: "ok"}),
+		Middleware:     []Middleware{res},
+		Checkpointer:   newRecordingCheckpointer(),
+		BackendFactory: newBackends().factory,
+		SyncWorkspace:  true,
+	})
+	in := threadInput("next")
+	in.State = s
+	_, final := collect(t, a.Run(ctx, in))
+	if final.Reason != ReasonMiddlewareError {
+		t.Fatalf("final = %+v, want middleware error", final)
+	}
+	saved, ok := WorkspaceKey.Get(final.State)
+	if !ok {
+		t.Fatal("final State lost the workspace snapshot")
+	}
+	restored := memory.New()
+	if err := restored.Restore(saved); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if _, err := restored.Read(ctx, "/old.txt", 0, 0); err != nil {
+		t.Fatalf("final snapshot lacks /old.txt: %v", err)
 	}
 }

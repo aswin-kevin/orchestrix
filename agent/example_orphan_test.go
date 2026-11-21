@@ -53,6 +53,8 @@ func (l *ledger) ResolveOrphan(_ context.Context, _ *state.State, o agent.Orphan
 // knows the first one ran and has no record of the second, so the next run
 // stores their results in State before the new prompt.
 func ExampleOrphanResolver() {
+	// WrapTool covers first execution; this example skips it by pre-seeding
+	// the ledger.
 	l := &ledger{done: map[string]tool.Result{"c1": tool.Text("deployed v7")}}
 	a, err := agent.New(agent.Config{
 		Provider:   llmtest.New(llmtest.Turn{Text: "ok"}),
