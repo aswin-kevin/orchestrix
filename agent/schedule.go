@@ -133,8 +133,8 @@ func (c *toolCall) pending() bool { return c.interrupt != nil }
 // directly follow their assistant message, and a BeforeAgent hook of a
 // resumed run may have appended messages after it; elisions over those
 // shift with them (a summarize Boundary index does not, and the agent
-// package cannot reach it). An index past the end (a tool or wrapper shrank the
-// history during the turn) appends.
+// package cannot reach it). An index past the end (a tool or wrapper shrank
+// the history during the turn) appends.
 //
 // SetMessages and shiftElisions are two steps, not one atomic update: this
 // is safe because insertAfter runs on the run's own goroutine before any

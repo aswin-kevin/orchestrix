@@ -189,13 +189,12 @@ type Config struct {
 	// per run, so a run resumed after an interrupt starts from zero. Once
 	// the cap is reached the run ends with ReasonTokenLimit instead of taking
 	// another turn or continuation. When the reply that reached it contains
-	// tool calls they do not run; the next run on the same State answers
-	// them as interrupted through history repair, or an OrphanResolver
-	// answers them. A reply without tool calls
-	// that reaches the cap still completes normally. If the turn limit is
-	// reached on the same turn, ReasonTokenLimit wins, and no settlement
-	// phase follows it. Unlike TokenBudget, which only nudges the model,
-	// this ends the run.
+	// tool calls they do not run; on the next run on the same State an
+	// OrphanResolver answers them, or else history repair answers them as
+	// interrupted. A reply without tool calls that reaches the cap still
+	// completes normally. If the turn limit is reached on the same turn,
+	// ReasonTokenLimit wins, and no settlement phase follows it. Unlike
+	// TokenBudget, which only nudges the model, this ends the run.
 	MaxTotalTokens int
 	// ModelTimeout bounds each model call, including any retries made by
 	// the provider or by model middleware and any extra model calls a

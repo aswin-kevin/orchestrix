@@ -325,7 +325,8 @@ func (r *run) afterReply(resp *llm.Response) *Final {
 		return r.afterNoToolTurn(resp)
 	}
 	if r.tokenLimitReached() {
-		// The tools do not run; the next run answers them (an OrphanResolver, else history repair).
+		// The tools do not run; the next run answers them (an
+		// OrphanResolver, else history repair).
 		return r.finish(ReasonTokenLimit, nil)
 	}
 	assistantIndex := len(r.state.Messages()) - 1 // record just appended it
