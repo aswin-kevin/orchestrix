@@ -84,6 +84,13 @@ func withResultsFor(uses []llm.Block, next llm.Message) llm.Message {
 	if len(missing) == 0 {
 		return next
 	}
+	return withBlocksAfterResults(next, missing)
+}
+
+// withBlocksAfterResults returns next with add placed after its existing
+// tool_results and before its other content. The content is copied, so
+// next's blocks stay intact.
+func withBlocksAfterResults(next llm.Message, add []llm.Block) llm.Message {
 	var results, rest []llm.Block
 	for _, b := range next.Content {
 		if b.Type == llm.BlockToolResult {
@@ -92,6 +99,6 @@ func withResultsFor(uses []llm.Block, next llm.Message) llm.Message {
 			rest = append(rest, b)
 		}
 	}
-	next.Content = slices.Concat(results, missing, rest)
+	next.Content = slices.Concat(results, add, rest)
 	return next
 }
