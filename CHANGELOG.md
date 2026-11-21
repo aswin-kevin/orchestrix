@@ -15,6 +15,10 @@ Crash recovery for side-effecting tools: middleware can now tell the model what 
 
 - A new run on a thread with an abandoned interrupt now writes the results of calls that had finished into State instead of showing them as interrupted.
 
+### Modules
+
+- The satellite modules move their core requirement from `v0.8.1` to `v0.9.0` and are tagged `orxotel/v0.3.0`, `orxpg/v0.3.0` and `orxdocker/v0.3.0`.
+
 ## v0.8.1 — 2026-11-20
 
 A security fix for path rules on case-insensitive file systems.
