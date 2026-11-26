@@ -8,6 +8,7 @@ import (
 	"iter"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -21,6 +22,11 @@ var (
 	ErrMissingDecision = errors.New("agent: missing decision for a pending action")
 	// ErrInvalidDecision: a decision's type is not in its request's Allowed.
 	ErrInvalidDecision = errors.New("agent: decision type not allowed for this action")
+	// ErrResumeWithoutVersion: a resume with Config.Checkpointer set and the
+	// zero Input.Version names a thread the checkpointer already holds, so
+	// its first save would conflict. The error also wraps
+	// checkpoint.ErrConflict.
+	ErrResumeWithoutVersion = errors.New("agent: resume of a saved thread without its Version")
 )
 
 // errResumeMessages reports a ResumeWith whose Input carries messages: a
@@ -138,33 +144,69 @@ type Decision struct {
 // BeforeAgent hook added) and the run goes on like one started by Run, with
 // the same hooks, a fresh budget, and threadID selecting the backend.
 //
-// Resume is ResumeWith with an Input holding just threadID and s. With
-// Config.Checkpointer set it saves under threadID as a new thread (the zero
-// Version), so to resume a saved thread use Thread.Resume, or ResumeWith
-// with the Version s was loaded at.
+// Resume is ResumeWith with an Input holding just threadID and s, so its
+// Version is the zero one: with Config.Checkpointer set it can resume only a
+// thread the checkpointer does not hold yet. A saved thread is refused
+// before anything runs (see ResumeWith); resume it with Thread.Resume, or
+// with ResumeWith and the Version s was loaded at.
 func (a *Agent) Resume(ctx context.Context, threadID string, s *state.State, decisions []Decision) iter.Seq2[Event, error] {
 	return a.ResumeWith(ctx, Input{ThreadID: threadID, State: s}, decisions)
 }
 
 // ResumeWith is Resume with the per-run settings of in: in.State is the
-// interrupted conversation, and in.ThreadID, in.Backend and in.AgentName
-// apply as they do for Run. A resumed run appends no messages, so a
-// non-empty in.Messages makes the request invalid, like a missing decision:
-// the stream is a single KindFinal with ReasonInvalidResume.
+// interrupted conversation, and in.ThreadID, in.Version, in.Backend and
+// in.AgentName apply as they do for Run. A resumed run appends no messages,
+// so a non-empty in.Messages makes the request invalid, like a missing
+// decision: the stream is a single KindFinal with ReasonInvalidResume.
+//
+// A persisted run (Config.Checkpointer set, a ThreadID, not Ephemeral)
+// with the zero in.Version would save as a new thread. When the
+// checkpointer already holds the thread, that save would conflict, so the
+// stream is a single KindFinal with ReasonInvalidResume and an error
+// wrapping ErrResumeWithoutVersion and checkpoint.ErrConflict: no hook,
+// model call or tool runs, nothing is saved and in.State is left untouched.
+// A Load that fails (other than with checkpoint.ErrNotFound) ends it the
+// same way with ReasonCheckpointError.
 func (a *Agent) ResumeWith(ctx context.Context, in Input, decisions []Decision) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
 		if a.closed.Load() {
 			yield(a.closedEvent(in), ErrClosed)
 			return
 		}
+		reason := ReasonInvalidResume
 		resume, err := a.newResumption(in, decisions)
+		if err == nil {
+			reason, err = a.checkResumeVersion(ctx, in)
+		}
 		if err != nil {
-			final := &Final{Reason: ReasonInvalidResume, Err: err, State: in.State, Version: in.Version}
+			final := &Final{Reason: reason, Err: err, State: in.State, Version: in.Version}
 			yield(Event{Kind: KindFinal, Agent: a.name(in), Time: time.Now(), Final: final}, err)
 			return
 		}
 		a.stream(ctx, in, resume)(yield)
 	}
+}
+
+// checkResumeVersion refuses a persisted resume with the zero Version of a
+// thread the checkpointer already holds: its first save would conflict, so
+// it ends before anything runs, with ReasonInvalidResume and
+// ErrResumeWithoutVersion. A failed Load ends it with ReasonCheckpointError.
+func (a *Agent) checkResumeVersion(ctx context.Context, in Input) (TerminalReason, error) {
+	store := a.storeFor(in)
+	if store == nil || in.Version != "" {
+		return "", nil
+	}
+	_, v, err := store.Load(ctx, in.ThreadID)
+	switch {
+	case errors.Is(err, checkpoint.ErrNotFound):
+		return "", nil
+	case err != nil:
+		return ReasonCheckpointError, fmt.Errorf("agent: checkpoint: %w", err)
+	}
+	return ReasonInvalidResume, fmt.Errorf(
+		"%w: thread %q is saved; resume it with Thread.Resume, or ResumeWith and "+
+			"the Version its State was loaded at: %w",
+		ErrResumeWithoutVersion, in.ThreadID, checkpoint.Conflict(in.ThreadID, "", v))
 }
 
 // newResumption validates a ResumeWith request.

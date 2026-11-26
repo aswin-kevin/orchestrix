@@ -63,7 +63,9 @@ type Input struct {
 	State *state.State
 	// Version is the checkpoint version State was loaded at (from
 	// Checkpointer.Load or a previous Final.Version); the run's first save
-	// expects it. The zero Version means the thread has no checkpoint yet.
+	// expects it. The zero Version means the thread has no checkpoint yet:
+	// a Run then ends with ReasonCheckpointError at its first save, and a
+	// resume is refused up front (see ResumeWith), when the thread has one.
 	// It matters only for a persisted run (Config.Checkpointer).
 	Version checkpoint.Version
 	// Backend, when non-nil, is the backend this run uses instead of

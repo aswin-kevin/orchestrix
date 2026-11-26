@@ -539,7 +539,7 @@ if final.Reason == agent.ReasonInterrupted {
 }
 ```
 
-Pass the same thread ID to `Resume` so the run keeps using the same backend. `Agent.Resume` suits an agent without a checkpointer: with `WithCheckpointer` it saves as a new thread, which already exists, so the run ends with `checkpoint_error`. There, open the thread with `Agent.Thread` and answer with `Thread.Resume` ([Checkpoints and threads](#checkpoints-and-threads)), or call `ResumeWith` with an `agent.Input` holding the thread ID, `Final.State` and `Final.Version`.
+Pass the same thread ID to `Resume` so the run keeps using the same backend. `Agent.Resume` suits an agent without a checkpointer: it carries no checkpoint version, so with `WithCheckpointer` it refuses a thread that is already saved, before anything runs, with reason `invalid_resume` and `agent.ErrResumeWithoutVersion`. There, open the thread with `Agent.Thread` and answer with `Thread.Resume` ([Checkpoints and threads](#checkpoints-and-threads)), or call `ResumeWith` with an `agent.Input` holding the thread ID, `Final.State` and `Final.Version`.
 
 `Final.State` can be serialized with `encoding/json` and resumed later. It holds the conversation and run state, not the workspace: to continue in a new process with the files intact, use a checkpointer (see [Checkpoints and threads](#checkpoints-and-threads)).
 

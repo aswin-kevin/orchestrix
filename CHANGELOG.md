@@ -4,6 +4,15 @@ Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `or
 
 ## Unreleased
 
+### Behaviour changes
+
+- `Agent.Resume`, and `Agent.ResumeWith` with the zero `Input.Version`, refuse a thread the checkpointer already holds before anything runs: the stream is a single final event with `ReasonInvalidResume` and an error wrapping the new `agent.ErrResumeWithoutVersion` and `checkpoint.ErrConflict`, and the State is left untouched. Such a resume used to end with `checkpoint_error` at its first save. Resume a saved thread with `Thread.Resume`, or `ResumeWith` and `Final.Version`. A failed `Load` during the check ends the run with `checkpoint_error`. Runs without a checkpointer or a thread ID, ephemeral runs, and threads not saved yet are unchanged.
+
+### Added
+
+- `llms.txt` and `llms-full.txt` at the repository root: a map and a self-contained reference of the API for coding agents.
+- A test compiles every Go block of `README.md`, `llms.txt` and `llms-full.txt` against the current code (`internal/doccheck`, and `orxotel` and `orxpg` for theirs).
+
 ### Fixed
 
 - The MCP client info and the web fetch User-Agent report the release number again (they said 0.8.0 since v0.8.0); a test now ties `internal/version` to the newest release in this file.
