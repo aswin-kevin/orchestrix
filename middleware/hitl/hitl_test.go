@@ -894,3 +894,124 @@ func TestExactKeyCanBeLessStrictThanPattern(t *testing.T) {
 		t.Fatal("mcp__a__y ran without approval, want the pattern to pause it")
 	}
 }
+
+// askRule makes the permission step ask about every write_file call.
+func askRule(ac agent.Config) agent.Config {
+	ac.Rules = permission.Rules{Ask: []permission.Rule{{Tool: "write_file"}}}
+	return ac
+}
+
+func allowedOn(name string, allowed ...agent.DecisionType) Config {
+	return Config{InterruptOn: map[string]InterruptConfig{name: {Allowed: allowed}}}
+}
+
+func TestPermissionApprovalDoesNotBypassRejectOnly(t *testing.T) {
+	l := &log{}
+	var asked atomic.Int32
+	ac := askRule(withTools(agent.Config{}, writeFile(l)))
+	ac.Approver = func(context.Context, permission.Request, string) permission.Decision {
+		asked.Add(1)
+		return permission.Allowed()
+	}
+	a := newAgent(t, allowedOn("write_file", agent.Reject), ac, writeTurns("/a.txt")...)
+	_, final := run(t, a)
+
+	mustComplete(t, final)
+	if len(l.all()) != 0 {
+		t.Fatalf("tool ran %v, want hitl's reject-only config to refuse it", l.all())
+	}
+	if text, isErr := result(t, final.State, "w"); !isErr || !strings.HasPrefix(text, "Rejected") {
+		t.Fatalf("result = %q (error %v), want a rejection", text, isErr)
+	}
+	if asked.Load() != 1 {
+		t.Fatalf("approver asked %d times, want only the permission step's prompt", asked.Load())
+	}
+}
+
+func TestPermissionApprovalStillNeedsHitlEdit(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		rewrite string
+		ran     []string
+	}{
+		{"plain allow refused", "", nil},
+		{"rewrite runs", `{"path":"/edited"}`, []string{"/edited"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &log{}
+			var asked atomic.Int32
+			ac := askRule(withTools(agent.Config{}, writeFile(l)))
+			ac.Approver = func(_ context.Context, req permission.Request, r string) permission.Decision {
+				asked.Add(1)
+				return allowAll(tc.rewrite)(context.Background(), req, r)
+			}
+			a := newAgent(t, allowedOn("write_file", agent.Edit, agent.Reject), ac, writeTurns("/a.txt")...)
+			_, final := run(t, a)
+
+			mustComplete(t, final)
+			if !slices.Equal(l.all(), tc.ran) {
+				t.Fatalf("ran %v, want %v", l.all(), tc.ran)
+			}
+			if asked.Load() != 2 {
+				t.Fatalf("approver asked %d times, want the permission step and hitl", asked.Load())
+			}
+		})
+	}
+}
+
+func TestPermissionApprovalAllowedWhenHitlAllowsApprove(t *testing.T) {
+	l := &log{}
+	var asked atomic.Int32
+	ac := askRule(withTools(agent.Config{}, writeFile(l)))
+	ac.Approver = func(context.Context, permission.Request, string) permission.Decision {
+		asked.Add(1)
+		return permission.Allowed()
+	}
+	a := newAgent(t, allowedOn("write_file", agent.Approve, agent.Reject), ac, writeTurns("/a.txt")...)
+	_, final := run(t, a)
+	mustComplete(t, final)
+	if !slices.Equal(l.all(), []string{"/a.txt"}) || asked.Load() != 1 {
+		t.Fatalf("ran %v after %d prompts, want one prompt and one run", l.all(), asked.Load())
+	}
+}
+
+func TestResumedPermissionApprovalDoesNotBypassRejectOnly(t *testing.T) {
+	l := &log{}
+	a := newAgent(t, allowedOn("write_file", agent.Reject), askRule(withTools(agent.Config{}, writeFile(l))), writeTurns("/a.txt")...)
+	events, final := run(t, a)
+	mustInterrupt(t, events, final)
+
+	events, final = resume(t, a, final.State, agent.Decision{ToolUseID: "w", Type: agent.Approve})
+	mustComplete(t, final)
+	if hasInterrupt(events) {
+		t.Fatal("interrupted again, want a reject-only config to refuse outright")
+	}
+	if len(l.all()) != 0 {
+		t.Fatalf("tool ran %v, want hitl's reject-only config to refuse it", l.all())
+	}
+	if text, isErr := result(t, final.State, "w"); !isErr || !strings.HasPrefix(text, "Rejected") {
+		t.Fatalf("result = %q (error %v), want a rejection", text, isErr)
+	}
+}
+
+func TestResumedPermissionApprovalAsksHitl(t *testing.T) {
+	l := &log{}
+	a := newAgent(t, allowedOn("write_file", agent.Edit, agent.Reject), askRule(withTools(agent.Config{}, writeFile(l))), writeTurns("/a.txt")...)
+	events, final := run(t, a)
+	mustInterrupt(t, events, final)
+
+	events, final = resume(t, a, final.State, agent.Decision{ToolUseID: "w", Type: agent.Approve})
+	in := mustInterrupt(t, events, final)
+	if len(in.Requests) != 1 || !slices.Equal(in.Requests[0].Allowed, []agent.DecisionType{agent.Edit, agent.Reject}) {
+		t.Fatalf("second interrupt = %+v, want hitl's own request with Allowed [edit reject]", in.Requests)
+	}
+	if len(l.all()) != 0 {
+		t.Fatalf("tool ran %v before hitl's decision", l.all())
+	}
+
+	_, final = resume(t, a, final.State, agent.Decision{ToolUseID: "w", Type: agent.Edit, Input: json.RawMessage(`{"path":"/b.txt"}`)})
+	mustComplete(t, final)
+	if !slices.Equal(l.all(), []string{"/b.txt"}) {
+		t.Fatalf("ran %v, want the edited input once", l.all())
+	}
+}

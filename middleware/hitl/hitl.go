@@ -4,9 +4,12 @@
 //
 // It sits on top of the permission pipeline and does not replace it: a
 // configured call pauses even in bypass mode, but a deny rule still refuses
-// it first, and a call a human already approved in the permission step is not
-// asked about again. The pause itself is the agent's ordinary interrupt: the
-// host answers it with Agent.Resume.
+// it first. A call a human already approved in the permission step is not
+// asked about again when its InterruptConfig allows Approve; when it does
+// not, the approval does not count: the call is rejected when only Reject is
+// allowed, and otherwise asked about again so that the human gives a decision
+// hitl allows (an Edit or a Respond). The pause itself is the agent's
+// ordinary interrupt: the host answers it with Agent.Resume.
 package hitl
 
 import (
@@ -209,15 +212,26 @@ func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 		return resumed(ctx, call, next)
 	case cfg.When != nil && !cfg.When(ctx, call):
 		return next(ctx, call)
-	case call.Approved:
-		return next(ctx, call) // the permission step already asked a human
+	case call.Approved && slices.Contains(allowedOf(cfg), agent.Approve):
+		// The permission step already asked a human, and a plain approval
+		// is a decision hitl allows too.
+		return next(ctx, call)
+	case call.Approved && !slices.ContainsFunc(allowedOf(cfg), notReject):
+		// Only Reject is allowed: no human decision could run the call.
+		return rejected("approval is not an allowed decision for " + call.Name), nil
 	}
+	// A call approved in the permission step whose config does not allow a
+	// plain Approve still needs a decision hitl allows (an Edit or a
+	// Respond), so it is asked again below.
 	if a, approver := approverOf(ctx); approver != nil {
 		return ask(ctx, a, approver, cfg, call, next)
 	}
 	askedKey.Update(call.State, func(ids []string) []string { return append(ids, call.ID) })
 	return tool.Result{}, interruptFor(cfg, call.Name)
 }
+
+// notReject reports whether d is a decision other than Reject.
+func notReject(d agent.DecisionType) bool { return d != agent.Reject }
 
 // cleared reports whether hitl already let this call through.
 func cleared(call *agent.ToolCall) bool {
