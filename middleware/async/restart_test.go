@@ -410,7 +410,10 @@ func TestContinueAfterRestart(t *testing.T) {
 	}
 	waitEnded(t, p2.m, "async_1")
 	p2.run(t, "and?", nil)
-	notes := notifications(p2.p)
+	// The first episode may have ended before p1's second turn, which then
+	// announced it before check_task showed it: that notice is p1's history.
+	// p2 announces the second episode only.
+	notes := notifications(p2.p)[len(storedNotifications(p1.st)):]
 	if len(notes) != 1 || !strings.Contains(notes[0].Text(), "completed.") || !strings.Contains(notes[0].Text(), "B") {
 		t.Fatalf("notifications = %+v", notes)
 	}
