@@ -41,7 +41,7 @@ func Run(t *testing.T, newStore func(t *testing.T) kv.Store) {
 func RunWith(t *testing.T, newStore func(t *testing.T) kv.Store, opts Options) {
 	t.Helper()
 	if opts.ModTimeTolerance < 0 {
-		t.Fatal("kvtest: negative ModTimeTolerance")
+		t.Fatal("kvtest: ModTimeTolerance is negative")
 	}
 	tol := opts.ModTimeTolerance
 	if tol == 0 {
