@@ -275,8 +275,18 @@ var remindedKey = state.NewKey[bool]("async.reminded", state.Private[bool]())
 // (see subagents.ResolveSpecs), a negative limit, or a configuration that
 // leaves no subagent to start.
 func New(cfg Config) (*Middleware, error) {
-	if cfg.MaxRunning < 0 || cfg.MaxFinished < 0 || cfg.TaskTimeout < 0 || cfg.MaxDepth < 0 {
-		return nil, errors.New("async: MaxRunning, MaxFinished, TaskTimeout and MaxDepth must not be negative")
+	for _, f := range []struct {
+		name     string
+		negative bool
+	}{
+		{"MaxRunning", cfg.MaxRunning < 0},
+		{"MaxFinished", cfg.MaxFinished < 0},
+		{"TaskTimeout", cfg.TaskTimeout < 0},
+		{"MaxDepth", cfg.MaxDepth < 0},
+	} {
+		if f.negative {
+			return nil, fmt.Errorf("async: %s must not be negative", f.name)
+		}
 	}
 	list, err := subagents.ResolveSpecs(subagents.Config{
 		Subagents:             cfg.Subagents,

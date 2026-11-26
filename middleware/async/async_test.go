@@ -339,9 +339,17 @@ func TestStartValidation(t *testing.T) {
 			t.Fatalf("nested start = %+v", res)
 		}
 	})
-	t.Run("negative depth", func(t *testing.T) {
-		if _, err := New(Config{MaxDepth: -1}); err == nil {
-			t.Fatal("New accepted a negative MaxDepth")
+	t.Run("negative limits", func(t *testing.T) {
+		for field, cfg := range map[string]Config{
+			"MaxRunning":  {MaxRunning: -1},
+			"MaxFinished": {MaxFinished: -1},
+			"TaskTimeout": {TaskTimeout: -1},
+			"MaxDepth":    {MaxDepth: -1},
+		} {
+			_, err := New(cfg)
+			if want := "async: " + field + " must not be negative"; err == nil || err.Error() != want {
+				t.Errorf("New(negative %s) = %v, want %q", field, err, want)
+			}
 		}
 	})
 }
