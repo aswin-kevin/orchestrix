@@ -241,7 +241,8 @@ type StopHook struct {
 }
 
 // SubagentStartHook runs before the subagent tool (agent.SubagentToolName)
-// is called.
+// is called. It does not run for start_task launches (see
+// Config.SubagentStart).
 type SubagentStartHook struct {
 	// Fn may block the launch or extend its task description. A returned
 	// error fails the call, or stops the run when it wraps
@@ -295,6 +296,10 @@ type Config struct {
 	// answer the run returns.
 	Stop []StopHook
 	// SubagentStart runs before the agent.SubagentToolName tool is called,
-	// and again for a call resumed after an interrupt (see PreToolUse).
+	// and again for a call resumed after an interrupt (see PreToolUse). It
+	// does not fire for a background task the async middleware's start_task
+	// launches (async.ToolStart): to gate those, use a PreToolUse hook whose
+	// Matcher names start_task, which sees the same subagent_type and
+	// description input.
 	SubagentStart []SubagentStartHook
 }
