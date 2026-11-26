@@ -115,7 +115,7 @@ func TestStackOrderM4(t *testing.T) {
 // kvBackend returns a kv backend over a fresh in-memory store.
 func kvBackend(t *testing.T) *kv.Backend {
 	t.Helper()
-	b, err := kv.New(kv.NewMemoryStore(), "test")
+	b, err := kv.New(testutil.MemoryStore(t), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func kvBackend(t *testing.T) *kv.Backend {
 // dirMemories returns a kv backend over a DirStore in dir, namespace "memories".
 func dirMemories(t *testing.T, dir string) *kv.Backend {
 	t.Helper()
-	store, err := kv.NewDirStore(dir)
+	store, err := kv.NewDirStore(dir, kv.DirStoreConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,8 +244,8 @@ func TestWithMountKeepsShellExecute(t *testing.T) {
 func TestWithMountWrapsBackendAndFactory(t *testing.T) {
 	ctx := context.Background()
 	for name, opt := range map[string]orchestrix.Option{
-		"backend": orchestrix.WithBackend(backendmemory.New()),
-		"factory": orchestrix.WithBackendFactory(func(string) backend.Backend { return backendmemory.New() }),
+		"backend": orchestrix.WithBackend(testutil.Memory(t)),
+		"factory": orchestrix.WithBackendFactory(func(string) backend.Backend { return testutil.Memory(t) }),
 	} {
 		kvb := kvBackend(t)
 		a, err := orchestrix.NewWithProvider(llmtest.New(), opt, orchestrix.WithMount("/kv", kvb))
@@ -278,7 +278,7 @@ func (c *closeCounter) Close() error {
 
 // Agent.Close still closes a WithBackend backend that WithMount wrapped.
 func TestWithMountKeepsBackendClose(t *testing.T) {
-	inner := &closeCounter{Backend: backendmemory.New()}
+	inner := &closeCounter{Backend: testutil.Memory(t)}
 	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithBackend(inner),
 		orchestrix.WithMount("/kv", kvBackend(t)))
 	if err != nil {

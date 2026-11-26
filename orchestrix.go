@@ -194,7 +194,8 @@ func (m *threadMemory) backend(threadID string) backend.Backend {
 
 // fresh returns a new in-memory backend under the mounts.
 func (m *threadMemory) fresh() backend.Backend {
-	var b backend.Backend = memory.New()
+	mem, _ := memory.New(memory.Config{}) // the zero Config is valid
+	var b backend.Backend = mem
 	if m.mount != nil {
 		b = m.mount(b)
 	}

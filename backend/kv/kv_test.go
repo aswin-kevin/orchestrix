@@ -14,6 +14,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/backendtest"
 	"github.com/aswin-kevin/orchestrix/backend/kv"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 )
 
 var ctx = context.Background()
@@ -29,7 +30,7 @@ func newBackend(t *testing.T, s kv.Store, ns string) *kv.Backend {
 
 func newDirStore(t *testing.T, dir string) *kv.DirStore {
 	t.Helper()
-	s, err := kv.NewDirStore(dir)
+	s, err := kv.NewDirStore(dir, kv.DirStoreConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +40,7 @@ func newDirStore(t *testing.T, dir string) *kv.DirStore {
 func TestKVConformance(t *testing.T) {
 	t.Run("Memory", func(t *testing.T) {
 		var n atomic.Int32
-		s := kv.NewMemoryStore()
+		s := testutil.MemoryStore(t)
 		backendtest.Run(t, func(t *testing.T) backend.Backend {
 			return newBackend(t, s, fmt.Sprintf("ns%d", n.Add(1)))
 		})
@@ -53,7 +54,7 @@ func TestKVConformance(t *testing.T) {
 }
 
 func TestNewValidates(t *testing.T) {
-	s := kv.NewMemoryStore()
+	s := testutil.MemoryStore(t)
 	for name, c := range map[string]struct {
 		store kv.Store
 		ns    string
@@ -97,7 +98,7 @@ func TestDirStorePersistsAcrossInstances(t *testing.T) {
 
 func TestDirStoreUsesInjectedClock(t *testing.T) {
 	stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	s, err := kv.NewDirStore(t.TempDir(), kv.WithClock(func() time.Time { return stamp }))
+	s, err := kv.NewDirStore(t.TempDir(), kv.DirStoreConfig{Clock: func() time.Time { return stamp }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestDirStoreUsesInjectedClock(t *testing.T) {
 
 func TestNamespacesIsolated(t *testing.T) {
 	for name, s := range map[string]kv.Store{
-		"memory": kv.NewMemoryStore(),
+		"memory": testutil.MemoryStore(t),
 		"dir":    newDirStore(t, t.TempDir()),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -195,7 +196,7 @@ func TestKeyTooLong(t *testing.T) {
 	if _, err := s.List(ctx, "ns", long); !errors.Is(err, kv.ErrKeyTooLong) {
 		t.Fatalf("List err = %v", err)
 	}
-	m := newBackend(t, kv.NewMemoryStore(), "ns")
+	m := newBackend(t, testutil.MemoryStore(t), "ns")
 	if err := m.Write(ctx, long, []byte("x")); err != nil {
 		t.Fatalf("MemoryStore must accept long keys: %v", err)
 	}
@@ -242,7 +243,10 @@ func TestErrorMessagesWrapOnce(t *testing.T) {
 
 func TestMemoryStoreUsesInjectedClock(t *testing.T) {
 	stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	s := kv.NewMemoryStore(kv.WithClock(func() time.Time { return stamp }))
+	s, err := kv.NewMemoryStore(kv.MemoryStoreConfig{Clock: func() time.Time { return stamp }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Put(ctx, "ns", "/k", []byte("v")); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +261,7 @@ func TestMemoryStoreUsesInjectedClock(t *testing.T) {
 }
 
 func TestMemoryStoreCopies(t *testing.T) {
-	s := kv.NewMemoryStore()
+	s := testutil.MemoryStore(t)
 	in := []byte("original")
 	if err := s.Put(ctx, "ns", "/k", in); err != nil {
 		t.Fatal(err)
@@ -276,7 +280,7 @@ func TestMemoryStoreCopies(t *testing.T) {
 
 func TestStoreGetMissingIsNotFound(t *testing.T) {
 	for name, s := range map[string]kv.Store{
-		"memory": kv.NewMemoryStore(),
+		"memory": testutil.MemoryStore(t),
 		"dir":    newDirStore(t, t.TempDir()),
 	} {
 		if _, err := s.Get(ctx, "ns", "/nope"); !errors.Is(err, backend.ErrNotFound) {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
@@ -302,7 +303,7 @@ func TestSearchResultsThroughRun(t *testing.T) {
 // backend, write_file deferred, and the given policy.
 func newFilesystemAgent(t *testing.T, p llm.Provider, cfg agent.Config) (*agent.Agent, *memory.Backend) {
 	t.Helper()
-	be := memory.New()
+	be := testutil.Memory(t)
 	cfg.Provider = p
 	cfg.Backend = be
 	cfg.Middleware = []agent.Middleware{filesystem.New(filesystem.Config{}), New(Config{Tools: []string{filesystem.ToolWriteFile}})}
@@ -575,7 +576,7 @@ func TestGateForwardsPermissionInterfaces(t *testing.T) {
 			}},
 			llmtest.Turn{Text: "done"},
 		)
-		be := memory.New()
+		be := testutil.Memory(t)
 		a := mustNew(t, agent.Config{
 			Provider: p,
 			Backend:  be,

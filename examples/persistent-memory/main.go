@@ -58,7 +58,7 @@ func run(ctx context.Context, w io.Writer) error {
 	// as a backend, which WithMount places at the memory store's directory.
 	// Every thread sees the same mount, while the rest of each thread's
 	// workspace stays its own.
-	store, err := kv.NewDirStore(dir)
+	store, err := kv.NewDirStore(dir, kv.DirStoreConfig{})
 	if err != nil {
 		return err
 	}

@@ -8,16 +8,16 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/composite"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	memmw "github.com/aswin-kevin/orchestrix/middleware/memory"
 )
 
 func TestLsMergesRealEntriesWithMounts(t *testing.T) {
-	def := memory.New()
+	def := testutil.Memory(t)
 	put(t, def, "/.orchestrix/other.txt", "o")
 	put(t, def, "/.orchestrix/memories/shadow.md", "s")
 	put(t, def, "/a.txt", "a")
-	c := mustNew(t, def, composite.Route{Prefix: memmw.DefaultDir, Backend: memory.New()})
+	c := mustNew(t, def, composite.Route{Prefix: memmw.DefaultDir, Backend: testutil.Memory(t)})
 	got, _ := c.Ls(ctx, "/.orchestrix")
 	wantPaths(t, "Ls(/.orchestrix)", got, "/.orchestrix/memories", "/.orchestrix/other.txt")
 	got, _ = c.Ls(ctx, "/")
@@ -25,7 +25,7 @@ func TestLsMergesRealEntriesWithMounts(t *testing.T) {
 }
 
 func TestShadowedDefaultFilesHidden(t *testing.T) {
-	def, route := memory.New(), memory.New()
+	def, route := testutil.Memory(t), testutil.Memory(t)
 	put(t, def, "/memories/old.md", "old shadow")
 	c := mustNew(t, def, composite.Route{Prefix: "/memories", Backend: route})
 
@@ -56,7 +56,7 @@ func TestShadowedDefaultFilesHidden(t *testing.T) {
 }
 
 func TestGlobAndGrepMerge(t *testing.T) {
-	def, route := memory.New(), memory.New()
+	def, route := testutil.Memory(t), testutil.Memory(t)
 	c := mustNew(t, def, composite.Route{Prefix: "/memories", Backend: route})
 	put(t, c, "/a.md", "alpha hit")
 	time.Sleep(20 * time.Millisecond)
@@ -94,7 +94,7 @@ func TestGlobAndGrepMerge(t *testing.T) {
 }
 
 func TestBasesAtAndBelowMount(t *testing.T) {
-	def, route := memory.New(), memory.New()
+	def, route := testutil.Memory(t), testutil.Memory(t)
 	c := mustNew(t, def, composite.Route{Prefix: "/.orchestrix/memories", Backend: route})
 	put(t, c, "/.orchestrix/memories/sub/n.md", "note")
 	put(t, c, "/.orchestrix/memories/top.md", "note")
@@ -133,9 +133,9 @@ func TestBasesAtAndBelowMount(t *testing.T) {
 }
 
 func TestGrepDoublestarGlobsReachMounts(t *testing.T) {
-	def := memory.New()
+	def := testutil.Memory(t)
 	put(t, def, "/x/memories/b.md", "hit")
-	c := mustNew(t, def, composite.Route{Prefix: "/.orchestrix/memories", Backend: memory.New()})
+	c := mustNew(t, def, composite.Route{Prefix: "/.orchestrix/memories", Backend: testutil.Memory(t)})
 	put(t, c, "/.orchestrix/memories/a.md", "hit")
 	const a, b = "/.orchestrix/memories/a.md", "/x/memories/b.md"
 	for glob, want := range map[string][]string{
@@ -160,9 +160,9 @@ func TestGrepDoublestarGlobsReachMounts(t *testing.T) {
 }
 
 func TestGlobDropsMountAncestorsFromDefault(t *testing.T) {
-	def := memory.New()
+	def := testutil.Memory(t)
 	put(t, def, "/m", "a file shadowed by the mount ancestor")
-	c := mustNew(t, def, composite.Route{Prefix: "/m/sub", Backend: memory.New()})
+	c := mustNew(t, def, composite.Route{Prefix: "/m/sub", Backend: testutil.Memory(t)})
 	put(t, c, "/m/sub/f", "x")
 	infos, err := c.Glob(ctx, "/m", "/")
 	if err != nil || len(infos) != 0 {
@@ -171,8 +171,8 @@ func TestGlobDropsMountAncestorsFromDefault(t *testing.T) {
 }
 
 func TestNestedMountAncestorsProtected(t *testing.T) {
-	a := memory.New()
-	c := mustNew(t, memory.New(), composite.Route{Prefix: "/m", Backend: a}, composite.Route{Prefix: "/m/a/b", Backend: memory.New()})
+	a := testutil.Memory(t)
+	c := mustNew(t, testutil.Memory(t), composite.Route{Prefix: "/m", Backend: a}, composite.Route{Prefix: "/m/a/b", Backend: testutil.Memory(t)})
 	put(t, a, "/a/other.txt", "keep")
 	if err := c.Delete(ctx, "/m/a"); !errors.Is(err, composite.ErrMountPoint) {
 		t.Fatalf("Delete(/m/a) = %v, want ErrMountPoint", err)
@@ -195,18 +195,18 @@ func TestNestedMountAncestorsProtected(t *testing.T) {
 
 func TestAncestorsFilteredFromFileResults(t *testing.T) {
 	// A def file standing where a mount ancestor is.
-	def := memory.New()
+	def := testutil.Memory(t)
 	put(t, def, "/m", "hit")
-	c := mustNew(t, def, composite.Route{Prefix: "/m/sub", Backend: memory.New()})
+	c := mustNew(t, def, composite.Route{Prefix: "/m/sub", Backend: testutil.Memory(t)})
 	ms, err := c.Grep(ctx, "hit", backend.GrepOptions{})
 	if err != nil || len(ms) != 0 {
 		t.Fatalf("Grep = %+v, %v; want none", ms, err)
 	}
 
 	// An outer mount's file standing where a nested mount's ancestor is.
-	a := memory.New()
+	a := testutil.Memory(t)
 	put(t, a, "/a", "hit")
-	c2 := mustNew(t, memory.New(), composite.Route{Prefix: "/m", Backend: a}, composite.Route{Prefix: "/m/a/b", Backend: memory.New()})
+	c2 := mustNew(t, testutil.Memory(t), composite.Route{Prefix: "/m", Backend: a}, composite.Route{Prefix: "/m/a/b", Backend: testutil.Memory(t)})
 	infos, err := c2.Glob(ctx, "**", "/")
 	if err != nil || len(infos) != 0 {
 		t.Fatalf("Glob = %q, %v; want none", paths(infos), err)

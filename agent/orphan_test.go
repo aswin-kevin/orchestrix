@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent/internal/elision"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -492,7 +492,7 @@ func TestResolverSavedIsACopy(t *testing.T) {
 // from State must survive into the final snapshot.
 func TestResolverErrorKeepsWorkspace(t *testing.T) {
 	ctx := context.Background()
-	old := memory.New()
+	old := testutil.Memory(t)
 	if err := old.Write(ctx, "/old.txt", []byte("old")); err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,7 @@ func TestResolverErrorKeepsWorkspace(t *testing.T) {
 	if !ok {
 		t.Fatal("final State lost the workspace snapshot")
 	}
-	restored := memory.New()
+	restored := testutil.Memory(t)
 	if err := restored.Restore(context.Background(), saved); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}

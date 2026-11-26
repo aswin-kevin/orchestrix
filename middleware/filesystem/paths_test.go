@@ -17,7 +17,7 @@ func TestBackslashTraversalSeesCleanPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	pc := permission.Context{Mode: permission.ModeBypass, Rules: permission.Rules{Deny: []permission.Rule{deny}}}
-	f := newFixture(t, Config{Backend: newClockBackend()})
+	f := newFixture(t, Config{Backend: newClockBackend(t)})
 	for _, p := range []string{`x\..\secrets\key`, `\secrets\key`, `..\..\secrets\key`, `x/..\secrets/key`} {
 		raw, err := json.Marshal(obj{"path": p})
 		if err != nil {

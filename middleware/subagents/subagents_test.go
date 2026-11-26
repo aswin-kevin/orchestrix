@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -242,7 +242,7 @@ func TestFilesMergeBackViaSharedBackend(t *testing.T) {
 	mw := newMiddleware(t, Config{Subagents: []Subagent{{
 		Name: "writer", Description: "Writes.", SystemPrompt: "you write", Provider: child, Tools: []tool.Tool{writerTool()},
 	}}})
-	be := memory.New()
+	be := testutil.Memory(t)
 	a, err := agent.New(agent.Config{
 		Provider: parent, Backend: be, Middleware: []agent.Middleware{mw}, PermissionMode: permission.ModeBypass,
 	})

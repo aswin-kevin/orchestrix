@@ -29,8 +29,12 @@ type fakeShell struct {
 
 var _ backend.Executor = (*fakeShell)(nil)
 
-func newFakeShell() *fakeShell {
-	return &fakeShell{Backend: membackend.New()}
+func newFakeShell() (*fakeShell, error) {
+	mem, err := membackend.New(membackend.Config{})
+	if err != nil {
+		return nil, err
+	}
+	return &fakeShell{Backend: mem}, nil
 }
 
 // Execute implements backend.Executor.

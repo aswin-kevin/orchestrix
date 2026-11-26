@@ -8,6 +8,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 )
 
 // wrap is a decorator over inner that forwards the Backend methods and
@@ -49,7 +50,7 @@ func (c *capable) Restore(ctx context.Context, data json.RawMessage) error {
 }
 
 func TestAsWalksUnwrap(t *testing.T) {
-	inner := &capable{Backend: memory.New()}
+	inner := &capable{Backend: testutil.Memory(t)}
 	b := newWrap(newWrap(inner))
 	ctx := t.Context()
 
@@ -103,7 +104,7 @@ func (refusingWrap) Execute(context.Context, string, backend.ExecOptions) (backe
 }
 
 func TestAsExecutorPrefersWrapper(t *testing.T) {
-	b := refusingWrap{newWrap(&capable{Backend: memory.New()})}
+	b := refusingWrap{newWrap(&capable{Backend: testutil.Memory(t)})}
 	e, ok := backend.AsExecutor(b)
 	if !ok {
 		t.Fatal("AsExecutor: not found")
@@ -114,10 +115,10 @@ func TestAsExecutorPrefersWrapper(t *testing.T) {
 }
 
 func TestAsWithoutCapability(t *testing.T) {
-	if _, ok := backend.AsExecutor(memory.New()); ok {
+	if _, ok := backend.AsExecutor(testutil.Memory(t)); ok {
 		t.Error("AsExecutor(memory) = ok, want false")
 	}
-	if _, ok := backend.AsExecutor(newWrap(memory.New())); ok {
+	if _, ok := backend.AsExecutor(newWrap(testutil.Memory(t))); ok {
 		t.Error("AsExecutor(wrapped memory) = ok, want false")
 	}
 	if _, ok := backend.AsExecutor(nil); ok {
@@ -135,7 +136,7 @@ func TestAsWithoutCapability(t *testing.T) {
 	if _, ok := backend.AsCloser(nil); ok {
 		t.Error("AsCloser(nil) = ok, want false")
 	}
-	if _, ok := backend.AsCloser(memory.New()); ok {
+	if _, ok := backend.AsCloser(testutil.Memory(t)); ok {
 		t.Error("AsCloser(memory) = ok, want false")
 	}
 }
@@ -166,7 +167,7 @@ func (c *ctxClosing) Close(ctx context.Context) error {
 }
 
 func TestAsCloserAdaptsIOCloser(t *testing.T) {
-	ioc := &ioClosing{Backend: memory.New()}
+	ioc := &ioClosing{Backend: testutil.Memory(t)}
 	c, ok := backend.AsCloser(newWrap(ioc))
 	if !ok {
 		t.Fatal("AsCloser(io.Closer) = false, want an adapter")
@@ -178,7 +179,7 @@ func TestAsCloserAdaptsIOCloser(t *testing.T) {
 		t.Fatalf("io.Closer called %d times, want 1", ioc.n)
 	}
 
-	cc := &ctxClosing{Backend: memory.New()}
+	cc := &ctxClosing{Backend: testutil.Memory(t)}
 	c, ok = backend.AsCloser(cc)
 	if !ok {
 		t.Fatal("AsCloser(Closer) = false")

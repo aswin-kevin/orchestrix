@@ -319,7 +319,7 @@ func ExampleWithAskUser() {
 }
 
 func ExampleWithMount() {
-	store, err := kv.NewDirStore("./memories") // survives restarts
+	store, err := kv.NewDirStore("./memories", kv.DirStoreConfig{}) // survives restarts
 	if err != nil {
 		log.Fatal(err)
 	}

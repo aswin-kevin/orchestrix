@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
@@ -123,7 +123,7 @@ func (h *harness) run(t *testing.T, ctx context.Context, text string, onEvent fu
 	t.Helper()
 	var evs []agent.Event
 	var final *agent.Final
-	in := agent.Input{ThreadID: h.thread, State: h.st, Backend: memory.New(), Messages: []llm.Message{llm.UserText(text)}}
+	in := agent.Input{ThreadID: h.thread, State: h.st, Backend: testutil.Memory(t), Messages: []llm.Message{llm.UserText(text)}}
 	for ev := range h.a.Run(ctx, in) {
 		evs = append(evs, ev)
 		if onEvent != nil {

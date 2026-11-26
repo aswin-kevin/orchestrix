@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/backend"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -242,7 +242,7 @@ func envTool(seen *[]tool.Call) tool.Tool {
 }
 
 func TestInputBackendOverrides(t *testing.T) {
-	override := memory.New()
+	override := testutil.Memory(t)
 	var backends []backend.Backend
 	var threads []string
 	var calls []tool.Call
@@ -250,7 +250,7 @@ func TestInputBackendOverrides(t *testing.T) {
 		Provider:       llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e", Name: "env"}}}, llmtest.Turn{Text: "done"}),
 		Tools:          []tool.Tool{envTool(&calls)},
 		Middleware:     []Middleware{requestProbe{&backends, &threads}},
-		BackendFactory: func(string) backend.Backend { return memory.New() },
+		BackendFactory: func(string) backend.Backend { return testutil.Memory(t) },
 	})
 
 	_, final := collect(t, a.Run(context.Background(), Input{ThreadID: "t", Backend: override, Messages: []llm.Message{llm.UserText("go")}}))
@@ -299,7 +299,7 @@ func TestInputAgentName(t *testing.T) {
 }
 
 func TestResumeWithInputOverrides(t *testing.T) {
-	override := memory.New()
+	override := testutil.Memory(t)
 	var backends []backend.Backend
 	var threads []string
 	var envCalls []tool.Call
@@ -311,7 +311,7 @@ func TestResumeWithInputOverrides(t *testing.T) {
 		),
 		Tools:          []tool.Tool{pauseOnceTool(log), envTool(&envCalls)},
 		Middleware:     []Middleware{requestProbe{&backends, &threads}},
-		BackendFactory: func(string) backend.Backend { return memory.New() },
+		BackendFactory: func(string) backend.Backend { return testutil.Memory(t) },
 	})
 	_, interrupted := collect(t, a.Run(context.Background(), Input{ThreadID: "t", Messages: []llm.Message{llm.UserText("go")}}))
 	if interrupted.Reason != ReasonInterrupted {

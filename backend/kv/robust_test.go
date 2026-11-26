@@ -88,7 +88,7 @@ func TestStaleTempSweepIgnoresInjectedClock(t *testing.T) {
 	// A clock far ahead (a test clock, or a skewed one) must not make another
 	// writer's in-flight temp look stale.
 	later := func() time.Time { return time.Now().Add(48 * time.Hour) }
-	if _, err := kv.NewDirStore(dir, kv.WithClock(later)); err != nil {
+	if _, err := kv.NewDirStore(dir, kv.DirStoreConfig{Clock: later}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(fresh); err != nil {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 )
@@ -24,7 +24,7 @@ func TestSummaryInputBounded(t *testing.T) {
 
 	main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("k1")}}, llmtest.Turn{Text: "done"})
 	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY"})
-	runAgent(t, main, memory.New(), Config{Provider: summarizer, TriggerFraction: noAutoTrigger}, msgs)
+	runAgent(t, main, testutil.Memory(t), Config{Provider: summarizer, TriggerFraction: noAutoTrigger}, msgs)
 
 	input := summarizerInput(t, summarizer, 0)
 	const prefix = "Previous summary:\n\n\nNew conversation:\n"

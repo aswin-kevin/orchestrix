@@ -60,25 +60,25 @@ type ItemInfo struct {
 	ModTime time.Time // when the value was last put
 }
 
-type storeOptions struct {
-	now func() time.Time
+// MemoryStoreConfig holds the optional settings of a MemoryStore. The zero
+// value is valid.
+type MemoryStoreConfig struct {
+	// Clock stamps modification times. The default is time.Now.
+	Clock func() time.Time
 }
 
-// StoreOption configures a MemoryStore or a DirStore.
-type StoreOption func(*storeOptions)
-
-// WithClock sets the clock that stamps modification times; the default is
-// time.Now.
-func WithClock(now func() time.Time) StoreOption {
-	return func(o *storeOptions) { o.now = now }
+// DirStoreConfig holds the optional settings of a DirStore. The zero value is
+// valid.
+type DirStoreConfig struct {
+	// Clock stamps modification times. The default is time.Now.
+	Clock func() time.Time
 }
 
-func newStoreOptions(opts []StoreOption) storeOptions {
-	o := storeOptions{now: time.Now}
-	for _, opt := range opts {
-		opt(&o)
+func clockOrNow(now func() time.Time) func() time.Time {
+	if now == nil {
+		return time.Now
 	}
-	return o
+	return now
 }
 
 // Stater is optionally implemented by a Store that can report a key's size
@@ -129,9 +129,11 @@ var (
 	_ Stater = (*MemoryStore)(nil)
 )
 
-// NewMemoryStore returns an empty MemoryStore.
-func NewMemoryStore(opts ...StoreOption) *MemoryStore {
-	return &MemoryStore{data: map[string]map[string]entry{}, now: newStoreOptions(opts).now}
+// NewMemoryStore returns an empty MemoryStore. The error is always nil today;
+// it is part of the signature so that settings can be validated without a
+// breaking change.
+func NewMemoryStore(cfg MemoryStoreConfig) (*MemoryStore, error) {
+	return &MemoryStore{data: map[string]map[string]entry{}, now: clockOrNow(cfg.Clock)}, nil
 }
 
 // Get returns a copy of the value stored under key.

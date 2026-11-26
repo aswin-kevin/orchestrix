@@ -16,6 +16,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
@@ -58,7 +59,7 @@ func writeThenAnswer(path, content string) *llmtest.Scripted {
 }
 
 func TestNewWithScriptedProviderWritesFile(t *testing.T) {
-	mem := memory.New()
+	mem := testutil.Memory(t)
 	a, err := orchestrix.NewWithProvider(writeThenAnswer("/hello.txt", "hi"),
 		orchestrix.WithBackend(mem),
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
@@ -242,8 +243,8 @@ func TestUnknownPermissionModeErrors(t *testing.T) {
 
 func TestBackendAndFactoryConflict(t *testing.T) {
 	_, err := orchestrix.NewWithProvider(llmtest.New(),
-		orchestrix.WithBackend(memory.New()),
-		orchestrix.WithBackendFactory(func(string) backend.Backend { return memory.New() }),
+		orchestrix.WithBackend(testutil.Memory(t)),
+		orchestrix.WithBackendFactory(func(string) backend.Backend { return testutil.Memory(t) }),
 	)
 	if err == nil {
 		t.Fatal("New accepted both WithBackend and WithBackendFactory")
@@ -398,7 +399,7 @@ func (b *startingBackend) Start(context.Context, string, backend.ExecOptions) (b
 func TestOrchestrixCloseStopsMCPAndTasks(t *testing.T) {
 	m := connectMCP(t, false)
 	tm := tasks.New(tasks.Config{})
-	b := &startingBackend{Backend: memory.New()}
+	b := &startingBackend{Backend: testutil.Memory(t)}
 	p := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e1", Name: filesystem.ToolExecute,
 			Input: map[string]any{"command": "serve", "run_in_background": true}}}},

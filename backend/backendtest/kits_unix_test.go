@@ -12,6 +12,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 )
 
 func realShell(t *testing.T) *shell.Backend {
@@ -118,7 +119,7 @@ func snapMutant(snap func(context.Context, *memory.Backend) (json.RawMessage, er
 	}
 	return func(t *testing.T) {
 		RunSnapshotter(t, func(*testing.T) backend.Backend {
-			return snapMut{Backend: memory.New(), snap: snap, restore: restore}
+			return snapMut{Backend: testutil.Memory(t), snap: snap, restore: restore}
 		})
 	}
 }

@@ -10,19 +10,41 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/backendtest"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 )
 
 func TestMemoryConformance(t *testing.T) {
-	backendtest.Run(t, func(t *testing.T) backend.Backend { return memory.New() })
+	backendtest.Run(t, func(t *testing.T) backend.Backend { return testutil.Memory(t) })
 }
 
 func TestMemoryImplementsSnapshotter(t *testing.T) {
-	var _ backend.Snapshotter = memory.New()
+	var _ backend.Snapshotter = testutil.Memory(t)
+}
+
+func TestNewZeroConfig(t *testing.T) {
+	m, err := memory.New(memory.Config{})
+	if err != nil || m == nil {
+		t.Fatalf("New(Config{}) = %v, %v", m, err)
+	}
+	before := time.Now()
+	if err := m.Write(context.Background(), "/f", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Read(context.Background(), "/f", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := res.ModTime.Sub(before); d < -time.Second || d > time.Second {
+		t.Fatalf("ModTime = %v, want within a second of %v", res.ModTime, before)
+	}
 }
 
 func TestMemoryUsesInjectedClock(t *testing.T) {
 	stamp := time.Date(2026, 1, 2, 3, 4, 5, 6, time.UTC)
-	m := memory.New(memory.WithClock(func() time.Time { return stamp }))
+	m, err := memory.New(memory.Config{Clock: func() time.Time { return stamp }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := m.Write(context.Background(), "/f", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +59,10 @@ func TestMemoryUsesInjectedClock(t *testing.T) {
 
 func TestMemorySnapshotShape(t *testing.T) {
 	stamp := time.Date(2026, 1, 2, 3, 4, 5, 6, time.UTC)
-	m := memory.New(memory.WithClock(func() time.Time { return stamp }))
+	m, err := memory.New(memory.Config{Clock: func() time.Time { return stamp }})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := m.Write(context.Background(), "/a/b.txt", []byte("hi")); err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +78,7 @@ func TestMemorySnapshotShape(t *testing.T) {
 
 func TestMemorySnapshotRestore(t *testing.T) {
 	ctx := context.Background()
-	m := memory.New()
+	m := testutil.Memory(t)
 	if err := m.Write(ctx, "/keep/a.txt", []byte("original")); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +107,7 @@ func TestMemorySnapshotRestore(t *testing.T) {
 }
 
 func TestMemoryRestoreRejectsBadInput(t *testing.T) {
-	m := memory.New()
+	m := testutil.Memory(t)
 	if err := m.Restore(context.Background(), json.RawMessage(`not json`)); err == nil {
 		t.Fatal("want error for malformed JSON")
 	}
@@ -94,7 +119,7 @@ func TestMemoryRestoreRejectsBadInput(t *testing.T) {
 
 func TestMemoryIsolatesCallerBuffers(t *testing.T) {
 	ctx := context.Background()
-	m := memory.New()
+	m := testutil.Memory(t)
 	buf := []byte("abc")
 	if err := m.Write(ctx, "/f", buf); err != nil {
 		t.Fatal(err)
@@ -108,7 +133,7 @@ func TestMemoryIsolatesCallerBuffers(t *testing.T) {
 
 func TestMemoryRefusesFilesOverReadLimit(t *testing.T) {
 	ctx := context.Background()
-	m := memory.New()
+	m := testutil.Memory(t)
 	big := make([]byte, backend.MaxReadFileBytes+1)
 	if err := m.Write(ctx, "/big", big); err != nil {
 		t.Fatal(err)
@@ -131,7 +156,7 @@ func TestMemoryRefusesFilesOverReadLimit(t *testing.T) {
 }
 
 func TestSnapshotHonoursCtx(t *testing.T) {
-	m := memory.New()
+	m := testutil.Memory(t)
 	if err := m.Write(context.Background(), "/a", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
@@ -156,5 +181,5 @@ func TestSnapshotHonoursCtx(t *testing.T) {
 }
 
 func TestMemorySnapshotterKit(t *testing.T) {
-	backendtest.RunSnapshotter(t, func(t *testing.T) backend.Backend { return memory.New() })
+	backendtest.RunSnapshotter(t, func(t *testing.T) backend.Backend { return testutil.Memory(t) })
 }

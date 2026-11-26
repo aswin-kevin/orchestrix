@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -94,7 +94,7 @@ func TestForkStateMergesBack(t *testing.T) {
 		llmtest.Turn{Text: "written"},
 		llmtest.Turn{Text: "done"},
 	)
-	be := memory.New()
+	be := testutil.Memory(t)
 	a, err := agent.New(agent.Config{
 		Provider: p, Backend: be, Tools: []tool.Tool{writerTool()},
 		Middleware: []agent.Middleware{newMiddleware(t, Config{})}, PermissionMode: permission.ModeBypass,

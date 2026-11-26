@@ -13,6 +13,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	cpmemory "github.com/aswin-kevin/orchestrix/checkpoint/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 )
 
@@ -87,7 +88,7 @@ func TestAgentCloseClosesMiddleware(t *testing.T) {
 			&closingMiddleware{name: "b", log: log, err: errB},
 			&closingMiddleware{name: "c", log: log},
 		},
-		Backend:      closingBackend{Backend: memory.New(), log: log},
+		Backend:      closingBackend{Backend: testutil.Memory(t), log: log},
 		Checkpointer: closingCheckpointer{Checkpointer: cpmemory.New(), log: log},
 		OnClose: []func(context.Context) error{
 			func(context.Context) error { log.add("hook1"); return nil },
@@ -253,7 +254,7 @@ func TestAgentCloseRecoversPanics(t *testing.T) {
 			panickingMiddleware{name: "boom", inDrain: true},
 			&closingMiddleware{name: "last", log: log},
 		},
-		Backend: closingBackend{Backend: memory.New(), log: log},
+		Backend: closingBackend{Backend: testutil.Memory(t), log: log},
 		OnClose: []func(context.Context) error{
 			func(context.Context) error { log.add("hook1"); return nil },
 			func(context.Context) error { panic("secret hook value") },
@@ -309,7 +310,7 @@ func TestAgentCloseClosesIOClosers(t *testing.T) {
 	errCP := errors.New("checkpointer failed")
 	a := mustNew(t, Config{
 		Provider:     llmtest.New(),
-		Backend:      ioClosingBackend{Backend: memory.New(), log: log},
+		Backend:      ioClosingBackend{Backend: testutil.Memory(t), log: log},
 		Checkpointer: ioClosingCheckpointer{Checkpointer: cpmemory.New(), log: log, err: errCP},
 	})
 	if err := a.Close(context.Background()); !errors.Is(err, errCP) {
@@ -331,7 +332,7 @@ func (b unwrappingBackend) Unwrap() backend.Backend { return b.inner }
 
 func TestCloseClosesWrappedBackend(t *testing.T) {
 	log := &closeLog{}
-	inner := ioClosingBackend{Backend: memory.New(), log: log}
+	inner := ioClosingBackend{Backend: testutil.Memory(t), log: log}
 	a := mustNew(t, Config{
 		Provider: llmtest.New(),
 		Backend:  unwrappingBackend{Backend: inner, inner: inner},

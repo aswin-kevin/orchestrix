@@ -11,6 +11,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/planning"
@@ -23,7 +24,7 @@ import (
 // visible file, both containing the word the searches look for.
 func secretWorkspace(t *testing.T) *memory.Backend {
 	t.Helper()
-	mem := memory.New()
+	mem := testutil.Memory(t)
 	ctx := context.Background()
 	for path, content := range map[string]string{
 		"/secrets/key.txt": "TOKEN=hidden\n",
@@ -97,7 +98,7 @@ func TestSearchToolsHideReadDeniedPaths(t *testing.T) {
 }
 
 func TestResumeEditIsCheckedAgainstDenyRules(t *testing.T) {
-	mem := memory.New()
+	mem := testutil.Memory(t)
 	p := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{{
 			ID: "w", Name: "write_file", Input: map[string]any{"path": "/notes/x.txt", "content": "x"},

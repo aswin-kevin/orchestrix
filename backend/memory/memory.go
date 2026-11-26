@@ -37,21 +37,20 @@ var (
 	_ backend.Snapshotter = (*Backend)(nil)
 )
 
-// Option configures a Backend.
-type Option func(*Backend)
-
-// WithClock sets the clock that stamps modification times.
-func WithClock(now func() time.Time) Option {
-	return func(b *Backend) { b.now = now }
+// Config holds the optional settings of a Backend. The zero Config is valid.
+type Config struct {
+	// Clock stamps modification times. The default is time.Now.
+	Clock func() time.Time
 }
 
-// New returns an empty backend.
-func New(opts ...Option) *Backend {
-	b := &Backend{files: map[string]file{}, now: time.Now}
-	for _, opt := range opts {
-		opt(b)
+// New returns an empty backend. The error is always nil today; it is part of
+// the signature so that settings can be validated without a breaking change.
+func New(cfg Config) (*Backend, error) {
+	now := cfg.Clock
+	if now == nil {
+		now = time.Now
 	}
-	return b
+	return &Backend{files: map[string]file{}, now: now}, nil
 }
 
 // kind classifies a cleaned path. Callers must hold b.mu.

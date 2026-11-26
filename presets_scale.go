@@ -94,7 +94,12 @@ func (s *settings) mountWrapper() func(backend.Backend) backend.Backend {
 	if len(s.mounts) == 0 {
 		return nil
 	}
-	if _, err := composite.New(memorybackend.New(), s.mounts...); err != nil {
+	probe, err := memorybackend.New(memorybackend.Config{})
+	if err != nil {
+		s.errs = append(s.errs, fmt.Errorf("WithMount: %w", err))
+		return nil
+	}
+	if _, err := composite.New(probe, s.mounts...); err != nil {
 		s.errs = append(s.errs, fmt.Errorf("WithMount: %w", err))
 		return nil
 	}

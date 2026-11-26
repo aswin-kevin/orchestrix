@@ -17,12 +17,38 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/kv"
 )
 
-// Run executes the conformance suite. newStore must return an empty Store
+// Options tunes RunWith for a store whose behaviour the default checks
+// would reject wrongly.
+type Options struct {
+	// ModTimeTolerance is how far apart the ModTimes that List, Get and Stat
+	// report for one key may be, and, with a floor of one minute, how old a
+	// fresh Put's ModTime may be. Zero means one second. Raise it for a store
+	// whose clock is not the test machine's, such as a database server's.
+	// A negative value fails the test.
+	ModTimeTolerance time.Duration
+}
+
+// Run executes the conformance suite with the default Options. It is
+// RunWith(t, newStore, Options{}).
+func Run(t *testing.T, newStore func(t *testing.T) kv.Store) {
+	t.Helper()
+	RunWith(t, newStore, Options{})
+}
+
+// RunWith executes the conformance suite. newStore must return an empty Store
 // isolated from other calls (for example backed by t.TempDir(), or a fresh
 // schema or tenant). When the Store implements kv.Stater, Stat is checked
 // against Get and List. Keys stay within kv.MaxKeyBytes.
-func Run(t *testing.T, newStore func(t *testing.T) kv.Store) {
+func RunWith(t *testing.T, newStore func(t *testing.T) kv.Store, opts Options) {
 	t.Helper()
+	if opts.ModTimeTolerance < 0 {
+		t.Fatal("kvtest: negative ModTimeTolerance")
+	}
+	tol := opts.ModTimeTolerance
+	if tol == 0 {
+		tol = time.Second
+	}
+	recent := max(time.Minute, tol)
 	cases := []struct {
 		name string
 		fn   func(*testing.T, kv.Store)
@@ -38,8 +64,8 @@ func Run(t *testing.T, newStore func(t *testing.T) kv.Store) {
 		{"ListEmpty", listEmpty},
 		{"AwkwardKeys", awkwardKeys},
 		{"ValuesAreCopies", valuesAreCopies},
-		{"ModTime", modTime},
-		{"StatAgrees", statAgrees},
+		{"ModTime", func(t *testing.T, s kv.Store) { modTime(t, s, tol, recent) }},
+		{"StatAgrees", func(t *testing.T, s kv.Store) { statAgrees(t, s, tol) }},
 		{"ConcurrentPutGet", concurrentPutGet},
 		{"CancelledContext", cancelledContext},
 	}
@@ -260,8 +286,8 @@ func valuesAreCopies(t *testing.T, s kv.Store) {
 	}
 }
 
-func modTime(t *testing.T, s kv.Store) {
-	before := time.Now().Add(-time.Minute)
+func modTime(t *testing.T, s kv.Store, tol, recent time.Duration) {
+	before := time.Now().Add(-recent)
 	mustPut(t, s, ns, "/m", "v")
 	item := mustGet(t, s, ns, "/m")
 	if item.ModTime.IsZero() || item.ModTime.Before(before) {
@@ -271,12 +297,12 @@ func modTime(t *testing.T, s kv.Store) {
 	if err != nil || len(infos) != 1 {
 		t.Fatalf("List = %v, %v", infos, err)
 	}
-	if d := infos[0].ModTime.Sub(item.ModTime); d < -time.Second || d > time.Second {
+	if d := infos[0].ModTime.Sub(item.ModTime); d < -tol || d > tol {
 		t.Fatalf("List ModTime %v disagrees with Get ModTime %v", infos[0].ModTime, item.ModTime)
 	}
 }
 
-func statAgrees(t *testing.T, s kv.Store) {
+func statAgrees(t *testing.T, s kv.Store, tol time.Duration) {
 	st, ok := s.(kv.Stater)
 	if !ok {
 		t.Skip("store does not implement kv.Stater")
@@ -290,7 +316,7 @@ func statAgrees(t *testing.T, s kv.Store) {
 	if info.Key != "/s/file" || info.Size != int64(len(item.Value)) {
 		t.Fatalf("Stat = %+v, want key /s/file of size %d", info, len(item.Value))
 	}
-	if d := info.ModTime.Sub(item.ModTime); d < -time.Second || d > time.Second {
+	if d := info.ModTime.Sub(item.ModTime); d < -tol || d > tol {
 		t.Fatalf("Stat ModTime %v disagrees with Get ModTime %v", info.ModTime, item.ModTime)
 	}
 	if _, err := st.Stat(ctx, "other", "/s/file"); !errors.Is(err, backend.ErrNotFound) {

@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -63,7 +63,7 @@ func confirmParent(t *testing.T, allowed ...agent.DecisionType) (*agent.Agent, *
 		Name: "confirmer", Description: "Confirms.", SystemPrompt: "you confirm", Provider: child,
 		Tools: []tool.Tool{confirmTool(allowed...)},
 	}}})
-	a, err := agent.New(agent.Config{Provider: parent, Backend: memory.New(), Middleware: []agent.Middleware{mw}})
+	a, err := agent.New(agent.Config{Provider: parent, Backend: testutil.Memory(t), Middleware: []agent.Middleware{mw}})
 	if err != nil {
 		t.Fatalf("agent.New: %v", err)
 	}
@@ -155,7 +155,7 @@ func testSuspendedTasksResume(t *testing.T, maxConcurrency, wantRounds int) {
 		{Name: "b", Description: "B.", SystemPrompt: "b", Provider: childTurns("b"), Tools: writer},
 	}})
 	a, err := agent.New(agent.Config{
-		Provider: parent, Backend: memory.New(), Middleware: []agent.Middleware{mw},
+		Provider: parent, Backend: testutil.Memory(t), Middleware: []agent.Middleware{mw},
 		MaxConcurrency: maxConcurrency,
 	})
 	if err != nil {
@@ -217,7 +217,7 @@ func TestForkSuspendsAndResumes(t *testing.T) {
 		llmtest.Turn{Text: "fork done"},
 		llmtest.Turn{Text: "parent done"},
 	)
-	be := memory.New()
+	be := testutil.Memory(t)
 	a, err := agent.New(agent.Config{
 		Provider: p, Backend: be, Tools: []tool.Tool{approvalWriter(&writes)},
 		Middleware: []agent.Middleware{newMiddleware(t, Config{})},

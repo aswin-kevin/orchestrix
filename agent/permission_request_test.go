@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -16,7 +16,7 @@ import (
 func TestPermissionRequestMatchesLoop(t *testing.T) {
 	a, err := agent.New(agent.Config{
 		Provider:   llmtest.New(),
-		Middleware: []agent.Middleware{filesystem.New(filesystem.Config{Backend: memory.New()})},
+		Middleware: []agent.Middleware{filesystem.New(filesystem.Config{Backend: testutil.Memory(t)})},
 	})
 	if err != nil {
 		t.Fatal(err)

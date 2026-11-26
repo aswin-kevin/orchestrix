@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -41,7 +41,7 @@ func toolTurn(id string, input int) llmtest.Turn {
 func runTrigger(t *testing.T, main, summarizer llm.Provider, cfg Config) *agent.Final {
 	t.Helper()
 	cfg.Provider = summarizer
-	return runWindow(t, main, memory.New(), cfg, agent.Input{ThreadID: "t1", Messages: triggerHistory()}, triggerWindow)
+	return runWindow(t, main, testutil.Memory(t), cfg, agent.Input{ThreadID: "t1", Messages: triggerHistory()}, triggerWindow)
 }
 
 func TestAutoCompactAtThreshold(t *testing.T) {
@@ -206,7 +206,7 @@ func TestNoProgressCountsAsFailure(t *testing.T) {
 	summarizer := llmtest.New()
 	huge := []llm.Message{llm.UserText(strings.Repeat("x", 8000))}
 
-	final := runWindow(t, main, memory.New(), Config{Provider: summarizer, MaxFailures: 1}, agent.Input{Messages: huge}, triggerWindow)
+	final := runWindow(t, main, testutil.Memory(t), Config{Provider: summarizer, MaxFailures: 1}, agent.Input{Messages: huge}, triggerWindow)
 
 	if final.Reason != agent.ReasonCompleted || summarizer.Calls() != 0 {
 		t.Fatalf("final = %+v, summarizer calls %d, want completion without summarizing", final, summarizer.Calls())
@@ -327,7 +327,7 @@ func TestReactiveRetryRestoresInnerWrappersRequest(t *testing.T) {
 	a, err := agent.New(agent.Config{
 		Provider:       main,
 		Profile:        &llm.Profile{ContextWindow: triggerWindow, MaxOutput: 500},
-		Backend:        memory.New(),
+		Backend:        testutil.Memory(t),
 		Middleware:     []agent.Middleware{New(Config{Provider: summarizer}), appender{}},
 		PermissionMode: permission.ModeBypass,
 	})

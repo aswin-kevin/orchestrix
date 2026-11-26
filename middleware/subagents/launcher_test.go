@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
@@ -51,7 +51,7 @@ func probeRun(t *testing.T, l *Launcher, spec Subagent, st *state.State, mw ...a
 		t.Fatal(err)
 	}
 	evs, final := collect(t, context.Background(), a, agent.Input{
-		ThreadID: "t", State: st, Backend: memory.New(), Messages: []llm.Message{llm.UserText("go")},
+		ThreadID: "t", State: st, Backend: testutil.Memory(t), Messages: []llm.Message{llm.UserText("go")},
 	})
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v)", final.Reason, final.Err)

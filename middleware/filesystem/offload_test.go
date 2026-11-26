@@ -9,7 +9,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -42,7 +42,7 @@ func bigOutput() string {
 }
 
 func TestLargeToolResultOffloaded(t *testing.T) {
-	b := memory.New()
+	b := testutil.Memory(t)
 	original := bigOutput()
 	out := wrapToolWith(t, Config{Backend: b}, "web_fetch", "call_1", tool.Text(original))
 
@@ -61,7 +61,7 @@ func TestLargeToolResultOffloaded(t *testing.T) {
 }
 
 func TestOwnToolsNotOffloaded(t *testing.T) {
-	b := memory.New()
+	b := testutil.Memory(t)
 	res := tool.Text(bigOutput())
 	out := wrapToolWith(t, Config{Backend: b}, ToolReadFile, "call_1", res)
 	if out.Flatten() != res.Flatten() {
@@ -73,7 +73,7 @@ func TestOwnToolsNotOffloaded(t *testing.T) {
 }
 
 func TestSmallResultAndNoBackendPassThrough(t *testing.T) {
-	b := memory.New()
+	b := testutil.Memory(t)
 	if out := wrapToolWith(t, Config{Backend: b}, "x", "c", tool.Text("small")); out.Flatten() != "small" {
 		t.Fatalf("small result changed: %q", out.Flatten())
 	}
@@ -84,7 +84,7 @@ func TestSmallResultAndNoBackendPassThrough(t *testing.T) {
 }
 
 func TestOffloadKeepsErrorFlagImagesAndSanitizesID(t *testing.T) {
-	b := memory.New()
+	b := testutil.Memory(t)
 	res := tool.Errorf("%s", bigOutput())
 	res.Content = append(res.Content, llm.Block{Type: llm.BlockImage, Source: &llm.Source{Type: "base64"}})
 	out := wrapToolWith(t, Config{Backend: b}, "x", "../a b/c", res)
@@ -99,7 +99,7 @@ func TestOffloadKeepsErrorFlagImagesAndSanitizesID(t *testing.T) {
 }
 
 func TestOffloadHeadCapsHugeLine(t *testing.T) {
-	out := wrapToolWith(t, Config{Backend: memory.New()}, "x", "c", tool.Text(strings.Repeat("y", 500_000)))
+	out := wrapToolWith(t, Config{Backend: testutil.Memory(t)}, "x", "c", tool.Text(strings.Repeat("y", 500_000)))
 	if len(out.Flatten()) > 10_000 {
 		t.Fatalf("single huge line defeated offload: %d bytes", len(out.Flatten()))
 	}
@@ -111,7 +111,7 @@ type failingBackend struct{ backend.Backend }
 func (failingBackend) Write(context.Context, string, []byte) error { return errors.New("disk full") }
 
 func TestOffloadWriteFailureTruncates(t *testing.T) {
-	cfg := Config{Backend: failingBackend{memory.New()}, OffloadChars: 1000}
+	cfg := Config{Backend: failingBackend{testutil.Memory(t)}, OffloadChars: 1000}
 	out := wrapToolWith(t, cfg, "x", "c", tool.Text(bigOutput()))
 	text := out.Flatten()
 	if !strings.Contains(text, "[truncated") || len(text) > 1100 {
@@ -145,7 +145,7 @@ func (c *countingBackend) Write(ctx context.Context, p string, d []byte) error {
 }
 
 func TestLargeUserMessageViewOnly(t *testing.T) {
-	cb := &countingBackend{Backend: memory.New()}
+	cb := &countingBackend{Backend: testutil.Memory(t)}
 	var b backend.Backend = cb
 	huge := "intro\n" + strings.Repeat("z", MessageOffloadChars+10)
 	history := []llm.Message{llm.UserText(huge), {Role: llm.RoleAssistant, Content: []llm.Block{llm.TextBlock(huge)}}}
@@ -177,7 +177,7 @@ func TestLargeUserMessageViewOnly(t *testing.T) {
 }
 
 func TestLargeUserMessageUsesRequestBackend(t *testing.T) {
-	b := memory.New()
+	b := testutil.Memory(t)
 	huge := strings.Repeat("z", MessageOffloadChars+10)
 	req := &agent.ModelRequest{Request: llm.Request{Messages: []llm.Message{llm.UserText(huge)}}, Backend: b}
 	var got []llm.Message
@@ -199,7 +199,7 @@ func TestLargeUserMessageUsesRequestBackend(t *testing.T) {
 }
 
 func TestExcludedOwnToolIsOffloadable(t *testing.T) {
-	cfg := Config{Backend: memory.New(), Tools: []string{ToolReadFile}}
+	cfg := Config{Backend: testutil.Memory(t), Tools: []string{ToolReadFile}}
 	out := wrapToolWith(t, cfg, ToolGrep, "c", tool.Text(bigOutput()))
 	if !strings.Contains(out.Flatten(), "Output too large") {
 		t.Fatal("a tool the allowlist excludes belongs to someone else and must be offloaded")

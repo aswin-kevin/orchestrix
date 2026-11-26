@@ -179,7 +179,7 @@ func (r *recordingExecutor) Execute(_ context.Context, cmd string, _ backend.Exe
 // A backend given with WithBackend that can run commands gets the execute
 // tool, as WithShell's does; one that cannot does not.
 func TestWithBackendExecutorRegistersExecute(t *testing.T) {
-	exec := &recordingExecutor{Backend: membackend.New()}
+	exec := &recordingExecutor{Backend: testutil.Memory(t)}
 	p := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "1", Name: "execute", Input: map[string]any{"command": "echo hi"}}}},
 		llmtest.Turn{Text: "done"},
@@ -197,7 +197,7 @@ func TestWithBackendExecutorRegistersExecute(t *testing.T) {
 	}
 
 	plain := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err = orchestrix.NewWithProvider(plain, orchestrix.WithBackend(membackend.New()))
+	a, err = orchestrix.NewWithProvider(plain, orchestrix.WithBackend(testutil.Memory(t)))
 	if err != nil {
 		t.Fatal(err)
 	}

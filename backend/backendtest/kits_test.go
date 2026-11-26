@@ -11,6 +11,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 )
 
 // brokenEnv makes a re-executed test binary run a kit against a broken fake.
@@ -36,7 +37,7 @@ func (brokenSnap) Restore(context.Context, json.RawMessage) error { return nil }
 var mutants = map[string]func(t *testing.T){
 	"exec/Echo": func(t *testing.T) { RunExecutor(t, func(*testing.T) backend.Executor { return brokenExec{} }) },
 	"snap/RestoreReplaces": func(t *testing.T) {
-		RunSnapshotter(t, func(*testing.T) backend.Backend { return brokenSnap{memory.New()} })
+		RunSnapshotter(t, func(*testing.T) backend.Backend { return brokenSnap{testutil.Memory(t)} })
 	},
 }
 

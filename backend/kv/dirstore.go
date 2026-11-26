@@ -69,7 +69,7 @@ var (
 // files are 0o600, and writes are atomic (os.CreateTemp in the namespace dir,
 // fsync, then os.Rename). Names starting with "." are temp files and never
 // listed; ones over an hour old are removed here.
-func NewDirStore(dir string, opts ...StoreOption) (*DirStore, error) {
+func NewDirStore(dir string, cfg DirStoreConfig) (*DirStore, error) {
 	if dir == "" {
 		return nil, errors.New("kv: empty directory")
 	}
@@ -80,7 +80,7 @@ func NewDirStore(dir string, opts ...StoreOption) (*DirStore, error) {
 	if err := os.MkdirAll(abs, dirMode); err != nil {
 		return nil, fmt.Errorf("kv: create store directory: %w", err)
 	}
-	d := &DirStore{dir: abs, now: newStoreOptions(opts).now}
+	d := &DirStore{dir: abs, now: clockOrNow(cfg.Clock)}
 	d.removeStaleTemps()
 	return d, nil
 }

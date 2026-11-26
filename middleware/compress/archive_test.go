@@ -10,6 +10,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
@@ -30,11 +31,11 @@ func TestCompressWithoutArchive(t *testing.T) {
 		thread  string
 		archive bool
 	}{
-		{"archived", testCfg, memory.New(), "t", true},
-		{"DisableArchive", Config{MinRangeTokens: 100, DisableArchive: true}, memory.New(), "t", false},
-		{"no thread", testCfg, memory.New(), "", false},
+		{"archived", testCfg, testutil.Memory(t), "t", true},
+		{"DisableArchive", Config{MinRangeTokens: 100, DisableArchive: true}, testutil.Memory(t), "t", false},
+		{"no thread", testCfg, testutil.Memory(t), "", false},
 		{"no backend", testCfg, nil, "t", false},
-		{"failed write", testCfg, failingWrites{memory.New()}, "t", false},
+		{"failed write", testCfg, failingWrites{testutil.Memory(t)}, "t", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := New(tc.cfg)
@@ -76,7 +77,7 @@ func TestSameTurnCompactionClosesOpenProposal(t *testing.T) {
 	)
 	summarizer := llmtest.New(llmtest.Turn{Text: "EARLIER"})
 	stack := []agent.Middleware{summarize.New(summarize.Config{Provider: summarizer, TriggerFraction: 100, DisableOffload: true}), New(testCfg)}
-	s := run(t, main, memory.New(), testCfg, seeded(), stack...)
+	s := run(t, main, testutil.Memory(t), testCfg, seeded(), stack...)
 
 	if id := proposed(main.Requests[0]); id != "c1" {
 		t.Fatalf("first request proposes %q, want c1", id)

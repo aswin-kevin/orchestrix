@@ -19,9 +19,9 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/kv"
-	membackend "github.com/aswin-kevin/orchestrix/backend/memory"
 	checkpointfile "github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/coordinator"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/mcp"
 	"github.com/aswin-kevin/orchestrix/middleware/async"
@@ -76,7 +76,7 @@ func TestLiveAgentWritesAndReadsFile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
 	defer cancel()
 
-	ws := membackend.New()
+	ws := testutil.Memory(t)
 	a, err := orchestrix.New(spec,
 		orchestrix.WithBackend(ws),
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
@@ -194,7 +194,7 @@ func TestLiveSubagentDelegation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
 	defer cancel()
 
-	ws := membackend.New()
+	ws := testutil.Memory(t)
 	a, err := orchestrix.New(spec,
 		orchestrix.WithBackend(ws),
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
@@ -414,7 +414,7 @@ func TestLiveSkillLoadAndUse(t *testing.T) {
 	}
 
 	a, err := orchestrix.New(spec,
-		orchestrix.WithBackend(membackend.New()),
+		orchestrix.WithBackend(testutil.Memory(t)),
 		orchestrix.WithSkills(skills.Config{Sources: []skills.Source{skills.DirSource(dir)}}),
 		orchestrix.WithMaxTurns(10),
 	)
@@ -435,7 +435,7 @@ func TestLiveMemoryRecall(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
 	defer cancel()
 
-	ws := membackend.New()
+	ws := testutil.Memory(t)
 	entry := "---\n" +
 		"name: favorite-color\n" +
 		"description: The user's favorite color.\n" +
@@ -484,7 +484,7 @@ func TestLiveMCPInProcess(t *testing.T) {
 	})
 
 	a, err := orchestrix.New(spec,
-		orchestrix.WithBackend(membackend.New()),
+		orchestrix.WithBackend(testutil.Memory(t)),
 		orchestrix.WithMCP(m),
 		orchestrix.WithPermissionMode(permission.ModeBypass),
 		orchestrix.WithMaxTurns(10),
@@ -513,7 +513,7 @@ func TestLiveWebFetch(t *testing.T) {
 	defer srv.Close()
 
 	a, err := orchestrix.New(spec,
-		orchestrix.WithBackend(membackend.New()),
+		orchestrix.WithBackend(testutil.Memory(t)),
 		orchestrix.WithWeb(web.Config{AllowPrivateNetworks: true, ReadOnly: true}),
 		orchestrix.WithMaxTurns(10),
 	)
@@ -538,7 +538,7 @@ func TestLivePlanModeApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ws := membackend.New()
+	ws := testutil.Memory(t)
 	a, err := orchestrix.New(spec,
 		orchestrix.WithBackend(ws),
 		orchestrix.WithCheckpointer(cp),
@@ -747,7 +747,7 @@ func TestLiveMountedMemoryAcrossThreads(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
 	defer cancel()
 
-	store, err := kv.NewDirStore(t.TempDir())
+	store, err := kv.NewDirStore(t.TempDir(), kv.DirStoreConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

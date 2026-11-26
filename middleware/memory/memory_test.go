@@ -8,7 +8,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -17,7 +17,7 @@ import (
 
 func backendWith(t *testing.T, files map[string]string) backend.Backend {
 	t.Helper()
-	b := memory.New()
+	b := testutil.Memory(t)
 	for p, c := range files {
 		if err := b.Write(context.Background(), p, []byte(c)); err != nil {
 			t.Fatal(err)
@@ -141,7 +141,7 @@ func (f failingBackend) Read(context.Context, string, int, int) (backend.ReadRes
 func TestAnyReadErrorSkipsFile(t *testing.T) {
 	for _, err := range []error{backend.ErrNotFound, backend.ErrIsDir, backend.ErrTooLarge, errors.New("disk on fire")} {
 		p := llmtest.New(llmtest.Turn{Text: "ok"})
-		b := failingBackend{Backend: memory.New(), err: err}
+		b := failingBackend{Backend: testutil.Memory(t), err: err}
 		s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles}), user("hi"))
 		if len(Files(s)) != 0 || len(p.Requests[0].System) != 1 {
 			t.Fatalf("read error %v: files=%+v system=%q, want the file skipped", err, Files(s), p.Requests[0].System)
@@ -158,7 +158,7 @@ func (binaryBackend) Read(context.Context, string, int, int) (backend.ReadResult
 
 func TestBinaryFileSkipped(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	s := run(t, newAgent(t, p, binaryBackend{memory.New()}, Config{Files: DefaultFiles}), user("hi"))
+	s := run(t, newAgent(t, p, binaryBackend{testutil.Memory(t)}, Config{Files: DefaultFiles}), user("hi"))
 	if len(Files(s)) != 0 {
 		t.Fatalf("Files = %+v, want none", Files(s))
 	}

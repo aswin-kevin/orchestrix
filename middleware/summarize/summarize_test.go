@@ -8,7 +8,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -109,7 +109,7 @@ func summarizerInput(t *testing.T, p *llmtest.Scripted, i int) string {
 func TestCompactToolSummarizesAndOffloads(t *testing.T) {
 	main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}}, llmtest.Turn{Text: "done"})
 	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})
-	b := memory.New()
+	b := testutil.Memory(t)
 
 	final := runAgent(t, main, b, Config{Provider: summarizer}, paddedHistory())
 
@@ -161,7 +161,7 @@ func TestIncrementalSummaryIncludesPrevious(t *testing.T) {
 		llmtest.Turn{Text: "done"},
 	)
 	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"}, llmtest.Turn{Text: "SUMMARY-2"})
-	b := memory.New()
+	b := testutil.Memory(t)
 
 	final := runAgent(t, main, b, Config{Provider: summarizer}, paddedHistory())
 
@@ -197,7 +197,7 @@ func TestCompactWithNothingToSummarize(t *testing.T) {
 	main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}}, llmtest.Turn{Text: "done"})
 	summarizer := llmtest.New()
 
-	final := runAgent(t, main, memory.New(), Config{Provider: summarizer}, []llm.Message{llm.UserText("hi")})
+	final := runAgent(t, main, testutil.Memory(t), Config{Provider: summarizer}, []llm.Message{llm.UserText("hi")})
 
 	if summarizer.Calls() != 0 {
 		t.Fatalf("summarizer called %d times for a short conversation, want 0", summarizer.Calls())
@@ -221,7 +221,7 @@ func TestDisableOffloadAndDefaultSummarizer(t *testing.T) {
 		llmtest.Turn{Text: "SUMMARY-1"},
 		llmtest.Turn{Text: "done"},
 	)
-	b := memory.New()
+	b := testutil.Memory(t)
 
 	final := runAgent(t, main, b, Config{DisableOffload: true, TriggerFraction: noAutoTrigger}, paddedHistory())
 
@@ -239,7 +239,7 @@ func TestDisableOffloadAndDefaultSummarizer(t *testing.T) {
 func TestThreadlessRunSkipsOffload(t *testing.T) {
 	main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}}, llmtest.Turn{Text: "done"})
 	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})
-	b := memory.New()
+	b := testutil.Memory(t)
 
 	final := runInput(t, main, b, Config{Provider: summarizer}, agent.Input{Messages: paddedHistory()})
 
@@ -257,7 +257,7 @@ func TestFailedCompactionRecordedAndRequestUncompacted(t *testing.T) {
 	summarizer := llmtest.New(llmtest.Turn{Err: errors.New("summarizer down")})
 
 	cfg.Provider = summarizer
-	final := runAgent(t, main, memory.New(), cfg, paddedHistory())
+	final := runAgent(t, main, testutil.Memory(t), cfg, paddedHistory())
 
 	if summarizer.Calls() != 1 {
 		t.Fatalf("summarizer called %d times, want 1", summarizer.Calls())
@@ -285,7 +285,7 @@ func TestSuccessfulCompactionClearsLastError(t *testing.T) {
 	)
 	summarizer := llmtest.New(llmtest.Turn{Err: errors.New("summarizer down")}, llmtest.Turn{Text: "SUMMARY-1"})
 
-	final := runAgent(t, main, memory.New(), Config{Provider: summarizer}, paddedHistory())
+	final := runAgent(t, main, testutil.Memory(t), Config{Provider: summarizer}, paddedHistory())
 
 	if bd, ok := Current(final.State); !ok || bd.Summary != "SUMMARY-1" || bd.LastError != "" || bd.Compactions != 1 {
 		t.Fatalf("boundary = %+v, want SUMMARY-1, compaction 1, no error", bd)
@@ -301,7 +301,7 @@ func TestCompactAlongsideParallelCalls(t *testing.T) {
 	)
 	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})
 
-	final := runAgent(t, main, memory.New(), Config{Provider: summarizer}, paddedHistory())
+	final := runAgent(t, main, testutil.Memory(t), Config{Provider: summarizer}, paddedHistory())
 
 	if summarizer.Calls() != 1 {
 		t.Fatalf("summarizer called %d times, want 1", summarizer.Calls())

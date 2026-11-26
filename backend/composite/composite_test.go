@@ -10,7 +10,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/backendtest"
 	"github.com/aswin-kevin/orchestrix/backend/composite"
 	"github.com/aswin-kevin/orchestrix/backend/kv"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	memmw "github.com/aswin-kevin/orchestrix/middleware/memory"
@@ -66,19 +65,19 @@ func wantPaths(t *testing.T, what string, got []backend.FileInfo, want ...string
 func TestCompositeConformance(t *testing.T) {
 	t.Run("NoRoutes", func(t *testing.T) {
 		backendtest.Run(t, func(t *testing.T) backend.Backend {
-			return mustNew(t, memory.New())
+			return mustNew(t, testutil.Memory(t))
 		})
 	})
 	t.Run("ThroughMount", func(t *testing.T) {
 		backendtest.Run(t, func(t *testing.T) backend.Backend {
-			return mntAdapter{mustNew(t, memory.New(), composite.Route{Prefix: mnt, Backend: memory.New()})}
+			return mntAdapter{mustNew(t, testutil.Memory(t), composite.Route{Prefix: mnt, Backend: testutil.Memory(t)})}
 		})
 	})
 }
 
 func TestRoutesByLongestPrefix(t *testing.T) {
-	a, b := memory.New(), memory.New()
-	c := mustNew(t, memory.New(), composite.Route{Prefix: "/m", Backend: a}, composite.Route{Prefix: "/m/deep", Backend: b})
+	a, b := testutil.Memory(t), testutil.Memory(t)
+	c := mustNew(t, testutil.Memory(t), composite.Route{Prefix: "/m", Backend: a}, composite.Route{Prefix: "/m/deep", Backend: b})
 	put(t, c, "/m/deep/x", "in-b")
 	put(t, c, "/m/y", "in-a")
 	if got := readAll(t, b, "/x"); got != "in-b" {
@@ -114,7 +113,7 @@ func TestRoutesByLongestPrefix(t *testing.T) {
 }
 
 func TestPrefixBoundary(t *testing.T) {
-	def, route := memory.New(), memory.New()
+	def, route := testutil.Memory(t), testutil.Memory(t)
 	c := mustNew(t, def, composite.Route{Prefix: "/memories", Backend: route})
 	put(t, c, "/memories2/x", "1")
 	put(t, c, "/memoriesX", "2")
@@ -132,32 +131,32 @@ func TestPrefixBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	slash := memory.New()
-	c2 := mustNew(t, memory.New(), composite.Route{Prefix: "/memories/", Backend: slash})
+	slash := testutil.Memory(t)
+	c2 := mustNew(t, testutil.Memory(t), composite.Route{Prefix: "/memories/", Backend: slash})
 	put(t, c2, "/memories/a", "x")
 	if !has(slash, "/a") {
 		t.Fatal("trailing slash prefix should behave like /memories")
 	}
 
 	for _, prefix := range []string{"/", "", "rel", "/a/../b", "/a//b", "/a\x00b"} {
-		if _, err := composite.New(memory.New(), composite.Route{Prefix: prefix, Backend: memory.New()}); err == nil {
+		if _, err := composite.New(testutil.Memory(t), composite.Route{Prefix: prefix, Backend: testutil.Memory(t)}); err == nil {
 			t.Errorf("prefix %q accepted", prefix)
 		}
 	}
-	dup := []composite.Route{{Prefix: "/a", Backend: memory.New()}, {Prefix: "/a/", Backend: memory.New()}}
-	if _, err := composite.New(memory.New(), dup...); err == nil {
+	dup := []composite.Route{{Prefix: "/a", Backend: testutil.Memory(t)}, {Prefix: "/a/", Backend: testutil.Memory(t)}}
+	if _, err := composite.New(testutil.Memory(t), dup...); err == nil {
 		t.Error("duplicate prefix accepted")
 	}
 	if _, err := composite.New(nil); err == nil {
 		t.Error("nil default accepted")
 	}
-	if _, err := composite.New(memory.New(), composite.Route{Prefix: "/a"}); err == nil {
+	if _, err := composite.New(testutil.Memory(t), composite.Route{Prefix: "/a"}); err == nil {
 		t.Error("nil route backend accepted")
 	}
 }
 
 func TestLsShowsMountAncestors(t *testing.T) {
-	c := mustNew(t, memory.New(), composite.Route{Prefix: memmw.DefaultDir, Backend: memory.New()})
+	c := mustNew(t, testutil.Memory(t), composite.Route{Prefix: memmw.DefaultDir, Backend: testutil.Memory(t)})
 	got, err := c.Ls(ctx, "/")
 	if err != nil {
 		t.Fatal(err)
@@ -185,8 +184,8 @@ func TestLsShowsMountAncestors(t *testing.T) {
 }
 
 func TestDeleteMountRefused(t *testing.T) {
-	route := memory.New()
-	def := memory.New()
+	route := testutil.Memory(t)
+	def := testutil.Memory(t)
 	c := mustNew(t, def, composite.Route{Prefix: "/a/memories", Backend: route})
 	put(t, c, "/a/memories/b.md", "b")
 	put(t, c, "/a/keep.txt", "k")
@@ -212,8 +211,8 @@ func TestDeleteMountRefused(t *testing.T) {
 }
 
 func TestEditAndMultiEditRoute(t *testing.T) {
-	route := memory.New()
-	c := mustNew(t, memory.New(), composite.Route{Prefix: "/m", Backend: route})
+	route := testutil.Memory(t)
+	c := mustNew(t, testutil.Memory(t), composite.Route{Prefix: "/m", Backend: route})
 	put(t, c, "/m/f", "one two")
 	if _, err := c.Edit(ctx, "/m/f", "one", "1", false); err != nil {
 		t.Fatal(err)
@@ -226,7 +225,7 @@ func TestEditAndMultiEditRoute(t *testing.T) {
 		t.Fatalf("content = %q", got)
 	}
 	// A target without MultiEdit fails with ErrUnsupported.
-	c2 := mustNew(t, memory.New(), composite.Route{Prefix: "/m", Backend: noMulti{memory.New()}})
+	c2 := mustNew(t, testutil.Memory(t), composite.Route{Prefix: "/m", Backend: noMulti{testutil.Memory(t)}})
 	put(t, c2, "/m/f", "x")
 	if _, err := c2.(backend.MultiEditor).MultiEdit(ctx, "/m/f", []backend.EditOp{{Old: "x", New: "y"}}); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("MultiEdit = %v, want ErrUnsupported", err)
@@ -242,7 +241,7 @@ func TestCapabilitiesFollowDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := mustNew(t, sh, composite.Route{Prefix: "/memories", Backend: memory.New()})
+	c := mustNew(t, sh, composite.Route{Prefix: "/memories", Backend: testutil.Memory(t)})
 	ex, ok := c.(backend.Executor)
 	if _, st := c.(backend.Starter); !ok || !st {
 		t.Fatal("shell default must yield Executor and Starter")
@@ -261,7 +260,7 @@ func TestCapabilitiesFollowDefault(t *testing.T) {
 		t.Fatal("shell default is not a Snapshotter")
 	}
 	// An Executor-only default yields Executor without Starter.
-	only := mustNew(t, execOnly{memory.New()})
+	only := mustNew(t, execOnly{testutil.Memory(t)})
 	if _, ok := only.(backend.Executor); !ok {
 		t.Fatal("Executor-only default lost Executor")
 	}
@@ -280,8 +279,8 @@ func (execOnly) Execute(context.Context, string, backend.ExecOptions) (backend.E
 }
 
 func TestSnapshotCoversDefaultOnly(t *testing.T) {
-	route := memory.New()
-	c := mustNew(t, memory.New(), composite.Route{Prefix: "/memories", Backend: route})
+	route := testutil.Memory(t)
+	c := mustNew(t, testutil.Memory(t), composite.Route{Prefix: "/memories", Backend: route})
 	if _, ok := c.(backend.Executor); ok {
 		t.Fatal("memory default must not yield Executor")
 	}
@@ -310,12 +309,12 @@ func TestSnapshotCoversDefaultOnly(t *testing.T) {
 }
 
 func TestMemoriesPersistAcrossThreads(t *testing.T) {
-	shared, err := kv.New(kv.NewMemoryStore(), "memories")
+	shared, err := kv.New(testutil.MemoryStore(t), "memories")
 	if err != nil {
 		t.Fatal(err)
 	}
 	thread := func() backend.Backend {
-		return mustNew(t, memory.New(), composite.Route{Prefix: memmw.DefaultDir, Backend: shared})
+		return mustNew(t, testutil.Memory(t), composite.Route{Prefix: memmw.DefaultDir, Backend: shared})
 	}
 	a, b := thread(), thread()
 	put(t, a, memmw.DefaultDir+"/color.md", "blue")
@@ -335,7 +334,7 @@ type unwrapping struct{ backend.Backend }
 func (u unwrapping) Unwrap() backend.Backend { return u.Backend }
 
 func TestCapabilitiesThroughUnwrap(t *testing.T) {
-	c := mustNew(t, unwrapping{memory.New()}, composite.Route{Prefix: "/m", Backend: unwrapping{memory.New()}})
+	c := mustNew(t, unwrapping{testutil.Memory(t)}, composite.Route{Prefix: "/m", Backend: unwrapping{testutil.Memory(t)}})
 	if _, ok := c.(backend.Snapshotter); !ok {
 		t.Fatal("default wrapping a Snapshotter must yield Snapshotter")
 	}
@@ -343,7 +342,7 @@ func TestCapabilitiesThroughUnwrap(t *testing.T) {
 	if _, err := c.(backend.MultiEditor).MultiEdit(ctx, "/m/f", []backend.EditOp{{Old: "x", New: "y"}}); err != nil {
 		t.Fatalf("MultiEdit through a route's Unwrap = %v", err)
 	}
-	ex, ok := mustNew(t, unwrapping{execOnly{memory.New()}}).(backend.Executor)
+	ex, ok := mustNew(t, unwrapping{execOnly{testutil.Memory(t)}}).(backend.Executor)
 	if !ok {
 		t.Fatal("default wrapping an Executor must yield Executor")
 	}

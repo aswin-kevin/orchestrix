@@ -20,12 +20,17 @@ import (
 
 // newClockBackend returns a memory backend whose clock advances on every
 // read, so each write gets a distinct modification time.
-func newClockBackend() *memory.Backend {
+func newClockBackend(t testing.TB) *memory.Backend {
+	t.Helper()
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	return memory.New(memory.WithClock(func() time.Time {
+	b, err := memory.New(memory.Config{Clock: func() time.Time {
 		now = now.Add(time.Second)
 		return now
-	}))
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func seed(t *testing.T, b backend.Backend, path, content string) {
@@ -80,7 +85,7 @@ func wantText(t *testing.T, res tool.Result, isError bool, want string) {
 }
 
 func TestReadFormatsAndPages(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/a.txt", "one\ntwo\nthree\nfour\n")
 	f := newFixture(t, Config{Backend: b})
 
@@ -95,7 +100,7 @@ func TestReadFormatsAndPages(t *testing.T) {
 }
 
 func TestReadLongLineTruncated(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/big.txt", strings.Repeat("x", 5<<20))
 	f := newFixture(t, Config{Backend: b})
 
@@ -106,7 +111,7 @@ func TestReadLongLineTruncated(t *testing.T) {
 }
 
 func TestReadBinaryImage(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	png := "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
 	seed(t, b, "/pic.png", png)
 	f := newFixture(t, Config{Backend: b})
@@ -125,7 +130,7 @@ func TestReadBinaryImage(t *testing.T) {
 }
 
 func TestEditRequiresRead(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/a.txt", "hello world")
 	f := newFixture(t, Config{Backend: b})
 	edit := obj{"path": "/a.txt", "old_string": "hello", "new_string": "bye"}
@@ -142,7 +147,7 @@ func TestEditRequiresRead(t *testing.T) {
 }
 
 func TestEditAfterExternalChangeRejected(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/a.txt", "hello")
 	f := newFixture(t, Config{Backend: b})
 	f.run(t, "read_file", obj{"path": "/a.txt"})
@@ -153,7 +158,7 @@ func TestEditAfterExternalChangeRejected(t *testing.T) {
 }
 
 func TestWriteNewFileNoReadNeeded(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	f := newFixture(t, Config{Backend: b})
 
 	wantText(t, f.run(t, "write_file", obj{"path": "/new/dir/f.txt", "content": "abc"}), false, "Wrote 3 bytes to /new/dir/f.txt")
@@ -162,7 +167,7 @@ func TestWriteNewFileNoReadNeeded(t *testing.T) {
 }
 
 func TestMultiEditAtomic(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/a.txt", "alpha\r\nbeta\r\n")
 	f := newFixture(t, Config{Backend: b})
 	f.run(t, "read_file", obj{"path": "/a.txt"})
@@ -196,7 +201,7 @@ func TestMultiEditAtomic(t *testing.T) {
 type plainBackend struct{ backend.Backend }
 
 func TestMultiEditRequiresMultiEditor(t *testing.T) {
-	inner := newClockBackend()
+	inner := newClockBackend(t)
 	seed(t, inner, "/a.txt", "x")
 	f := newFixture(t, Config{Backend: plainBackend{inner}})
 	f.run(t, "read_file", obj{"path": "/a.txt"})
@@ -205,7 +210,7 @@ func TestMultiEditRequiresMultiEditor(t *testing.T) {
 }
 
 func TestReadBinaryPDF(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/d.pdf", "%PDF-1.4\n\x00\xff\xfe")
 	f := newFixture(t, Config{Backend: b})
 	f.call.Profile = llm.Profile{PDFs: true}
@@ -216,7 +221,7 @@ func TestReadBinaryPDF(t *testing.T) {
 }
 
 func TestGrepCapFooterOnlyWhenCapped(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	for i := 0; i < backend.DefaultMaxResults; i++ {
 		seed(t, b, fmt.Sprintf("/f%04d.txt", i), "hit")
 	}
@@ -233,7 +238,7 @@ func TestGrepCapFooterOnlyWhenCapped(t *testing.T) {
 }
 
 func TestDeleteDirectoryForgetsReads(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/d/a.txt", "a")
 	seed(t, b, "/dd/b.txt", "b")
 	f := newFixture(t, Config{Backend: b})
@@ -252,7 +257,7 @@ func TestDeleteDirectoryForgetsReads(t *testing.T) {
 }
 
 func TestEditErrorsRenderedForModel(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/a.txt", "x x")
 	f := newFixture(t, Config{Backend: b})
 	f.run(t, "read_file", obj{"path": "/a.txt"})
@@ -265,7 +270,7 @@ func TestEditErrorsRenderedForModel(t *testing.T) {
 }
 
 func TestDeleteLsGlob(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/src/a.go", "package a")
 	seed(t, b, "/src/sub/b.go", "package b")
 	seed(t, b, "/README.md", "hi")
@@ -285,7 +290,7 @@ func TestDeleteLsGlob(t *testing.T) {
 }
 
 func TestGrepModes(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/a.txt", "Foo\nbar\nfoo foo\n")
 	seed(t, b, "/b.go", "nothing\n")
 	f := newFixture(t, Config{Backend: b})
@@ -312,7 +317,7 @@ func TestNoBackendConfigured(t *testing.T) {
 }
 
 func TestCallBackendUsedWhenConfigBackendNil(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/a.txt", "hi")
 	f := newFixture(t, Config{})
 	f.call.Backend = b
@@ -333,14 +338,14 @@ func (e *execBackend) Execute(_ context.Context, cmd string, opts backend.ExecOp
 }
 
 func TestExecuteOnlyWithExecutor(t *testing.T) {
-	if _, ok := newFixture(t, Config{Backend: newClockBackend()}).tools["execute"]; ok {
+	if _, ok := newFixture(t, Config{Backend: newClockBackend(t)}).tools["execute"]; ok {
 		t.Fatal("execute registered for a backend that cannot execute")
 	}
 	if _, ok := newFixture(t, Config{}).tools["execute"]; ok {
 		t.Fatal("execute registered without a backend or opt-in")
 	}
 
-	eb := &execBackend{Backend: newClockBackend(), result: backend.ExecResult{Output: "hi", ExitCode: 3}}
+	eb := &execBackend{Backend: newClockBackend(t), result: backend.ExecResult{Output: "hi", ExitCode: 3}}
 	f := newFixture(t, Config{Backend: eb})
 	if _, ok := f.tools["execute"]; !ok {
 		t.Fatal("execute not registered for an Executor backend")
@@ -352,7 +357,7 @@ func TestExecuteOnlyWithExecutor(t *testing.T) {
 }
 
 func TestExecuteTimeoutCappedAndSubject(t *testing.T) {
-	eb := &execBackend{Backend: newClockBackend()}
+	eb := &execBackend{Backend: newClockBackend(t)}
 	f := newFixture(t, Config{Backend: eb, MaxExecTimeout: time.Minute})
 
 	f.run(t, "execute", obj{"command": "sleep", "timeout_seconds": 99999})
@@ -386,7 +391,7 @@ func TestExecuteToolIsShellSubject(t *testing.T) {
 	if got := tl.(tool.Subjecter).Subject(json.RawMessage(`{"command":"ls && pwd"}`)); got != "ls && pwd" {
 		t.Fatalf("Subject = %q", got)
 	}
-	if s, ok := newFixture(t, Config{Backend: newClockBackend()}).tools["read_file"].(tool.ShellSubjecter); ok && s.ShellSubject() {
+	if s, ok := newFixture(t, Config{Backend: newClockBackend(t)}).tools["read_file"].(tool.ShellSubjecter); ok && s.ShellSubject() {
 		t.Fatal("read_file must not report a shell subject")
 	}
 }
@@ -396,12 +401,12 @@ func TestExecuteOptInWithPerCallBackend(t *testing.T) {
 	if _, ok := f.tools["execute"]; !ok {
 		t.Fatal("execute not registered with Execute opt-in")
 	}
-	f.call.Backend = newClockBackend()
+	f.call.Backend = newClockBackend(t)
 	wantText(t, f.run(t, "execute", obj{"command": "ls"}), true, "this backend cannot execute commands")
 }
 
 func TestPathsAreCleanedAbsolute(t *testing.T) {
-	f := newFixture(t, Config{Backend: newClockBackend(), Execute: true})
+	f := newFixture(t, Config{Backend: newClockBackend(t), Execute: true})
 	cases := []struct {
 		tool string
 		in   string
@@ -433,7 +438,7 @@ func TestPathsAreCleanedAbsolute(t *testing.T) {
 }
 
 func TestToolFlags(t *testing.T) {
-	f := newFixture(t, Config{Backend: newClockBackend()})
+	f := newFixture(t, Config{Backend: newClockBackend(t)})
 	raw := json.RawMessage(`{}`)
 	for _, name := range []string{"ls", "read_file", "glob", "grep"} {
 		tl := f.tools[name]
@@ -450,7 +455,7 @@ func TestToolFlags(t *testing.T) {
 }
 
 func TestReadKeyUpdatesAreCopies(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/a.txt", "a")
 	seed(t, b, "/b.txt", "b")
 	f := newFixture(t, Config{Backend: b})
@@ -465,7 +470,7 @@ func TestReadKeyUpdatesAreCopies(t *testing.T) {
 }
 
 func TestDescriptionsOverride(t *testing.T) {
-	f := newFixture(t, Config{Backend: newClockBackend(), Descriptions: map[string]string{"ls": "custom"}})
+	f := newFixture(t, Config{Backend: newClockBackend(t), Descriptions: map[string]string{"ls": "custom"}})
 	if f.tools["ls"].Description() != "custom" {
 		t.Fatalf("description = %q", f.tools["ls"].Description())
 	}
@@ -475,7 +480,7 @@ func TestDescriptionsOverride(t *testing.T) {
 }
 
 func TestAllowlist(t *testing.T) {
-	f := newFixture(t, Config{Backend: newClockBackend(), Tools: []string{"read_file", "grep"}})
+	f := newFixture(t, Config{Backend: newClockBackend(t), Tools: []string{"read_file", "grep"}})
 	if len(f.tools) != 2 || f.tools["read_file"] == nil || f.tools["grep"] == nil {
 		t.Fatalf("tools = %v, want read_file and grep", f.tools)
 	}
@@ -548,7 +553,7 @@ func TestWrapModelDoesNotAliasHostSystem(t *testing.T) {
 }
 
 func TestSearchToolsDropInvisiblePaths(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	seed(t, b, "/secrets/key.txt", "token")
 	seed(t, b, "/notes/a.txt", "token")
 	f := newFixture(t, Config{Backend: b})
@@ -563,7 +568,7 @@ func TestSearchToolsDropInvisiblePaths(t *testing.T) {
 }
 
 func TestTooLargeFileRenderedForModel(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	size := backend.MaxReadFileBytes + 1
 	seed(t, b, "/big.txt", strings.Repeat("a", size))
 	f := newFixture(t, Config{Backend: b})
@@ -574,7 +579,7 @@ func TestTooLargeFileRenderedForModel(t *testing.T) {
 }
 
 func TestOversizedMediaIsNotAttached(t *testing.T) {
-	b := newClockBackend()
+	b := newClockBackend(t)
 	png := "\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
 	seed(t, b, "/huge.png", png+strings.Repeat("\x00", MaxMediaBytes))
 	f := newFixture(t, Config{Backend: b})
@@ -608,7 +613,7 @@ func TestExecuteBackgroundSchemaOnlyWhenEnabled(t *testing.T) {
 		t.Fatal("run_in_background missing with Config.Background")
 	}
 
-	eb := &execBackend{Backend: newClockBackend()}
+	eb := &execBackend{Backend: newClockBackend(t)}
 	f := newFixture(t, Config{Backend: eb, Background: true})
 	wantText(t, f.run(t, "execute", obj{"command": "make", "run_in_background": true}), true,
 		"background execution is not available")
@@ -661,7 +666,7 @@ type unwrapping struct{ backend.Backend }
 func (u unwrapping) Unwrap() backend.Backend { return u.Backend }
 
 func TestToolsReachCapabilitiesThroughUnwrap(t *testing.T) {
-	eb := &execBackend{Backend: newClockBackend(), result: backend.ExecResult{Output: "hi"}}
+	eb := &execBackend{Backend: newClockBackend(t), result: backend.ExecResult{Output: "hi"}}
 	seed(t, eb, "/a.txt", "x")
 	f := newFixture(t, Config{Backend: unwrapping{eb}})
 	if _, ok := f.tools["execute"]; !ok {

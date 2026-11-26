@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	cpmemory "github.com/aswin-kevin/orchestrix/checkpoint/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -718,7 +718,7 @@ func (p backendProbe) WrapModel(ctx context.Context, req *ModelRequest, next Mod
 }
 
 func TestModelRequestCarriesThreadBackend(t *testing.T) {
-	byThread := map[string]backend.Backend{"t1": memory.New(), "t2": memory.New()}
+	byThread := map[string]backend.Backend{"t1": testutil.Memory(t), "t2": testutil.Memory(t)}
 	var seen []backend.Backend
 	a := mustNew(t, Config{
 		Provider:       llmtest.New(llmtest.Turn{Text: "ok"}),

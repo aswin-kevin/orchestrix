@@ -9,7 +9,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/agent/elide"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -150,7 +150,7 @@ func TestSummarizeEstimateUsesElidedView(t *testing.T) {
 			main := llmtest.New(llmtest.Turn{Text: "done"})
 			summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY"})
 
-			runWindow(t, main, memory.New(), Config{Provider: summarizer}, agent.Input{ThreadID: "t1", State: s, Messages: texts("u2")}, triggerWindow)
+			runWindow(t, main, testutil.Memory(t), Config{Provider: summarizer}, agent.Input{ThreadID: "t1", State: s, Messages: texts("u2")}, triggerWindow)
 
 			want := 1
 			if elided {

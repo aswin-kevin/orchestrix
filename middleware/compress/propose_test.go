@@ -8,7 +8,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/agent/elide"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
@@ -116,12 +116,12 @@ func TestIDsSkipExistingElisions(t *testing.T) {
 
 func TestSecondRunProposesNextID(t *testing.T) {
 	first := llmtest.New(llmtest.Turn{Text: "done"})
-	s := run(t, first, memory.New(), testCfg, seeded())
+	s := run(t, first, testutil.Memory(t), testCfg, seeded())
 	if id := proposed(first.Requests[0]); id != "c1" {
 		t.Fatalf("first run proposes %q, want c1", id)
 	}
 	second := llmtest.New(llmtest.Turn{Text: "done"})
-	run(t, second, memory.New(), testCfg, s)
+	run(t, second, testutil.Memory(t), testCfg, s)
 	if id := proposed(second.Requests[0]); id != "c2" {
 		t.Fatalf("second run proposes %q, want c2", id)
 	}
@@ -153,7 +153,7 @@ func TestStopContinuationsAreNotTurns(t *testing.T) {
 	// The run's input lands at index 10; three stop continuations follow
 	// its answers, as the agent core appends them.
 	p := llmtest.New(llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"}, llmtest.Turn{Text: "c"}, llmtest.Turn{Text: "d"})
-	s := run(t, p, memory.New(), Config{}, seeded(), continuing{})
+	s := run(t, p, testutil.Memory(t), Config{}, seeded(), continuing{})
 	if n := len(s.Messages()); n != 18 {
 		t.Fatalf("state has %d messages, want 18 (input, 4 answers, 3 continuations)", n)
 	}

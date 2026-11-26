@@ -14,6 +14,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	cpmemory "github.com/aswin-kevin/orchestrix/checkpoint/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -237,7 +238,7 @@ func (b *backends) factory(threadID string) backend.Backend {
 	if be, ok := b.byID[threadID]; ok {
 		return be
 	}
-	be := memory.New()
+	be, _ := memory.New(memory.Config{}) // the zero Config is valid
 	b.byID[threadID] = be
 	return be
 }
@@ -254,7 +255,7 @@ func (b *backends) content(t *testing.T, threadID, path string) string {
 
 func TestWorkspaceNotRestoredIntoNonEmptyBackend(t *testing.T) {
 	ctx := context.Background()
-	old := memory.New()
+	old := testutil.Memory(t)
 	if err := old.Write(ctx, "/old.txt", []byte("old")); err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +288,7 @@ func TestWorkspaceNotRestoredIntoNonEmptyBackend(t *testing.T) {
 		t.Fatalf("read /old.txt: err = %v, want not found: the snapshot must not be restored", err)
 	}
 	// The end-of-run snapshot reflects the live backend.
-	restored := memory.New()
+	restored := testutil.Memory(t)
 	saved, _ := workspaceKey.Get(final.State)
 	if err := restored.Restore(context.Background(), saved); err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -298,7 +299,7 @@ func TestWorkspaceNotRestoredIntoNonEmptyBackend(t *testing.T) {
 }
 
 func TestWorkspaceNotSyncedForInputBackend(t *testing.T) {
-	ws := memory.New()
+	ws := testutil.Memory(t)
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"}), SyncWorkspace: true})
 	in := threadInput("go")
 	in.Backend = ws
@@ -331,7 +332,7 @@ func (b *countingBackend) Snapshot(ctx context.Context) (json.RawMessage, error)
 }
 
 func TestWorkspaceCapturedOnlyAfterTools(t *testing.T) {
-	be := &countingBackend{Backend: memory.New()}
+	be := &countingBackend{Backend: testutil.Memory(t)}
 	cp := newRecordingCheckpointer()
 	a := mustNew(t, Config{
 		Provider:       llmtest.New(toolTurn("e1"), llmtest.Turn{Text: "done"}),

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -70,7 +70,7 @@ func (r modeRun) run(t *testing.T) modeOutcome {
 		Name: "writer", Description: "Writes.", SystemPrompt: "you write", Provider: child,
 		Tools: []tool.Tool{editTool()}, PermissionMode: r.childMode,
 	}}})
-	be := memory.New()
+	be := testutil.Memory(t)
 	a, err := agent.New(agent.Config{
 		Provider: parent, Backend: be, Middleware: []agent.Middleware{mw}, PermissionMode: r.parentMode,
 	})
@@ -179,7 +179,7 @@ func TestGrandchildOfPlanParentIsPlan(t *testing.T) {
 		Name: "researcher", Description: "Researches.", SystemPrompt: "you research", Provider: child,
 		Tools: []tool.Tool{editTool()}, PermissionMode: permission.ModeBypass,
 	}}})
-	be := memory.New()
+	be := testutil.Memory(t)
 	a, err := agent.New(agent.Config{
 		Provider: parent, Backend: be, Middleware: []agent.Middleware{mw}, PermissionMode: permission.ModeBypass,
 	})
@@ -219,7 +219,7 @@ func TestForkKeepsParentRunMode(t *testing.T) {
 		llmtest.Turn{Text: "fork done"},
 		llmtest.Turn{Text: "done"},
 	)
-	be := memory.New()
+	be := testutil.Memory(t)
 	a, err := agent.New(agent.Config{
 		Provider: p, Backend: be, Tools: []tool.Tool{editTool()},
 		Middleware: []agent.Middleware{newMiddleware(t, Config{})}, PermissionMode: permission.ModeBypass,
