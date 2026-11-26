@@ -46,17 +46,6 @@ func stackNames(a *agent.Agent) []string {
 	return names
 }
 
-func TestDefaultStackOrder(t *testing.T) {
-	a, err := orchestrix.NewWithProvider(llmtest.New())
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"summarize", "cache", "filesystem", "planning", "subagents"}
-	if got := stackNames(a); !slices.Equal(got, want) {
-		t.Errorf("default stack = %v, want %v", got, want)
-	}
-}
-
 func TestFullStackOrder(t *testing.T) {
 	sh := t.TempDir()
 	tm := mustJobs(t)
@@ -77,46 +66,93 @@ func TestFullStackOrder(t *testing.T) {
 	}
 }
 
-// TestStackOrder pins the order New's doc gives, every optional middleware
-// on, by the middleware's Name constants.
+// TestStackOrder pins the order New's doc gives, by the middleware's Name
+// constants: the default stack, then the optional middleware in two groups.
 func TestStackOrder(t *testing.T) {
-	am, err := async.New(async.Config{})
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name string
+		opts func(t *testing.T) []orchestrix.Option
+		want []string
+	}{
+		{
+			name: "base",
+			opts: func(*testing.T) []orchestrix.Option { return nil },
+			want: []string{summarize.Name, cache.Name, filesystem.Name, planning.Name, subagents.Name},
+		},
+		{
+			name: "tools",
+			opts: func(t *testing.T) []orchestrix.Option {
+				return []orchestrix.Option{
+					orchestrix.WithShell(t.TempDir(), shell.Config{}),
+					orchestrix.WithJobs(mustJobs(t)),
+					orchestrix.WithHooks(hooks.Config{}),
+					orchestrix.WithInterruptOn("write_file"),
+					orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles()}),
+					orchestrix.WithSkills(testSkills()),
+					orchestrix.WithPlanMode(planmode.Config{}),
+					orchestrix.WithDeferredTools(deferred.Config{}),
+					orchestrix.WithMCP(connectMCP(t, false)),
+					orchestrix.WithWeb(web.Config{}),
+					orchestrix.WithAskUser(askuser.Config{}),
+				}
+			},
+			want: []string{summarize.Name, cache.Name, hooks.Name, hitl.Name, memory.Name, skills.Name,
+				planmode.Name, filesystem.Name, planning.Name, subagents.Name, deferred.Name, mcp.Name,
+				web.Name, askuser.Name, jobs.Name},
+		},
+		{
+			name: "scale",
+			opts: func(t *testing.T) []orchestrix.Option {
+				am, err := async.New(async.Config{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = am.Close(context.Background()) })
+				return []orchestrix.Option{
+					orchestrix.WithShell(t.TempDir(), shell.Config{}),
+					orchestrix.WithJobs(mustJobs(t)),
+					orchestrix.WithHooks(hooks.Config{}),
+					orchestrix.WithInterruptOn("write_file"),
+					orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles()}),
+					orchestrix.WithSkills(testSkills()),
+					orchestrix.WithPlanMode(planmode.Config{}),
+					orchestrix.WithDeferredTools(deferred.Config{}),
+					orchestrix.WithMCP(connectMCP(t, false)),
+					orchestrix.WithWeb(web.Config{}),
+					orchestrix.WithAskUser(askuser.Config{}),
+					orchestrix.WithAsync(am),
+					orchestrix.WithCompress(compress.Config{}),
+					orchestrix.WithRubric(passRubric()),
+					orchestrix.WithProfiles(profiles.Config{}),
+					orchestrix.WithMount("/kv", kvBackend(t)),
+				}
+			},
+			want: []string{summarize.Name, compress.Name, cache.Name, hooks.Name, hitl.Name, rubric.Name,
+				memory.Name, skills.Name, planmode.Name, filesystem.Name, planning.Name, subagents.Name,
+				async.Name, deferred.Name, mcp.Name, web.Name, askuser.Name, jobs.Name, profiles.Name},
+		},
 	}
-	t.Cleanup(func() { _ = am.Close(context.Background()) })
-	a, err := orchestrix.NewWithProvider(llmtest.New(),
-		orchestrix.WithShell(t.TempDir(), shell.Config{}),
-		orchestrix.WithJobs(mustJobs(t)),
-		orchestrix.WithHooks(hooks.Config{}),
-		orchestrix.WithInterruptOn("write_file"),
-		orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles()}),
-		orchestrix.WithSkills(testSkills()),
-		orchestrix.WithPlanMode(planmode.Config{}),
-		orchestrix.WithDeferredTools(deferred.Config{}),
-		orchestrix.WithMCP(connectMCP(t, false)),
-		orchestrix.WithWeb(web.Config{}),
-		orchestrix.WithAskUser(askuser.Config{}),
-		orchestrix.WithAsync(am),
-		orchestrix.WithCompress(compress.Config{}),
-		orchestrix.WithRubric(passRubric()),
-		orchestrix.WithProfiles(profiles.Config{}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	closeAtEnd(t, a)
-	want := []string{summarize.Name, compress.Name, cache.Name, hooks.Name, hitl.Name, rubric.Name,
-		memory.Name, skills.Name, planmode.Name, filesystem.Name, planning.Name, subagents.Name,
-		async.Name, deferred.Name, mcp.Name, web.Name, askuser.Name, jobs.Name, profiles.Name}
-	got := stackNames(a)
-	if !slices.Equal(got, want) {
-		t.Errorf("stack = %v, want %v", got, want)
-	}
-	// Every slot is on here, so each built middleware's Name must be its
-	// slot's name: WithMiddleware and WithoutMiddleware match by it.
-	if slots := orchestrix.PresetStackNames(); !slices.Equal(got, slots) {
-		t.Errorf("built names = %v, slot names = %v", got, slots)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, err := orchestrix.NewWithProvider(llmtest.New(), tc.opts(t)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			closeAtEnd(t, a)
+			got := stackNames(a)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("stack = %v, want %v", got, tc.want)
+			}
+			if tc.name != "scale" {
+				return
+			}
+			// Every slot is on here, so each built middleware's Name must
+			// be its slot's name: WithMiddleware and WithoutMiddleware
+			// match by it.
+			if slots := orchestrix.PresetStackNames(); !slices.Equal(got, slots) {
+				t.Errorf("built names = %v, slot names = %v", got, slots)
+			}
+		})
 	}
 }
 

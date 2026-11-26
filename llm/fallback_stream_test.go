@@ -256,3 +256,23 @@ func TestFallbackStreamStampsBlocks(t *testing.T) {
 		t.Errorf("stamps per block = %v, want one each for blocks 0 and 1", stamps)
 	}
 }
+
+func TestFallbackStreamSwitchesOnInStreamOverload(t *testing.T) {
+	primary := &eventStub{
+		events: []llm.StreamEvent{{Type: llm.EventMessageStart}},
+		err:    &llm.APIError{Body: anthropicOverloadedEvent},
+	}
+	backup := llmtest.New(llmtest.Turn{Text: "ok"})
+	var events []llm.FallbackEvent
+	p := newFallback(t, llm.FallbackConfig{
+		Entries:    []llm.FallbackEntry{{Provider: primary, Name: "a"}, {Provider: backup, Name: "b"}},
+		OnFallback: func(_ context.Context, ev llm.FallbackEvent) { events = append(events, ev) },
+	})
+	resp, err := llm.Collect(context.Background(), p, llm.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Message.Text() != "ok" || len(events) != 1 {
+		t.Errorf("text %q, events %+v; want ok and one switch", resp.Message.Text(), events)
+	}
+}

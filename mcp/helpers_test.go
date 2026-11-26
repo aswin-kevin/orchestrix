@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 )
 
 // bigResultBytes is the size of the "big" tool's text, larger than the
@@ -170,4 +172,14 @@ func initializeReply(msg map[string]any, v string) []string {
 // isMethod matches messages calling method.
 func isMethod(method string) func(map[string]any) bool {
 	return func(msg map[string]any) bool { return msg["method"] == method }
+}
+
+// mustDeferred builds the deferred middleware or fails the test.
+func mustDeferred(t *testing.T, cfg deferred.Config) *deferred.Middleware {
+	t.Helper()
+	m, err := deferred.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
 }

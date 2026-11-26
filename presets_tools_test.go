@@ -9,15 +9,12 @@ import (
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/mcp"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
-	"github.com/aswin-kevin/orchestrix/middleware/hooks"
 	"github.com/aswin-kevin/orchestrix/middleware/memory"
-	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/web"
@@ -49,32 +46,6 @@ func connectMCP(t *testing.T, gated bool) *mcp.Middleware {
 	}
 	t.Cleanup(func() { _ = m.Close(context.Background()) })
 	return m
-}
-
-func TestStackOrderM3(t *testing.T) {
-	tm := mustJobs(t)
-	a, err := orchestrix.NewWithProvider(llmtest.New(),
-		orchestrix.WithShell(t.TempDir(), shell.Config{}),
-		orchestrix.WithJobs(tm),
-		orchestrix.WithHooks(hooks.Config{}),
-		orchestrix.WithInterruptOn("write_file"),
-		orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles()}),
-		orchestrix.WithSkills(testSkills()),
-		orchestrix.WithPlanMode(planmode.Config{}),
-		orchestrix.WithDeferredTools(deferred.Config{}),
-		orchestrix.WithMCP(connectMCP(t, false)),
-		orchestrix.WithWeb(web.Config{}),
-		orchestrix.WithAskUser(askuser.Config{}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	closeAtEnd(t, a)
-	want := []string{"summarize", "cache", "hooks", "hitl", "memory", "skills", "planmode",
-		"filesystem", "planning", "subagents", "deferred", "mcp", "web", "askuser", "jobs"}
-	if got := stackNames(a); !slices.Equal(got, want) {
-		t.Errorf("stack = %v, want %v", got, want)
-	}
 }
 
 func TestMCPWithoutHiddenToolsAddsNoDeferred(t *testing.T) {
@@ -230,7 +201,7 @@ func TestWithMCPNilFailsNew(t *testing.T) {
 	}
 }
 
-func TestM3ConstructorErrorsAreJoined(t *testing.T) {
+func TestToolOptionErrorsAreJoined(t *testing.T) {
 	cfg := testSkills()
 	cfg.Pinned = []string{"nope"}
 	_, err := orchestrix.NewWithProvider(llmtest.New(),

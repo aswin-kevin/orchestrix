@@ -17,16 +17,10 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
-	"github.com/aswin-kevin/orchestrix/middleware/askuser"
 	"github.com/aswin-kevin/orchestrix/middleware/async"
-	"github.com/aswin-kevin/orchestrix/middleware/compress"
-	"github.com/aswin-kevin/orchestrix/middleware/deferred"
-	"github.com/aswin-kevin/orchestrix/middleware/hooks"
 	"github.com/aswin-kevin/orchestrix/middleware/memory"
-	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/profiles"
 	"github.com/aswin-kevin/orchestrix/middleware/rubric"
-	"github.com/aswin-kevin/orchestrix/middleware/web"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
@@ -63,50 +57,6 @@ func passRubric() rubric.Config {
 		Grader: rubric.GraderFunc(func(context.Context, rubric.GradeRequest) (rubric.Grade, error) {
 			return rubric.Grade{Pass: true}, nil
 		}),
-	}
-}
-
-func TestStackOrderM4(t *testing.T) {
-	tm := mustJobs(t)
-	am, err := async.New(async.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = am.Close(context.Background()) }()
-	a, err := orchestrix.NewWithProvider(llmtest.New(),
-		orchestrix.WithShell(t.TempDir(), shell.Config{}),
-		orchestrix.WithJobs(tm),
-		orchestrix.WithHooks(hooks.Config{}),
-		orchestrix.WithInterruptOn("write_file"),
-		orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles()}),
-		orchestrix.WithSkills(testSkills()),
-		orchestrix.WithPlanMode(planmode.Config{}),
-		orchestrix.WithDeferredTools(deferred.Config{}),
-		orchestrix.WithMCP(connectMCP(t, false)),
-		orchestrix.WithWeb(web.Config{}),
-		orchestrix.WithAskUser(askuser.Config{}),
-		orchestrix.WithAsync(am),
-		orchestrix.WithCompress(compress.Config{}),
-		orchestrix.WithRubric(passRubric()),
-		orchestrix.WithProfiles(profiles.Config{}),
-		orchestrix.WithMount("/kv", kvBackend(t)),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	closeAtEnd(t, a)
-	want := []string{"summarize", "compress", "cache", "hooks", "hitl", "rubric", "memory", "skills", "planmode",
-		"filesystem", "planning", "subagents", "async", "deferred", "mcp", "web", "askuser", "jobs", "profiles"}
-	if got := stackNames(a); !slices.Equal(got, want) {
-		t.Errorf("stack = %v, want %v", got, want)
-	}
-
-	def, err := orchestrix.NewWithProvider(llmtest.New())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := stackNames(def), []string{"summarize", "cache", "filesystem", "planning", "subagents"}; !slices.Equal(got, want) {
-		t.Errorf("default stack = %v, want %v", got, want)
 	}
 }
 

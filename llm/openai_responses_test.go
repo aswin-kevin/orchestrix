@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -418,4 +419,15 @@ func TestResponsesResponseModelAndID(t *testing.T) {
 	if resp.Model != "resp-wire" || resp.ID != "resp_1" {
 		t.Errorf("Model, ID = %q, %q", resp.Model, resp.ID)
 	}
+}
+
+func TestResponsesEarlyStreamErrorYieldsOnlyTheError(t *testing.T) {
+	checkEarlyStreamError(t, func(t *testing.T, u string) Provider { return newTestResponses(t, u) })
+}
+
+func TestResponsesFirstEventErrorEndsStream(t *testing.T) {
+	srv := newSSEServer(t, http.StatusOK, "text/event-stream",
+		"event: error\ndata: {\"type\":\"error\",\"message\":\"overloaded\"}\n\n"+
+			"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"late\"}\n\n")
+	checkFirstEventError(t, newTestResponses(t, srv.URL))
 }
