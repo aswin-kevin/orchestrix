@@ -1,6 +1,7 @@
 package orxdocker
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -167,103 +168,120 @@ var scopePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$`)
 
 // withDefaults validates c and fills in its defaults.
 func (c Config) withDefaults() (Config, error) {
-	if c.Image == "" {
-		c.Image = DefaultImage
+	if err := c.validate(); err != nil {
+		return c, err
 	}
+	return c.applyDefaults(), nil
+}
+
+// dockerHostSocket returns the socket named by DOCKER_HOST, or DefaultSocket
+// when it is unset.
+func dockerHostSocket() (string, error) {
+	h := os.Getenv("DOCKER_HOST")
+	if h == "" {
+		return DefaultSocket, nil
+	}
+	sock, ok := strings.CutPrefix(h, "unix://")
+	if !ok {
+		return "", fmt.Errorf("orxdocker: DOCKER_HOST %q is not a unix:// URL; set Config.Socket or Config.Dial", h)
+	}
+	return sock, nil
+}
+
+// validate rejects an invalid c. It looks at the fields as set, before any
+// default: every default is valid.
+func (c Config) validate() error {
 	switch {
 	case c.Dial != nil && c.Socket != "":
-		return c, errors.New("orxdocker: set at most one of Socket and Dial")
+		return errors.New("orxdocker: set at most one of Socket and Dial")
 	case c.Dial == nil && c.Socket == "":
-		c.Socket = DefaultSocket
-		if h := os.Getenv("DOCKER_HOST"); h != "" {
-			sock, ok := strings.CutPrefix(h, "unix://")
-			if !ok {
-				return c, fmt.Errorf("orxdocker: DOCKER_HOST %q is not a unix:// URL; set Config.Socket or Config.Dial", h)
-			}
-			c.Socket = sock
+		if _, err := dockerHostSocket(); err != nil {
+			return err
 		}
 	}
-	if c.APIVersion == "" {
-		c.APIVersion = DefaultAPIVersion
+	if c.Scope != "" && !scopePattern.MatchString(c.Scope) {
+		return fmt.Errorf("orxdocker: scope %q must be 1-63 letters, digits, '_', '.' or '-'", c.Scope)
 	}
-	if c.Scope == "" {
-		c.Scope = DefaultScope
+	if err := c.validateWorkDir(); err != nil {
+		return err
 	}
-	if !scopePattern.MatchString(c.Scope) {
-		return c, fmt.Errorf("orxdocker: scope %q must be 1-63 letters, digits, '_', '.' or '-'", c.Scope)
-	}
-	if c.User == "" {
-		c.User = DefaultUser
-	}
-	if c.WorkDir == "" {
-		c.WorkDir = DefaultWorkDir
-	}
-	if !path.IsAbs(c.WorkDir) || path.Clean(c.WorkDir) != c.WorkDir || c.WorkDir == "/" || c.WorkDir == "/tmp" {
-		return c, fmt.Errorf("orxdocker: workdir %q must be an absolute, clean path other than / and /tmp", c.WorkDir)
-	}
-	if strings.ContainsAny(c.WorkDir, ",:") {
-		return c, errors.New("orxdocker: workdir must not contain ',' or ':'")
-	}
-	var err error
-	if c.PidsLimit, err = limitOr("PidsLimit", c.PidsLimit, DefaultPidsLimit); err != nil {
-		return c, err
-	}
-	if c.MemoryBytes, err = limitOr("MemoryBytes", c.MemoryBytes, DefaultMemoryBytes); err != nil {
-		return c, err
-	}
-	if c.NanoCPUs, err = limitOr("NanoCPUs", c.NanoCPUs, DefaultNanoCPUs); err != nil {
-		return c, err
-	}
-	if c.IdleTTL, err = limitOr("IdleTTL", c.IdleTTL, DefaultIdleTTL); err != nil {
-		return c, err
-	}
-	if c.WorkspaceBytes, err = orDefault("WorkspaceBytes", c.WorkspaceBytes, DefaultWorkspaceBytes); err != nil {
-		return c, err
-	}
-	if c.TmpBytes, err = orDefault("TmpBytes", c.TmpBytes, DefaultTmpBytes); err != nil {
-		return c, err
-	}
-	if c.Timeout, err = orDefault("Timeout", c.Timeout, DefaultTimeout); err != nil {
-		return c, err
-	}
-	if c.MaxOutputBytes, err = orDefault("MaxOutputBytes", c.MaxOutputBytes, DefaultMaxOutputBytes); err != nil {
-		return c, err
-	}
-	if c.MaxThreads, err = orDefault("MaxThreads", c.MaxThreads, DefaultMaxThreads); err != nil {
-		return c, err
-	}
-	if c.OpTimeout < 0 { // 0 is left to sandbox.Config
-		return c, errors.New("orxdocker: OpTimeout is negative")
+	if err := c.validateLimits(); err != nil {
+		return err
 	}
 	if _, err := mergeEnv(c.Env); err != nil {
-		return c, err
+		return err
 	}
 	for k := range c.Labels {
 		if k == LabelManaged || strings.HasPrefix(k, LabelManaged+".") {
-			return c, fmt.Errorf("orxdocker: label %q is reserved", k)
+			return fmt.Errorf("orxdocker: label %q is reserved", k)
 		}
 	}
-	return c, nil
+	return nil
 }
 
-// orDefault returns fallback for a zero v, and an error naming the field
-// for a negative one.
-func orDefault[T int | int64 | time.Duration](name string, v, fallback T) (T, error) {
-	switch {
-	case v < 0:
-		return v, fmt.Errorf("orxdocker: %s is negative", name)
-	case v == 0:
-		return fallback, nil
+// validateWorkDir rejects an unusable WorkDir; "" is the default.
+func (c Config) validateWorkDir() error {
+	w := c.WorkDir
+	if w == "" {
+		return nil
 	}
-	return v, nil
+	if !path.IsAbs(w) || path.Clean(w) != w || w == "/" || w == "/tmp" {
+		return fmt.Errorf("orxdocker: workdir %q must be an absolute, clean path other than / and /tmp", w)
+	}
+	if strings.ContainsAny(w, ",:") {
+		return errors.New("orxdocker: workdir must not contain ',' or ':'")
+	}
+	return nil
 }
 
-// limitOr is orDefault for a field that also accepts Unlimited.
-func limitOr[T int64 | time.Duration](name string, v, fallback T) (T, error) {
-	if v == Unlimited {
-		return v, nil
+// validateLimits rejects negative numeric fields. A zero value means the
+// default; only Unlimited, where a field's doc names it, may be negative.
+// OpTimeout's 0 is left to sandbox.Config.
+func (c Config) validateLimits() error {
+	for _, f := range []struct {
+		name      string
+		v         int64
+		unlimited bool
+	}{
+		{"PidsLimit", c.PidsLimit, true},
+		{"MemoryBytes", c.MemoryBytes, true},
+		{"NanoCPUs", c.NanoCPUs, true},
+		{"IdleTTL", int64(c.IdleTTL), true},
+		{"WorkspaceBytes", c.WorkspaceBytes, false},
+		{"TmpBytes", c.TmpBytes, false},
+		{"Timeout", int64(c.Timeout), false},
+		{"MaxOutputBytes", int64(c.MaxOutputBytes), false},
+		{"MaxThreads", int64(c.MaxThreads), false},
+		{"OpTimeout", int64(c.OpTimeout), false},
+	} {
+		if f.v < 0 && !(f.unlimited && f.v == Unlimited) {
+			return fmt.Errorf("orxdocker: %s is negative", f.name)
+		}
 	}
-	return orDefault(name, v, fallback)
+	return nil
+}
+
+// applyDefaults fills in the zero fields of a validated c. Unlimited is
+// negative, so it survives.
+func (c Config) applyDefaults() Config {
+	c.Image = cmp.Or(c.Image, DefaultImage)
+	if c.Dial == nil && c.Socket == "" {
+		c.Socket, _ = dockerHostSocket() // validated
+	}
+	c.APIVersion = cmp.Or(c.APIVersion, DefaultAPIVersion)
+	c.Scope = cmp.Or(c.Scope, DefaultScope)
+	c.User = cmp.Or(c.User, DefaultUser)
+	c.WorkDir = cmp.Or(c.WorkDir, DefaultWorkDir)
+	c.PidsLimit = cmp.Or(c.PidsLimit, DefaultPidsLimit)
+	c.MemoryBytes = cmp.Or(c.MemoryBytes, DefaultMemoryBytes)
+	c.NanoCPUs = cmp.Or(c.NanoCPUs, DefaultNanoCPUs)
+	c.IdleTTL = cmp.Or(c.IdleTTL, DefaultIdleTTL)
+	c.WorkspaceBytes = cmp.Or(c.WorkspaceBytes, DefaultWorkspaceBytes)
+	c.TmpBytes = cmp.Or(c.TmpBytes, DefaultTmpBytes)
+	c.Timeout = cmp.Or(c.Timeout, DefaultTimeout)
+	c.MaxOutputBytes = cmp.Or(c.MaxOutputBytes, DefaultMaxOutputBytes)
+	c.MaxThreads = cmp.Or(c.MaxThreads, DefaultMaxThreads)
+	return c
 }
 
 // network is the container's network mode.
