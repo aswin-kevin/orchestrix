@@ -84,12 +84,11 @@ type APIError struct {
 	// for an error inside a stream.
 	Header http.Header
 	// RetryAfter is the delay requested by the Retry-After header; see
-	// hasRetryAfter to tell an explicit zero from an absent header.
+	// HasRetryAfter to tell an explicit zero from an absent header.
 	RetryAfter time.Duration
-
-	// hasRetryAfter records that the header was present and valid, so that
-	// "Retry-After: 0" (retry now) differs from no header at all.
-	hasRetryAfter bool
+	// HasRetryAfter is true when the Retry-After header was present and
+	// valid, so an explicit zero means retry now.
+	HasRetryAfter bool
 }
 
 // Error implements the error interface.
@@ -132,8 +131,14 @@ func (e *APIError) Kind() ErrorKind {
 }
 
 // IsContextOverflow reports whether err says the prompt exceeded the model's
-// context window.
+// context window. The first error in the chain that has a
+// ContextOverflow() bool method decides; otherwise an *APIError is
+// recognised by its status and body.
 func IsContextOverflow(err error) bool {
+	var o interface{ ContextOverflow() bool }
+	if errors.As(err, &o) {
+		return o.ContextOverflow()
+	}
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		return false
@@ -205,10 +210,15 @@ func transientType(v any) ErrorKind {
 // IsRetryable reports whether repeating the request may succeed: transient
 // HTTP statuses, network failures and ErrStreamIdle qualify, cancellation
 // never does. A stream that has delivered content is never replayed,
-// whatever its error.
+// whatever its error. After the context check, the first error in the chain
+// that has a Retryable() bool method decides.
 func IsRetryable(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
+	}
+	var r interface{ Retryable() bool }
+	if errors.As(err, &r) {
+		return r.Retryable()
 	}
 	if errors.Is(err, ErrStreamIdle) {
 		return true

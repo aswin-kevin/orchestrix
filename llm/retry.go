@@ -101,7 +101,7 @@ func (t *Transport) attempt(ctx context.Context, build func() (*http.Request, er
 		RequestID:     firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("request-id")),
 		Header:        header,
 		RetryAfter:    retryAfter,
-		hasRetryAfter: hasRetryAfter,
+		HasRetryAfter: hasRetryAfter,
 	}
 }
 
@@ -124,7 +124,7 @@ func (t *Transport) maxRetries() int {
 // a fixed interval is used as given.
 func (t *Transport) retryDelay(attempt int, err error) time.Duration {
 	var apiErr *APIError
-	if errors.As(err, &apiErr) && apiErr.hasRetryAfter {
+	if errors.As(err, &apiErr) && apiErr.HasRetryAfter {
 		wait := min(apiErr.RetryAfter, maxRetryAfter)
 		return wait + randomUpTo(wait/retryAfterJitterDivisor)
 	}

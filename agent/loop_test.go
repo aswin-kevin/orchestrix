@@ -462,6 +462,22 @@ func TestOverflowReason(t *testing.T) {
 	}
 }
 
+type customOverflow struct{}
+
+func (customOverflow) Error() string         { return "window exceeded" }
+func (customOverflow) ContextOverflow() bool { return true }
+
+func TestCustomOverflowErrorEndsPromptTooLong(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{Err: customOverflow{}})
+	a := mustNew(t, Config{Provider: p})
+
+	_, final := collect(t, a.Run(context.Background(), userInput("hi")))
+
+	if final.Reason != ReasonPromptTooLong {
+		t.Fatalf("final = %+v, want prompt_too_long", final)
+	}
+}
+
 func TestModelErrorReason(t *testing.T) {
 	failure := &llm.APIError{Status: 500, Body: "boom"}
 	p := llmtest.New(llmtest.Turn{Err: failure})

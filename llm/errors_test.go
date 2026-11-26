@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -408,5 +409,81 @@ func TestAPIErrorHeaderDropsCookies(t *testing.T) {
 	}
 	if apiErr.Header.Get("X-Ratelimit-Remaining") != "0" {
 		t.Errorf("Header = %v, want other headers kept", apiErr.Header)
+	}
+}
+
+type flaky struct{}
+
+func (flaky) Error() string   { return "flaky" }
+func (flaky) Retryable() bool { return true }
+
+type final struct{ err error }
+
+func (f final) Error() string   { return "final" }
+func (f final) Unwrap() error   { return f.err }
+func (f final) Retryable() bool { return false }
+
+type tooBig struct{}
+
+func (tooBig) Error() string         { return "too big" }
+func (tooBig) ContextOverflow() bool { return true }
+
+func TestRetryableInterface(t *testing.T) {
+	err := fmt.Errorf("w: %w", flaky{})
+	if !IsRetryable(err) {
+		t.Error("IsRetryable = false, want true")
+	}
+	if !DefaultShouldFallback(err) {
+		t.Error("DefaultShouldFallback = false, want true")
+	}
+}
+
+func TestRetryableInterfaceOverridesStatus(t *testing.T) {
+	err := final{err: &APIError{Status: 503}}
+	if IsRetryable(err) {
+		t.Error("IsRetryable = true, want false: the outer Retryable decides")
+	}
+}
+
+func TestContextOverflowInterface(t *testing.T) {
+	err := fmt.Errorf("w: %w", tooBig{})
+	if !IsContextOverflow(err) {
+		t.Error("IsContextOverflow = false, want true")
+	}
+	if DefaultShouldFallback(err) {
+		t.Error("DefaultShouldFallback = true, want false")
+	}
+}
+
+func TestHasRetryAfterExported(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	start := time.Now()
+	resp, err := testTransport(t, func(c *Config) { c.RetryInterval = 10 * time.Second }).Do(t.Context(), requestTo(srv.URL))
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	resp.Body.Close()
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("Do took %v, want under 1s: Retry-After 0 means retry now", elapsed)
+	}
+
+	hits.Store(0)
+	_, err = testTransport(t, func(c *Config) { c.MaxRetries = -1 }).Do(t.Context(), requestTo(srv.URL))
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err = %v, want *APIError", err)
+	}
+	if !apiErr.HasRetryAfter || apiErr.RetryAfter != 0 {
+		t.Errorf("HasRetryAfter = %v, RetryAfter = %v, want true and 0", apiErr.HasRetryAfter, apiErr.RetryAfter)
 	}
 }

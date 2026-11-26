@@ -209,7 +209,7 @@ func TestDoHandsOffToFallback(t *testing.T) {
 
 func TestRetryDelay(t *testing.T) {
 	tr := &Transport{}
-	rateLimited := &APIError{Status: 429, RetryAfter: 3 * time.Second, hasRetryAfter: true}
+	rateLimited := &APIError{Status: 429, RetryAfter: 3 * time.Second, HasRetryAfter: true}
 	plain := &APIError{Status: 500}
 
 	// Retry-After is honoured and only ever lengthened, by at most a tenth.
@@ -234,7 +234,7 @@ func TestRetryDelay(t *testing.T) {
 	}
 
 	// A huge Retry-After is capped at maxRetryAfter, plus its jitter.
-	huge := &APIError{Status: 429, RetryAfter: time.Hour, hasRetryAfter: true}
+	huge := &APIError{Status: 429, RetryAfter: time.Hour, HasRetryAfter: true}
 	for range 100 {
 		if got := tr.retryDelay(0, huge); got < maxRetryAfter || got > maxRetryAfter+maxRetryAfter/retryAfterJitterDivisor {
 			t.Fatalf("capped Retry-After delay = %v, want within [%v, %v]", got, maxRetryAfter, maxRetryAfter+maxRetryAfter/retryAfterJitterDivisor)
@@ -246,7 +246,7 @@ func TestRetryDelay(t *testing.T) {
 // all wait the same time before retrying.
 func TestRetryDelaySpreadsCallers(t *testing.T) {
 	tr := &Transport{}
-	rateLimited := &APIError{Status: 429, RetryAfter: 3 * time.Second, hasRetryAfter: true}
+	rateLimited := &APIError{Status: 429, RetryAfter: 3 * time.Second, HasRetryAfter: true}
 	for _, err := range []error{&APIError{Status: 500}, rateLimited} {
 		seen := make(map[time.Duration]bool)
 		for range 20 {
