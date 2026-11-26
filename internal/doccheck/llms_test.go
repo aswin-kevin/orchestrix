@@ -4,7 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"go/ast"
+	"go/scanner"
+	"go/token"
+	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -25,7 +29,10 @@ const (
 )
 
 // apiIndex holds the exported API of every importable package of every
-// module, keyed by package name: two packages with one name share an entry.
+// module, keyed by package name: two packages with one name share an entry
+// (backend/memory, checkpoint/memory and middleware/memory are one
+// "memory"), so a name that moves between them still resolves. The
+// snippet compile test (TestSnippetsCompile) tells them apart.
 type apiIndex struct {
 	// paths holds the import path of every package.
 	paths map[string]bool
@@ -34,16 +41,20 @@ type apiIndex struct {
 	// members maps "pkg.Type" to its exported fields and methods.
 	members map[string]map[string]bool
 	// embeds maps "pkg.Type" to the "pkg.Type" keys whose members it
-	// gains: embedded fields and interfaces, and the target of an alias
-	// or a defined type.
+	// gains: embedded fields and interfaces, and the target of an alias.
 	embeds map[string][]string
 }
 
 // TestLLMsFiles keeps llms.txt and llms-full.txt in step with the code: the
 // Packages section of llms.txt lists every importable package, every
 // pkg.Name and pkg.Type.Member reference in code resolves to an exported
-// declaration, every linked README anchor exists, and llms.txt lists every
-// example.
+// declaration, an inline pkg.Name names a package of the repository, the
+// standard library or a name the file's Go blocks use, every Type.Member
+// reference to an exported type names one of its members, every
+// unqualified WithX name is declared somewhere, llms-full.txt mentions every
+// exported name of package orchestrix, every linked
+// README anchor exists, and llms.txt lists every example. Whether the Go
+// blocks compile is TestSnippetsCompile's job.
 func TestLLMsFiles(t *testing.T) {
 	idx := buildIndex(t)
 	docs := map[string]string{}
@@ -57,12 +68,12 @@ func TestLLMsFiles(t *testing.T) {
 		for _, m := range re.FindAllStringSubmatch(section(docs["llms.txt"], "Packages"), -1) {
 			listed[m[1]] = true
 		}
-		for _, p := range sortedKeys(idx.paths) {
+		for _, p := range slices.Sorted(maps.Keys(idx.paths)) {
 			if !listed[p] {
 				t.Errorf("llms.txt: Packages section does not list %s", p)
 			}
 		}
-		for _, p := range sortedKeys(listed) {
+		for _, p := range slices.Sorted(maps.Keys(listed)) {
 			if !idx.paths[p] {
 				t.Errorf("llms.txt: Packages section lists %s, which is not an importable package", p)
 			}
@@ -79,6 +90,60 @@ func TestLLMsFiles(t *testing.T) {
 					t.Errorf("%s:%d: %s does not name an exported declaration",
 						name, ref.line, strings.Join(ref.parts, "."))
 				}
+			}
+		}
+	})
+
+	t.Run("package names", func(t *testing.T) {
+		std := stdPackageNames(t)
+		for _, name := range llmsFiles {
+			local := fenceIdents(docs[name])
+			for _, ref := range spanRefs(docs[name]) {
+				p := ref.parts[0]
+				if idx.decls[p] == nil && !std[p] && !local[p] && !otherNames[p] {
+					t.Errorf("%s:%d: %s names no package of the repository or the standard library",
+						name, ref.line, strings.Join(ref.parts, "."))
+				}
+			}
+		}
+	})
+
+	t.Run("members", func(t *testing.T) {
+		for _, name := range llmsFiles {
+			for _, ref := range typeMemberRefs(docs[name]) {
+				var types []string
+				for pkg, decls := range idx.decls {
+					if decls[ref.parts[0]] {
+						types = append(types, pkg+"."+ref.parts[0])
+					}
+				}
+				if len(types) == 0 {
+					continue // not an exported type of the repository
+				}
+				if !slices.ContainsFunc(types, func(key string) bool {
+					return idx.hasMember(key, ref.parts[1], map[string]bool{})
+				}) {
+					t.Errorf("%s:%d: %s: no exported type %s has a member %s",
+						name, ref.line, strings.Join(ref.parts, "."), ref.parts[0], ref.parts[1])
+				}
+			}
+		}
+	})
+
+	t.Run("options", func(t *testing.T) {
+		for _, name := range llmsFiles {
+			for _, ref := range matchCode(docs[name], optionPattern, true) {
+				if ref.parts[0] != "WithX" && !idx.declaredAnywhere(ref.parts[0]) {
+					t.Errorf("%s:%d: %s is not declared by any package", name, ref.line, ref.parts[0])
+				}
+			}
+		}
+	})
+
+	t.Run("facade", func(t *testing.T) {
+		for _, n := range slices.Sorted(maps.Keys(idx.decls["orchestrix"])) {
+			if !regexp.MustCompile(`(^|[^A-Za-z0-9_])` + n + `([^A-Za-z0-9_]|$)`).MatchString(docs["llms-full.txt"]) {
+				t.Errorf("llms-full.txt does not mention orchestrix.%s", n)
 			}
 		}
 	})
@@ -200,8 +265,13 @@ func (idx *apiIndex) addFile(pkg string, f *ast.File) {
 						}
 					}
 				case *ast.TypeSpec:
-					if s.Name.IsExported() {
-						idx.add(idx.decls, pkg, s.Name.Name)
+					if !s.Name.IsExported() {
+						continue
+					}
+					idx.add(idx.decls, pkg, s.Name.Name)
+					if s.Assign != 0 {
+						idx.addEmbed(pkg, pkg+"."+s.Name.Name, s.Type)
+					} else {
 						idx.addType(pkg, pkg+"."+s.Name.Name, s.Type)
 					}
 				}
@@ -210,7 +280,10 @@ func (idx *apiIndex) addFile(pkg string, f *ast.File) {
 	}
 }
 
-// addType records the fields, methods and embedded types of type key.
+// addType records the fields, methods and embedded types of type key, a
+// defined type. A type defined over another named type gains none of its
+// methods, so it records nothing for one (the repository defines such
+// types only over basic types).
 func (idx *apiIndex) addType(pkg, key string, expr ast.Expr) {
 	switch x := expr.(type) {
 	case *ast.StructType:
@@ -235,8 +308,6 @@ func (idx *apiIndex) addType(pkg, key string, expr ast.Expr) {
 				}
 			}
 		}
-	default:
-		idx.addEmbed(pkg, key, expr)
 	}
 }
 
@@ -261,6 +332,18 @@ func (idx *apiIndex) addEmbed(pkg, key string, expr ast.Expr) {
 	}
 }
 
+// declaredAnywhere reports whether some package declares name at top
+// level.
+func (idx *apiIndex) declaredAnywhere(name string) bool {
+	for _, d := range idx.decls {
+		if d[name] {
+			return true
+		}
+	}
+	return false
+}
+
+// add records name under key in m.
 func (idx *apiIndex) add(m map[string]map[string]bool, key, name string) {
 	if m[key] == nil {
 		m[key] = map[string]bool{}
@@ -278,6 +361,8 @@ func (idx *apiIndex) resolves(parts []string) bool {
 	return len(parts) == 2 || idx.hasMember(parts[0]+"."+parts[1], parts[2], map[string]bool{})
 }
 
+// hasMember reports whether name is a field or method of the type key or of
+// a type it embeds; seen guards against embedding cycles.
 func (idx *apiIndex) hasMember(key, name string, seen map[string]bool) bool {
 	if seen[key] {
 		return false
@@ -306,14 +391,52 @@ type codeRef struct {
 var refPattern = regexp.MustCompile(
 	`(?:^|[^A-Za-z0-9_./])([a-z][a-z0-9]*)\.([A-Z][A-Za-z0-9_]*)(?:\.([A-Z][A-Za-z0-9_]*))?`)
 
+// otherNames are the names an inline pkg.Name reference may use besides the
+// packages of the repository and the standard library: the satellites'
+// dependencies, and pkg, the placeholder the files use for any package.
+var otherNames = map[string]bool{
+	"pgx": true, "pgxpool": true, "otel": true, "trace": true, "pkg": true,
+}
+
+// typeMemberPattern matches Type.Member: an exported name not preceded by
+// a name character, a dot or a slash, then a dot and an exported name.
+var typeMemberPattern = regexp.MustCompile(
+	`(?:^|[^A-Za-z0-9_./])([A-Z][A-Za-z0-9_]*)\.([A-Z][A-Za-z0-9_]*)`)
+
+// optionPattern matches an unqualified WithX name, such as an option named
+// in prose without its package; WithX itself is the files' placeholder.
+var optionPattern = regexp.MustCompile(`(?:^|[^A-Za-z0-9_./])(With[A-Z][A-Za-z0-9_]*)`)
+
+// spanPattern matches an inline code span.
+var spanPattern = regexp.MustCompile("`[^`]+`")
+
 // codeRefs returns the references inside the fenced code blocks and inline
 // code spans of a Markdown document. Their first part may name no package
 // of the index (a local variable, a standard library package); the caller
 // skips those.
 func codeRefs(doc string) []codeRef {
+	return matchCode(doc, refPattern, true)
+}
+
+// spanRefs returns the references inside the inline code spans of a
+// Markdown document only; the Go blocks are compiled instead.
+func spanRefs(doc string) []codeRef {
+	return matchCode(doc, refPattern, false)
+}
+
+// typeMemberRefs returns the Type.Member references inside the fenced code
+// blocks and inline code spans of a Markdown document.
+func typeMemberRefs(doc string) []codeRef {
+	return matchCode(doc, typeMemberPattern, true)
+}
+
+// matchCode returns the matches of re, whose groups are the parts of a
+// reference, in the inline code spans of doc and, with fences set, in its
+// fenced code blocks. Fences open and close with ``` at the start of a line;
+// the files use no ~~~ or indented fences.
+func matchCode(doc string, re *regexp.Regexp, fences bool) []codeRef {
 	var refs []codeRef
 	inFence := false
-	span := regexp.MustCompile("`[^`]+`")
 	for i, line := range strings.Split(doc, "\n") {
 		if strings.HasPrefix(line, "```") {
 			inFence = !inFence
@@ -321,19 +444,68 @@ func codeRefs(doc string) []codeRef {
 		}
 		code := []string{line}
 		if !inFence {
-			code = span.FindAllString(line, -1)
+			code = spanPattern.FindAllString(line, -1)
+		} else if !fences {
+			continue
 		}
 		for _, c := range code {
-			for _, m := range refPattern.FindAllStringSubmatch(c, -1) {
-				parts := []string{m[1], m[2]}
-				if m[3] != "" {
-					parts = append(parts, m[3])
+			for _, m := range re.FindAllStringSubmatch(c, -1) {
+				var parts []string
+				for _, p := range m[1:] {
+					if p != "" {
+						parts = append(parts, p)
+					}
 				}
 				refs = append(refs, codeRef{line: i + 1, parts: parts})
 			}
 		}
 	}
 	return refs
+}
+
+// fenceIdents returns the identifiers used in the Go blocks of a Markdown
+// document, and the last element of every path they import: the local
+// variables and packages an inline reference may name.
+func fenceIdents(doc string) map[string]bool {
+	idents := map[string]bool{}
+	for _, block := range regexp.MustCompile("(?s)```go\n(.*?)\n```").FindAllStringSubmatch(doc, -1) {
+		var s scanner.Scanner
+		fset := token.NewFileSet()
+		s.Init(fset.AddFile("", -1, len(block[1])), []byte(block[1]), nil, 0)
+		for {
+			_, tok, lit := s.Scan()
+			if tok == token.EOF {
+				break
+			}
+			switch tok {
+			case token.IDENT:
+				idents[lit] = true
+			case token.STRING:
+				p := strings.Trim(lit, "`\"")
+				idents[p[strings.LastIndex(p, "/")+1:]] = true
+			}
+		}
+	}
+	return idents
+}
+
+// stdPackageNames returns the names of the standard library packages, as
+// go list reports them. It skips t when the go command is not on PATH.
+func stdPackageNames(t *testing.T) map[string]bool {
+	t.Helper()
+	goCmd, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go command not on PATH")
+	}
+	out, err := exec.CommandContext(t.Context(), goCmd, "list", "-f", "{{.Name}}", "std").Output()
+	if err != nil {
+		t.Fatalf("go list std: %v", err)
+	}
+	names := map[string]bool{}
+	for _, n := range strings.Fields(string(out)) {
+		names[n] = true
+	}
+	return names
 }
 
 // section returns the body of the "## title" section of a Markdown
@@ -352,7 +524,8 @@ func section(doc, title string) string {
 // headingAnchors returns the anchors GitHub gives the headings of a
 // Markdown document: lowercased, with characters other than letters, digits,
 // spaces, hyphens and underscores removed, spaces turned into hyphens, and
-// "-1", "-2", ... appended to repeats.
+// "-1", "-2", ... appended to repeats. It assumes fences open with ``` at
+// the start of a line (README.md uses no ~~~ or indented fences).
 func headingAnchors(doc string) map[string]bool {
 	anchors := map[string]bool{}
 	seen := map[string]int{}
@@ -383,14 +556,4 @@ func headingAnchors(doc string) map[string]bool {
 		anchors[a] = true
 	}
 	return anchors
-}
-
-// sortedKeys returns the keys of m in order.
-func sortedKeys(m map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
 }
