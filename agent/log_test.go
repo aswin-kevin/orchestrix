@@ -70,15 +70,15 @@ func (c *capture) WithGroup(string) slog.Handler { return c }
 // failingRelease is a memory checkpointer whose lease release fails.
 type failingRelease struct{ *cpmemory.Checkpointer }
 
-func (l failingRelease) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (func(context.Context) error, func(context.Context) error, error) {
-	renew, release, err := l.Checkpointer.Acquire(ctx, threadID, owner, ttl)
+func (l failingRelease) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (*checkpoint.Lease, error) {
+	lease, err := l.Checkpointer.Acquire(ctx, threadID, owner, ttl)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return renew, func(ctx context.Context) error {
-		_ = release(ctx)
+	return checkpoint.NewLease(threadID, owner, lease.Renew, func(ctx context.Context) error {
+		_ = lease.Release(ctx)
 		return errors.New("release boom")
-	}, nil
+	}), nil
 }
 
 func TestLoggerReceivesSwallowedErrors(t *testing.T) {

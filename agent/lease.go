@@ -17,11 +17,11 @@ import (
 // runLease is a run's hold on its thread, taken from a checkpoint.Leaser
 // and renewed in the background until the run ends.
 type runLease struct {
-	release func(context.Context) error
-	ttl     time.Duration
-	stop    chan struct{}
-	done    chan struct{}
-	log     *slog.Logger
+	lease *checkpoint.Lease
+	ttl   time.Duration
+	stop  chan struct{}
+	done  chan struct{}
+	log   *slog.Logger
 
 	mu sync.Mutex
 	// err is set once a renewal found the lease taken by another owner.
@@ -48,8 +48,11 @@ func (r *run) acquireLease() *Final {
 	ttl := r.agent.cfg.LeaseTTL
 	ctx := context.WithoutCancel(r.ctx)
 	callCtx, cancel := context.WithTimeout(ctx, leaseCallTimeout(ttl))
-	renew, release, err := leaser.Acquire(callCtx, r.threadID, leaseOwner(), ttl)
+	lease, err := leaser.Acquire(callCtx, r.threadID, leaseOwner(), ttl)
 	cancel()
+	if err == nil && lease == nil {
+		err = errors.New("agent: Leaser returned a nil lease")
+	}
 	if err != nil {
 		reason := ReasonCheckpointError
 		if errors.Is(err, checkpoint.ErrLeaseHeld) {
@@ -59,8 +62,8 @@ func (r *run) acquireLease() *Final {
 		final.Version = r.version
 		return final
 	}
-	l := &runLease{release: release, ttl: ttl, stop: make(chan struct{}), done: make(chan struct{}), log: r.logger}
-	go l.keep(ctx, renew, ttl)
+	l := &runLease{lease: lease, ttl: ttl, stop: make(chan struct{}), done: make(chan struct{}), log: r.logger}
+	go l.keep(ctx, lease.Renew, ttl)
 	r.lease = l
 	return nil
 }
@@ -81,7 +84,7 @@ func (r *run) releaseLease() {
 			logPanic(l.log, slog.LevelWarn, "agent: lease release panicked", v, debug.Stack())
 		}
 	}()
-	if err := l.release(ctx); err != nil {
+	if err := l.lease.Release(ctx); err != nil {
 		l.log.Warn("agent: lease release failed", "err", err)
 	}
 }

@@ -1,45 +1,15 @@
-// Package revision holds what the built-in checkpointers share: version
-// tokens that never repeat for a thread id, and an in-process lease table.
+// Package revision holds what the built-in checkpointers share: an
+// in-process lease table.
 package revision
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 )
-
-// NewGeneration returns a random token naming one incarnation of a thread:
-// a thread created again after Delete gets a new one, so its versions never
-// match those of the deleted thread.
-func NewGeneration() string {
-	var b [12]byte
-	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails
-	return hex.EncodeToString(b[:])
-}
-
-// Version formats the version of a thread's saves-th save in generation gen.
-func Version(gen string, saves int) checkpoint.Version {
-	return checkpoint.Version(gen + ":" + strconv.Itoa(saves))
-}
-
-// Conflict returns the error a Save reports when the thread's current
-// version is not the expected one.
-func Conflict(threadID string, expected, current checkpoint.Version) error {
-	switch {
-	case current == "":
-		return fmt.Errorf("%w: thread %q has no checkpoint, expected version %q", checkpoint.ErrConflict, threadID, expected)
-	case expected == "":
-		return fmt.Errorf("%w: thread %q already exists at version %q", checkpoint.ErrConflict, threadID, current)
-	default:
-		return fmt.Errorf("%w: thread %q is at version %q, expected %q", checkpoint.ErrConflict, threadID, current, expected)
-	}
-}
 
 // Leases is an in-process lease table. The zero value is ready to use.
 type Leases struct {
@@ -61,21 +31,21 @@ func (l *Leases) clock() time.Time {
 }
 
 // Acquire implements checkpoint.Leaser.Acquire.
-func (l *Leases) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (func(context.Context) error, func(context.Context) error, error) {
+func (l *Leases) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (*checkpoint.Lease, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := checkpoint.ValidThreadID(threadID); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if owner == "" {
-		return nil, nil, fmt.Errorf("checkpoint: lease owner is empty")
+		return nil, fmt.Errorf("checkpoint: lease owner is empty")
 	}
 	if ttl <= 0 {
-		return nil, nil, fmt.Errorf("checkpoint: lease ttl %v is not positive", ttl)
+		return nil, fmt.Errorf("checkpoint: lease ttl %v is not positive", ttl)
 	}
 	if err := l.take(threadID, owner, ttl); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	renew := func(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
@@ -91,7 +61,7 @@ func (l *Leases) Acquire(ctx context.Context, threadID, owner string, ttl time.D
 		}
 		return nil
 	}
-	return renew, release, nil
+	return checkpoint.NewLease(threadID, owner, renew, release), nil
 }
 
 // take grants owner the lease until now+ttl unless another owner holds an

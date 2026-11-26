@@ -588,55 +588,55 @@ func sequentialSaves(t *testing.T, c checkpoint.Checkpointer) {
 const leaseTTL = time.Minute
 
 func leaseExclusive(t *testing.T, l checkpoint.Leaser) {
-	renew, release, err := l.Acquire(ctx, "t", "a", leaseTTL)
+	lease, err := l.Acquire(ctx, "t", "a", leaseTTL)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	defer release(ctx)
-	if _, _, err := l.Acquire(ctx, "t", "b", leaseTTL); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+	defer lease.Release(ctx)
+	if _, err := l.Acquire(ctx, "t", "b", leaseTTL); !errors.Is(err, checkpoint.ErrLeaseHeld) {
 		t.Fatalf("second owner Acquire: got %v, want ErrLeaseHeld", err)
 	}
-	if err := renew(ctx); err != nil {
+	if err := lease.Renew(ctx); err != nil {
 		t.Fatalf("renew: %v", err)
 	}
-	if _, rel, err := l.Acquire(ctx, "t", "a", leaseTTL); err != nil {
+	if rel, err := l.Acquire(ctx, "t", "a", leaseTTL); err != nil {
 		t.Fatalf("holder re-Acquire: %v", err)
 	} else {
-		defer rel(ctx)
+		defer rel.Release(ctx)
 	}
 }
 
 func leaseRelease(t *testing.T, l checkpoint.Leaser) {
-	_, release, err := l.Acquire(ctx, "t", "a", leaseTTL)
+	lease, err := l.Acquire(ctx, "t", "a", leaseTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := release(ctx); err != nil {
+	if err := lease.Release(ctx); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	_, releaseB, err := l.Acquire(ctx, "t", "b", leaseTTL)
+	leaseB, err := l.Acquire(ctx, "t", "b", leaseTTL)
 	if err != nil {
 		t.Fatalf("Acquire after release: %v", err)
 	}
 	// A stale release by the old owner must not drop b's lease.
-	if err := release(ctx); err != nil {
+	if err := lease.Release(ctx); err != nil {
 		t.Fatalf("second release: %v", err)
 	}
-	if _, _, err := l.Acquire(ctx, "t", "c", leaseTTL); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+	if _, err := l.Acquire(ctx, "t", "c", leaseTTL); !errors.Is(err, checkpoint.ErrLeaseHeld) {
 		t.Fatalf("old owner's release dropped another owner's lease: %v", err)
 	}
-	releaseB(ctx)
+	leaseB.Release(ctx)
 }
 
 func leaseExpires(t *testing.T, l checkpoint.Leaser) {
-	if _, _, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond); err != nil {
+	if _, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		_, release, err := l.Acquire(ctx, "t", "b", leaseTTL)
+		lease, err := l.Acquire(ctx, "t", "b", leaseTTL)
 		if err == nil {
-			release(ctx)
+			lease.Release(ctx)
 			return
 		}
 		if !errors.Is(err, checkpoint.ErrLeaseHeld) || time.Now().After(deadline) {
@@ -647,14 +647,14 @@ func leaseExpires(t *testing.T, l checkpoint.Leaser) {
 }
 
 func leaseRenewAfterTakeover(t *testing.T, l checkpoint.Leaser) {
-	renew, _, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond)
+	lease, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
-	var releaseB func(context.Context) error
+	var leaseB *checkpoint.Lease
 	for {
-		_, releaseB, err = l.Acquire(ctx, "t", "b", leaseTTL)
+		leaseB, err = l.Acquire(ctx, "t", "b", leaseTTL)
 		if err == nil {
 			break
 		}
@@ -663,8 +663,8 @@ func leaseRenewAfterTakeover(t *testing.T, l checkpoint.Leaser) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	defer releaseB(ctx)
-	if err := renew(ctx); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+	defer leaseB.Release(ctx)
+	if err := lease.Renew(ctx); !errors.Is(err, checkpoint.ErrLeaseHeld) {
 		t.Fatalf("renew after another owner took the lease: got %v, want ErrLeaseHeld", err)
 	}
 }
@@ -673,33 +673,33 @@ func leaseRenewAfterTakeover(t *testing.T, l checkpoint.Leaser) {
 // valid: once it expired, another owner may have taken and released it, so
 // renewing must not silently take it again.
 func leaseRenewAfterExpiry(t *testing.T, l checkpoint.Leaser) {
-	renew, release, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond)
+	lease, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release(ctx)
+	defer lease.Release(ctx)
 	time.Sleep(120 * time.Millisecond)
-	if err := renew(ctx); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+	if err := lease.Renew(ctx); !errors.Is(err, checkpoint.ErrLeaseHeld) {
 		t.Fatalf("renew after expiry: got %v, want ErrLeaseHeld", err)
 	}
-	if _, releaseB, err := l.Acquire(ctx, "t", "b", leaseTTL); err != nil {
+	if leaseB, err := l.Acquire(ctx, "t", "b", leaseTTL); err != nil {
 		t.Fatalf("Acquire after the failed renew: %v", err)
 	} else {
-		releaseB(ctx)
+		leaseB.Release(ctx)
 	}
 }
 
 func leasePerThread(t *testing.T, l checkpoint.Leaser) {
-	_, relA, err := l.Acquire(ctx, "t1", "a", leaseTTL)
+	relA, err := l.Acquire(ctx, "t1", "a", leaseTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer relA(ctx)
-	_, relB, err := l.Acquire(ctx, "t2", "b", leaseTTL)
+	defer relA.Release(ctx)
+	relB, err := l.Acquire(ctx, "t2", "b", leaseTTL)
 	if err != nil {
 		t.Fatalf("lease on another thread: %v", err)
 	}
-	relB(ctx)
+	relB.Release(ctx)
 }
 
 func cancelledContext(t *testing.T, c checkpoint.Checkpointer) {

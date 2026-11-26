@@ -1013,15 +1013,15 @@ type countingLeaser struct {
 	releases atomic.Int32
 }
 
-func (l *countingLeaser) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (func(context.Context) error, func(context.Context) error, error) {
-	renew, release, err := l.Checkpointer.Acquire(ctx, threadID, owner, ttl)
+func (l *countingLeaser) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (*checkpoint.Lease, error) {
+	lease, err := l.Checkpointer.Acquire(ctx, threadID, owner, ttl)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return renew, func(ctx context.Context) error {
+	return checkpoint.NewLease(threadID, owner, lease.Renew, func(ctx context.Context) error {
 		l.releases.Add(1)
-		return release(ctx)
-	}, nil
+		return lease.Release(ctx)
+	}), nil
 }
 
 func TestPanicReleasesLeaseAndKeepsVersion(t *testing.T) {
@@ -1076,13 +1076,16 @@ type panickingRenewer struct {
 	renews atomic.Int32
 }
 
-func (l *panickingRenewer) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (func(context.Context) error, func(context.Context) error, error) {
-	_, release, err := l.Checkpointer.Acquire(ctx, threadID, owner, ttl)
+func (l *panickingRenewer) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (*checkpoint.Lease, error) {
+	lease, err := l.Checkpointer.Acquire(ctx, threadID, owner, ttl)
+	if err != nil {
+		return nil, err
+	}
 	renew := func(context.Context) error {
 		l.renews.Add(1)
 		panic("renew exploded")
 	}
-	return renew, release, err
+	return checkpoint.NewLease(threadID, owner, renew, lease.Release), nil
 }
 
 func TestLeaseRenewPanicIsAFailedRenewal(t *testing.T) {

@@ -22,7 +22,7 @@ type entry struct {
 }
 
 func (e entry) version() checkpoint.Version {
-	return revision.Version(e.gen, e.saves)
+	return checkpoint.FormatVersion(e.gen, int64(e.saves))
 }
 
 // Checkpointer keeps the latest state JSON of each thread in memory. The zero
@@ -67,10 +67,10 @@ func (c *Checkpointer) Save(ctx context.Context, threadID string, s *state.State
 		current = e.version()
 	}
 	if current != expected {
-		return "", fmt.Errorf("checkpoint/memory: save: %w", revision.Conflict(threadID, expected, current))
+		return "", fmt.Errorf("checkpoint/memory: save: %w", checkpoint.Conflict(threadID, expected, current))
 	}
 	if !ok {
-		e.gen = revision.NewGeneration()
+		e.gen = checkpoint.NewGeneration()
 	}
 	next := entry{data: data, updated: time.Now(), gen: e.gen, saves: e.saves + 1}
 	c.threads[threadID] = next
@@ -100,7 +100,7 @@ func (c *Checkpointer) Load(ctx context.Context, threadID string) (*state.State,
 
 // Acquire implements checkpoint.Leaser; the leases hold within this
 // Checkpointer only.
-func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (renew, release func(context.Context) error, err error) {
+func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (*checkpoint.Lease, error) {
 	return c.leases.Acquire(ctx, threadID, owner, ttl)
 }
 

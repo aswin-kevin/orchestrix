@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -164,7 +165,7 @@ type stealableLeaser struct {
 	renews atomic.Int32
 }
 
-func (l *stealableLeaser) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (func(context.Context) error, func(context.Context) error, error) {
+func (l *stealableLeaser) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (*checkpoint.Lease, error) {
 	renew := func(context.Context) error {
 		l.renews.Add(1)
 		l.mu.Lock()
@@ -174,7 +175,7 @@ func (l *stealableLeaser) Acquire(ctx context.Context, threadID, owner string, t
 		}
 		return nil
 	}
-	return renew, func(context.Context) error { return nil }, nil
+	return checkpoint.NewLease(threadID, owner, renew, func(context.Context) error { return nil }), nil
 }
 
 func (l *stealableLeaser) steal() {
@@ -242,10 +243,10 @@ type hangingLeaser struct {
 	releaseErr                          chan error
 }
 
-func (l *hangingLeaser) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (func(context.Context) error, func(context.Context) error, error) {
+func (l *hangingLeaser) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (*checkpoint.Lease, error) {
 	if l.hangAcquire {
 		<-ctx.Done()
-		return nil, nil, ctx.Err()
+		return nil, ctx.Err()
 	}
 	renew := func(ctx context.Context) error {
 		l.renews.Add(1)
@@ -264,7 +265,7 @@ func (l *hangingLeaser) Acquire(ctx context.Context, threadID, owner string, ttl
 		l.releaseErr <- err
 		return err
 	}
-	return renew, release, nil
+	return checkpoint.NewLease(threadID, owner, renew, release), nil
 }
 
 // shortLeaseCalls bounds lease calls at d for the rest of the test.
@@ -339,5 +340,23 @@ func TestLeaseRenewAndReleaseHangBounded(t *testing.T) {
 	}
 	if err := <-cp.releaseErr; !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("release ended with %v, want DeadlineExceeded", err)
+	}
+}
+
+// nilLeaser returns a nil lease without an error.
+type nilLeaser struct{ checkpoint.Checkpointer }
+
+func (nilLeaser) Acquire(context.Context, string, string, time.Duration) (*checkpoint.Lease, error) {
+	return nil, nil
+}
+
+func TestNilLeaseIsAnError(t *testing.T) {
+	a := mustNew(t, Config{
+		Provider:     llmtest.New(llmtest.Turn{Text: "done"}),
+		Checkpointer: nilLeaser{cpmemory.New()},
+	})
+	_, final := collect(t, a.Run(context.Background(), threadInput("hi")))
+	if final.Reason != ReasonCheckpointError || final.Err == nil || !strings.Contains(final.Err.Error(), "Leaser returned a nil lease") {
+		t.Fatalf("final = %v, %v; want a checkpoint error naming the nil lease", final.Reason, final.Err)
 	}
 }

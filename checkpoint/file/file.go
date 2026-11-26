@@ -148,7 +148,7 @@ func (ts *threadState) version() checkpoint.Version {
 	if ts == nil {
 		return ""
 	}
-	return revision.Version(ts.gen, ts.seq)
+	return checkpoint.FormatVersion(ts.gen, int64(ts.seq))
 }
 
 // New returns a Checkpointer storing files in dir, creating it (mode 0o700)
@@ -215,7 +215,7 @@ func (c *Checkpointer) save(threadID string, next *image, expected checkpoint.Ve
 		return "", err
 	}
 	if current := prev.version(); current != expected {
-		return "", revision.Conflict(threadID, expected, current)
+		return "", checkpoint.Conflict(threadID, expected, current)
 	}
 	now := time.Now().UTC()
 
@@ -226,7 +226,7 @@ func (c *Checkpointer) save(threadID string, next *image, expected checkpoint.Ve
 		ts      = &threadState{img: next, seq: 1, records: 1}
 	)
 	if fresh {
-		ts.gen = revision.NewGeneration()
+		ts.gen = checkpoint.NewGeneration()
 	} else {
 		ts.gen = prev.gen
 	}
@@ -264,7 +264,7 @@ func (c *Checkpointer) save(threadID string, next *image, expected checkpoint.Ve
 
 // Acquire implements checkpoint.Leaser; the leases hold among the callers
 // of this Checkpointer only (see the package comment).
-func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (renew, release func(context.Context) error, err error) {
+func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (*checkpoint.Lease, error) {
 	return c.leases.Acquire(ctx, threadID, owner, ttl)
 }
 
@@ -441,7 +441,7 @@ func (c *Checkpointer) Load(ctx context.Context, threadID string) (*state.State,
 	if err := s.UnmarshalJSON(data); err != nil {
 		return nil, "", fmt.Errorf("checkpoint/file: load %q: %w", threadID, err)
 	}
-	return s, revision.Version(r.gen, r.seq), nil
+	return s, checkpoint.FormatVersion(r.gen, int64(r.seq)), nil
 }
 
 // List reads the last record of every thread file and returns one page,
@@ -469,7 +469,7 @@ func (c *Checkpointer) List(ctx context.Context, opts checkpoint.ListOptions) (c
 		if err != nil {
 			return checkpoint.ListPage{}, fmt.Errorf("checkpoint/file: list %s: %w", e.Name(), err)
 		}
-		infos = append(infos, checkpoint.ThreadInfo{ID: rec.Thread, Updated: rec.Time, Saves: rec.Seq, Version: revision.Version(rec.Gen, rec.Seq)})
+		infos = append(infos, checkpoint.ThreadInfo{ID: rec.Thread, Updated: rec.Time, Saves: rec.Seq, Version: checkpoint.FormatVersion(rec.Gen, int64(rec.Seq))})
 	}
 	return checkpoint.Paginate(infos, opts)
 }

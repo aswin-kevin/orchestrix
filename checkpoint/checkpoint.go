@@ -85,14 +85,16 @@ type Checkpointer interface {
 // Checkpointer implements Leaser, an agent run takes the thread's lease
 // before it starts and holds it until it ends.
 type Leaser interface {
-	// Acquire takes the lease on threadID for owner until ttl elapses, and
-	// returns functions that extend it by ttl from now and give it up. It
-	// returns an error wrapping ErrLeaseHeld while another owner holds an
-	// unexpired lease. Acquiring a lease owner already holds extends it.
-	// renew only extends a lease owner still holds unexpired: once the
-	// lease expired it fails with ErrLeaseHeld, even when no other owner
-	// took it since. release never removes another owner's lease.
-	Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (renew func(context.Context) error, release func(context.Context) error, err error)
+	// Acquire takes the lease on threadID for owner until ttl elapses and
+	// returns it; Lease.Renew extends it by ttl from now and Lease.Release
+	// gives it up. It returns an error wrapping ErrLeaseHeld while another
+	// owner holds an unexpired lease, and never a nil Lease without an
+	// error. Acquiring a lease owner already holds extends it. Renew only
+	// extends a lease owner still holds unexpired: once the lease expired
+	// it fails with ErrLeaseHeld, even when no other owner took it since.
+	// Release never removes another owner's lease. Stores build the Lease
+	// with NewLease.
+	Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (*Lease, error)
 }
 
 // ValidThreadID reports whether id may be used as a thread id: non-empty, at

@@ -1,7 +1,6 @@
 package orxpg_test
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -114,7 +113,7 @@ func TestSeparatePoolsOneLeaseWins(t *testing.T) {
 		var (
 			wg       sync.WaitGroup
 			mu       sync.Mutex
-			releases []func(context.Context) error
+			releases []*checkpoint.Lease
 			held     int
 		)
 		start := make(chan struct{})
@@ -123,12 +122,12 @@ func TestSeparatePoolsOneLeaseWins(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				_, release, err := c.Acquire(ctx, "shared", strings.Repeat("o", i+1), time.Minute)
+				lease, err := c.Acquire(ctx, "shared", strings.Repeat("o", i+1), time.Minute)
 				mu.Lock()
 				defer mu.Unlock()
 				switch {
 				case err == nil:
-					releases = append(releases, release)
+					releases = append(releases, lease)
 				case errors.Is(err, checkpoint.ErrLeaseHeld):
 					held++
 				default:
@@ -141,7 +140,7 @@ func TestSeparatePoolsOneLeaseWins(t *testing.T) {
 		if len(releases) != 1 || held != 1 {
 			t.Fatalf("round %d: %d owners got the lease and %d were refused, want 1 and 1", round, len(releases), held)
 		}
-		if err := releases[0](ctx); err != nil {
+		if err := releases[0].Release(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -149,7 +148,7 @@ func TestSeparatePoolsOneLeaseWins(t *testing.T) {
 
 func TestLeaseBeforeFirstSave(t *testing.T) {
 	c := newCheckpointer(t, newPool(t, testSchema(t)), "tenant")
-	_, release, err := c.Acquire(ctx, "new", "a", time.Minute)
+	lease, err := c.Acquire(ctx, "new", "a", time.Minute)
 	if err != nil {
 		t.Fatalf("Acquire on a thread with no checkpoint: %v", err)
 	}
@@ -159,10 +158,10 @@ func TestLeaseBeforeFirstSave(t *testing.T) {
 	if err := c.Delete(ctx, "new"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.Acquire(ctx, "new", "b", time.Minute); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+	if _, err := c.Acquire(ctx, "new", "b", time.Minute); !errors.Is(err, checkpoint.ErrLeaseHeld) {
 		t.Fatalf("Delete dropped the lease: Acquire by another owner = %v", err)
 	}
-	if err := release(ctx); err != nil {
+	if err := lease.Release(ctx); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -198,15 +197,15 @@ func TestTenantIsolation(t *testing.T) {
 	if page, err := a.List(ctx, checkpoint.ListOptions{}); err != nil || len(page.Threads) != 1 {
 		t.Fatalf("A listed %+v, %v; want its one thread", page, err)
 	}
-	_, rel, err := a.Acquire(ctx, "t", "owner", time.Minute)
+	rel, err := a.Acquire(ctx, "t", "owner", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rel(ctx)
-	if _, relB, err := b.Acquire(ctx, "t", "other", time.Minute); err != nil {
+	defer rel.Release(ctx)
+	if relB, err := b.Acquire(ctx, "t", "other", time.Minute); err != nil {
 		t.Fatalf("A's lease blocked B: %v", err)
 	} else {
-		relB(ctx)
+		relB.Release(ctx)
 	}
 
 	sa := newStore(t, pool, "tenant-a")

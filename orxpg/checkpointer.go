@@ -2,12 +2,8 @@ package orxpg
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/checkpoint"
@@ -85,31 +81,6 @@ RETURNING owner`,
 // TenantID returns the tenant the Checkpointer is bound to.
 func (c *Checkpointer) TenantID() string { return c.tenant }
 
-// newGeneration returns a random token naming one incarnation of a thread.
-func newGeneration() string {
-	var b [12]byte
-	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails
-	return hex.EncodeToString(b[:])
-}
-
-func formatVersion(gen string, saves int64) checkpoint.Version {
-	return checkpoint.Version(gen + ":" + strconv.FormatInt(saves, 10))
-}
-
-// parseVersion splits a version into its generation and save count; ok is
-// false for a string no thread of this package could have.
-func parseVersion(v checkpoint.Version) (gen string, saves int64, ok bool) {
-	g, n, found := strings.Cut(string(v), ":")
-	if !found || g == "" {
-		return "", 0, false
-	}
-	saves, err := strconv.ParseInt(n, 10, 64)
-	if err != nil || saves < 1 {
-		return "", 0, false
-	}
-	return g, saves, true
-}
-
 // Save stores the JSON encoding of s as the thread's latest state when the
 // thread is at version expected, in one conditional statement.
 func (c *Checkpointer) Save(ctx context.Context, threadID string, s *state.State, expected checkpoint.Version) (checkpoint.Version, error) {
@@ -131,7 +102,7 @@ func (c *Checkpointer) Save(ctx context.Context, threadID string, s *state.State
 		saves int64
 	)
 	if expected == "" {
-		gen = newGeneration()
+		gen = checkpoint.NewGeneration()
 		err = c.pool.QueryRow(ctx, c.sqlCreate, c.tenant, threadID, gen, data).Scan(&saves)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", fmt.Errorf("orxpg: save: %w: thread %q already exists", checkpoint.ErrConflict, threadID)
@@ -139,7 +110,7 @@ func (c *Checkpointer) Save(ctx context.Context, threadID string, s *state.State
 	} else {
 		var want int64
 		var ok bool
-		if gen, want, ok = parseVersion(expected); !ok {
+		if gen, want, ok = checkpoint.ParseVersion(expected); !ok {
 			return "", fmt.Errorf("orxpg: save: %w: thread %q cannot be at version %q", checkpoint.ErrConflict, threadID, expected)
 		}
 		err = c.pool.QueryRow(ctx, c.sqlUpdate, c.tenant, threadID, gen, want, data).Scan(&saves)
@@ -150,7 +121,7 @@ func (c *Checkpointer) Save(ctx context.Context, threadID string, s *state.State
 	if err != nil {
 		return "", fmt.Errorf("orxpg: save %q: %w", threadID, err)
 	}
-	return formatVersion(gen, saves), nil
+	return checkpoint.FormatVersion(gen, saves), nil
 }
 
 // Load decodes the thread's latest state into a fresh State.
@@ -177,7 +148,7 @@ func (c *Checkpointer) Load(ctx context.Context, threadID string) (*state.State,
 	if err := s.UnmarshalJSON(data); err != nil {
 		return nil, "", fmt.Errorf("orxpg: decode state of %q: %w", threadID, err)
 	}
-	return s, formatVersion(gen, saves), nil
+	return s, checkpoint.FormatVersion(gen, saves), nil
 }
 
 // List returns one page of the tenant's threads, newest first. It is a
@@ -220,7 +191,7 @@ func (c *Checkpointer) List(ctx context.Context, opts checkpoint.ListOptions) (c
 		if err := rows.Scan(&id, &gen, &saves, &updated); err != nil {
 			return checkpoint.ListPage{}, fmt.Errorf("orxpg: list: %w", err)
 		}
-		page.Threads = append(page.Threads, checkpoint.ThreadInfo{ID: id, Updated: updated, Saves: int(saves), Version: formatVersion(gen, saves)})
+		page.Threads = append(page.Threads, checkpoint.ThreadInfo{ID: id, Updated: updated, Saves: int(saves), Version: checkpoint.FormatVersion(gen, saves)})
 	}
 	if err := rows.Err(); err != nil {
 		return checkpoint.ListPage{}, fmt.Errorf("orxpg: list: %w", err)
@@ -253,21 +224,21 @@ func (c *Checkpointer) Delete(ctx context.Context, threadID string) error {
 // Acquire implements checkpoint.Leaser. The lease holds across every
 // process that shares the tables; its expiry is measured by the database
 // clock, at microsecond precision.
-func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (renew, release func(context.Context) error, err error) {
+func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl time.Duration) (*checkpoint.Lease, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := checkpoint.ValidThreadID(threadID); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if owner == "" {
-		return nil, nil, errors.New("orxpg: lease owner is empty")
+		return nil, errors.New("orxpg: lease owner is empty")
 	}
 	if !validText(owner) {
-		return nil, nil, fmt.Errorf("orxpg: lease owner %q is not valid UTF-8 or contains NUL", owner)
+		return nil, fmt.Errorf("orxpg: lease owner %q is not valid UTF-8 or contains NUL", owner)
 	}
 	if ttl <= 0 {
-		return nil, nil, fmt.Errorf("orxpg: lease ttl %v is not positive", ttl)
+		return nil, fmt.Errorf("orxpg: lease ttl %v is not positive", ttl)
 	}
 	micros := max(ttl.Microseconds(), 1)
 	// run executes a lease statement that returns a row only when owner
@@ -287,10 +258,10 @@ func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl 
 		return nil
 	}
 	if err := run(ctx, c.sqlLease); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	renew = func(ctx context.Context) error { return run(ctx, c.sqlRenew) }
-	release = func(ctx context.Context) error {
+	renew := func(ctx context.Context) error { return run(ctx, c.sqlRenew) }
+	release := func(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -299,5 +270,5 @@ func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl 
 		}
 		return nil
 	}
-	return renew, release, nil
+	return checkpoint.NewLease(threadID, owner, renew, release), nil
 }
