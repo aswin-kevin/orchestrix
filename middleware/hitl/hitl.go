@@ -41,7 +41,9 @@ var approvedKey = state.NewKey[[]string]("hitl.approved", state.Private[[]string
 // longer satisfies When.
 var askedKey = state.NewKey[[]string]("hitl.asked", state.Private[[]string]())
 
-// InterruptConfig describes when and how one tool needs a human decision.
+// InterruptConfig describes when and how one tool, or the tools matching a
+// pattern, need a human decision. Where several pattern keys match one tool
+// they are combined (see Config.InterruptOn).
 type InterruptConfig struct {
 	// Allowed lists the decisions the host may answer with: Approve, Edit,
 	// Reject or Respond. Nil means DefaultAllowed.
@@ -58,8 +60,15 @@ type InterruptConfig struct {
 type Config struct {
 	// InterruptOn maps a tool name pattern (tool.MatchName: * matches any
 	// run of characters, ? exactly one) to its InterruptConfig. A key equal
-	// to the tool's name wins; otherwise the first matching key in sorted
-	// order applies. A tool no key matches is left alone; nil lists none.
+	// to the tool's name wins outright. Otherwise every matching pattern
+	// key applies, combined fail-closed so that a broad pattern never
+	// weakens a narrower one: the call pauses when any of their When
+	// functions says so (a nil When always does), Allowed is the
+	// intersection of their Allowed sets (an unset one counts as
+	// DefaultAllowed; an empty intersection allows only Reject), and the
+	// Reason is the most specific key's (the most non-wildcard characters,
+	// ties going to the key first in sorted order). A tool no key matches
+	// is left alone; nil lists none.
 	InterruptOn map[string]InterruptConfig
 }
 
@@ -105,19 +114,75 @@ func (m *Middleware) Name() string { return Name }
 // MiddlewareExcluder may not remove them.
 func (m *Middleware) Required() bool { return true }
 
-// configFor returns the InterruptConfig for the tool called name: the one of
-// a key equal to name, else of the first key in sorted order that matches
-// it. ok is false when no key matches.
+// configFor returns the InterruptConfig for the tool called name. A key
+// equal to name wins outright. Otherwise every matching pattern key is
+// combined fail-closed (see Config.InterruptOn). ok is false when no key
+// matches.
 func (m *Middleware) configFor(name string) (cfg InterruptConfig, ok bool) {
 	if cfg, ok := m.on[name]; ok {
 		return cfg, true
 	}
+	var matched []InterruptConfig
+	reason, best := "", -1
 	for _, key := range m.keys {
-		if tool.MatchName(key, name) {
-			return m.on[key], true
+		if !tool.MatchName(key, name) {
+			continue
+		}
+		c := m.on[key]
+		matched = append(matched, c)
+		// Keys are sorted, so a tie keeps the earlier key.
+		if n := literals(key); n > best {
+			reason, best = c.Reason, n
 		}
 	}
-	return InterruptConfig{}, false
+	switch len(matched) {
+	case 0:
+		return InterruptConfig{}, false
+	case 1:
+		return matched[0], true
+	}
+	return InterruptConfig{Allowed: intersect(matched), When: anyWhen(matched), Reason: reason}, true
+}
+
+// literals counts the characters of pattern that are not wildcards.
+func literals(pattern string) int {
+	n := 0
+	for _, r := range pattern {
+		if r != '*' && r != '?' {
+			n++
+		}
+	}
+	return n
+}
+
+// intersect returns the decisions every config allows, in the order of the
+// first; an unset Allowed is DefaultAllowed. An empty intersection allows
+// only Reject.
+func intersect(cfgs []InterruptConfig) []agent.DecisionType {
+	out := slices.Clone(allowedOf(cfgs[0]))
+	for _, c := range cfgs[1:] {
+		allowed := allowedOf(c)
+		out = slices.DeleteFunc(out, func(d agent.DecisionType) bool { return !slices.Contains(allowed, d) })
+	}
+	if len(out) == 0 {
+		return []agent.DecisionType{agent.Reject}
+	}
+	return out
+}
+
+// anyWhen returns a When that pauses when any config's When does; nil (every
+// call pauses) when one of them has no When.
+func anyWhen(cfgs []InterruptConfig) func(context.Context, *agent.ToolCall) bool {
+	whens := make([]func(context.Context, *agent.ToolCall) bool, 0, len(cfgs))
+	for _, c := range cfgs {
+		if c.When == nil {
+			return nil
+		}
+		whens = append(whens, c.When)
+	}
+	return func(ctx context.Context, call *agent.ToolCall) bool {
+		return slices.ContainsFunc(whens, func(when func(context.Context, *agent.ToolCall) bool) bool { return when(ctx, call) })
+	}
 }
 
 // WrapTool implements agent.ToolWrapper.

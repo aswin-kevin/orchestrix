@@ -85,10 +85,11 @@ func WithInterruptOn(tools ...string) Option {
 }
 
 // WithInterruptConfig pauses the run for tools according to on, keyed by tool
-// name pattern as in WithInterruptOn (see hitl.Config.InterruptOn: a key equal
-// to the tool's name wins, otherwise the first matching key in sorted order).
-// It combines with WithInterruptOn; the later option wins for a key given to
-// both.
+// name pattern as in WithInterruptOn. A key equal to the tool's name wins;
+// otherwise every matching pattern applies, combined fail-closed (see
+// hitl.Config.InterruptOn): the call pauses when any of them would pause it,
+// and only the decisions all of them allow are offered. It combines with
+// WithInterruptOn; the later option wins for a key given to both.
 func WithInterruptConfig(on map[string]hitl.InterruptConfig) Option {
 	return func(s *settings) {
 		for name, cfg := range on {

@@ -617,21 +617,107 @@ func TestInterruptOnPattern(t *testing.T) {
 func TestExactKeyBeatsPattern(t *testing.T) {
 	cfg := Config{InterruptOn: map[string]InterruptConfig{
 		"mcp__*":          {Reason: "A"},
-		"mcp__srv__write": {Reason: "B"},
-		"mcp__srv__*":     {Reason: "C"},
+		"mcp__srv__write": {Reason: "B", Allowed: []agent.DecisionType{agent.Approve, agent.Respond}},
+		"mcp__srv__*":     {Reason: "C", Allowed: []agent.DecisionType{agent.Reject}},
 	}}
-	for _, tc := range []struct{ tool, reason string }{
-		{"mcp__srv__write", "B"},
-		// No exact key: the first matching key in sorted order.
-		{"mcp__srv__read", "A"},
+	for _, tc := range []struct {
+		tool, reason string
+		allowed      []agent.DecisionType
+	}{
+		// The exact key wins outright, even over stricter patterns.
+		{"mcp__srv__write", "B", []agent.DecisionType{agent.Approve, agent.Respond}},
+		// No exact key: patterns combine; the most specific one's Reason.
+		{"mcp__srv__read", "C", []agent.DecisionType{agent.Reject}},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			a := newAgent(t, cfg, withTools(bypass, named(&log{}, tc.tool)), callTurns(tc.tool)...)
 			events, final := run(t, a)
-			if got := mustInterrupt(t, events, final).Requests[0].Reason; got != tc.reason {
-				t.Fatalf("Reason = %q, want %q", got, tc.reason)
+			req := mustInterrupt(t, events, final).Requests[0]
+			if req.Reason != tc.reason || !slices.Equal(req.Allowed, tc.allowed) {
+				t.Fatalf("request = %q %v, want %q %v", req.Reason, req.Allowed, tc.reason, tc.allowed)
 			}
 		})
+	}
+}
+
+// interruptRequest runs one call of name under cfg and returns the request
+// it paused with, or nil when it ran without pausing.
+func interruptRequest(t *testing.T, cfg Config, name string) *agent.ActionRequest {
+	t.Helper()
+	l := &log{}
+	a := newAgent(t, cfg, withTools(bypass, named(l, name)), callTurns(name)...)
+	events, final := run(t, a)
+	if !hasInterrupt(events) {
+		mustComplete(t, final)
+		return nil
+	}
+	if len(l.all()) != 0 {
+		t.Fatalf("ran %v before approval", l.all())
+	}
+	return &mustInterrupt(t, events, final).Requests[0]
+}
+
+func TestBroadPatternDoesNotWeakenNarrowOne(t *testing.T) {
+	never := func(context.Context, *agent.ToolCall) bool { return false }
+	cfg := Config{InterruptOn: map[string]InterruptConfig{
+		"mcp__*":       {When: never, Reason: "broad"},
+		"mcp__bank__*": {},
+	}}
+	req := interruptRequest(t, cfg, "mcp__bank__pay")
+	if req == nil {
+		t.Fatal("mcp__bank__pay ran without approval")
+	}
+	if req.Reason != "Approval required for mcp__bank__pay" {
+		t.Fatalf("Reason = %q, want the most specific key's (default) reason", req.Reason)
+	}
+	if req := interruptRequest(t, cfg, "mcp__srv__x"); req != nil {
+		t.Fatalf("mcp__srv__x paused with %+v, want the broad When to skip it", req)
+	}
+}
+
+func TestNarrowAllowedSurvivesBroadPattern(t *testing.T) {
+	// As WithInterruptOn("mcp__*") plus WithInterruptConfig for the bank.
+	cfg := Config{InterruptOn: map[string]InterruptConfig{
+		"mcp__*":       {},
+		"mcp__bank__*": {Allowed: []agent.DecisionType{agent.Reject}},
+	}}
+	req := interruptRequest(t, cfg, "mcp__bank__pay")
+	if req == nil || !slices.Equal(req.Allowed, []agent.DecisionType{agent.Reject}) {
+		t.Fatalf("request = %+v, want Allowed [reject]", req)
+	}
+}
+
+func TestThreePatternIntersection(t *testing.T) {
+	cfg := Config{InterruptOn: map[string]InterruptConfig{
+		"*":         {Allowed: []agent.DecisionType{agent.Approve, agent.Edit, agent.Reject, agent.Respond}},
+		"mcp__*":    {}, // the default set: approve, edit, reject
+		"mcp__a__*": {Allowed: []agent.DecisionType{agent.Reject, agent.Approve, agent.Respond}, Reason: "narrow"},
+	}}
+	req := interruptRequest(t, cfg, "mcp__a__x")
+	if req == nil || !slices.Equal(req.Allowed, []agent.DecisionType{agent.Approve, agent.Reject}) || req.Reason != "narrow" {
+		t.Fatalf("request = %+v, want Allowed [approve reject] and Reason narrow", req)
+	}
+}
+
+func TestEmptyIntersectionAllowsOnlyReject(t *testing.T) {
+	cfg := Config{InterruptOn: map[string]InterruptConfig{
+		"mcp__*":    {Allowed: []agent.DecisionType{agent.Approve}},
+		"mcp__a__*": {Allowed: []agent.DecisionType{agent.Respond}},
+	}}
+	req := interruptRequest(t, cfg, "mcp__a__x")
+	if req == nil || !slices.Equal(req.Allowed, []agent.DecisionType{agent.Reject}) {
+		t.Fatalf("request = %+v, want Allowed [reject]", req)
+	}
+}
+
+func TestSpecificityTieUsesSortOrder(t *testing.T) {
+	cfg := Config{InterruptOn: map[string]InterruptConfig{
+		"ab*": {Reason: "first"},
+		"a*c": {Reason: "second"},
+	}}
+	// Both have two literal characters; "a*c" sorts before "ab*".
+	if req := interruptRequest(t, cfg, "abc"); req == nil || req.Reason != "second" {
+		t.Fatalf("request = %+v, want Reason second", req)
 	}
 }
 

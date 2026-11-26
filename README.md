@@ -457,7 +457,7 @@ Pass the same thread ID to `Resume` so the run keeps using the same backend.
 
 `Final.State` can be serialized with `encoding/json` and resumed later. It holds the conversation and run state, not the workspace: to continue in a new process with the files intact, use a checkpointer (see "Checkpoints and threads").
 
-To pause for a human before specific tools regardless of the permission mode, use `WithInterruptOn`; `WithInterruptConfig` narrows the decisions allowed or which calls pause. Both take tool name patterns (`tool.MatchName`), so `"mcp__*"` pauses every MCP tool; a key equal to the tool's name wins over a pattern, and otherwise the first matching key in sorted order applies:
+To pause for a human before specific tools regardless of the permission mode, use `WithInterruptOn`; `WithInterruptConfig` narrows the decisions allowed or which calls pause. Both take tool name patterns (`tool.MatchName`), so `"mcp__*"` pauses every MCP tool; a key equal to the tool's name wins outright. Otherwise every matching pattern applies, combined fail-closed so a broad pattern never weakens a narrower one: the call pauses when any of them would pause it, only the decisions all of them allow are offered (just `Reject` when they share none), and the reason comes from the most specific pattern:
 
 ```go
 // Imports omitted; model comes from surrounding code.
