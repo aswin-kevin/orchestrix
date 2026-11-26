@@ -2,6 +2,7 @@
 package doccheck
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -213,4 +214,123 @@ func embeddedName(e ast.Expr) string {
 		return embeddedName(x.X)
 	}
 	return ""
+}
+
+// maxCommentWidth is the widest a source line holding a comment may be.
+const maxCommentWidth = 79
+
+// lineWidth is the display width of a source line: runes, with a tab
+// counting as four columns.
+func lineWidth(line string) int {
+	n := 0
+	for _, r := range line {
+		if r == '\t' {
+			n += 4
+		} else {
+			n++
+		}
+	}
+	return n
+}
+
+// generated reports whether the file carries the standard generated-code
+// marker.
+func generated(f *ast.File) bool {
+	for _, g := range f.Comments {
+		for _, c := range g.List {
+			t := c.Text
+			if strings.HasPrefix(t, "// Code generated ") && strings.HasSuffix(t, " DO NOT EDIT.") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// exemptComment reports whether a comment may exceed the width: directives
+// and comments holding a URL, which cannot be wrapped.
+func exemptComment(c *ast.Comment) bool {
+	t := c.Text
+	for _, p := range []string{"//go:", "//line ", "//export "} {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return strings.Contains(t, "://")
+}
+
+// outputGroup reports whether a comment group in a test file is example
+// output.
+func outputGroup(g *ast.CommentGroup) bool {
+	t := g.List[0].Text
+	return strings.HasPrefix(t, "// Output:") ||
+		strings.HasPrefix(t, "// Unordered output:")
+}
+
+// TestCommentWidth keeps every source line that holds a comment within 79
+// columns, across all modules, tests and examples included.
+func TestCommentWidth(t *testing.T) {
+	root := filepath.Join("..", "..")
+	var bad []string
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			n := d.Name()
+			if path != root && (skipDirs2[n] || strings.HasPrefix(n, ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		src, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, src, parser.ParseComments)
+		if err != nil {
+			return err
+		}
+		if generated(f) {
+			return nil
+		}
+		lines := strings.Split(string(src), "\n")
+		isTest := strings.HasSuffix(path, "_test.go")
+		for _, g := range f.Comments {
+			if isTest && outputGroup(g) {
+				continue
+			}
+			for _, c := range g.List {
+				if exemptComment(c) {
+					continue
+				}
+				from := fset.Position(c.Pos()).Line
+				to := fset.Position(c.End()).Line
+				for l := from; l <= to; l++ {
+					if w := lineWidth(lines[l-1]); w > maxCommentWidth {
+						bad = append(bad, fmt.Sprintf("%s:%d: %d columns", path, l, w))
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(bad)
+	if len(bad) > 0 {
+		t.Errorf("%d comment lines wider than %d columns:\n%s",
+			len(bad), maxCommentWidth, strings.Join(bad, "\n"))
+	}
+}
+
+// skipDirs2 are directories TestCommentWidth never enters. Unlike skipDirs it
+// walks internal, cmd, examples and the satellite modules.
+var skipDirs2 = map[string]bool{
+	"testdata": true, "docs": true, "vendor": true,
 }
