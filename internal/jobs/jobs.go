@@ -450,6 +450,90 @@ func (m *Manager[H]) Adopt(threadID, id string, started time.Time, h H) (*Job[H]
 	return j, nil
 }
 
+// AdoptStarting is Adopt for work that start begins now, such as a task
+// taken over after a restart that resumes as it is adopted. Like Start, it
+// first reserves a slot of the thread's running limit under the Manager's
+// lock, so nothing is begun when the thread is full, then calls start
+// without the lock (start may block but must not call the Manager), and
+// registers the handle it returns as job id: watched as a started job is,
+// or, when it already ended, in the finished list. When start fails (or
+// panics) the reservation is rolled back. A job committed after Close began
+// is stopped at once and returned, as in Start.
+//
+// AdoptStarting returns ErrShutdown after Close, a *LimitError when the
+// thread runs or is starting MaxRunning jobs, and an error when the thread
+// already holds job id, all without calling start; an error from start is
+// returned as is. When another caller registered id while start ran, the
+// new handle is stopped and an error returned.
+func (m *Manager[H]) AdoptStarting(threadID, id string, started time.Time, start func() (H, error)) (*Job[H], error) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, ErrShutdown
+	}
+	t := m.thread(threadID)
+	if _, ok := t.jobs[id]; ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("jobs: thread %s already holds job %s", threadID, id)
+	}
+	if t.running()+t.starting >= m.limits.MaxRunning {
+		if len(t.jobs) == 0 && t.starting == 0 {
+			delete(m.threads, threadID)
+		}
+		m.mu.Unlock()
+		return nil, &LimitError{Limit: m.limits.MaxRunning}
+	}
+	t.starting++
+	m.starting.Add(1)
+	m.mu.Unlock()
+	committed := false
+	defer func() {
+		if !committed { // start failed or panicked
+			m.mu.Lock()
+			t.starting--
+			if len(t.jobs) == 0 && t.starting == 0 && m.threads[threadID] == t {
+				delete(m.threads, threadID)
+			}
+			m.mu.Unlock()
+		}
+		m.starting.Done()
+	}()
+
+	h, err := start()
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	t.starting--
+	committed = true
+	if _, held := t.jobs[id]; held || m.threads[threadID] != t {
+		m.mu.Unlock()
+		ctx, cancel := detachedStop(context.Background())
+		_ = h.Stop(ctx)
+		cancel()
+		return nil, fmt.Errorf("jobs: thread %s took job %s while it was adopted", threadID, id)
+	}
+	t.next = max(t.next, m.highestNumber([]string{id}))
+	j := &Job[H]{ID: id, ThreadID: threadID, Started: started, Handle: h}
+	t.jobs[id] = j
+	if j.Ended() {
+		t.finished = append(t.finished, id)
+		t.trim(m.limits.MaxFinished, m.pinned)
+	} else {
+		m.watchers.Add(1)
+		go m.watch(t, j, j.episode)
+	}
+	closed := m.closed
+	m.mu.Unlock()
+	if closed {
+		ctx, cancel := detachedStop(context.Background())
+		_, _ = requestStop(ctx, j) // a failed signal still ends in Done via the handle's own escalation
+		cancel()
+	}
+	return j, nil
+}
+
 // highestNumber returns the largest job number among ids; 0 when none parses.
 func (m *Manager[H]) highestNumber(ids []string) int {
 	highest := 0

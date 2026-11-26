@@ -86,9 +86,14 @@
 // over when update_task names them. Resolve takes over a waiting task the
 // process does not hold, from the State saved with the Checkpointer of the
 // agent the middleware is bound to (see Bind): use one Middleware per
-// top-level agent when Resolve must work across restarts. Every episode of
-// a task taken over runs nested (agent.RunInfo.Depth at least 1), as one
-// started by start_task does, though no tool call of the parent starts it.
+// top-level agent when Resolve must work across restarts. Resolve may go
+// on with a task even when it fails with ErrNotWaiting (a task recorded
+// running is reattached first). Every episode of a task taken over runs
+// nested (agent.RunInfo.Depth at least 1), as one started by start_task
+// does, though no tool call of the parent starts it, and on the run's
+// backend (for Resolve, the thread's own, see agent.Agent.ThreadBackend).
+// One live process must own a thread's tasks at a time: two processes
+// that take over the same task both run it.
 package async
 
 import (
@@ -208,7 +213,8 @@ type Config struct {
 	// State. It runs after the outcome is published, on the goroutine that
 	// watched the episode, or for a cancelled waiting task on a goroutine
 	// of its own, so it should not block: a slow one delays the task's
-	// next report, not cancel_task or Close. It may call Resolve. A task
+	// next report, not cancel_task or Close; that cancelled report may thus
+	// run after Close returned. It may call Resolve. A task
 	// stopped as it started (Close raced start_task), which the parent
 	// never recorded, is not reported. ctx is the context the episode was
 	// started from, without its cancellation: the start_task or update_task
@@ -371,12 +377,18 @@ func (m *Middleware) Close(ctx context.Context) error {
 // Checkpointer of the agent the middleware is bound to (see Bind), finds
 // the task's record there and reattaches it through the Runner's
 // Reattacher, with the parent's permission mode as saved in that State; it
-// then runs nested at Depth 1, on that agent's backend for threadID. A
+// then runs under that agent, nested at Depth 1, on the thread's own
+// backend (agent.Agent.ThreadBackend: its synced workspace restored). A
 // record that still shows the task running (its parent's run ended before
 // the task started waiting) is reattached as the thread's next run would
 // reattach it: when the task's history shows it waiting it is resolved,
 // and otherwise it goes on in a new episode, held by this process, and
-// Resolve fails with ErrNotWaiting.
+// Resolve fails with ErrNotWaiting: Resolve may thus continue a task even
+// when it fails. Only a top-level thread's tasks are taken over this way:
+// threadID naming a task's own thread (<thread>/async_N) fails with
+// ErrCannotReattach, since that task's next run takes over its tasks, under
+// the task's agent and depth. One live process must own a thread's tasks
+// at a time: two that take over the same task both run it.
 //
 // Only one decision per wait wins: a concurrent or later Resolve, a
 // cancel_task or an update_task fails, so the approved actions run at most
@@ -390,7 +402,8 @@ func (m *Middleware) Close(ctx context.Context) error {
 // Config.MaxRunning tasks, and with the runner's error, such as a
 // decision that does not answer every pending action exactly once with a
 // type it allows (agent.ErrMissingDecision, agent.ErrInvalidDecision); the
-// task then still waits.
+// task then still waits. Test ErrCannotReattach before ErrUnknownTask: an
+// error that wraps both says the task could not be looked for.
 func (m *Middleware) Resolve(ctx context.Context, threadID, taskID string, decisions []agent.Decision) error {
 	j := m.jobs.Get(threadID, taskID)
 	if j == nil {
@@ -435,6 +448,11 @@ func (m *Middleware) reattachSaved(ctx context.Context, threadID, taskID string)
 	if a == nil {
 		return nil, fmt.Errorf("%w: %w: task %s: this process does not hold it and the middleware is bound to no agent", ErrUnknownTask, ErrCannotReattach, taskID)
 	}
+	if isTaskThread(threadID) {
+		// A task's own tasks belong to its runs: they are reattached by
+		// the task's next run, under the task's agent and depth.
+		return nil, fmt.Errorf("%w: task %s: thread %s is a background task's own thread; its tasks are taken over by that task's next run", ErrCannotReattach, taskID, threadID)
+	}
 	cp := a.Config().Checkpointer
 	if cp == nil {
 		return nil, fmt.Errorf("%w: %w: task %s: this process does not hold it and the agent has no Checkpointer", ErrUnknownTask, ErrCannotReattach, taskID)
@@ -458,8 +476,13 @@ func (m *Middleware) reattachSaved(ctx context.Context, threadID, taskID string)
 	if _, ok := m.runner.(Reattacher); !ok {
 		return nil, fmt.Errorf("%w: task %s: the runner cannot reattach tasks", ErrCannotReattach, taskID)
 	}
-	f := followUp{mode: a.PermissionMode(s)}
+	f := followUp{mode: a.PermissionMode(s), parent: a}
 	if err := m.checkFollowUpMode(f.mode, r.StartMode); err != nil {
+		return nil, fmt.Errorf("async: resolve task %s: %w", taskID, err)
+	}
+	// The thread's own backend, its synced workspace restored, so the
+	// task's files add to the thread's saved ones.
+	if f.backend, err = a.ThreadBackend(ctx, threadID, s); err != nil {
 		return nil, fmt.Errorf("async: resolve task %s: %w", taskID, err)
 	}
 	j, err := m.reattach(withFollowUp(ctx, f), r)
@@ -586,7 +609,8 @@ func (m *Middleware) reattachRunning(ctx context.Context, s *state.State) {
 	if _, ok := m.runner.(Reattacher); !ok {
 		return
 	}
-	var f followUp
+	// The task works on the run's own backend, as it did when started.
+	f := followUp{backend: info.Backend()}
 	if info.Agent != nil {
 		f.mode = info.Agent.PermissionMode(s)
 	}

@@ -361,36 +361,55 @@ func (m *Middleware) reattach(ctx context.Context, r TaskRecord) (*jobs.Job[*tas
 	if j := m.jobs.Get(r.ThreadID, r.ID); j != nil {
 		return j, nil // attached by another run meanwhile
 	}
-	h, err := ra.Attach(ctx, r)
-	if err == nil && h == nil {
-		err = errNoHandle
-	}
-	if err != nil {
-		return nil, err
+	attach := func() (Handle, error) {
+		h, err := ra.Attach(ctx, r)
+		if err == nil && h == nil {
+			err = errNoHandle
+		}
+		return h, err
 	}
 	t := newTask(ctx)
 	meta := TaskRecord{
 		ID: r.ID, ThreadID: r.ThreadID, TaskThreadID: r.TaskThreadID, SubagentType: r.SubagentType, Description: r.Description,
 		StartMode: r.StartMode, Started: r.Started,
 	}
+	var j *jobs.Job[*task]
+	var err error
 	if r.Status == StatusRunning {
-		// Its episode is reported when it stops, as is a wait the
-		// process that went away never saw recorded.
+		// Attach goes on with the task: it takes a running slot first, so
+		// nothing starts in a full thread. Its episode is reported when it
+		// stops (as is a wait the process that went away never saw
+		// recorded), once the task is registered.
 		t.bind(meta, m.settled)
-		t.attach(h)
+		t.holdReports()
+		j, err = m.jobs.AdoptStarting(r.ThreadID, r.ID, r.Started, func() (*task, error) {
+			h, err := attach()
+			if err != nil {
+				return nil, err
+			}
+			t.attach(h)
+			return t, nil
+		})
+		t.releaseReports(err == nil)
+		if err != nil {
+			return nil, err
+		}
 	} else {
+		h, err := attach()
+		if err != nil {
+			return nil, err
+		}
 		// Bound after attach: the attached episode stopped before, and
 		// was reported then; only later episodes are.
 		t.attach(h)
 		t.bind(meta, m.settled)
-	}
-	j, err := m.jobs.Adopt(r.ThreadID, r.ID, r.Started, t)
-	if err != nil {
-		t.bind(meta, nil) // nobody is told of a task nobody holds
-		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DefaultStopWait)
-		_ = h.Stop(stopCtx) // nobody holds it
-		cancel()
-		return nil, err
+		if j, err = m.jobs.Adopt(r.ThreadID, r.ID, r.Started, t); err != nil {
+			t.bind(meta, nil) // nobody is told of a task nobody holds
+			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DefaultStopWait)
+			_ = h.Stop(stopCtx) // nobody holds it
+			cancel()
+			return nil, err
+		}
 	}
 	// For a waiting record Notified only says the model was told it
 	// waits: its job is not settled, so it must not be released.

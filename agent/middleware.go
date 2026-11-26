@@ -81,6 +81,10 @@ type RunWrapper interface {
 // order; an error fails New. Subagents built from the agent's configuration
 // go through New too, so Bind is called again with each of them: a
 // middleware that must know the agent the host built keeps the first one.
+// When a later Binder of the stack fails, New returns no agent, but the
+// Binders before it stay bound to the discarded one: a middleware that
+// keeps its first bind is then bound to an agent nobody runs, so build
+// such a middleware anew after a failed New.
 type Binder interface {
 	Bind(a *Agent) error
 }

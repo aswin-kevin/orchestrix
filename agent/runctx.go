@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/aswin-kevin/orchestrix/agent/internal/runctx"
+	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/llm"
 )
 
@@ -152,6 +153,17 @@ func runContext(ctx context.Context, info *RunInfo, emit func(Event) bool) conte
 func (r *run) callContext(ctx context.Context, toolUseID string) (callCtx context.Context, end func()) {
 	scope := &toolScope{run: r, toolUseID: toolUseID}
 	return context.WithValue(ctx, toolScopeKey{}, scope), func() { scope.done.Store(true) }
+}
+
+// Backend returns the backend the run uses: Input.Backend, else
+// BackendFactory(ThreadID), else Config.Backend; nil when it has none, for
+// the zero RunInfo, and inside a RunWrapper's WrapRun (the run is not built
+// yet).
+func (i RunInfo) Backend() backend.Backend {
+	if i.run == nil {
+		return nil
+	}
+	return i.run.backend
 }
 
 // Model returns the model the run's agent is configured with (Config.Model)

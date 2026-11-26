@@ -294,8 +294,14 @@ type followUp struct {
 	// mode is the parent run's current permission mode: the next episode
 	// runs in the stricter of it and the task's own mode.
 	mode permission.Mode
-	// backend is the call's backend, for a reattached task.
+	// backend is the backend a reattached task runs on: the update_task
+	// call's, the starting run's, or for a host's Resolve the thread's
+	// (agent.Agent.ThreadBackend).
 	backend backend.Backend
+	// parent, when set, is the agent a reattached task runs under, at
+	// Depth 1, whatever run ctx belongs to: the bound agent, for a host's
+	// Resolve.
+	parent *agent.Agent
 }
 
 // withFollowUp returns ctx carrying f.
@@ -362,8 +368,13 @@ const restartText = "The process running this task restarted. Continue the task 
 // the runner's in-memory store, which a new process starts empty (the task
 // then cannot be reattached). The parent agent is the one of the run ctx
 // belongs to, else the agent the middleware is bound to (a host's Resolve
-// after a restart). The task runs on the backend the middleware passed with
-// ctx, else on the parent's BackendFactory(rec.ThreadID) or Backend.
+// after a restart); the middleware may name it. The task runs on the
+// backend the middleware passed with ctx (the update_task call's, the
+// starting run's, or the thread's own for a host's Resolve), else on the
+// parent's BackendFactory(rec.ThreadID) or Backend, which a runner
+// without the middleware's help can only guess: such a backend may not be
+// the thread's (an Input.Backend a host passes per run) nor hold its
+// synced workspace.
 //
 // From the loaded thread: a pending action gives a Handle whose episode
 // stopped waiting on it, read from the thread in full, not from the
@@ -436,9 +447,13 @@ func (l *localRunner) Attach(ctx context.Context, rec TaskRecord) (Handle, error
 }
 
 // parentOf returns the agent a task reattached with ctx runs under, and the
-// Depth of its runs: the agent of the run ctx belongs to, one level below
-// that run, else the bound agent, at Depth 1.
+// Depth of its runs: the parent the middleware passed (followUp.parent), at
+// Depth 1; else the agent of the run ctx belongs to, one level below that
+// run; else the bound agent, at Depth 1.
 func (l *localRunner) parentOf(ctx context.Context) (*agent.Agent, int) {
+	if f, ok := followUpOf(ctx); ok && f.parent != nil {
+		return f.parent, 1
+	}
 	if info, ok := agent.Info(ctx); ok && info.Agent != nil {
 		return info.Agent, info.Depth + 1
 	}

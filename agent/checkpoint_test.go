@@ -357,3 +357,69 @@ func TestWorkspaceCapturedOnlyAfterTools(t *testing.T) {
 		t.Fatal("final State lacks the workspace snapshot")
 	}
 }
+
+func TestThreadBackendRestoresWorkspace(t *testing.T) {
+	ctx := context.Background()
+	old := testutil.Memory(t)
+	if err := old.Write(ctx, "/old.txt", []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := old.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := state.New()
+	workspaceKey.Set(s, snap)
+
+	ws := newBackends()
+	a := mustNew(t, Config{Provider: llmtest.New(), BackendFactory: ws.factory, SyncWorkspace: true})
+	be, err := a.ThreadBackend(ctx, "t1", s)
+	if err != nil || be != ws.factory("t1") {
+		t.Fatalf("ThreadBackend = %v, %v; want the thread's factory backend", be, err)
+	}
+	if got := ws.content(t, "t1", "/old.txt"); got != "old" {
+		t.Fatalf("/old.txt = %q, want the snapshot restored", got)
+	}
+	// Not synced: the backend is returned untouched.
+	plain := newBackends()
+	b := mustNew(t, Config{Provider: llmtest.New(), BackendFactory: plain.factory})
+	if be, err := b.ThreadBackend(ctx, "t1", s); err != nil || be != plain.factory("t1") {
+		t.Fatalf("ThreadBackend without sync = %v, %v", be, err)
+	}
+	if _, err := plain.factory("t1").Read(ctx, "/old.txt", 0, 0); !errors.Is(err, backend.ErrNotFound) {
+		t.Fatalf("read /old.txt without sync: err = %v, want not found", err)
+	}
+	if be, err := mustNew(t, Config{Provider: llmtest.New()}).ThreadBackend(ctx, "t1", s); be != nil || err != nil {
+		t.Fatalf("ThreadBackend with no backend = %v, %v; want nil, nil", be, err)
+	}
+}
+
+// infoBackendProbe records RunInfo.Backend in BeforeAgent.
+type infoBackendProbe struct{ seen *backend.Backend }
+
+func (infoBackendProbe) Name() string { return "info_backend_probe" }
+
+func (p infoBackendProbe) BeforeAgent(ctx context.Context, _ *state.State) error {
+	info, _ := Info(ctx)
+	*p.seen = info.Backend()
+	return nil
+}
+
+func TestRunInfoBackend(t *testing.T) {
+	var seen backend.Backend
+	cfgBe, runBe := testutil.Memory(t), testutil.Memory(t)
+	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"}), Backend: cfgBe, Middleware: []Middleware{infoBackendProbe{&seen}}})
+	in := userInput("go")
+	in.Backend = runBe
+	collect(t, a.Run(context.Background(), in))
+	if seen != runBe {
+		t.Fatalf("RunInfo.Backend = %v, want Input.Backend", seen)
+	}
+	collect(t, a.Run(context.Background(), userInput("go")))
+	if seen != cfgBe {
+		t.Fatalf("RunInfo.Backend = %v, want Config.Backend", seen)
+	}
+	if (RunInfo{}).Backend() != nil {
+		t.Fatal("the zero RunInfo has a backend")
+	}
+}

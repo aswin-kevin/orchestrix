@@ -72,17 +72,53 @@ func (r *run) restoreWorkspace() error {
 
 // restoreInto restores snapshot into the run's backend when it is empty.
 func (r *run) restoreInto(snapshot json.RawMessage) error {
-	entries, err := r.backend.Ls(r.ctx, "/")
+	return restoreEmpty(r.ctx, r.backend, r.workspace, snapshot)
+}
+
+// restoreEmpty restores snapshot into be, through its Snapshotter ws, when
+// be is empty.
+func restoreEmpty(ctx context.Context, be backend.Backend, ws backend.Snapshotter, snapshot json.RawMessage) error {
+	entries, err := be.Ls(ctx, "/")
 	if err != nil && !errors.Is(err, backend.ErrNotFound) {
 		return fmt.Errorf("agent: restore workspace: list backend: %w", err)
 	}
 	if len(entries) > 0 {
 		return nil
 	}
-	if err := r.workspace.Restore(context.WithoutCancel(r.ctx), snapshot); err != nil {
+	if err := ws.Restore(context.WithoutCancel(ctx), snapshot); err != nil {
 		return fmt.Errorf("agent: restore workspace: %w", err)
 	}
 	return nil
+}
+
+// ThreadBackend returns the backend a run of threadID resolves for itself,
+// with no Input.Backend: BackendFactory(threadID), else Config.Backend; nil
+// when the agent has neither. When the workspace is synced
+// (Config.SyncWorkspace) and s holds a snapshot of it, the snapshot is
+// first restored into that backend if it is empty, exactly as a run
+// starting from s would do. Code that works on a thread's backend outside
+// its runs, such as a background task a host resumes after a restart, uses
+// it so that its files add to the thread's saved ones: a later run finds
+// the backend filled, so it skips the restore and captures what it holds,
+// which must then include the saved files. s may be nil (nothing is
+// restored). It fails when the restore fails.
+func (a *Agent) ThreadBackend(ctx context.Context, threadID string, s *state.State) (backend.Backend, error) {
+	be := a.backendFor(Input{ThreadID: threadID})
+	if be == nil || s == nil {
+		return be, nil
+	}
+	ws := a.workspaceFor(Input{ThreadID: threadID}, be)
+	if ws == nil {
+		return be, nil
+	}
+	snapshot, ok := workspaceKey.Get(s)
+	if !ok {
+		return be, nil
+	}
+	if err := restoreEmpty(ctx, be, ws, snapshot); err != nil {
+		return nil, err
+	}
+	return be, nil
 }
 
 // snapshotWorkspace captures the backend's content into State.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/agenttest"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	cpmemory "github.com/aswin-kevin/orchestrix/checkpoint/memory"
@@ -36,6 +37,8 @@ type proc struct {
 	cp checkpoint.Checkpointer
 	// st is the parent's State when cp is nil: the host keeps it.
 	st *state.State
+	// runBackend, when set, is every run's Input.Backend.
+	runBackend backend.Backend
 }
 
 // newProc builds a process whose parent saves with cp (nil: unsaved) and
@@ -81,7 +84,8 @@ func (pr *proc) run(t *testing.T, text string, mutate func(*state.State)) []agen
 	}
 	var evs []agent.Event
 	var final *agent.Final
-	for ev := range pr.a.Run(ctx, agent.Input{ThreadID: "t", State: s, Version: v, Messages: []llm.Message{llm.UserText(text)}}) {
+	in := agent.Input{ThreadID: "t", State: s, Version: v, Backend: pr.runBackend, Messages: []llm.Message{llm.UserText(text)}}
+	for ev := range pr.a.Run(ctx, in) {
 		evs = append(evs, ev)
 		if ev.Kind == agent.KindFinal {
 			final = ev.Final
@@ -481,5 +485,210 @@ func TestResolveAfterRestartRecordedRunning(t *testing.T) {
 	}
 	if w2.runs.Load() != 1 {
 		t.Fatalf("write_file ran %d times, want 1", w2.runs.Load())
+	}
+}
+
+// perThread is a BackendFactory that keeps one backend per thread, as the
+// root preset's does.
+type perThread struct {
+	t  *testing.T
+	mu sync.Mutex
+	m  map[string]backend.Backend
+}
+
+func (p *perThread) get(id string) backend.Backend {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.m == nil {
+		p.m = map[string]backend.Backend{}
+	}
+	if b, ok := p.m[id]; ok {
+		return b
+	}
+	b := testutil.Memory(p.t)
+	p.m[id] = b
+	return b
+}
+
+func TestResolveAfterRestartKeepsSyncedWorkspace(t *testing.T) {
+	cp := cpmemory.New()
+	ctx := context.Background()
+	mk := func(sub subagents.Subagent, f *perThread, turns ...llmtest.Turn) (*Middleware, *agent.Agent) {
+		m, err := New(Config{Subagents: []subagents.Subagent{sub}, DisableStopReminder: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Close(ctx) })
+		a, err := agent.New(agent.Config{Provider: llmtest.New(turns...), Middleware: []agent.Middleware{m}, PermissionMode: permission.ModeDefault,
+			Checkpointer: cp, BackendFactory: f.get, SyncWorkspace: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m, a
+	}
+	prompt := func(a *agent.Agent, text string) {
+		th, err := a.Thread(ctx, "t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, err := range th.Prompt(ctx, text) {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	f1 := &perThread{t: t}
+	if err := f1.get("t").Write(ctx, "/keep.txt", []byte("precious")); err != nil {
+		t.Fatal(err)
+	}
+	m1, a1 := mk(newWriter().spec(), f1, start("s1", "researcher", "write"), call("c1", ToolCheck, obj{"task_id": "async_1", "wait": true}), llmtest.Turn{Text: "waiting"})
+	prompt(a1, "go")
+	_ = m1.Close(ctx)
+
+	// Process 2's backends start empty: the thread's files are only in its
+	// saved workspace.
+	f2 := &perThread{t: t}
+	w2 := &writer{child: llmtest.New(llmtest.Turn{Text: "wrote it"})}
+	m2, a2 := mk(w2.spec(), f2, llmtest.Turn{Text: "ok"})
+	if err := m2.Resolve(ctx, "t", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}); err != nil {
+		t.Fatalf("Resolve = %v", err)
+	}
+	waitEnded(t, m2, "async_1")
+	prompt(a2, "next")
+	for _, name := range []string{"/keep.txt", "/out.txt"} {
+		if _, err := f2.get("t").Read(ctx, name, 0, 10); err != nil {
+			t.Fatalf("%s is missing from the thread's workspace after a Resolve from a new process: %v", name, err)
+		}
+	}
+	// And from the snapshot the run saved.
+	f3 := &perThread{t: t}
+	m3, a3 := mk(newWriter().spec(), f3, llmtest.Turn{Text: "ok"})
+	_ = m3
+	prompt(a3, "again")
+	if _, err := f3.get("t").Read(ctx, "/keep.txt", 0, 10); err != nil {
+		t.Fatalf("the saved workspace lost /keep.txt: %v", err)
+	}
+}
+
+// marker is a tool writing /mark.txt to the call's backend.
+var marker = tool.New("mark", "Marks.", func(ctx context.Context, _ struct{}, c *tool.Call) (tool.Result, error) {
+	return tool.Text("marked"), c.Backend.Write(ctx, "/mark.txt", []byte("x"))
+}, tool.WithReadOnly())
+
+func TestReattachRunsOnRunBackend(t *testing.T) {
+	cp := cpmemory.New()
+	cfgBe, runBe := testutil.Memory(t), testutil.Memory(t)
+	b := newBlocker(call("n1", "noop", obj{}))
+	p1 := newProc(t, Config{Subagents: []subagents.Subagent{worker(b, "")}}, cp, cfgBe, nil,
+		start("s1", "researcher", "slow research"), llmtest.Turn{Text: "started"})
+	p1.runBackend = runBe
+	p1.run(t, "go", nil)
+	for range 2 {
+		<-b.entered
+	}
+	p1.crash(t)
+
+	spec := researcher(llmtest.New(call("m1", "mark", obj{}), llmtest.Turn{Text: "done"}))
+	spec.Tools = []tool.Tool{noop, marker}
+	p2 := newProc(t, Config{Subagents: []subagents.Subagent{spec}}, cp, cfgBe, nil, llmtest.Turn{Text: "checking"})
+	p2.runBackend = runBe
+	p2.run(t, "status?", nil)
+	waitEnded(t, p2.m, "async_1")
+	ctx := context.Background()
+	if _, err := runBe.Read(ctx, "/mark.txt", 0, 10); err != nil {
+		t.Fatalf("the reattached task did not work on the run's backend: %v", err)
+	}
+	if _, err := cfgBe.Read(ctx, "/mark.txt", 0, 10); err == nil {
+		t.Fatal("the reattached task worked on Config.Backend, not the run's")
+	}
+}
+
+func TestResolveAfterRestartRunsUnderBoundAgent(t *testing.T) {
+	cp, be := cpmemory.New(), testutil.Memory(t)
+	crashWhileWaiting(t, cp, be)
+	spy := &modeSpy{}
+	w := &writer{child: llmtest.New(llmtest.Turn{Text: "wrote it"})}
+	p2 := newProc(t, Config{Subagents: []subagents.Subagent{w.spec()}}, cp, be, []agent.Middleware{spy.hooks()})
+	// The host resolves from inside some other agent's deep run.
+	other, err := agent.New(agent.Config{Provider: llmtest.New()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, _ := agenttest.Context(context.Background(), agent.RunInfo{Agent: other, ThreadID: "elsewhere", Depth: 3})
+	if err := p2.m.Resolve(ctx, "t", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}); err != nil {
+		t.Fatalf("Resolve = %v", err)
+	}
+	waitEnded(t, p2.m, "async_1")
+	if w.runs.Load() != 1 {
+		t.Fatalf("write_file ran %d times, want 1", w.runs.Load())
+	}
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	// The spy is in the bound agent's stack: the task ran under it, at
+	// Depth 1, not under the caller's run.
+	if len(spy.depths) != 1 || spy.depths[0] != 1 {
+		t.Fatalf("resolved task depths = %v, want [1] under the bound agent", spy.depths)
+	}
+}
+
+func TestResolveRefusesTaskThread(t *testing.T) {
+	cp, be := cpmemory.New(), testutil.Memory(t)
+	p := newProc(t, Config{}, cp, be, nil)
+	err := p.m.Resolve(context.Background(), "t/async_1", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}})
+	if !errors.Is(err, ErrCannotReattach) {
+		t.Fatalf("Resolve on a task's thread = %v, want ErrCannotReattach", err)
+	}
+	if !isTaskThread("t/async_2/x") || isTaskThread("async_1") || isTaskThread("t/async_x") || isTaskThread("t/async_") {
+		t.Fatal("isTaskThread misreads thread ids")
+	}
+}
+
+func TestReattachRespectsMaxRunning(t *testing.T) {
+	cp, be := cpmemory.New(), testutil.Memory(t)
+	b := newBlocker(call("n1", "noop", obj{}))
+	p1 := newProc(t, Config{Subagents: []subagents.Subagent{worker(b, "")}}, cp, be, nil,
+		llmtest.Turn{ToolCalls: []llmtest.Call{
+			{ID: "s1", Name: ToolStart, Input: obj{"subagent_type": "researcher", "description": "one"}},
+			{ID: "s2", Name: ToolStart, Input: obj{"subagent_type": "researcher", "description": "two"}},
+		}}, llmtest.Turn{Text: "started"})
+	p1.run(t, "go", nil)
+	for range 2 {
+		<-b.entered // both tasks called their model
+	}
+	p1.crash(t)
+
+	calls := &settledCalls{}
+	g := newGate(llmtest.Turn{Text: "done"})
+	p2 := newProc(t, Config{Subagents: []subagents.Subagent{worker(g, "")}, MaxRunning: 1, OnSettled: calls.hook}, cp, be, nil,
+		llmtest.Turn{Text: "checking"})
+	p2.run(t, "status?", nil)
+	g.waitEntered(t, 1)
+	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-g.entered:
+		t.Fatal("a task over the running limit was started")
+	default:
+	}
+	// The tasks started concurrently, so either may be recorded first and
+	// take the only slot; the other is lost.
+	var kept string
+	lost := 0
+	for _, r := range Tasks(p2.st) {
+		switch r.Status {
+		case StatusLost:
+			lost++
+		case StatusRunning:
+			kept = r.ID
+		}
+	}
+	if lost != 1 || kept == "" {
+		t.Fatalf("records = %+v, want one running and one lost", Tasks(p2.st))
+	}
+	g.release()
+	waitEnded(t, p2.m, kept)
+	for _, rec := range calls.waitCalls(t, 1) {
+		if rec.ID != kept {
+			t.Fatalf("OnSettled reported %+v, a task that was never taken over", rec)
+		}
 	}
 }

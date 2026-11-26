@@ -3,6 +3,7 @@ package async
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -220,4 +221,17 @@ func (m *Middleware) markSeen(c *tool.Call, id string) {
 			m.markNotified(r)
 		}
 	})
+}
+
+// isTaskThread reports whether threadID is, or lies below, the thread of a
+// background task: a segment after its first is IDPrefix followed by a
+// number, as in <thread>/async_N.
+func isTaskThread(threadID string) bool {
+	segs := strings.Split(threadID, "/")
+	for _, seg := range segs[1:] {
+		if n, ok := strings.CutPrefix(seg, IDPrefix); ok && n != "" && strings.Trim(n, "0123456789") == "" {
+			return true
+		}
+	}
+	return false
 }

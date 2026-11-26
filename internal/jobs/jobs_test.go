@@ -908,3 +908,33 @@ func TestFailedRestartBeforeWatcherRecordsEnd(t *testing.T) {
 		t.Fatalf("the ended job is %d times in the finished list, want 1", n)
 	}
 }
+
+func TestAdoptStartingReservesFirst(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 1, MaxFinished: 5})
+	startFake(t, m, "t")
+	called := false
+	_, err := m.AdoptStarting("t", "x_7", time.Now(), func() (*fake, error) { called = true; return newFake(), nil })
+	var limit *LimitError
+	if !errors.As(err, &limit) || called {
+		t.Fatalf("AdoptStarting at the limit = %v (start called %v), want a LimitError before start", err, called)
+	}
+	m2 := NewManager[*fake]("x_", Limits{MaxRunning: 1, MaxFinished: 5})
+	if _, err := m2.AdoptStarting("t", "x_7", time.Now(), func() (*fake, error) { return nil, errors.New("no") }); err == nil {
+		t.Fatal("a failed start was adopted")
+	}
+	f := newFake()
+	j, err := m2.AdoptStarting("t", "x_7", time.Now(), func() (*fake, error) { return f, nil })
+	if err != nil || m2.Get("t", "x_7") != j {
+		t.Fatalf("AdoptStarting = %v, %v", j, err)
+	}
+	// The slot is taken and numbering continues after the adopted id.
+	if _, err := m2.Start("t", nil, func() (*fake, error) { return newFake(), nil }); !errors.As(err, &limit) {
+		t.Fatalf("Start beside the adopted running job = %v, want a LimitError", err)
+	}
+	f.end()
+	eventually(t, j.Ended)
+	j2, _ := startFake(t, m2, "t")
+	if j2.ID != "x_8" {
+		t.Fatalf("next id = %s, want x_8", j2.ID)
+	}
+}
