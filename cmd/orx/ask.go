@@ -21,7 +21,7 @@ const (
 	multiAnswerPrompt  = "Answer (option numbers, comma-separated, or your own words): "
 )
 
-// ask implements askuser.Config.Ask on the terminal. It prints each question
+// Ask implements askuser.Asker on the terminal. It prints each question
 // with its numbered options and reads one line per question: an option
 // number (comma-separated numbers for a multi-choice question) selects
 // options, anything else is the user's own answer. It shares the approver's input and prompt lock, so its
@@ -32,7 +32,7 @@ const (
 //
 // askuser already strips control characters from the questions; the text is
 // still passed through termsafe.String, since it is written by the model.
-func (a *approver) ask(ctx context.Context, questions []askuser.Question) ([]askuser.Answer, error) {
+func (a *approver) Ask(ctx context.Context, questions []askuser.Question) ([]askuser.Answer, error) {
 	tctx, release, err := a.takeTerminal(ctx)
 	if errors.Is(err, errTurnEnded) {
 		return nil, err

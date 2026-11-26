@@ -40,7 +40,7 @@ func newAgent(t *testing.T, cfg Config, ac agent.Config, turns ...llmtest.Turn) 
 	t.Helper()
 	p := llmtest.New(turns...)
 	ac.Provider = p
-	ac.Middleware = append(ac.Middleware, New(cfg))
+	ac.Middleware = append(ac.Middleware, mustNew(t, cfg))
 	a, err := agent.New(ac)
 	if err != nil {
 		t.Fatal(err)
@@ -143,10 +143,10 @@ func TestAskUserInterruptAndRespond(t *testing.T) {
 
 func TestAskUserCallback(t *testing.T) {
 	var got []Question
-	cfg := Config{Ask: func(_ context.Context, qs []Question) ([]Answer, error) {
+	cfg := Config{Asker: AskerFunc(func(_ context.Context, qs []Question) ([]Answer, error) {
 		got = qs
 		return []Answer{{Selected: []string{"SQLite", "Mongo"}, Other: "maybe both"}}, nil
-	}}
+	})}
 	a, p := newAgent(t, cfg, agent.Config{},
 		llmtest.Turn{ToolCalls: []llmtest.Call{askCall(dbQuestion())}},
 		llmtest.Turn{Text: "done"})
@@ -163,7 +163,7 @@ func TestAskUserCallback(t *testing.T) {
 }
 
 func TestAskUserCallbackError(t *testing.T) {
-	cfg := Config{Ask: func(context.Context, []Question) ([]Answer, error) { return nil, errors.New("no terminal") }}
+	cfg := Config{Asker: AskerFunc(func(context.Context, []Question) ([]Answer, error) { return nil, errors.New("no terminal") })}
 	a, p := newAgent(t, cfg, agent.Config{},
 		llmtest.Turn{ToolCalls: []llmtest.Call{askCall(dbQuestion())}},
 		llmtest.Turn{Text: "done"})
@@ -207,10 +207,10 @@ func TestAskUserValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{Ask: func(context.Context, []Question) ([]Answer, error) {
+			cfg := Config{Asker: AskerFunc(func(context.Context, []Question) ([]Answer, error) {
 				t.Error("callback must not run for invalid questions")
 				return nil, nil
-			}}
+			})}
 			a, p := newAgent(t, cfg, agent.Config{},
 				llmtest.Turn{ToolCalls: []llmtest.Call{askCall(tc.qs...)}},
 				llmtest.Turn{Text: "done"})
@@ -223,7 +223,7 @@ func TestAskUserValidation(t *testing.T) {
 }
 
 func TestAskUserHeaderAtLimitAccepted(t *testing.T) {
-	cfg := Config{Ask: func(context.Context, []Question) ([]Answer, error) { return []Answer{{Selected: []string{"x"}}}, nil }}
+	cfg := Config{Asker: AskerFunc(func(context.Context, []Question) ([]Answer, error) { return []Answer{{Selected: []string{"x"}}}, nil })}
 	q := obj{"question": "a", "header": strings.Repeat("é", MaxHeaderChars), "options": opts("x", "y")}
 	a, p := newAgent(t, cfg, agent.Config{}, llmtest.Turn{ToolCalls: []llmtest.Call{askCall(q)}}, llmtest.Turn{Text: "done"})
 	run(t, a)
@@ -233,9 +233,9 @@ func TestAskUserHeaderAtLimitAccepted(t *testing.T) {
 }
 
 func TestAskUserAllowedInPlanMode(t *testing.T) {
-	cfg := Config{Ask: func(context.Context, []Question) ([]Answer, error) {
+	cfg := Config{Asker: AskerFunc(func(context.Context, []Question) ([]Answer, error) {
 		return []Answer{{Selected: []string{"Postgres"}}}, nil
-	}}
+	})}
 	a, p := newAgent(t, cfg, agent.Config{PermissionMode: permission.ModePlan},
 		llmtest.Turn{ToolCalls: []llmtest.Call{askCall(dbQuestion())}},
 		llmtest.Turn{Text: "done"})
@@ -250,9 +250,9 @@ func TestAskUserNoApprovalNeeded(t *testing.T) {
 		t.Error("ask_user must not reach the approver")
 		return permission.Denied("no")
 	}
-	cfg := Config{Ask: func(context.Context, []Question) ([]Answer, error) {
+	cfg := Config{Asker: AskerFunc(func(context.Context, []Question) ([]Answer, error) {
 		return []Answer{{Selected: []string{"Postgres"}}}, nil
-	}}
+	})}
 	a, p := newAgent(t, cfg, agent.Config{Approver: deny},
 		llmtest.Turn{ToolCalls: []llmtest.Call{askCall(dbQuestion())}},
 		llmtest.Turn{Text: "done"})
@@ -328,15 +328,15 @@ func runInSubagent(t *testing.T, cfg Config) (string, bool) {
 
 func TestAskUserRefusedInSubagentWithoutAsk(t *testing.T) {
 	text, isErr := runInSubagent(t, Config{})
-	if !isErr || !strings.Contains(text, "subagent") || !strings.Contains(text, "Config.Ask") {
+	if !isErr || !strings.Contains(text, "subagent") || !strings.Contains(text, "Config.Asker") {
 		t.Fatalf("result = %q (error %v)", text, isErr)
 	}
 }
 
 func TestAskUserInSubagentUsesAsk(t *testing.T) {
-	text, isErr := runInSubagent(t, Config{Ask: func(context.Context, []Question) ([]Answer, error) {
+	text, isErr := runInSubagent(t, Config{Asker: AskerFunc(func(context.Context, []Question) ([]Answer, error) {
 		return []Answer{{Selected: []string{"SQLite"}}}, nil
-	}})
+	})})
 	if isErr || !strings.Contains(text, "SQLite") {
 		t.Fatalf("result = %q (error %v)", text, isErr)
 	}
@@ -360,7 +360,7 @@ func TestPromptSegment(t *testing.T) {
 // askWith runs one call whose answers come from ask and returns the result.
 func askWith(t *testing.T, ask func(context.Context, []Question) ([]Answer, error), q ...obj) string {
 	t.Helper()
-	a, p := newAgent(t, Config{Ask: ask}, agent.Config{},
+	a, p := newAgent(t, Config{Asker: AskerFunc(ask)}, agent.Config{},
 		llmtest.Turn{ToolCalls: []llmtest.Call{askCall(q...)}}, llmtest.Turn{Text: "done"})
 	run(t, a)
 	text, _ := resultFor(t, p, "q")
@@ -477,7 +477,7 @@ func TestSingleSelectKeepsFirstLabel(t *testing.T) {
 }
 
 func TestAskUserAllowedInDontAskMode(t *testing.T) {
-	a, p := newAgent(t, Config{Ask: answering(Answer{Selected: []string{"Postgres"}})}, agent.Config{PermissionMode: permission.ModeDontAsk},
+	a, p := newAgent(t, Config{Asker: AskerFunc(answering(Answer{Selected: []string{"Postgres"}}))}, agent.Config{PermissionMode: permission.ModeDontAsk},
 		llmtest.Turn{ToolCalls: []llmtest.Call{askCall(dbQuestion())}}, llmtest.Turn{Text: "done"})
 	run(t, a)
 	if text, isErr := resultFor(t, p, "q"); isErr || !strings.Contains(text, "Postgres") {
@@ -486,7 +486,7 @@ func TestAskUserAllowedInDontAskMode(t *testing.T) {
 }
 
 func TestToolIsNotConcurrent(t *testing.T) {
-	tl := New(Config{}).(agent.ToolProvider).Tools()[0]
+	tl := mustNew(t, Config{}).Tools()[0]
 	if isConcurrent(tl, nil) {
 		t.Fatal("ask_user must not be concurrency-safe")
 	}
@@ -558,4 +558,80 @@ func TestOtherEqualToSelectedIsNotRepeated(t *testing.T) {
 func isConcurrent(t tool.Tool, in json.RawMessage) bool {
 	c, ok := tool.As[tool.ConcurrencySafer](t)
 	return ok && c.ConcurrencySafe(in)
+}
+
+// mustNew builds the middleware or fails the test.
+func mustNew(t *testing.T, cfg Config) *Middleware {
+	t.Helper()
+	m, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func TestNewRejectsNilAskerFunc(t *testing.T) {
+	if _, err := New(Config{Asker: AskerFunc(nil)}); err == nil {
+		t.Fatal("New accepted a nil AskerFunc")
+	}
+	m, err := New(Config{})
+	if err != nil || m.Name() != Name {
+		t.Fatalf("New(Config{}) = %v, %v", m, err)
+	}
+}
+
+func TestAskerFunc(t *testing.T) {
+	var got []Question
+	f := AskerFunc(func(_ context.Context, qs []Question) ([]Answer, error) {
+		got = qs
+		return []Answer{{Selected: []string{"SQLite"}}}, nil
+	})
+	a, p := newAgent(t, Config{Asker: f}, agent.Config{},
+		llmtest.Turn{ToolCalls: []llmtest.Call{askCall(obj{"question": "Which\u001b?", "options": opts("a", "b")})}},
+		llmtest.Turn{Text: "done"})
+	run(t, a)
+	if len(got) != 1 || got[0].Question != "Which?" {
+		t.Fatalf("asker got %+v, want sanitized question", got)
+	}
+	if text, isErr := resultFor(t, p, "q"); isErr || !strings.Contains(text, "SQLite") {
+		t.Fatalf("result = %q (error %v)", text, isErr)
+	}
+}
+
+// ui is one host object serving both approvals and questions.
+type ui struct{ approved, asked int }
+
+func (u *ui) approve(context.Context, permission.Request, string) permission.Decision {
+	u.approved++
+	return permission.Decision{Behavior: permission.Allow}
+}
+
+func (u *ui) Ask(context.Context, []Question) ([]Answer, error) {
+	u.asked++
+	return []Answer{{Selected: []string{"SQLite"}}}, nil
+}
+
+func TestOneObjectAnswersApprovalsAndQuestions(t *testing.T) {
+	u := &ui{}
+	write := tool.New("write", "Needs approval.", func(context.Context, struct{}, *tool.Call) (tool.Result, error) {
+		return tool.Text("written"), nil
+	})
+	a, p := newAgent(t, Config{Asker: u}, agent.Config{Approver: u.approve, Tools: []tool.Tool{write}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{askCall(dbQuestion()), {ID: "w", Name: "write", Input: obj{}}}},
+		llmtest.Turn{Text: "done"})
+	fin := run(t, a)
+	if fin.Reason != agent.ReasonCompleted || u.approved != 1 || u.asked != 1 {
+		t.Fatalf("reason %q approved %d asked %d", fin.Reason, u.approved, u.asked)
+	}
+	if text, isErr := resultFor(t, p, "q"); isErr || !strings.Contains(text, "SQLite") {
+		t.Fatalf("result = %q (error %v)", text, isErr)
+	}
+}
+
+func TestAskerAnswersInSubagent(t *testing.T) {
+	u := &ui{}
+	text, isErr := runInSubagent(t, Config{Asker: u})
+	if isErr || !strings.Contains(text, "SQLite") || u.asked != 1 {
+		t.Fatalf("result = %q (error %v), asked %d", text, isErr, u.asked)
+	}
 }

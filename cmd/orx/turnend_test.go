@@ -63,8 +63,8 @@ func TestMultiQuestionAskCutAtTurnEnd(t *testing.T) {
 	ap := newApprover(newLineReader(pr), out)
 	_, end := ap.beginTurn()
 	questions := []askuser.Question{
-		{Question: "First?", Options: []askuser.Option{{Label: "a"}, {Label: "b"}}},
-		{Question: "Second?", Options: []askuser.Option{{Label: "c"}, {Label: "d"}}},
+		{Question: "First?", Options: []askuser.Choice{{Label: "a"}, {Label: "b"}}},
+		{Question: "Second?", Options: []askuser.Choice{{Label: "c"}, {Label: "d"}}},
 	}
 
 	type result struct {
@@ -73,7 +73,7 @@ func TestMultiQuestionAskCutAtTurnEnd(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		answers, err := ap.ask(context.Background(), questions)
+		answers, err := ap.Ask(context.Background(), questions)
 		done <- result{answers, err}
 	}()
 	waitFor(t, "the first question", func() bool { return out.contains("First?") })

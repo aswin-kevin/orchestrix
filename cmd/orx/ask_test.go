@@ -13,15 +13,15 @@ import (
 
 // twoQuestions is a single-choice question followed by a multi-choice one.
 var twoQuestions = []askuser.Question{
-	{Question: "Which database?", Header: "DB", Options: []askuser.Option{{Label: "Alpha", Description: "the old one"}, {Label: "Beta"}}},
-	{Question: "Which targets?", Options: []askuser.Option{{Label: "linux"}, {Label: "darwin"}, {Label: "windows"}}, MultiSelect: true},
+	{Question: "Which database?", Header: "DB", Options: []askuser.Choice{{Label: "Alpha", Description: "the old one"}, {Label: "Beta"}}},
+	{Question: "Which targets?", Options: []askuser.Choice{{Label: "linux"}, {Label: "darwin"}, {Label: "windows"}}, MultiSelect: true},
 }
 
 func TestAskSelectsNumberedOptions(t *testing.T) {
 	out := &promptLog{}
 	ap := activeApprover(newLineReader(strings.NewReader("2\n1, 3\n")), out)
 
-	answers, err := ap.ask(context.Background(), twoQuestions)
+	answers, err := ap.Ask(context.Background(), twoQuestions)
 
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestAskFreeText(t *testing.T) {
 		t.Run(line, func(t *testing.T) {
 			ap := activeApprover(newLineReader(strings.NewReader(line+"\n")), &promptLog{})
 
-			answers, err := ap.ask(context.Background(), twoQuestions[:1])
+			answers, err := ap.Ask(context.Background(), twoQuestions[:1])
 
 			if err != nil {
 				t.Fatal(err)
@@ -71,7 +71,7 @@ func TestAskFreeText(t *testing.T) {
 func TestAskEndOfInputFails(t *testing.T) {
 	ap := activeApprover(newLineReader(strings.NewReader("1\n")), &promptLog{})
 
-	_, err := ap.ask(context.Background(), twoQuestions)
+	_, err := ap.Ask(context.Background(), twoQuestions)
 
 	if !errors.Is(err, io.EOF) {
 		t.Errorf("err = %v, want end of input", err)
@@ -85,7 +85,7 @@ func TestAskCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := ap.ask(ctx, twoQuestions); !errors.Is(err, context.Canceled) {
+	if _, err := ap.Ask(ctx, twoQuestions); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
@@ -96,10 +96,10 @@ func TestAskEscapesModelText(t *testing.T) {
 	qs := []askuser.Question{{
 		Question: "Pick\x1b[2J one",
 		Header:   "H\x1b",
-		Options:  []askuser.Option{{Label: "A\x07", Description: "d\u009b"}, {Label: "B\r"}},
+		Options:  []askuser.Choice{{Label: "A\x07", Description: "d\u009b"}, {Label: "B\r"}},
 	}}
 
-	if _, err := ap.ask(context.Background(), qs); err != nil {
+	if _, err := ap.Ask(context.Background(), qs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -118,7 +118,7 @@ func TestAskPromptMatchesQuestionKind(t *testing.T) {
 	out := &promptLog{}
 	ap := activeApprover(newLineReader(strings.NewReader("1\n1\n")), out)
 
-	if _, err := ap.ask(context.Background(), twoQuestions); err != nil {
+	if _, err := ap.Ask(context.Background(), twoQuestions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -139,7 +139,7 @@ func TestQuestionsWhileIdleFailWithoutPrompt(t *testing.T) {
 	out := &promptLog{}
 	ap := newApprover(newLineReader(strings.NewReader("1\n")), out) // no turn runs
 
-	_, err := ap.ask(context.Background(), []askuser.Question{{Question: "Which?", Options: []askuser.Option{{Label: "a"}, {Label: "b"}}}})
+	_, err := ap.Ask(context.Background(), []askuser.Question{{Question: "Which?", Options: []askuser.Choice{{Label: "a"}, {Label: "b"}}}})
 
 	if err == nil || err.Error() != deniedNoTerminal {
 		t.Errorf("err = %v, want %q", err, deniedNoTerminal)

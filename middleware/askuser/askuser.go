@@ -1,7 +1,7 @@
 // Package askuser lets the agent put structured multiple-choice questions to
-// the human. The ask_user tool is answered either by a synchronous callback
-// (Config.Ask) or, without one, by pausing the run with an interrupt that the
-// host answers with Respond (the answers) or Reject (declined).
+// the human. The ask_user tool is answered either by a synchronous Asker
+// (Config.Asker) or, without one, by pausing the run with an interrupt that
+// the host answers with Respond (the answers) or Reject (declined).
 //
 // Questions, options and headers are text written by the model. They are
 // shown to the human as data: control characters other than newline are
@@ -16,6 +16,7 @@ package askuser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -26,6 +27,9 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
+
+// Name is the name of the askuser middleware.
+const Name = "askuser"
 
 // ToolAskUser is the name of the tool the middleware offers.
 const ToolAskUser = "ask_user"
@@ -60,8 +64,8 @@ const (
 	answersTitle = "User answers:"
 )
 
-// Option is one choice of a question.
-type Option struct {
+// Choice is one choice of a question.
+type Choice struct {
 	// Label is the short choice text shown to the user.
 	Label string `json:"label" desc:"Short choice text."`
 	// Description says what choosing the option means.
@@ -76,7 +80,7 @@ type Question struct {
 	Header string `json:"header,omitempty" desc:"Very short label (max 12 chars)."`
 	// Options are the choices, two to four; the user may also answer in
 	// their own words.
-	Options []Option `json:"options" desc:"2-4 choices; the user may also answer in their own words."`
+	Options []Choice `json:"options" desc:"2-4 choices; the user may also answer in their own words."`
 	// MultiSelect allows the user to pick several options.
 	MultiSelect bool `json:"multi_select,omitempty" desc:"Allow several choices."`
 }
@@ -100,47 +104,74 @@ type Answer struct {
 	Other string `json:"other,omitempty"`
 }
 
+// Asker answers questions for the human, synchronously.
+//
+// One host UI object can serve both approvals and questions: pass its
+// approve method to orchestrix.WithApprover and the object itself as
+// Config.Asker.
+type Asker interface {
+	// Ask returns one Answer per question, in order. An error is shown to
+	// the model as a tool error.
+	Ask(ctx context.Context, questions []Question) ([]Answer, error)
+}
+
+// AskerFunc adapts a function to an Asker.
+type AskerFunc func(ctx context.Context, questions []Question) ([]Answer, error)
+
+// Ask calls f.
+func (f AskerFunc) Ask(ctx context.Context, questions []Question) ([]Answer, error) {
+	return f(ctx, questions)
+}
+
 // Config configures the askuser middleware.
 type Config struct {
-	// Ask answers the questions synchronously. It returns one Answer per
-	// question, in order. nil pauses the run with an interrupt instead,
-	// which the host answers with Respond or Reject.
+	// Asker answers the questions synchronously. nil pauses the run with an
+	// interrupt instead, which the host answers with Respond or Reject.
 	//
 	// A subagent cannot pause for a human, so ask_user called at a depth
-	// above zero (inside a subagent) without Ask returns an error result and
-	// raises no interrupt: the agent that spawns subagents must supply Ask
-	// for them to be able to ask.
+	// above zero (inside a subagent) without an Asker returns an error
+	// result and raises no interrupt: the agent that spawns subagents must
+	// supply an Asker for them to be able to ask. An Asker applies at any
+	// depth.
+	//
+	// One host UI object can serve both approvals and questions: pass its
+	// approve method to orchestrix.WithApprover and the object itself as
+	// Asker.
 	//
 	// Parallel subagents may call ask_user at the same time, so Ask must be
 	// safe for concurrent use and should serialise its prompts to the human
 	// itself.
-	Ask func(ctx context.Context, questions []Question) ([]Answer, error)
+	Asker Asker
 	// Prompt is the system prompt segment describing the tool. nil uses
 	// DefaultPrompt; a pointer to "" disables the segment.
 	Prompt *string
 }
 
-// middleware is the askuser middleware. It is immutable after New, so it is
+// Middleware is the askuser middleware. It is immutable after New, so it is
 // safe to share between concurrent runs.
-type middleware struct {
-	cfg    Config
+type Middleware struct {
+	asker  Asker
 	prompt string
 }
 
-// New returns the askuser middleware.
-func New(cfg Config) agent.Middleware {
-	m := &middleware{cfg: cfg, prompt: DefaultPrompt}
+// New returns the askuser middleware. It returns an error when
+// Config.Asker is a nil AskerFunc.
+func New(cfg Config) (*Middleware, error) {
+	if f, ok := cfg.Asker.(AskerFunc); ok && f == nil {
+		return nil, errors.New("askuser: Asker is a nil AskerFunc")
+	}
+	m := &Middleware{asker: cfg.Asker, prompt: DefaultPrompt}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
 	}
-	return m
+	return m, nil
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "askuser" }
+func (m *Middleware) Name() string { return Name }
 
 // Tools implements agent.ToolProvider.
-func (m *middleware) Tools() []tool.Tool {
+func (m *Middleware) Tools() []tool.Tool {
 	return []tool.Tool{tool.New(ToolAskUser,
 		"Ask the user one to four multiple-choice questions when a decision is theirs to make. Each question needs 2-4 options; the user may also answer in their own words.",
 		m.ask,
@@ -153,7 +184,7 @@ func (m *middleware) Tools() []tool.Tool {
 
 // WrapModel implements agent.ModelWrapper. It appends the prompt after the
 // host's system segments, outside the cached prefix.
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if m.prompt != "" {
 		req.Request.System = append(slices.Clone(req.Request.System), m.prompt)
 	}
@@ -192,7 +223,7 @@ func Respond(toolUseID string, answers []Answer) agent.Decision {
 	return agent.Decision{ToolUseID: toolUseID, Type: agent.Respond, Message: string(msg)}
 }
 
-func (m *middleware) ask(ctx context.Context, in Input, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) ask(ctx context.Context, in Input, c *tool.Call) (tool.Result, error) {
 	qs := clean(in.Questions)
 	if err := validate(qs); err != nil {
 		return tool.Errorf("invalid questions: %v", err), nil
@@ -200,15 +231,15 @@ func (m *middleware) ask(ctx context.Context, in Input, c *tool.Call) (tool.Resu
 	if r := c.Resume; r != nil {
 		return resumed(qs, r), nil
 	}
-	if m.cfg.Ask != nil {
-		answers, err := m.cfg.Ask(ctx, qs)
+	if m.asker != nil {
+		answers, err := m.asker.Ask(ctx, qs)
 		if err != nil {
 			return tool.Errorf("could not ask the user: %v", err), nil
 		}
 		return tool.Text(formatAnswers(qs, answers)), nil
 	}
 	if info, _ := agent.Info(ctx); info.Depth > 0 {
-		return tool.Errorf("ask_user cannot pause a subagent for the user's answer: the agent that spawned this one must supply Config.Ask. Decide yourself or report the open question in your result."), nil
+		return tool.Errorf("ask_user cannot pause a subagent for the user's answer: the agent that spawned this one must supply Config.Asker. Decide yourself or report the open question in your result."), nil
 	}
 	return tool.Result{}, &agent.Interrupt{
 		Requests: []agent.ActionRequest{{
@@ -308,7 +339,7 @@ func inline(s string, n int) string {
 }
 
 func hasOption(q Question, label string) bool {
-	return slices.ContainsFunc(q.Options, func(o Option) bool { return inline(o.Label, MaxLabelRunes) == label })
+	return slices.ContainsFunc(q.Options, func(o Choice) bool { return inline(o.Label, MaxLabelRunes) == label })
 }
 
 // clean returns a copy of qs with every text stripped of control characters
@@ -320,10 +351,10 @@ func clean(qs []Question) []Question {
 			Question:    stripControl(q.Question),
 			Header:      stripControl(q.Header),
 			MultiSelect: q.MultiSelect,
-			Options:     make([]Option, len(q.Options)),
+			Options:     make([]Choice, len(q.Options)),
 		}
 		for j, o := range q.Options {
-			out[i].Options[j] = Option{Label: stripControl(o.Label), Description: stripControl(o.Description)}
+			out[i].Options[j] = Choice{Label: stripControl(o.Label), Description: stripControl(o.Description)}
 		}
 	}
 	return out
@@ -376,7 +407,7 @@ func validate(qs []Question) error {
 	return nil
 }
 
-func validateOptions(n int, opts []Option) error {
+func validateOptions(n int, opts []Choice) error {
 	seen := make(map[string]bool, len(opts))
 	for _, o := range opts {
 		switch {

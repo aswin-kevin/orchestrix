@@ -235,7 +235,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		orchestrix.WithMaxTurns(o.maxTurns),
 		orchestrix.WithConfig(func(c *agent.Config) { c.Model = cfg.Model }),
 		orchestrix.WithPlanMode(planmode.Config{}),
-		orchestrix.WithAskUser(askuser.Config{Ask: ap.ask}),
+		orchestrix.WithAskUser(askuser.Config{Asker: ap}),
 	}
 	if o.noShell {
 		ws, err := disk.New(o.dir, disk.Config{})

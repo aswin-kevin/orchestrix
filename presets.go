@@ -236,7 +236,7 @@ func (s *settings) baseStack() []agent.Middleware {
 		stack = s.appendBuilt(stack, "WithWeb", func() (agent.Middleware, error) { return web.New(*s.web) })
 	}
 	if s.askUser != nil {
-		stack = append(stack, askuser.New(*s.askUser))
+		stack = s.appendBuilt(stack, "WithAskUser", func() (agent.Middleware, error) { return askuser.New(*s.askUser) })
 	}
 	if s.tasks != nil {
 		stack = append(stack, s.tasks)
@@ -384,7 +384,7 @@ func WithWeb(cfg web.Config) Option {
 }
 
 // WithAskUser adds ask_user, with which the model puts multiple-choice
-// questions to the human. Without cfg.Ask, a call pauses the run; answer it
+// questions to the human. Without cfg.Asker, a call pauses the run; answer it
 // with askuser.Respond when resuming.
 func WithAskUser(cfg askuser.Config) Option {
 	return func(s *settings) { s.askUser = &cfg }
