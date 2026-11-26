@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/internal/pathutil"
 )
 
 const (
@@ -92,7 +93,7 @@ func (b *Backend) Execute(ctx context.Context, cmd string, opts backend.ExecOpti
 // prepare prefixes cmd with a quoted cd into Root+opts.Dir and clears
 // opts.Dir, which would name a path in the executor's own namespace.
 func (b *Backend) prepare(cmd string, opts backend.ExecOptions) (string, backend.ExecOptions, error) {
-	dir, err := cleanBase(opts.Dir)
+	dir, err := pathutil.CleanBase(opts.Dir)
 	if err != nil {
 		return "", opts, err
 	}
@@ -119,14 +120,6 @@ func (b *Backend) virtual(realPath string) (string, bool) {
 		return realPath[len(b.root):], true
 	}
 	return "", false
-}
-
-// cleanBase cleans a directory argument; empty means the root.
-func cleanBase(p string) (string, error) {
-	if p == "" {
-		return "/", nil
-	}
-	return backend.Clean(p)
 }
 
 // run sends one file-operation script and maps its exit status: the script

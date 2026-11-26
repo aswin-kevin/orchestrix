@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/internal/pathutil"
 )
 
 // mergeLs lists p from the backend serving it, hides entries owned by deeper
@@ -48,7 +49,7 @@ func (c *composite) mergeLs(ctx context.Context, p string) ([]backend.FileInfo, 
 // every mount, newest first. A base at or below a mount is served wholly by
 // that mount.
 func (c *composite) Glob(ctx context.Context, pattern, base string) ([]backend.FileInfo, error) {
-	base, err := cleanBase(base)
+	base, err := pathutil.CleanBase(base)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +114,7 @@ func (c *composite) globMount(ctx context.Context, m mount, rel, abs string, out
 // mount below it; results are ordered by path then line and cut at
 // opts.MaxResults.
 func (c *composite) Grep(ctx context.Context, pattern string, opts backend.GrepOptions) ([]backend.GrepMatch, error) {
-	base, err := cleanBase(opts.Path)
+	base, err := pathutil.CleanBase(opts.Path)
 	if err != nil {
 		return nil, err
 	}

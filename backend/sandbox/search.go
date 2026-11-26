@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/internal/pathutil"
 )
 
 const (
@@ -40,7 +41,7 @@ func (b *Backend) Ls(ctx context.Context, p string) ([]backend.FileInfo, error) 
 // relative pattern is resolved against base; an empty base means the root.
 // Symlinks are not followed or listed.
 func (b *Backend) Glob(ctx context.Context, pattern, base string) ([]backend.FileInfo, error) {
-	clean, err := cleanBase(base)
+	clean, err := pathutil.CleanBase(base)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +63,7 @@ func (b *Backend) Glob(ctx context.Context, pattern, base string) ([]backend.Fil
 // backend. Files over backend.MaxGrepFileBytes and files the sandbox user
 // cannot read are skipped.
 func (b *Backend) Grep(ctx context.Context, pattern string, opts backend.GrepOptions) ([]backend.GrepMatch, error) {
-	clean, err := cleanBase(opts.Path)
+	clean, err := pathutil.CleanBase(opts.Path)
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/internal/pathutil"
 )
 
 const rootPath = "/"
@@ -42,10 +43,6 @@ func New(store Store, namespace string) (*Backend, error) {
 	return &Backend{store: store, namespace: namespace}, nil
 }
 
-func fail(op, p string, sentinel error) error {
-	return fmt.Errorf("kv: %s %s: %w", op, p, sentinel)
-}
-
 // wrap adds the operation and path to a store error, naming the package only
 // when the error does not already (ErrKeyTooLong and the stores' own
 // argument errors do).
@@ -60,13 +57,6 @@ func wrap(op, p string, err error) error {
 // dirPrefix returns the key prefix shared by everything below directory dir.
 func dirPrefix(dir string) string {
 	return strings.TrimSuffix(dir, "/") + "/"
-}
-
-func cleanBase(p string) (string, error) {
-	if p == "" {
-		return rootPath, nil
-	}
-	return backend.Clean(p)
 }
 
 // lookup fetches the file at p; ok is false when there is none.
@@ -141,9 +131,9 @@ func (b *Backend) requireDir(ctx context.Context, op, p string) error {
 	}
 	switch k {
 	case missing:
-		return fail(op, p, backend.ErrNotFound)
+		return pathutil.Fail("kv", op, p, backend.ErrNotFound)
 	case isFile:
-		return fail(op, p, backend.ErrNotDir)
+		return pathutil.Fail("kv", op, p, backend.ErrNotDir)
 	}
 	return nil
 }
@@ -169,14 +159,14 @@ func (b *Backend) Ls(ctx context.Context, p string) ([]backend.FileInfo, error) 
 	if _, ok, err := b.stat(ctx, p); err != nil {
 		return nil, wrap("ls", p, err)
 	} else if ok {
-		return nil, fail("ls", p, backend.ErrNotDir)
+		return nil, pathutil.Fail("kv", "ls", p, backend.ErrNotDir)
 	}
 	infos, err := b.below(ctx, p)
 	if err != nil {
 		return nil, wrap("ls", p, err)
 	}
 	if len(infos) == 0 && p != rootPath {
-		return nil, fail("ls", p, backend.ErrNotFound)
+		return nil, pathutil.Fail("kv", "ls", p, backend.ErrNotFound)
 	}
 	return children(p, infos), nil
 }
@@ -223,12 +213,12 @@ func (b *Backend) load(ctx context.Context, op, p string) (Item, error) {
 			return Item{}, wrap(op, p, err)
 		}
 		if k == isDir {
-			return Item{}, fail(op, p, backend.ErrIsDir)
+			return Item{}, pathutil.Fail("kv", op, p, backend.ErrIsDir)
 		}
-		return Item{}, fail(op, p, backend.ErrNotFound)
+		return Item{}, pathutil.Fail("kv", op, p, backend.ErrNotFound)
 	}
 	if err := backend.CheckReadSize(info.Size); err != nil {
-		return Item{}, fail(op, p, err)
+		return Item{}, pathutil.Fail("kv", op, p, err)
 	}
 	item, err := b.store.Get(ctx, b.namespace, p)
 	if err != nil {
@@ -267,12 +257,12 @@ func (b *Backend) Write(ctx context.Context, p string, content []byte) error {
 		}
 	}
 	if k == isDir {
-		return fail("write", p, backend.ErrIsDir)
+		return pathutil.Fail("kv", "write", p, backend.ErrIsDir)
 	}
 	if blocked, err := b.hasFileAncestor(ctx, p); err != nil {
 		return wrap("write", p, err)
 	} else if blocked {
-		return fail("write", p, backend.ErrNotDir)
+		return pathutil.Fail("kv", "write", p, backend.ErrNotDir)
 	}
 	if err := b.store.Put(ctx, b.namespace, p, content); err != nil {
 		return wrap("write", p, err)
@@ -336,7 +326,7 @@ func (b *Backend) Delete(ctx context.Context, p string) error {
 		return wrap("delete", p, err)
 	}
 	if len(infos) == 0 {
-		return fail("delete", p, backend.ErrNotFound)
+		return pathutil.Fail("kv", "delete", p, backend.ErrNotFound)
 	}
 	keys := make([]string, len(infos))
 	for i, info := range infos {
@@ -357,7 +347,7 @@ func (b *Backend) removeKeys(ctx context.Context, p string, keys []string) error
 // Glob returns the files under base matching pattern, newest first. A relative
 // pattern is resolved against base; an empty base means the root.
 func (b *Backend) Glob(ctx context.Context, pattern, base string) ([]backend.FileInfo, error) {
-	base, err := cleanBase(base)
+	base, err := pathutil.CleanBase(base)
 	if err != nil {
 		return nil, err
 	}
@@ -386,7 +376,7 @@ func (b *Backend) Glob(ctx context.Context, pattern, base string) ([]backend.Fil
 // Grep searches file contents under opts.Path. Files over
 // backend.MaxGrepFileBytes and binary files are skipped.
 func (b *Backend) Grep(ctx context.Context, pattern string, opts backend.GrepOptions) ([]backend.GrepMatch, error) {
-	base, err := cleanBase(opts.Path)
+	base, err := pathutil.CleanBase(opts.Path)
 	if err != nil {
 		return nil, err
 	}

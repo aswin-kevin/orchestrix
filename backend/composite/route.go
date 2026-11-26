@@ -97,14 +97,6 @@ func join(prefix, rel string) string {
 	return prefix + rel
 }
 
-// cleanBase cleans a base directory, defaulting an empty one to the root.
-func cleanBase(p string) (string, error) {
-	if p == "" {
-		return "/", nil
-	}
-	return backend.Clean(p)
-}
-
 // source returns the mount serving the directory p (a zero mount, with an
 // empty prefix, standing for the default backend) and p in its namespace.
 func (c *composite) source(p string) (mount, string) {

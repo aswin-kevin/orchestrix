@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/internal/pathutil"
 )
 
 const rootPath = "/"
@@ -86,10 +87,6 @@ func (b *Backend) hasFileAncestor(p string) bool {
 	return false
 }
 
-func fail(op, p string, sentinel error) error {
-	return fmt.Errorf("backend/memory: %s %s: %w", op, p, sentinel)
-}
-
 // Ls lists the direct children of the directory at p, sorted by name.
 func (b *Backend) Ls(_ context.Context, p string) ([]backend.FileInfo, error) {
 	p, err := backend.Clean(p)
@@ -100,9 +97,9 @@ func (b *Backend) Ls(_ context.Context, p string) ([]backend.FileInfo, error) {
 	defer b.mu.RUnlock()
 	switch b.kindOf(p) {
 	case missing:
-		return nil, fail("ls", p, backend.ErrNotFound)
+		return nil, pathutil.Fail("backend/memory", "ls", p, backend.ErrNotFound)
 	case isFile:
-		return nil, fail("ls", p, backend.ErrNotDir)
+		return nil, pathutil.Fail("backend/memory", "ls", p, backend.ErrNotDir)
 	}
 	return b.children(p), nil
 }
@@ -155,12 +152,12 @@ func (b *Backend) load(op, p string) (file, error) {
 	f, ok := b.files[p]
 	if !ok {
 		if b.kindOf(p) == isDir {
-			return file{}, fail(op, p, backend.ErrIsDir)
+			return file{}, pathutil.Fail("backend/memory", op, p, backend.ErrIsDir)
 		}
-		return file{}, fail(op, p, backend.ErrNotFound)
+		return file{}, pathutil.Fail("backend/memory", op, p, backend.ErrNotFound)
 	}
 	if err := backend.CheckReadSize(int64(len(f.content))); err != nil {
-		return file{}, fail(op, p, err)
+		return file{}, pathutil.Fail("backend/memory", op, p, err)
 	}
 	return f, nil
 }
@@ -174,10 +171,10 @@ func (b *Backend) Write(_ context.Context, p string, content []byte) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.kindOf(p) == isDir {
-		return fail("write", p, backend.ErrIsDir)
+		return pathutil.Fail("backend/memory", "write", p, backend.ErrIsDir)
 	}
 	if b.hasFileAncestor(p) {
-		return fail("write", p, backend.ErrNotDir)
+		return pathutil.Fail("backend/memory", "write", p, backend.ErrNotDir)
 	}
 	b.files[p] = file{content: slices.Clone(content), modTime: b.now()}
 	return nil
@@ -236,7 +233,7 @@ func (b *Backend) Delete(_ context.Context, p string) error {
 	defer b.mu.Unlock()
 	switch b.kindOf(p) {
 	case missing:
-		return fail("delete", p, backend.ErrNotFound)
+		return pathutil.Fail("backend/memory", "delete", p, backend.ErrNotFound)
 	case isFile:
 		delete(b.files, p)
 		return nil
@@ -253,7 +250,7 @@ func (b *Backend) Delete(_ context.Context, p string) error {
 // Glob returns the files under base matching pattern, newest first. A relative
 // pattern is resolved against base; an empty base means the root.
 func (b *Backend) Glob(_ context.Context, pattern, base string) ([]backend.FileInfo, error) {
-	base, err := cleanBase(base)
+	base, err := pathutil.CleanBase(base)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +275,7 @@ func (b *Backend) Glob(_ context.Context, pattern, base string) ([]backend.FileI
 
 // Grep searches file contents under opts.Path.
 func (b *Backend) Grep(_ context.Context, pattern string, opts backend.GrepOptions) ([]backend.GrepMatch, error) {
-	base, err := cleanBase(opts.Path)
+	base, err := pathutil.CleanBase(opts.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -307,20 +304,13 @@ func (b *Backend) Grep(_ context.Context, pattern string, opts backend.GrepOptio
 	return grepper.Results(), nil
 }
 
-func cleanBase(p string) (string, error) {
-	if p == "" {
-		return rootPath, nil
-	}
-	return backend.Clean(p)
-}
-
 // requireDir fails unless p is an existing directory. Callers must hold b.mu.
 func (b *Backend) requireDir(op, p string) error {
 	switch b.kindOf(p) {
 	case missing:
-		return fail(op, p, backend.ErrNotFound)
+		return pathutil.Fail("backend/memory", op, p, backend.ErrNotFound)
 	case isFile:
-		return fail(op, p, backend.ErrNotDir)
+		return pathutil.Fail("backend/memory", op, p, backend.ErrNotDir)
 	}
 	return nil
 }
