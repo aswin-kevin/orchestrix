@@ -205,9 +205,12 @@ type Config struct {
 	// threadID is the thread of the run that started the task, and rec is
 	// built from the task (its identity and the episode's outcome, capped
 	// as records are) with Notified false; it is not the record in any
-	// State. It runs on the goroutine that watched the episode, after the
-	// outcome is published (for a cancel, on the canceller's), so it must
-	// not block; it may call Resolve. ctx is the context the episode was
+	// State. It runs after the outcome is published, on the goroutine that
+	// watched the episode, or for a cancelled waiting task on a goroutine
+	// of its own, so it should not block: a slow one delays the task's
+	// next report, not cancel_task or Close. It may call Resolve. A task
+	// stopped as it started (Close raced start_task), which the parent
+	// never recorded, is not reported. ctx is the context the episode was
 	// started from, without its cancellation: the start_task or update_task
 	// call's, carrying the parent run's agent.Info, or the ctx given to
 	// Resolve, which may carry none. A panic is recovered and logged with
@@ -546,6 +549,9 @@ func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
 		case r.Status == StatusWaiting:
 			notices = append(notices, notification(*r))
 			r.Notified = true
+			if j := m.jobs.Get(r.ThreadID, r.ID); j != nil {
+				j.Handle.sawWait()
+			}
 		default:
 			notices = append(notices, notification(*r))
 			m.markNotified(r)
@@ -695,6 +701,12 @@ func (m *Middleware) endNested(ctx context.Context, s *state.State, threadID str
 		m.jobs.StopAndForget(ctx, threadID, resumed, DefaultStopWait, func() {
 			m.updateRecords(s, threadID, func(r *TaskRecord) {
 				if slices.Contains(resumed, r.ID) {
+					// A decision that had claimed the task may not have
+					// committed its episode: the record would still
+					// wait. Either way the task is stopped for good.
+					if !r.terminal() {
+						r.Status, r.Pending, r.Ended = StatusCancelled, nil, time.Now()
+					}
 					m.markNotified(r)
 				}
 			})
@@ -725,12 +737,14 @@ func (m *Middleware) cancelWaiting(r *TaskRecord) (list []*jobs.Job[*task], ok b
 // stopWaiting calls Stop on the Handles of cancelled waiting tasks, all at
 // once, each bounded by DefaultStopWait or ctx's deadline when that comes
 // sooner: nothing runs, but the runner may release what it holds for the
-// task. Each task is then reported to Config.OnSettled as cancelled.
+// task. Each task is then reported to Config.OnSettled as cancelled, on a
+// goroutine of its own: a slow OnSettled delays neither the caller nor the
+// other stops.
 func stopWaiting(ctx context.Context, list []*jobs.Job[*task]) {
 	var wg sync.WaitGroup
 	for _, j := range list {
 		wg.Go(func() {
-			defer j.Handle.settledCancelled()
+			defer func() { go j.Handle.settledCancelled() }()
 			h := j.Handle.handle()
 			if h == nil {
 				return

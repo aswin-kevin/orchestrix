@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -837,5 +838,73 @@ func TestRestartOfForgottenJobIsStopped(t *testing.T) {
 	}
 	if !j.Ended() || !j.Stopped() {
 		t.Fatalf("the restarted episode: ended %v stopped %v; want it stopped", j.Ended(), j.Stopped())
+	}
+}
+
+// finishedCount returns how many times id is in thread's finished list.
+func finishedCount[H Handle](m *Manager[H], thread, id string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	if t, ok := m.threads[thread]; ok {
+		for _, f := range t.finished {
+			if f == id {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func TestRestartBeforeWatcherRecordsEnd(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	for range 20 {
+		m := NewManager[*episodic]("x_", Limits{MaxRunning: 2, MaxFinished: 5})
+		j, e := startEpisodic(t, m, "t")
+		for range 10 {
+			runtime.Gosched() // the watcher now waits on the first episode
+		}
+		ch, _ := m.Changed("t")
+		// The episode ends and the job is restarted at once, before its
+		// watcher (on the only P) records the end.
+		e.end()
+		if _, err := m.Restart("t", j.ID, e.rearm); err != nil {
+			t.Fatalf("Restart: %v", err)
+		}
+		for range 10 {
+			runtime.Gosched() // let the old watcher run
+		}
+		time.Sleep(time.Millisecond)
+		if n := finishedCount(m, "t", j.ID); n != 0 {
+			t.Fatalf("the running job is %d times in the finished list", n)
+		}
+		select {
+		case <-ch:
+			t.Fatal("Changed fired for an episode Restart had already taken")
+		default:
+		}
+		e.end()
+		waitFor(t, ch)
+		if n := finishedCount(m, "t", j.ID); n != 1 {
+			t.Fatalf("the ended job is %d times in the finished list, want 1", n)
+		}
+	}
+}
+
+func TestFailedRestartBeforeWatcherRecordsEnd(t *testing.T) {
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	m := NewManager[*episodic]("x_", Limits{MaxRunning: 2, MaxFinished: 5})
+	j, e := startEpisodic(t, m, "t")
+	for range 10 {
+		runtime.Gosched()
+	}
+	ch, _ := m.Changed("t")
+	e.end()
+	if _, err := m.Restart("t", j.ID, func() error { return errors.New("no") }); err == nil {
+		t.Fatal("Restart succeeded")
+	}
+	waitFor(t, ch)
+	if n := finishedCount(m, "t", j.ID); n != 1 {
+		t.Fatalf("the ended job is %d times in the finished list, want 1", n)
 	}
 }

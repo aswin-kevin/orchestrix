@@ -92,6 +92,12 @@ type Job[H Handle] struct {
 	// job again: the job then holds a reservation instead of counting as
 	// running, and no other Restart may take it.
 	restarting bool
+	// episode counts the times Restart took the job, under the Manager's
+	// lock. A watcher records the end of the episode it was started for
+	// only while the count is unchanged: a Restart that took the job
+	// before that watcher ran (its Done was already closed) owns the job
+	// from then on.
+	episode uint64
 }
 
 // Ended reports whether the job's Done channel is closed.
@@ -293,7 +299,7 @@ func (m *Manager[H]) Start(threadID string, recordedIDs []string, start func() (
 	j := &Job[H]{ID: m.prefix + strconv.Itoa(n), ThreadID: threadID, Started: time.Now(), Handle: h}
 	t.jobs[j.ID] = j
 	m.watchers.Add(1)
-	go m.watch(t, j)
+	go m.watch(t, j, j.episode)
 	closed := m.closed
 	m.mu.Unlock()
 	if closed {
@@ -347,6 +353,7 @@ func (m *Manager[H]) Restart(threadID, id string, start func() error) (*Job[H], 
 		t.finished = slices.Delete(t.finished, at, at+1)
 	}
 	j.restarting = true
+	j.episode++ // the ended episode's watcher, if still pending, stands down
 	t.starting++
 	m.starting.Add(1)
 	m.mu.Unlock()
@@ -359,6 +366,10 @@ func (m *Manager[H]) Restart(threadID, id string, start func() error) (*Job[H], 
 			if at >= 0 {
 				t.finished = slices.Insert(t.finished, min(at, len(t.finished)), id)
 				t.trim(m.limits.MaxFinished, m.pinned)
+			} else if t.jobs[id] == j {
+				// The ended episode's watcher stood down before recording
+				// it: record it now, as it would have.
+				m.recordEnd(t, j)
 			}
 			m.mu.Unlock()
 		}
@@ -388,7 +399,7 @@ func (m *Manager[H]) Restart(threadID, id string, start func() error) (*Job[H], 
 	j.stopped.Store(false)
 	j.notified.Store(false)
 	m.watchers.Add(1)
-	go m.watch(t, j)
+	go m.watch(t, j, j.episode)
 	closed := m.closed
 	m.mu.Unlock()
 	if closed {
@@ -435,7 +446,7 @@ func (m *Manager[H]) Adopt(threadID, id string, started time.Time, h H) (*Job[H]
 	t.next = max(t.next, m.highestNumber([]string{id}))
 	t.jobs[id] = j
 	m.watchers.Add(1)
-	go m.watch(t, j)
+	go m.watch(t, j, j.episode)
 	return j, nil
 }
 
@@ -450,17 +461,25 @@ func (m *Manager[H]) highestNumber(ids []string) int {
 	return highest
 }
 
-// watch waits for j to end, then wakes the thread's sleepers and forgets the
-// oldest ended jobs beyond MaxFinished. A job already dropped (its nested run
-// ended) needs neither.
-func (m *Manager[H]) watch(t *thread[H], j *Job[H]) {
+// watch waits for episode of j to end, then records its end (see
+// recordEnd). A job already dropped (its nested run ended) needs nothing,
+// and neither does one that Restart took again meanwhile (its episode
+// changed): the job runs again, and its new watcher records its next end.
+func (m *Manager[H]) watch(t *thread[H], j *Job[H], episode uint64) {
 	defer m.watchers.Done()
 	<-j.Handle.Done()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if t.jobs[j.ID] != j {
+	if t.jobs[j.ID] != j || j.episode != episode {
 		return
 	}
+	m.recordEnd(t, j)
+}
+
+// recordEnd adds the ended job j to t's finished list, forgets the oldest
+// ended jobs beyond MaxFinished and wakes the thread's sleepers. The caller
+// holds m.mu.
+func (m *Manager[H]) recordEnd(t *thread[H], j *Job[H]) {
 	t.finished = append(t.finished, j.ID)
 	t.trim(m.limits.MaxFinished, m.pinned)
 	t.lastFinished = j.ID

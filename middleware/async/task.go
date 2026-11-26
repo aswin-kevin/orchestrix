@@ -79,6 +79,14 @@ type task struct {
 	// start_task, at a follow-up and at each turn of a run of the parent's
 	// thread. A host's decision passes it on (see Middleware.Resolve).
 	parentMode permission.Mode
+	// hold keeps the settled function's reports in held while start_task
+	// has not yet decided whether the parent records the task (see
+	// holdReports).
+	hold bool
+	held []func()
+	// episode counts the episodes started after the first; waitSeen is the
+	// episode whose wait the model was last told of (see sawWait).
+	episode, waitSeen int
 }
 
 // settledFunc is told that an episode of t stopped with out (ended is when),
@@ -180,22 +188,55 @@ func (t *task) follow(h Handle, done chan struct{}, ctx context.Context) {
 		out = Outcome{Status: StatusFailed, Error: "the runner reported no outcome"}
 	}
 	out, ended := t.finish(out, done)
-	t.mu.Lock()
-	settled := t.settled
-	t.mu.Unlock()
-	if settled != nil {
-		settled(ctx, t, out, ended)
-	}
+	t.report(ctx, out, ended)
 }
 
 // settledCancelled tells the settled function that the waiting task was
 // cancelled (see cancelWaiting), on the context of its last episode.
 func (t *task) settledCancelled() {
 	t.mu.Lock()
-	settled, ctx, out, ended := t.settled, t.epCtx, t.out, t.ended
+	ctx, out, ended := t.epCtx, t.out, t.ended
+	t.mu.Unlock()
+	t.report(ctx, out, ended)
+}
+
+// report tells the settled function, if any, that an episode stopped with
+// out at ended, or keeps the report while reports are held.
+func (t *task) report(ctx context.Context, out Outcome, ended time.Time) {
+	t.mu.Lock()
+	settled := t.settled
+	if f := settled; f != nil && t.hold {
+		t.held = append(t.held, func() { f(ctx, t, out, ended) })
+		settled = nil
+	}
 	t.mu.Unlock()
 	if settled != nil {
 		settled(ctx, t, out, ended)
+	}
+}
+
+// holdReports keeps the settled function's reports until releaseReports.
+func (t *task) holdReports() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.hold = true
+}
+
+// releaseReports ends holdReports: the reports kept meanwhile are made
+// when send is set and dropped otherwise.
+func (t *task) releaseReports(send bool) {
+	t.mu.Lock()
+	held := t.held
+	t.hold, t.held = false, nil
+	t.mu.Unlock()
+	if send && len(held) > 0 {
+		// On a goroutine, as the watcher's would have been: the caller
+		// is the start_task call.
+		go func() {
+			for _, f := range held {
+				f()
+			}
+		}()
 	}
 }
 
@@ -316,10 +357,27 @@ func (t *task) advance(caller context.Context, claim func() (func() (Handle, err
 	t.mu.Lock()
 	done := make(chan struct{})
 	t.h, t.done, t.state, t.epCtx = h, done, episodeRunning, epCtx
+	t.episode++
 	t.out, t.ended = Outcome{}, time.Time{}
 	t.mu.Unlock()
 	go t.follow(h, done, epCtx)
 	return nil
+}
+
+// sawWait records that the model was told the current episode waits.
+func (t *task) sawWait() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.waitSeen = t.episode
+}
+
+// waitUnseen reports whether the episode the model was last told waits is
+// not the current one: a decision resumed the task since, and a wait now is
+// a new one, even on the same tool call.
+func (t *task) waitUnseen() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.waitSeen != t.episode
 }
 
 // waiting reports whether the task's episode stopped waiting for a

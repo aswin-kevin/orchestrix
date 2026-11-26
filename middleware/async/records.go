@@ -116,9 +116,9 @@ func (m *Middleware) updateRecords(s *state.State, threadID string, edit func(*T
 // record whose job the middleware no longer holds stays waiting: it is not
 // lost, as nothing was running. A waiting record whose task was resumed by a
 // decision (see Resolve) is running again, and once its task stopped anew
-// (it ended, was cancelled, or waits for another decision) it is to be
-// announced again: Notified, which said the model was told it waits, is
-// cleared.
+// (it ended, was cancelled, or waits again, even on the same tool call) it
+// is to be announced again: Notified, which said the model was told it
+// waits, is cleared.
 func (m *Middleware) refresh(r *TaskRecord) {
 	if r.terminal() {
 		return
@@ -139,7 +139,7 @@ func (m *Middleware) refresh(r *TaskRecord) {
 		return
 	}
 	out, ended = m.stoppedOutcome(j, out, ended)
-	if r.Status == StatusWaiting && (out.Status != StatusWaiting || !samePending(r.Pending, out.Pending)) {
+	if r.Status == StatusWaiting && (out.Status != StatusWaiting || !samePending(r.Pending, out.Pending) || j.Handle.waitUnseen()) {
 		r.Notified = false
 	}
 	applyOutcome(r, out, ended)

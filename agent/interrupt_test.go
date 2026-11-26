@@ -803,3 +803,34 @@ func TestResumedRunEventsTurnAndInvalidResumeTime(t *testing.T) {
 		t.Fatalf("invalid resume: final %+v, Time %v; want invalid_resume with a Time", bad, events[0].Time)
 	}
 }
+
+func TestCheckDecisions(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "p1", Name: "pause_once"}}})
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{pauseOnceTool(newInfoLog())}})
+	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	if final.Reason != ReasonInterrupted {
+		t.Fatalf("final = %+v, want interrupted", final)
+	}
+	s := final.State
+	if err := CheckDecisions(s, []Decision{{ToolUseID: "p1", Type: Approve}}); err != nil {
+		t.Fatalf("a valid decision = %v", err)
+	}
+	if err := CheckDecisions(s, nil); !errors.Is(err, ErrMissingDecision) {
+		t.Fatalf("no decision = %v, want ErrMissingDecision", err)
+	}
+	if err := CheckDecisions(s, []Decision{{ToolUseID: "p1", Type: Approve}, {ToolUseID: "p1", Type: Approve}}); err == nil {
+		t.Fatal("a duplicate decision was accepted")
+	}
+	if err := CheckDecisions(s, []Decision{{ToolUseID: "nope", Type: Approve}}); err == nil {
+		t.Fatal("a decision for no pending call was accepted")
+	}
+	if err := CheckDecisions(state.New(), nil); !errors.Is(err, ErrNoPendingInterrupt) {
+		t.Fatalf("no interrupt = %v, want ErrNoPendingInterrupt", err)
+	}
+	// The interrupted turn is gone from the history: no resume can start.
+	gone := s.Clone()
+	gone.SetMessages(nil)
+	if err := CheckDecisions(gone, []Decision{{ToolUseID: "p1", Type: Approve}}); err == nil {
+		t.Fatal("decisions for a turn missing from the history were accepted")
+	}
+}

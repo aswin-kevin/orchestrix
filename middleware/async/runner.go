@@ -169,7 +169,12 @@ type Continuer interface {
 	// end with it (as for Runner.Start). It also carries the parent run's
 	// current permission mode (FollowUpMode): the episode MUST run in
 	// permission.Stricter of that mode and the task's own, so a parent
-	// that entered plan mode cannot resume a task that writes.
+	// that entered plan mode cannot resume a task that writes. A Handle
+	// that Reattacher.Attach returned for an ended record may stand on a
+	// history that still holds a pending turn (the record alone cannot
+	// tell a task cancelled while it waited from any other cancelled
+	// one): Continue must abandon that turn, as agent.Agent.Run does,
+	// and never run its pending actions.
 	Continue(ctx context.Context, message string) (Handle, error)
 }
 
@@ -663,14 +668,13 @@ func (t *localTask) Resolve(ctx context.Context, decisions []agent.Decision) (Ha
 		t.mu.Unlock()
 		return nil, ErrNotWaiting
 	}
-	intr, ok := agent.Pending(t.last)
-	if !ok {
+	if _, ok := agent.Pending(t.last); !ok {
 		t.mu.Unlock()
 		return nil, fmt.Errorf("%w: the task's thread holds no pending action", ErrNotWaiting)
 	}
-	if err := checkDecisions(intr, decisions); err != nil {
+	if err := agent.CheckDecisions(t.last, decisions); err != nil {
 		t.mu.Unlock()
-		return nil, err
+		return nil, fmt.Errorf("async: %w", err)
 	}
 	t.continued = true
 	last, version := t.last, t.version
@@ -688,35 +692,6 @@ func (t *localTask) Resolve(ctx context.Context, decisions []agent.Decision) (Ha
 		return nil, err
 	}
 	return h, nil
-}
-
-// checkDecisions reports an error unless decisions answer every request of
-// intr exactly once, each with a type the request allows, as
-// agent.Agent.Resume requires.
-func checkDecisions(intr *agent.Interrupt, decisions []agent.Decision) error {
-	requests := make(map[string]agent.ActionRequest, len(intr.Requests))
-	for _, req := range intr.Requests {
-		requests[req.ToolUseID] = req
-	}
-	seen := make(map[string]bool, len(decisions))
-	for _, d := range decisions {
-		req, ok := requests[d.ToolUseID]
-		switch {
-		case !ok:
-			return fmt.Errorf("async: no pending action for tool call %q", d.ToolUseID)
-		case seen[d.ToolUseID]:
-			return fmt.Errorf("async: more than one decision for tool call %q", d.ToolUseID)
-		case !slices.Contains(req.Allowed, d.Type):
-			return fmt.Errorf("async: %w: %q for tool call %q (allowed: %v)", agent.ErrInvalidDecision, d.Type, d.ToolUseID, req.Allowed)
-		}
-		seen[d.ToolUseID] = true
-	}
-	for id := range requests {
-		if !seen[id] {
-			return fmt.Errorf("async: %w: tool call %q", agent.ErrMissingDecision, id)
-		}
-	}
-	return nil
 }
 
 // localOutcome maps a subagent's Final to the task's outcome. A run that

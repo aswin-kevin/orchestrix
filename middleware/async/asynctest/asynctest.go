@@ -222,7 +222,13 @@ func testStopCancels(t *testing.T, h async.Handle) {
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Go(func() {
-			<-h.Done()
+			// Bounded, so a Handle whose Done never closes fails below
+			// with its own message instead of hanging the test.
+			select {
+			case <-h.Done():
+			case <-time.After(StopTimeout):
+				return
+			}
 			_, _ = h.Outcome()
 			_ = h.Progress()
 		})

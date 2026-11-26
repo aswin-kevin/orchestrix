@@ -281,6 +281,19 @@ func checkEditedInput(t tool.Tool, in json.RawMessage) error {
 	return tool.CheckInput(t, in)
 }
 
+// CheckDecisions reports whether decisions can resume the interrupted run
+// whose State is s, as Resume and ResumeWith check them, without starting
+// anything: ErrNoPendingInterrupt when s holds no interrupted run, an error
+// when the interrupted turn is no longer in s's history, and an error for
+// decisions that do not answer every pending action exactly once with a
+// type its request allows (wrapping ErrMissingDecision or
+// ErrInvalidDecision when that is the cause). nil means a resume with
+// decisions starts.
+func CheckDecisions(s *state.State, decisions []Decision) error {
+	_, err := newResumption(s, decisions)
+	return err
+}
+
 // newResumption validates a Resume request against the pending record in s.
 func newResumption(s *state.State, decisions []Decision) (*resumption, error) {
 	if s == nil {

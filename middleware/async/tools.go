@@ -127,6 +127,9 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 	startMode := info.Agent.PermissionMode(c.State)
 	t := newTask(ctx)
 	t.setParentMode(startMode)
+	// Reports wait until the parent records the task: one stopped as it
+	// started is never recorded, so never reported.
+	t.holdReports()
 	j, err := m.jobs.Start(c.ThreadID, recordedIDs(c.State), func() (*task, error) { return t, nil })
 	var limit *jobs.LimitError
 	switch {
@@ -157,12 +160,14 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 		// Close came while the Runner started the task, and attach
 		// stopped it; as for a failed start, this result is all there is.
 		m.jobs.MarkNotified(c.ThreadID, j.ID)
+		t.releaseReports(false)
 		return tool.Errorf("background tasks are shut down; task %s was stopped as it started", j.ID), nil
 	}
 	addRecord(c.State, TaskRecord{
 		ID: j.ID, ThreadID: c.ThreadID, TaskThreadID: taskThread, SubagentType: in.SubagentType, Description: in.Description,
 		StartMode: startMode, Status: StatusRunning, Started: j.Started,
 	})
+	t.releaseReports(true)
 	return tool.Text(fmt.Sprintf("Started background task %s (%s). You will be notified when it finishes; use %s to see its progress.",
 		j.ID, in.SubagentType, ToolCheck)), nil
 }
