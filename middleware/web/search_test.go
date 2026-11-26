@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -440,10 +441,10 @@ func TestSearchToolFormatsAndClamps(t *testing.T) {
 func TestSearchToolAttributes(t *testing.T) {
 	tl := searchTool(&fakeBackend{}, false)
 	in := json.RawMessage(`{"query":"find me"}`)
-	if isReadOnly(tl, in) || !isConcurrent(tl, in) {
-		t.Fatalf("readOnly = %v, concurrent = %v", isReadOnly(tl, in), isConcurrent(tl, in))
+	if testutil.IsReadOnly(tl, in) || !isConcurrent(tl, in) {
+		t.Fatalf("readOnly = %v, concurrent = %v", testutil.IsReadOnly(tl, in), isConcurrent(tl, in))
 	}
-	if !isReadOnly(searchTool(&fakeBackend{}, true), in) {
+	if !testutil.IsReadOnly(searchTool(&fakeBackend{}, true), in) {
 		t.Fatal("ReadOnly config not honoured")
 	}
 	if got := searchSubject(in); got != "find me" {

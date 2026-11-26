@@ -550,7 +550,7 @@ func TestToolIsConcurrentAndAllowed(t *testing.T) {
 	if !isConcurrent(task, in) {
 		t.Fatal("task tool is not concurrency-safe")
 	}
-	if d := selfCheck(task, t.Context(), in, permission.Context{}); d.Behavior != permission.Allow {
+	if d := testutil.SelfCheck(task, t.Context(), in, permission.Context{}); d.Behavior != permission.Allow {
 		t.Fatalf("task permission = %+v, want allowed", d)
 	}
 }
@@ -622,14 +622,4 @@ func TestTaskToolInDontAskMode(t *testing.T) {
 func isConcurrent(t tool.Tool, in json.RawMessage) bool {
 	c, ok := tool.As[tool.ConcurrencySafer](t)
 	return ok && c.ConcurrencySafe(in)
-}
-
-// selfCheck is t's own permission verdict, found with tool.As; the zero
-// Decision when t has none.
-func selfCheck(t tool.Tool, ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision {
-	c, ok := tool.As[tool.PermissionChecker](t)
-	if !ok {
-		return permission.Decision{}
-	}
-	return c.CheckPermission(ctx, in, pc)
 }

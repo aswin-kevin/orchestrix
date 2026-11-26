@@ -1,12 +1,16 @@
 package testutil
 
 import (
+	"context"
+	"encoding/json"
 	"os/exec"
 	"runtime"
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/backend/kv"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // RequireUnixShell skips t on Windows, and wherever sh is not on PATH. The
@@ -42,4 +46,20 @@ func MemoryStore(t testing.TB) *kv.MemoryStore {
 		t.Fatalf("kv.NewMemoryStore: %v", err)
 	}
 	return s
+}
+
+// IsReadOnly reports whether tool.As finds t read-only for input in.
+func IsReadOnly(t tool.Tool, in json.RawMessage) bool {
+	r, ok := tool.As[tool.ReadOnlyer](t)
+	return ok && r.ReadOnly(in)
+}
+
+// SelfCheck is t's own permission verdict, found with tool.As; the zero
+// Decision when t has none.
+func SelfCheck(t tool.Tool, ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision {
+	c, ok := tool.As[tool.PermissionChecker](t)
+	if !ok {
+		return permission.Decision{}
+	}
+	return c.CheckPermission(ctx, in, pc)
 }

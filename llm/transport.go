@@ -125,11 +125,8 @@ func (t *Transport) Fetch(ctx context.Context, build func() (*http.Request, erro
 	idle.resume()
 	body, err := io.ReadAll(idleReader{resp.Body, idle})
 	if err != nil {
-		if cause := idleCause(ctx); cause != nil {
+		if cause := streamReadError(ctx, nil); cause != nil {
 			return nil, cause
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
 		}
 		return nil, t.Redact(fmt.Errorf("llm: read response body: %w", err))
 	}

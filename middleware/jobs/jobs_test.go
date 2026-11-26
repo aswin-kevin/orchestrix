@@ -15,6 +15,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
@@ -242,8 +243,8 @@ func TestCancelJobKillsJob(t *testing.T) {
 func TestCancelJobAllowsItself(t *testing.T) {
 	m := mustNew(t, Config{})
 	for _, tl := range m.Tools() {
-		d := selfCheck(tl, t.Context(), json.RawMessage(`{}`), permission.Context{})
-		readOnly := isReadOnly(tl, json.RawMessage(`{}`))
+		d := testutil.SelfCheck(tl, t.Context(), json.RawMessage(`{}`), permission.Context{})
+		readOnly := testutil.IsReadOnly(tl, json.RawMessage(`{}`))
 		switch tl.Name() {
 		case ToolCancel:
 			if d.Behavior != permission.Allow || readOnly {
@@ -442,26 +443,10 @@ func TestNotificationIsMarkedInjected(t *testing.T) {
 	}
 }
 
-// isReadOnly reports whether tool.As finds t read-only for input in.
-func isReadOnly(t tool.Tool, in json.RawMessage) bool {
-	r, ok := tool.As[tool.ReadOnlyer](t)
-	return ok && r.ReadOnly(in)
-}
-
 // isConcurrent reports whether tool.As finds t concurrency-safe for input in.
 func isConcurrent(t tool.Tool, in json.RawMessage) bool {
 	c, ok := tool.As[tool.ConcurrencySafer](t)
 	return ok && c.ConcurrencySafe(in)
-}
-
-// selfCheck is t's own permission verdict, found with tool.As; the zero
-// Decision when t has none.
-func selfCheck(t tool.Tool, ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision {
-	c, ok := tool.As[tool.PermissionChecker](t)
-	if !ok {
-		return permission.Decision{}
-	}
-	return c.CheckPermission(ctx, in, pc)
 }
 
 func TestCancelJobRecordsCancelled(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
@@ -67,7 +68,7 @@ func TestToolAdapterSchemaAndDescription(t *testing.T) {
 	if r, ok := tool.As[tool.RawInputer](titled); !ok || !r.AcceptsRawInput() {
 		t.Fatal("MCP tools must accept raw input")
 	}
-	if isReadOnly(titled, nil) || isConcurrent(titled, nil) {
+	if testutil.IsReadOnly(titled, nil) || isConcurrent(titled, nil) {
 		t.Fatal("MCP tools must not be read-only or concurrent by default")
 	}
 	if n := len(findTool(t, tools, "mcp__srv__wordy").Description()); n != MaxDescriptionBytes {
@@ -369,10 +370,10 @@ func TestMCPToolAsksByDefault(t *testing.T) {
 	cfg.TrustReadOnlyHints = true
 	trusted := connectMiddleware(t, cfg)
 	peek := findTool(t, trusted.DynamicTools(), "mcp__trusted__peek")
-	if !isReadOnly(peek, nil) || !isConcurrent(peek, nil) {
+	if !testutil.IsReadOnly(peek, nil) || !isConcurrent(peek, nil) {
 		t.Fatal("trusted readOnlyHint must make the tool read-only and concurrent")
 	}
-	if isReadOnly(findTool(t, trusted.DynamicTools(), "mcp__trusted__echo"), nil) {
+	if testutil.IsReadOnly(findTool(t, trusted.DynamicTools(), "mcp__trusted__echo"), nil) {
 		t.Fatal("a tool without the hint must not be read-only")
 	}
 	final := runAgent(t, trusted, agent.Config{Provider: call("mcp__trusted__peek")}, nil)
@@ -504,12 +505,6 @@ func sentCount(f *fakeTransport, method string) int {
 		}
 	}
 	return n
-}
-
-// isReadOnly reports whether tool.As finds t read-only for input in.
-func isReadOnly(t tool.Tool, in json.RawMessage) bool {
-	r, ok := tool.As[tool.ReadOnlyer](t)
-	return ok && r.ReadOnly(in)
 }
 
 // isConcurrent reports whether tool.As finds t concurrency-safe for input in.

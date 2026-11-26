@@ -13,6 +13,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	filecp "github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/internal/summary"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
@@ -97,7 +98,7 @@ func TestSkillToolLoadsBody(t *testing.T) {
 		t.Fatalf("Loaded = %v, want [pdf]", got)
 	}
 	tl := toolNamed(t, m, ToolSkill)
-	if !isReadOnly(tl, nil) || !isConcurrent(tl, nil) {
+	if !testutil.IsReadOnly(tl, nil) || !isConcurrent(tl, nil) {
 		t.Fatal("the skill tool must be read-only and concurrent")
 	}
 }
@@ -668,12 +669,6 @@ func TestLegacyStateRelocksNothing(t *testing.T) {
 	if !deferred.Unlocked(s, "only_a") || !deferred.Unlocked(s, "mcp__x__q") {
 		t.Fatal("a State without the pinned_unlocks key must keep its unlocks")
 	}
-}
-
-// isReadOnly reports whether tool.As finds t read-only for input in.
-func isReadOnly(t tool.Tool, in json.RawMessage) bool {
-	r, ok := tool.As[tool.ReadOnlyer](t)
-	return ok && r.ReadOnly(in)
 }
 
 // isConcurrent reports whether tool.As finds t concurrency-safe for input in.

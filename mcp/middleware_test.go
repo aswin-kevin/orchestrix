@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
@@ -183,7 +184,7 @@ func TestResourceTools(t *testing.T) {
 	}
 	list, read := tools[0], tools[1]
 	for _, tl := range tools {
-		if !isReadOnly(tl, nil) || !isConcurrent(tl, nil) {
+		if !testutil.IsReadOnly(tl, nil) || !isConcurrent(tl, nil) {
 			t.Fatalf("%s must be read-only and concurrent", tl.Name())
 		}
 	}

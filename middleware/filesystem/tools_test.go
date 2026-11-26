@@ -12,6 +12,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -374,10 +375,10 @@ func TestExecuteTimeoutCappedAndSubject(t *testing.T) {
 	if got := tl.(tool.Subjecter).Subject(raw); got != "ls -l" {
 		t.Fatalf("Subject = %q", got)
 	}
-	if isReadOnly(tl, raw) {
+	if testutil.IsReadOnly(tl, raw) {
 		t.Fatal("execute must not be read-only")
 	}
-	if d := selfCheck(tl, t.Context(), raw, permission.Context{}); d.Behavior != "" {
+	if d := testutil.SelfCheck(tl, t.Context(), raw, permission.Context{}); d.Behavior != "" {
 		t.Fatalf("execute self-check = %v, want no opinion", d.Behavior)
 	}
 }
@@ -442,13 +443,13 @@ func TestToolFlags(t *testing.T) {
 	raw := json.RawMessage(`{}`)
 	for _, name := range []string{"ls", "read_file", "glob", "grep"} {
 		tl := f.tools[name]
-		if !isReadOnly(tl, raw) || !isConcurrent(tl, raw) {
+		if !testutil.IsReadOnly(tl, raw) || !isConcurrent(tl, raw) {
 			t.Errorf("%s must be read-only and concurrency safe", name)
 		}
 	}
 	for _, name := range []string{"write_file", "edit_file", "multi_edit", "delete"} {
 		tl := f.tools[name]
-		if e, ok := tool.As[tool.Editor](tl); isReadOnly(tl, raw) || isConcurrent(tl, raw) || !ok || !e.IsEdit(raw) {
+		if e, ok := tool.As[tool.Editor](tl); testutil.IsReadOnly(tl, raw) || isConcurrent(tl, raw) || !ok || !e.IsEdit(raw) {
 			t.Errorf("%s must be a serialized edit", name)
 		}
 	}
@@ -626,26 +627,10 @@ func TestExecuteBackgroundSchemaOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
-// isReadOnly reports whether tool.As finds t read-only for input in.
-func isReadOnly(t tool.Tool, in json.RawMessage) bool {
-	r, ok := tool.As[tool.ReadOnlyer](t)
-	return ok && r.ReadOnly(in)
-}
-
 // isConcurrent reports whether tool.As finds t concurrency-safe for input in.
 func isConcurrent(t tool.Tool, in json.RawMessage) bool {
 	c, ok := tool.As[tool.ConcurrencySafer](t)
 	return ok && c.ConcurrencySafe(in)
-}
-
-// selfCheck is t's own permission verdict, found with tool.As; the zero
-// Decision when t has none.
-func selfCheck(t tool.Tool, ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision {
-	c, ok := tool.As[tool.PermissionChecker](t)
-	if !ok {
-		return permission.Decision{}
-	}
-	return c.CheckPermission(ctx, in, pc)
 }
 
 // unwrapping is a decorator that hides every optional capability of the
