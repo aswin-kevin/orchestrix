@@ -798,7 +798,7 @@ The agent writes transcripts and oversized outputs under `.orchestrix/` in the w
 
 ## Untrusted tools in containers
 
-When tools run commands an attacker can influence (untrusted repositories, prompt-injected content, scans of hosts you don't control), run them in containers with the separate module `orxdocker`. It talks to the Docker Engine API over its Unix socket using only the standard library, and gives each thread its own container, created on first use, reused across runs of the thread, and removed after an idle period, by `Delete`, or by `Close`:
+When tools run commands an attacker can influence (untrusted repositories, prompt-injected content, scans of hosts you don't control), run them in containers with the separate module `orxdocker`. It talks to the Docker Engine API over its Unix socket (or the connections `Config.Dial` opens) using only the standard library, and gives each thread its own container, created on first use, reused across runs of the thread, and removed after an idle period, by `Delete`, or by `Close`:
 
 ```sh
 go get github.com/aswin-kevin/orchestrix/orxdocker
@@ -806,11 +806,11 @@ go get github.com/aswin-kevin/orchestrix/orxdocker
 
 ```go
 // Imports omitted; model comes from surrounding code.
-m, err := orxdocker.NewManager(orxdocker.Options{}) // alpine:3.22 by default
+m, err := orxdocker.NewManager(orxdocker.Config{}) // alpine:3.22 by default
 if err != nil {
 	log.Fatal(err)
 }
-defer m.Close() // removes this process's containers
+defer m.Close(context.Background()) // removes this process's containers
 
 tm := tasks.New(tasks.Config{})
 defer tm.Shutdown()
@@ -822,7 +822,7 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 _, _ = a, err
 ```
 
-Containers are hardened by default, and every field that weakens this is an explicit opt-out: commands run as `nobody`, the root file system is read-only with only the workspace (`/workspace`) and `/tmp` writable (both size-limited tmpfs, so the workspace lives as long as the container), all capabilities are dropped, `no-new-privileges` and Docker's default seccomp profile apply, processes, memory and CPU are limited, there is no network, and commands see no host environment, only `Options.Env` and `ExecOptions.Env`. `Options.Network` joins a named network instead; filtering its traffic, the cloud metadata address included, is then up to that network (for instance an internal network whose only exit is a filtering proxy). Each command runs in its own process group: a timeout or stop kills the group from a second exec (Docker cannot stop an exec), and a backstop inside the container kills it shortly after the timeout even if your process is gone. `Execute` and timeouts are always bounded: a command that defeats the in-container kill has its container force-removed. A command can still leave processes running in its own thread's container, by detaching them or by killing its wrapper before its timeout; they stay confined by the container's hardening (no network, dropped capabilities, resource limits) and end when the container is removed (`Delete`, `ReapIdle`, the idle TTL or `Close`). Output is capped while it streams.
+Containers are hardened by default, and every field that weakens this is an explicit opt-out: commands run as `nobody`, the root file system is read-only with only the workspace (`/workspace`) and `/tmp` writable (both size-limited tmpfs, so the workspace lives as long as the container), all capabilities are dropped, `no-new-privileges` and Docker's default seccomp profile apply, processes, memory and CPU are limited (`orxdocker.Unlimited` lifts a limit), there is no network, and commands see no host environment, only `Config.Env` and `ExecOptions.Env`. `Config.Network` joins a named network instead; filtering its traffic, the cloud metadata address included, is then up to that network (for instance an internal network whose only exit is a filtering proxy). Each command runs in its own process group: a timeout or stop kills the group from a second exec (Docker cannot stop an exec), and a backstop inside the container kills it shortly after the timeout even if your process is gone. `Execute` and timeouts are always bounded: a command that defeats the in-container kill has its container force-removed. A command can still leave processes running in its own thread's container, by detaching them or by killing its wrapper before its timeout; they stay confined by the container's hardening (no network, dropped capabilities, resource limits) and end when the container is removed (`Delete`, `ReapIdle`, the idle TTL or `Close`). Output is capped while it streams.
 
 Every container is labeled (`dev.orchestrix.orxdocker`, its scope, thread id and creation time). `m.Reap(ctx, orxdocker.ReapOptions{OlderThan: ..., Keep: ...})` removes containers orphaned by a crashed process or left for deleted threads. The image needs `/bin/sh`, `setsid`, `sleep`, `kill`, `cat`, `rm` and the tools `backend/sandbox` lists; alpine (busybox) and Debian images work. Workspace files are not captured by checkpoints. A command of a run without a thread ID fails with `orxdocker.ErrNoThread`: threadless runs never share a container.
 

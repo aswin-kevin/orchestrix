@@ -8,11 +8,13 @@ Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `or
 
 - `backend.OutputCapture` and `backend.NewOutputCapture`: the bounded head-and-tail output capture that `backend/shell` and `orxdocker` each carried a private copy of is now one exported type, with `Truncated` and `Omitted`. A `maxBytes` of zero or less keeps nothing.
 - `checkpoint.ListOptions.PageLimit`: the page size a `ListOptions` selects (`DefaultListLimit` for zero, an error for a negative limit), shared by `checkpoint.Paginate` and stores that page themselves, such as `orxpg`.
+- `orxdocker.Config.Dial` opens the connections to the daemon instead of the Unix socket (for a remote daemon over TLS or an SSH tunnel); with it, `DOCKER_HOST` is not read. `orxdocker.Unlimited` (`-1`) removes the `PidsLimit`, `MemoryBytes` or `NanoCPUs` limit or the `IdleTTL`.
 
 ### Behaviour changes
 
 - `backend/composite`: the backend `composite.New` returns now implements `backend.Closer`. Its `Close(ctx)` closes the default backend, then each route's backend in the order given, each once, and joins their errors. So `Agent.Close` now also closes the backends mounted with `WithMount` when the agent's backend comes from `WithBackend` (or `WithShell`); with the default per-thread workspace or `WithBackendFactory`, mounted backends are still left to the host.
 - `orxpg`: `Migrate` replaces the thread list index `orx_threads_updated` with `orx_threads_list` on `(tenant_id, updated_at DESC, thread_id)`, which covers `List`'s keyset order. On an existing install the first `Migrate` builds the new index, blocking writes to the threads table while it runs, and drops the old one from its own schema; for a large table, create the index `CONCURRENTLY` beforehand.
+- `orxdocker`: a negative numeric `Config` field now makes `NewManager` fail (`orxdocker: <Field> is negative`), except `Unlimited` in `PidsLimit`, `MemoryBytes`, `NanoCPUs` and `IdleTTL`. Those four used to take any negative as "no limit", and `WorkspaceBytes`, `TmpBytes`, `Timeout`, `MaxOutputBytes` and `MaxThreads` used to take a negative as the default. `Manager.Close(ctx)` removes containers within `ctx` rather than a fixed 30 seconds, and a later or concurrent `Close` returns the first one's result. A `Process.Stop` whose ctx had already ended no longer makes later `Stop` calls return that stale error.
 
 ## v0.9.0 — 2026-11-21
 

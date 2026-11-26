@@ -31,21 +31,21 @@ var scopeSeq atomic.Int64
 
 // newTestManager returns a Manager with a scope of its own, whose
 // containers are all removed when the test ends.
-func newTestManager(t *testing.T, opts Options) *Manager {
+func newTestManager(t *testing.T, cfg Config) *Manager {
 	t.Helper()
 	if os.Getenv("ORX_TEST_DOCKER") != "1" {
 		t.Skip("set ORX_TEST_DOCKER=1 to run against a Docker daemon")
 	}
-	if opts.Scope == "" {
-		opts.Scope = fmt.Sprintf("orxtest-%d-%d", os.Getpid(), scopeSeq.Add(1))
+	if cfg.Scope == "" {
+		cfg.Scope = fmt.Sprintf("orxtest-%d-%d", os.Getpid(), scopeSeq.Add(1))
 	}
-	if opts.Image == "" {
-		opts.Image = os.Getenv("ORX_TEST_DOCKER_IMAGE")
+	if cfg.Image == "" {
+		cfg.Image = os.Getenv("ORX_TEST_DOCKER_IMAGE")
 	}
-	if opts.IdleTTL == 0 {
-		opts.IdleTTL = -1
+	if cfg.IdleTTL == 0 {
+		cfg.IdleTTL = Unlimited
 	}
-	m, err := NewManager(opts)
+	m, err := NewManager(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func newTestManager(t *testing.T, opts Options) *Manager {
 		t.Fatalf("Docker daemon unreachable: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := m.Close(); err != nil {
+		if err := m.Close(context.Background()); err != nil {
 			t.Errorf("Close: %v", err)
 		}
 		if _, err := m.Reap(context.Background(), ReapOptions{}); err != nil {
@@ -116,7 +116,7 @@ func managedContainers(t *testing.T, m *Manager, extra ...string) []containerSum
 }
 
 func TestDockerConformance(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	e := m.Executor("conformance")
 	var n atomic.Int64
 	backendtest.RunWith(t, func(t *testing.T) backend.Backend {
@@ -126,6 +126,16 @@ func TestDockerConformance(t *testing.T) {
 		}
 		return b
 	}, backendtest.Options{ModTimeResolution: time.Second})
+}
+
+func TestExecutorConformance(t *testing.T) {
+	m := newTestManager(t, Config{})
+	backendtest.RunExecutor(t, func(*testing.T) backend.Executor { return m.Executor("conf") })
+}
+
+func TestStarterConformance(t *testing.T) {
+	m := newTestManager(t, Config{})
+	backendtest.RunStarter(t, func(*testing.T) backend.Starter { return m.Executor("conf") })
 }
 
 // hostileNames matches backend/sandbox's list: names built to break out of a
@@ -150,7 +160,7 @@ var hostileNames = []string{
 const nonUTF8Name = "/bad-\xff\xfe.txt"
 
 func TestDockerHostileNames(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	b := m.Backend("hostile")
 	ctx := t.Context()
 	for i, name := range hostileNames {
@@ -199,7 +209,7 @@ func TestDockerHostileNames(t *testing.T) {
 // tools refuse such arguments (Rust coreutils) must fail with the sandbox's
 // explicit error instead.
 func TestDockerNonUTF8Name(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	b := m.Backend("bytes")
 	ctx := t.Context()
 	if err := b.Write(ctx, nonUTF8Name, []byte("bytes")); err != nil {
@@ -223,24 +233,24 @@ func TestDockerNonUTF8Name(t *testing.T) {
 
 func TestDockerNoHostEnvironment(t *testing.T) {
 	t.Setenv("ORX_HOST_CANARY", "host-secret-value")
-	m := newTestManager(t, Options{Env: map[string]string{"FROM_OPTIONS": "1", "SHARED": "options"}})
+	m := newTestManager(t, Config{Env: map[string]string{"FROM_CONFIG": "1", "SHARED": "config"}})
 	e := m.Executor("env")
 	res := run(t, e, "env", backend.ExecOptions{Env: map[string]string{"FROM_CALL": "1", "SHARED": "call"}})
 	if strings.Contains(res.Output, "host-secret-value") || strings.Contains(res.Output, "ORX_HOST_CANARY") {
 		t.Fatalf("host environment leaked: %q", res.Output)
 	}
-	for _, want := range []string{"FROM_OPTIONS=1", "FROM_CALL=1", "SHARED=call"} {
+	for _, want := range []string{"FROM_CONFIG=1", "FROM_CALL=1", "SHARED=call"} {
 		if !strings.Contains(res.Output, want+"\n") {
 			t.Errorf("env lacks %s: %q", want, res.Output)
 		}
 	}
 	if strings.Contains(res.Output, "SHARED=options") {
-		t.Errorf("ExecOptions.Env did not override Options.Env: %q", res.Output)
+		t.Errorf("ExecOptions.Env did not override Config.Env: %q", res.Output)
 	}
 }
 
 func TestDockerNoNetwork(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	e := m.Executor("net")
 	if got := strings.TrimSpace(run(t, e, "ls /sys/class/net", backend.ExecOptions{}).Output); got != "lo" {
 		t.Errorf("network interfaces = %q, want only lo", got)
@@ -254,7 +264,7 @@ func TestDockerNoNetwork(t *testing.T) {
 }
 
 func TestDockerHardening(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	e := m.Executor("hardening")
 	if got := strings.TrimSpace(run(t, e, "id -u; id -g", backend.ExecOptions{}).Output); got != "65534\n65534" {
 		t.Errorf("ids = %q", got)
@@ -279,7 +289,7 @@ func TestDockerHardening(t *testing.T) {
 }
 
 func TestDockerForkBombIsContained(t *testing.T) {
-	m := newTestManager(t, Options{PidsLimit: 64})
+	m := newTestManager(t, Config{PidsLimit: 64})
 	e := m.Executor("forkbomb")
 	start := time.Now()
 	// The shell stays in the foreground so the bomb runs until the timeout.
@@ -324,7 +334,7 @@ func TestDockerForkBombIsContained(t *testing.T) {
 }
 
 func TestDockerTimeoutKillsProcess(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	e := m.Executor("timeout")
 	start := time.Now()
 	res, err := e.Execute(t.Context(), "sleep 600", backend.ExecOptions{Timeout: time.Second})
@@ -375,7 +385,7 @@ func TestDockerTimeoutKillsProcess(t *testing.T) {
 // kill; its kill cannot be confirmed, so the container is removed instead
 // and the next command gets a new one.
 func TestDockerHostileCommandCannotOutliveTimeout(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	e := m.Executor("hostile")
 	before, err := e.ContainerID(t.Context())
 	if err != nil {
@@ -407,7 +417,7 @@ func TestDockerHostileCommandCannotOutliveTimeout(t *testing.T) {
 }
 
 func TestDockerExecOptions(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	e := m.Executor("opts")
 	if res := run(t, e, "echo out; echo err >&2; exit 7", backend.ExecOptions{}); res.ExitCode != 7 || res.Output != "out\nerr\n" {
 		t.Errorf("exit and output: %+v", res)
@@ -434,7 +444,7 @@ func TestDockerExecOptions(t *testing.T) {
 }
 
 func TestDockerStartAndStop(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	e := m.Executor("start")
 	p, err := e.Start(t.Context(), "echo begin; sleep 604", backend.ExecOptions{})
 	if err != nil {
@@ -470,7 +480,7 @@ func TestDockerStartAndStop(t *testing.T) {
 }
 
 func TestDockerWithTasks(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown()
 	call := func(id, name string, in map[string]any) llmtest.Turn {
@@ -523,7 +533,7 @@ func toolResult(p *llmtest.Scripted, id string) string {
 }
 
 func TestDockerContainerPerThread(t *testing.T) {
-	m := newTestManager(t, Options{})
+	m := newTestManager(t, Config{})
 	ctx := t.Context()
 	a, b := m.Backend("thread-a"), m.Backend("thread-b")
 	if err := a.Write(ctx, "/f.txt", []byte("a")); err != nil {
@@ -559,7 +569,7 @@ func TestDockerContainerPerThread(t *testing.T) {
 		t.Fatalf("deleted thread's file survived: %v", err)
 	}
 
-	if err := m.Close(); err != nil {
+	if err := m.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if list := managedContainers(t, m); len(list) != 0 {
@@ -571,7 +581,7 @@ func TestDockerContainerPerThread(t *testing.T) {
 }
 
 func TestDockerIdleTTL(t *testing.T) {
-	m := newTestManager(t, Options{IdleTTL: 2 * time.Second})
+	m := newTestManager(t, Config{IdleTTL: 2 * time.Second})
 	e := m.Executor("idle")
 	run(t, e, "echo hi > /workspace/f", backend.ExecOptions{})
 	first, _ := e.ContainerID(t.Context())
@@ -601,7 +611,7 @@ func TestDockerIdleTTL(t *testing.T) {
 }
 
 func TestDockerReapAndAdopt(t *testing.T) {
-	m1 := newTestManager(t, Options{})
+	m1 := newTestManager(t, Config{})
 	ctx := t.Context()
 	keepID, err := m1.Executor("keep").ContainerID(ctx)
 	if err != nil {
@@ -614,7 +624,7 @@ func TestDockerReapAndAdopt(t *testing.T) {
 
 	// A second Manager on the same scope (a restarted process) reuses the
 	// running container of a thread.
-	m2 := newTestManager(t, Options{Scope: m1.opts.Scope})
+	m2 := newTestManager(t, Config{Scope: m1.cfg.Scope})
 	if id, err := m2.Executor("keep").ContainerID(ctx); err != nil || id != keepID {
 		t.Fatalf("adopted %q, %v; want %q", id, err, keepID)
 	}

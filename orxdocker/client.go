@@ -43,18 +43,25 @@ func isStatus(err error, statuses ...int) bool {
 	return false
 }
 
-// client talks to the Docker Engine API over a Unix socket. It uses only the
-// standard library.
+// client talks to the Docker Engine API over a Unix socket or the
+// connections of Config.Dial. It uses only the standard library.
 type client struct {
 	http    *http.Client
 	version string // API version path prefix, such as "/v1.44"
 }
 
-func newClient(socket, apiVersion string) *client {
-	dialer := &net.Dialer{}
+// newClient returns a client whose connections come from dial; nil dials
+// the Unix socket.
+func newClient(socket string, dial func(context.Context) (net.Conn, error), apiVersion string) *client {
+	if dial == nil {
+		dialer := &net.Dialer{}
+		dial = func(ctx context.Context) (net.Conn, error) {
+			return dialer.DialContext(ctx, "unix", socket)
+		}
+	}
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return dialer.DialContext(ctx, "unix", socket)
+			return dial(ctx)
 		},
 		MaxIdleConns:    16,
 		IdleConnTimeout: 90 * time.Second,
@@ -63,7 +70,7 @@ func newClient(socket, apiVersion string) *client {
 }
 
 // request builds a request to the API; host "docker" is a placeholder the
-// Unix dialer ignores.
+// dialer ignores.
 func (c *client) request(ctx context.Context, method, path string, query url.Values, body any) (*http.Request, error) {
 	var rd io.Reader
 	if body != nil {

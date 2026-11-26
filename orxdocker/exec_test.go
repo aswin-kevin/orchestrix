@@ -106,18 +106,18 @@ func newFakeEngine(t *testing.T) *fakeEngine {
 }
 
 // manager returns a Manager talking to the engine, with short waits.
-func (f *fakeEngine) manager(opts Options) *Manager {
+func (f *fakeEngine) manager(cfg Config) *Manager {
 	f.t.Helper()
-	opts.Socket = f.socket
-	opts.IdleTTL = -1
-	m, err := NewManager(opts)
+	cfg.Socket = f.socket
+	cfg.IdleTTL = Unlimited
+	m, err := NewManager(cfg)
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	m.killGrace = 50 * time.Millisecond
 	m.hardGrace = 5 * time.Second
 	m.exitWait = 5 * time.Second
-	f.t.Cleanup(func() { _ = m.Close() })
+	f.t.Cleanup(func() { _ = m.Close(context.Background()) })
 	return m
 }
 
@@ -350,7 +350,7 @@ func TestFollowHardDeadline(t *testing.T) {
 	f := newFakeEngine(t)
 	f.stream, f.state = hang, runningUntilGone
 	f.signalStatus = exitNoPid // the pid file is gone
-	m := f.manager(Options{})
+	m := f.manager(Config{})
 	m.hardGrace = 200 * time.Millisecond
 	e := m.Executor("t1")
 
@@ -386,7 +386,7 @@ func TestStopFallsBackToRemove(t *testing.T) {
 	f := newFakeEngine(t)
 	f.stream, f.state = hang, runningUntilGone
 	f.signalStatus = exitNoPid
-	m := f.manager(Options{})
+	m := f.manager(Config{})
 	m.hardGrace = time.Hour
 	p, err := m.Executor("t1").Start(t.Context(), "evade", execOpts(time.Hour))
 	if err != nil {
@@ -422,7 +422,7 @@ func TestExitCodeWaitsForExit(t *testing.T) {
 		}
 		return false, &seven
 	}
-	m := f.manager(Options{})
+	m := f.manager(Config{})
 	res, err := m.Executor("t1").Execute(t.Context(), "exit 7", execOpts(time.Minute))
 	if err != nil || res.ExitCode != 7 || res.Output != "out\n" {
 		t.Fatalf("result = %+v, %v", res, err)
@@ -441,7 +441,7 @@ func TestExitCodeWaitsForExit(t *testing.T) {
 func TestExecStartCancelled(t *testing.T) {
 	f := newFakeEngine(t)
 	f.hangStart = true
-	m := f.manager(Options{})
+	m := f.manager(Config{})
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	errc := make(chan error, 1)
@@ -463,7 +463,7 @@ func TestExecStartCancelled(t *testing.T) {
 // and removes its container; busy executors are never evicted.
 func TestThreadsEvictLRU(t *testing.T) {
 	f := newFakeEngine(t)
-	m := f.manager(Options{MaxThreads: 2})
+	m := f.manager(Config{MaxThreads: 2})
 	for _, th := range []string{"t1", "t2"} {
 		if _, err := m.Executor(th).Execute(t.Context(), "true", execOpts(time.Minute)); err != nil {
 			t.Fatal(err)
@@ -506,7 +506,7 @@ func TestThreadsEvictLRU(t *testing.T) {
 }
 
 func TestMaxThreadsDefault(t *testing.T) {
-	o, err := Options{Socket: "/s"}.withDefaults()
+	o, err := Config{Socket: "/s"}.withDefaults()
 	if err != nil || o.MaxThreads != DefaultMaxThreads || DefaultMaxThreads != 1024 {
 		t.Fatalf("MaxThreads = %d, %v", o.MaxThreads, err)
 	}
@@ -543,7 +543,7 @@ func TestStopTermFailureTriesKill(t *testing.T) {
 		}
 		return 1 // TERM fails
 	}
-	m := f.manager(Options{})
+	m := f.manager(Config{})
 	m.hardGrace = time.Hour
 	p, err := m.Executor("t1").Start(t.Context(), "cmd", execOpts(time.Hour))
 	if err != nil {
@@ -587,14 +587,14 @@ func TestStopTermFailureTriesKill(t *testing.T) {
 // Manager neither keeps nor evicts executors.
 func TestCloseWaitsForEvictions(t *testing.T) {
 	f := newFakeEngine(t)
-	m := f.manager(Options{MaxThreads: 1})
+	m := f.manager(Config{MaxThreads: 1})
 	if _, err := m.Executor("t1").Execute(t.Context(), "true", execOpts(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	release := f.waitGate()
 	m.Executor("t2") // evicts t1; its removal waits on the gate
 	time.AfterFunc(200*time.Millisecond, release)
-	if err := m.Close(); err != nil {
+	if err := m.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.removedIDs(); len(got) != 1 || got[0] != "c1" {
@@ -618,7 +618,7 @@ func TestCloseWaitsForEvictions(t *testing.T) {
 // thread's next executor creates a new one.
 func TestEvictedContainerNotAdopted(t *testing.T) {
 	f := newFakeEngine(t)
-	m := f.manager(Options{MaxThreads: 1})
+	m := f.manager(Config{MaxThreads: 1})
 	if _, err := m.Executor("t1").Execute(t.Context(), "true", execOpts(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +685,7 @@ func TestTimeoutUnconfirmedKillRemovesContainer(t *testing.T) {
 			}
 			f.state = exitedAfter(&started, 200*time.Millisecond, tc.exit)
 			f.signalStatus = tc.pidStatus
-			m := f.manager(Options{})
+			m := f.manager(Config{})
 			m.killGrace = 300 * time.Millisecond
 			m.hardGrace = time.Hour
 			e := m.Executor("t1")
@@ -762,7 +762,7 @@ func endOnSignal(f *fakeEngine, sigs ...string) (sent func() []string) {
 func TestExecuteCancelledSendsTerm(t *testing.T) {
 	f := newFakeEngine(t)
 	sent := endOnSignal(f, "TERM")
-	m := f.manager(Options{})
+	m := f.manager(Config{})
 	m.hardGrace = time.Hour
 	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(200*time.Millisecond, cancel)
@@ -784,7 +784,7 @@ func TestExecuteCancelledSendsTerm(t *testing.T) {
 func TestStopCancelledCtxStillEnds(t *testing.T) {
 	f := newFakeEngine(t)
 	sent := endOnSignal(f, "KILL")
-	m := f.manager(Options{})
+	m := f.manager(Config{})
 	m.hardGrace = time.Hour
 	p, err := m.Executor("t1").Start(t.Context(), "cmd", execOpts(time.Hour))
 	if err != nil {
@@ -805,5 +805,32 @@ func TestStopCancelledCtxStillEnds(t *testing.T) {
 	}
 	if got := f.removedIDs(); len(got) != 0 {
 		t.Fatalf("KILL worked but containers were removed: %v", got)
+	}
+}
+
+// A Stop whose ctx had already ended returns that error without keeping
+// it: a later Stop with a live ctx does not report the stale cancellation.
+func TestStopCancelledCtxNotSticky(t *testing.T) {
+	f := newFakeEngine(t)
+	endOnSignal(f, "KILL")
+	m := f.manager(Config{})
+	m.killGrace = time.Hour // keep the command running past both Stops
+	m.hardGrace = time.Hour
+	p, err := m.Executor("t1").Start(t.Context(), "cmd", execOpts(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := p.Stop(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stop(cancelled ctx) = %v, want context.Canceled", err)
+	}
+	select {
+	case <-p.Done():
+		t.Fatal("command ended before the second Stop")
+	default:
+	}
+	if err := p.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop(live ctx) after a cancelled Stop = %v, want nil", err)
 	}
 }

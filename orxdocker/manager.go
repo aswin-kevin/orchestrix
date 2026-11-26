@@ -28,27 +28,32 @@ var (
 	ErrNoThread = errors.New("orxdocker: empty thread id: every run needs its own Input.ThreadID")
 )
 
-// cleanupTimeout bounds the API calls of Close and of the idle janitor.
+// cleanupTimeout bounds the API calls of the idle janitor and of the
+// background removal of evicted containers.
 const cleanupTimeout = 30 * time.Second
 
 // Manager runs one container per thread. Its Backend method fits
 // orchestrix.WithBackendFactory; each thread's container is created on its
 // first command, reused by later ones (and by later runs of the thread),
-// and removed after Options.IdleTTL without commands, by Delete, or by
+// and removed after Config.IdleTTL without commands, by Delete, or by
 // Close. A Manager is safe for concurrent use.
 //
 // A container still running when the process starts again is reused for its
 // thread if its configuration (LabelConfig) matches; Reap removes the ones
 // nobody will use.
 type Manager struct {
-	opts Options
+	cfg  Config
 	spec containerConfig
 	c    *client
 
-	mu      sync.Mutex
-	closed  bool
-	threads map[string]*Executor   // the executor Executor and Backend return
-	live    map[*Executor]struct{} // executors that may own a container
+	mu     sync.Mutex
+	closed bool
+	// closeDone is closed once the first Close has finished; closeErr,
+	// written before, is its result.
+	closeDone chan struct{}
+	closeErr  error
+	threads   map[string]*Executor   // the executor Executor and Backend return
+	live      map[*Executor]struct{} // executors that may own a container
 	// removing counts the removals in flight per container id; adopt and
 	// track skip those containers.
 	removing  map[string]int
@@ -63,21 +68,22 @@ type Manager struct {
 	exitWait  time.Duration // for an exec to report its exit once its output ended
 }
 
-// NewManager validates opts and returns a Manager. It does not contact the
-// daemon (see Ping); when Options.IdleTTL is positive it starts a goroutine
-// that removes idle containers until Close.
-func NewManager(opts Options) (*Manager, error) {
-	o, err := opts.withDefaults()
+// NewManager validates cfg and returns a Manager. It does not contact the
+// daemon (see Ping); unless Config.IdleTTL is Unlimited it starts a
+// goroutine that removes idle containers until Close.
+func NewManager(cfg Config) (*Manager, error) {
+	c, err := cfg.withDefaults()
 	if err != nil {
 		return nil, err
 	}
-	if _, err := sandbox.New(nopExec{}, sandbox.Config{Root: o.WorkDir, OpTimeout: o.OpTimeout}); err != nil {
+	if _, err := sandbox.New(nopExec{}, sandbox.Config{Root: c.WorkDir, OpTimeout: c.OpTimeout}); err != nil {
 		return nil, fmt.Errorf("orxdocker: %w", err)
 	}
 	m := &Manager{
-		opts:        o,
-		spec:        o.containerSpec(),
-		c:           newClient(o.Socket, o.APIVersion),
+		cfg:         c,
+		spec:        c.containerSpec(),
+		c:           newClient(c.Socket, c.Dial, c.APIVersion),
+		closeDone:   make(chan struct{}),
 		threads:     map[string]*Executor{},
 		live:        map[*Executor]struct{}{},
 		removing:    map[string]int{},
@@ -87,7 +93,7 @@ func NewManager(opts Options) (*Manager, error) {
 		hardGrace:   hardGrace,
 		exitWait:    exitWait,
 	}
-	if o.IdleTTL > 0 {
+	if c.IdleTTL > 0 {
 		go m.janitor()
 	} else {
 		close(m.janitorDone)
@@ -102,13 +108,13 @@ func (nopExec) Execute(context.Context, string, backend.ExecOptions) (backend.Ex
 	return backend.ExecResult{}, errors.ErrUnsupported
 }
 
-// Ping checks that the daemon answers on the configured socket.
+// Ping checks that the daemon answers on the configured socket or Dial.
 func (m *Manager) Ping(ctx context.Context) error {
 	return m.c.do(ctx, http.MethodGet, "/_ping", nil, nil, nil)
 }
 
 // Backend returns the sandboxed backend of a thread: a sandbox.StarterBackend
-// rooted at Options.WorkDir whose commands run in the thread's container. It
+// rooted at Config.WorkDir whose commands run in the thread's container. It
 // implements backend.Backend, backend.MultiEditor, backend.Executor and
 // backend.Starter, so it works with orchestrix.WithTasks. Pass the method to
 // orchestrix.WithBackendFactory. The empty thread id is rejected with
@@ -117,9 +123,9 @@ func (m *Manager) Backend(threadID string) backend.Backend {
 	return m.Executor(threadID).sb
 }
 
-// Executor returns the thread's executor, whose paths (ExecOptions.Dir) are
+// Executor returns the thread's executor, whose paths (ExecConfig.Dir) are
 // paths inside the container. Most callers want Backend. Creating one past
-// Options.MaxThreads evicts the least recently used executor that runs no
+// Config.MaxThreads evicts the least recently used executor that runs no
 // command and removes its container in the background.
 func (m *Manager) Executor(threadID string) *Executor {
 	m.mu.Lock()
@@ -128,7 +134,7 @@ func (m *Manager) Executor(threadID string) *Executor {
 		return e
 	}
 	e := &Executor{m: m, thread: threadID, lastUsed: time.Now()}
-	sb, err := sandbox.NewStarter(e, sandbox.Config{Root: m.opts.WorkDir, OpTimeout: m.opts.OpTimeout})
+	sb, err := sandbox.NewStarter(e, sandbox.Config{Root: m.cfg.WorkDir, OpTimeout: m.cfg.OpTimeout})
 	if err != nil {
 		panic("orxdocker: sandbox options checked by NewManager: " + err.Error()) // unreachable
 	}
@@ -136,7 +142,7 @@ func (m *Manager) Executor(threadID string) *Executor {
 	if m.closed {
 		return e // its commands fail with ErrClosed; nothing to keep or evict
 	}
-	if len(m.threads) >= m.opts.MaxThreads {
+	if len(m.threads) >= m.cfg.MaxThreads {
 		if id := m.evictLocked(); id != "" {
 			m.removing[id]++
 			m.evictions.Add(1)
@@ -251,18 +257,18 @@ func (m *Manager) Delete(ctx context.Context, threadID string) error {
 // scopeFilters returns the label filters selecting this Manager's
 // containers, plus extra.
 func (m *Manager) scopeFilters(extra ...string) []string {
-	return append([]string{LabelManaged + "=true", LabelScope + "=" + m.opts.Scope}, extra...)
+	return append([]string{LabelManaged + "=true", LabelScope + "=" + m.cfg.Scope}, extra...)
 }
 
 // ReapIdle removes the containers of this Manager's threads that have run
-// no command for Options.IdleTTL and have none running, and reports how
-// many it removed. The janitor calls it periodically; with a negative
-// IdleTTL it removes nothing.
+// no command for Config.IdleTTL and have none running, and reports how
+// many it removed. The janitor calls it periodically; with IdleTTL
+// Unlimited it removes nothing.
 func (m *Manager) ReapIdle(ctx context.Context) (int, error) {
-	if m.opts.IdleTTL <= 0 {
+	if m.cfg.IdleTTL <= 0 {
 		return 0, nil
 	}
-	cutoff := time.Now().Add(-m.opts.IdleTTL)
+	cutoff := time.Now().Add(-m.cfg.IdleTTL)
 	m.mu.Lock()
 	var idle []string
 	for e := range m.live {
@@ -335,13 +341,22 @@ func (m *Manager) forgetContainer(id string) {
 }
 
 // Close stops the janitor and removes every container this Manager's
-// executors created or reused, killing their commands. Commands fail with
+// executors created or reused, killing their commands, then waits for the
+// removal of evicted containers. ctx bounds all of it. Commands fail with
 // ErrClosed afterwards. Containers of other processes are left alone.
-func (m *Manager) Close() error {
+//
+// Only the first call does the work. Later and concurrent calls wait for it
+// to finish, or for their own ctx to end, and return its result.
+func (m *Manager) Close(ctx context.Context) error {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		return nil
+		select {
+		case <-m.closeDone:
+			return m.closeErr
+		case <-ctx.Done():
+			return fmt.Errorf("orxdocker: close: %w", ctx.Err())
+		}
 	}
 	m.closed = true
 	execs := make([]*Executor, 0, len(m.live))
@@ -350,11 +365,20 @@ func (m *Manager) Close() error {
 	}
 	m.live = map[*Executor]struct{}{}
 	m.mu.Unlock()
-	close(m.stop)
-	<-m.janitorDone
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-	defer cancel()
+	m.closeErr = m.close(ctx, execs)
+	close(m.closeDone)
+	return m.closeErr
+}
+
+// close does the work of the first Close.
+func (m *Manager) close(ctx context.Context, execs []*Executor) error {
 	var errs []error
+	close(m.stop)
+	select {
+	case <-m.janitorDone:
+	case <-ctx.Done(): // its removals are detached and bounded
+		errs = append(errs, fmt.Errorf("orxdocker: stopping the janitor: %w", ctx.Err()))
+	}
 	for _, e := range execs {
 		if id := e.forget(""); id != "" {
 			errs = append(errs, m.c.removeContainer(ctx, id))
@@ -377,7 +401,7 @@ func (m *Manager) Close() error {
 // janitor calls ReapIdle until Close.
 func (m *Manager) janitor() {
 	defer close(m.janitorDone)
-	every := min(max(m.opts.IdleTTL/4, time.Second), time.Minute)
+	every := min(max(m.cfg.IdleTTL/4, time.Second), time.Minute)
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {

@@ -20,7 +20,7 @@ const (
 	// LabelManaged marks a container as created by orxdocker; its value is
 	// "true".
 	LabelManaged = "dev.orchestrix.orxdocker"
-	// LabelScope holds Options.Scope.
+	// LabelScope holds Config.Scope.
 	LabelScope = "dev.orchestrix.orxdocker.scope"
 	// LabelThread holds the thread id the container serves.
 	LabelThread = "dev.orchestrix.orxdocker.thread"
@@ -68,9 +68,9 @@ type hostConfig struct {
 }
 
 // containerSpec builds the creation request for a thread's container from
-// validated options. Labels other than the thread's and the creation time
+// a validated Config. Labels other than the thread's and the creation time
 // are part of the configuration hash.
-func (o *Options) containerSpec() containerConfig {
+func (o *Config) containerSpec() containerConfig {
 	uid, gid, _ := strings.Cut(o.User, ":")
 	if gid == "" {
 		gid = uid
@@ -97,7 +97,7 @@ func (o *Options) containerSpec() containerConfig {
 		Env:        []string{},
 		Labels:     labels,
 		HostConfig: hostConfig{
-			Init:           !o.NoInit,
+			Init:           !o.DisableInit,
 			ReadonlyRootfs: !o.WritableRootfs,
 			CapDrop:        []string{"ALL"},
 			CapAdd:         o.CapAdd,
@@ -115,13 +115,13 @@ func (o *Options) containerSpec() containerConfig {
 			RestartPolicy: map[string]string{"Name": "no"},
 		},
 	}
-	if o.PidsLimit < 0 {
-		cfg.HostConfig.PidsLimit = -1
+	if o.PidsLimit == Unlimited {
+		cfg.HostConfig.PidsLimit = -1 // the Engine API's "no limit"
 	}
-	if o.MemoryBytes < 0 {
+	if o.MemoryBytes == Unlimited {
 		cfg.HostConfig.Memory, cfg.HostConfig.MemorySwap = 0, 0
 	}
-	if o.NanoCPUs < 0 {
+	if o.NanoCPUs == Unlimited {
 		cfg.HostConfig.NanoCPUs = 0
 	}
 	data, _ := json.Marshal(cfg) // plain strings and maps: cannot fail

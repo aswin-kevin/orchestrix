@@ -122,7 +122,7 @@ var errNoPid = errors.New("orxdocker: the command's pid file is missing")
 //
 // Every command runs as "/bin/sh -c" in a new process group in the
 // workspace (or ExecOptions.Dir), with only the image's environment,
-// Options.Env and ExecOptions.Env, no stdin, stderr merged into stdout, and
+// Config.Env and ExecOptions.Env, no stdin, stderr merged into stdout, and
 // output capped at a head and a tail of MaxOutputBytes while it streams. The
 // command and directory may hold any bytes (they travel base64-encoded);
 // environment entries reach the daemon as JSON strings, so bytes that are
@@ -344,7 +344,7 @@ func (e *Executor) Start(ctx context.Context, cmd string, opts backend.ExecOptio
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	o := &e.m.opts
+	o := &e.m.cfg
 	dir := opts.Dir
 	if dir == "" {
 		dir = o.WorkDir
@@ -618,7 +618,8 @@ func (p *process) Output() string { return p.out.String() }
 // when SIGTERM cannot be sent). When ctx ends before the signal is sent,
 // Stop returns that error but the command is still ended: SIGKILL follows
 // after the grace period, and then the container's removal, as above. Only
-// the first call signals.
+// the first call signals; a later call returns nil, or the error of a
+// removal that failed, never the first call's ended ctx.
 func (p *process) Stop(ctx context.Context) error {
 	select {
 	case <-p.done:
@@ -634,8 +635,11 @@ func (p *process) Stop(ctx context.Context) error {
 // stop acts only on its first call. A TERM that reaches no group (the pid
 // file is missing, or the exec exited first) leaves the kill unconfirmed,
 // which follow acts on (see confirmKill). ctx bounds the signals sent before
-// stop returns; the escalation after it runs on its own.
+// stop returns; the escalation after it runs on its own. An error caused by
+// ctx is returned by that call only: stopErr keeps the failures that no
+// other ctx would have avoided.
 func (p *process) stop(ctx context.Context) error {
+	var ctxErr error
 	p.stopOnce.Do(func() {
 		p.stopping.Store(true)
 		defer close(p.termSent)
@@ -649,7 +653,7 @@ func (p *process) stop(ctx context.Context) error {
 		case ctx.Err() != nil:
 			// The caller's ctx ended the request, not the container: the
 			// escalation below still kills the command.
-			p.stopErr = err
+			ctxErr = err
 		default:
 			kerr := p.e.signal(ctx, p.container, p.token, "KILL", p.exited)
 			switch {
@@ -657,7 +661,7 @@ func (p *process) stop(ctx context.Context) error {
 			case notSent(kerr):
 				p.unconfirmed.Store(true)
 			case ctx.Err() != nil:
-				p.stopErr = errors.Join(err, kerr)
+				ctxErr = errors.Join(err, kerr)
 			default:
 				// No signal can be sent: only removing the container is left.
 				if rerr := p.remove(); rerr != nil {
@@ -679,6 +683,9 @@ func (p *process) stop(ctx context.Context) error {
 			_ = p.remove() // the hard deadline retries
 		}()
 	})
+	if ctxErr != nil {
+		return ctxErr
+	}
 	return p.stopErr
 }
 
