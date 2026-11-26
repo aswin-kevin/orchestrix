@@ -80,9 +80,16 @@ func WithRubric(cfg rubric.Config) Option {
 // Commands (execute) run only in the underlying backend: files under a mount
 // are invisible to them. A backend installed through WithConfig (a patch of
 // agent.Config.Backend or BackendFactory) is not mounted: the mounts wrap the
-// backend options above, and WithConfig patches apply after them. An invalid or duplicate prefix ("/" included) makes
-// New fail. With the default workspace and WithCheckpointer, a checkpoint
-// saves the per-thread part only; mounted backends persist on their own.
+// backend options above, and WithConfig patches apply after them. An invalid
+// or duplicate prefix ("/" included) makes New fail. With the default
+// workspace and WithCheckpointer, a checkpoint saves the per-thread part
+// only; mounted backends persist on their own.
+//
+// With WithBackend or WithShell, Agent.Close closes b too (through
+// backend.AsCloser), along with the agent's backend; each backend is closed
+// once. Do not pass a backend that must outlive the agent there. With the
+// default per-thread workspace or WithBackendFactory, the agent does not
+// close mounted backends.
 func WithMount(prefix string, b backend.Backend) Option {
 	return func(s *settings) { s.mounts = append(s.mounts, composite.Route{Prefix: prefix, Backend: b}) }
 }
@@ -116,18 +123,14 @@ func (s *settings) mountWrapper() func(backend.Backend) backend.Backend {
 }
 
 // applyMounts puts mount over cfg's backend: Backend is wrapped once and every
-// backend the factory returns is wrapped. A nil mount changes nothing. The
-// wrapper has no Close, so Agent.Close would no longer reach a wrapped
-// Backend's: an OnClose function closes it instead.
+// backend the factory returns is wrapped. A nil mount changes nothing.
+// Agent.Close closes the wrapped Backend through the composite's Close,
+// which closes the backend it wraps and the mounted ones.
 func applyMounts(cfg *agent.Config, mount func(backend.Backend) backend.Backend) {
 	switch {
 	case mount == nil:
 	case cfg.Backend != nil:
-		inner := cfg.Backend
-		cfg.Backend = mount(inner)
-		if c, ok := backend.AsCloser(inner); ok {
-			cfg.OnClose = append(cfg.OnClose, c.Close)
-		}
+		cfg.Backend = mount(cfg.Backend)
 	case cfg.BackendFactory != nil:
 		factory := cfg.BackendFactory
 		cfg.BackendFactory = func(threadID string) backend.Backend { return mount(factory(threadID)) }

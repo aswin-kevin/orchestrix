@@ -242,8 +242,9 @@ func TestCapabilitiesFollowDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := mustNew(t, sh, composite.Route{Prefix: "/memories", Backend: testutil.Memory(t)})
-	ex, ok := c.(backend.Executor)
-	if _, st := c.(backend.Starter); !ok || !st {
+	ex, ok := backend.AsExecutor(c)
+	st, okStart := backend.AsStarter(c)
+	if !ok || !okStart {
 		t.Fatal("shell default must yield Executor and Starter")
 	}
 	res, err := ex.Execute(ctx, "echo hi", backend.ExecOptions{})
@@ -253,21 +254,21 @@ func TestCapabilitiesFollowDefault(t *testing.T) {
 	if _, err := ex.Execute(ctx, "true", backend.ExecOptions{Dir: "/memories/x"}); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("Execute in mount = %v, want ErrUnsupported", err)
 	}
-	if _, err := c.(backend.Starter).Start(ctx, "true", backend.ExecOptions{Dir: "/memories"}); !errors.Is(err, errors.ErrUnsupported) {
+	if _, err := st.Start(ctx, "true", backend.ExecOptions{Dir: "/memories"}); !errors.Is(err, errors.ErrUnsupported) {
 		t.Fatalf("Start in mount = %v, want ErrUnsupported", err)
 	}
-	if _, snap := c.(backend.Snapshotter); snap {
+	if _, snap := backend.AsSnapshotter(c); snap {
 		t.Fatal("shell default is not a Snapshotter")
 	}
 	// An Executor-only default yields Executor without Starter.
 	only := mustNew(t, execOnly{testutil.Memory(t)})
-	if _, ok := only.(backend.Executor); !ok {
+	if _, ok := backend.AsExecutor(only); !ok {
 		t.Fatal("Executor-only default lost Executor")
 	}
-	if _, ok := only.(backend.Starter); ok {
+	if _, ok := backend.AsStarter(only); ok {
 		t.Fatal("Executor-only default gained Starter")
 	}
-	if _, ok := only.(backend.Snapshotter); ok {
+	if _, ok := backend.AsSnapshotter(only); ok {
 		t.Fatal("execOnly is not a Snapshotter")
 	}
 }
@@ -281,10 +282,10 @@ func (execOnly) Execute(context.Context, string, backend.ExecOptions) (backend.E
 func TestSnapshotCoversDefaultOnly(t *testing.T) {
 	route := testutil.Memory(t)
 	c := mustNew(t, testutil.Memory(t), composite.Route{Prefix: "/memories", Backend: route})
-	if _, ok := c.(backend.Executor); ok {
+	if _, ok := backend.AsExecutor(c); ok {
 		t.Fatal("memory default must not yield Executor")
 	}
-	snap, ok := c.(backend.Snapshotter)
+	snap, ok := backend.AsSnapshotter(c)
 	if !ok {
 		t.Fatal("memory default must yield Snapshotter")
 	}

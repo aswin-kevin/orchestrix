@@ -18,7 +18,7 @@ import (
 )
 
 func TestWithTasksRejectsSandboxWithoutStarter(t *testing.T) {
-	sb, err := sandbox.New(shellBackend(t).(*shell.Backend), sandbox.Options{Root: t.TempDir()})
+	sb, err := sandbox.New(shellBackend(t).(*shell.Backend), sandbox.Config{Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestWithTasksRunsJobInSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sb, err := sandbox.NewStarter(sh, sandbox.Options{Root: dir})
+	sb, err := sandbox.NewStarter(sh, sandbox.Config{Root: dir})
 	if err != nil {
 		t.Fatal(err)
 	}

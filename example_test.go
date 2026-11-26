@@ -338,7 +338,7 @@ func ExampleWithMount() {
 var remote backend.Executor
 
 func ExampleWithBackend_sandbox() {
-	sb, err := sandbox.New(remote, sandbox.Options{Root: "/workspace"})
+	sb, err := sandbox.New(remote, sandbox.Config{Root: "/workspace"})
 	if err != nil {
 		log.Fatal(err)
 	}

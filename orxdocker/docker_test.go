@@ -120,7 +120,7 @@ func TestDockerConformance(t *testing.T) {
 	e := m.Executor("conformance")
 	var n atomic.Int64
 	backendtest.RunWith(t, func(t *testing.T) backend.Backend {
-		b, err := sandbox.NewStarter(e, sandbox.Options{Root: fmt.Sprintf("/workspace/case%d", n.Add(1))})
+		b, err := sandbox.NewStarter(e, sandbox.Config{Root: fmt.Sprintf("/workspace/case%d", n.Add(1))})
 		if err != nil {
 			t.Fatal(err)
 		}

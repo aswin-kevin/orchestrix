@@ -6,12 +6,16 @@
 // Backend has no move or rename, so no edit ever crosses routes. Commands see
 // only the default backend: mounted files are invisible to them, and def files
 // a mount shadows remain visible.
+//
+// The composite owns its backends: its Close (see New) closes the default
+// backend and every route's backend.
 package composite
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 )
@@ -39,11 +43,18 @@ type composite struct {
 	exec  backend.Executor
 	start backend.Starter
 	snap  backend.Snapshotter
+
+	// owned is def followed by the route backends in the order given to
+	// New: the order Close releases them in.
+	owned     []backend.Backend
+	closeOnce sync.Once
+	closeErr  error
 }
 
 var (
 	_ backend.Backend     = (*composite)(nil)
 	_ backend.MultiEditor = (*composite)(nil)
+	_ backend.Closer      = (*composite)(nil)
 )
 
 // New returns a backend that routes each path to the route with the longest
@@ -54,7 +65,19 @@ var (
 // backend.Executor alone when def implements only that, and
 // backend.Snapshotter when def does (snapshots cover def only: routes persist
 // on their own). A capability of a backend def wraps counts as def's (see
-// backend.Backend's Unwrap). Commands run in def; ExecOptions.Dir inside a mount fails.
+// backend.Backend's Unwrap). Commands run in def; ExecOptions.Dir inside a
+// mount fails with an error wrapping errors.ErrUnsupported.
+//
+// The result always implements backend.Closer. Close closes def first, then
+// each route's backend in the order given here, each through
+// backend.AsCloser; a backend given more than once (the same comparable
+// Closer, also when reached through Unwrap) is closed once, and the errors
+// are joined. The first call does the work; later and concurrent calls
+// return its result. Do not close the composite while a backend it was
+// given must stay open for someone else.
+//
+// New returns backend.Backend rather than a concrete type because the
+// optional capabilities of the result depend on def.
 // Errors: nil def or route backend, invalid or duplicate prefix.
 func New(def backend.Backend, routes ...Route) (backend.Backend, error) {
 	if def == nil {
@@ -64,7 +87,11 @@ func New(def backend.Backend, routes ...Route) (backend.Backend, error) {
 	if err != nil {
 		return nil, err
 	}
-	return withCapabilities(&composite{def: def, mounts: mounts}), nil
+	owned := []backend.Backend{def}
+	for _, r := range routes {
+		owned = append(owned, r.Backend)
+	}
+	return withCapabilities(&composite{def: def, mounts: mounts, owned: owned}), nil
 }
 
 // target picks the backend serving p and the path to give it. A path that is a

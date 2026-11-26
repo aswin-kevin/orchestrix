@@ -130,6 +130,14 @@ func init() {
 		r.ExitCode = 0
 		return r, err
 	})
+	// A command that succeeded reports exit status 1; the output is right.
+	mutants["exec/EchoExitCode"] = execMutant(func(in backend.Executor, ctx context.Context, c string, o backend.ExecOptions) (backend.ExecResult, error) {
+		r, err := in.Execute(ctx, c, o)
+		if r.ExitCode == 0 {
+			r.ExitCode = 1
+		}
+		return r, err
+	})
 	mutants["exec/Env"] = execMutant(func(in backend.Executor, ctx context.Context, c string, o backend.ExecOptions) (backend.ExecResult, error) {
 		o.Env = nil
 		return in.Execute(ctx, c, o)
@@ -222,11 +230,11 @@ func init() {
 		return json.RawMessage(`{}`), nil
 	}, nil)
 	mutants["snap/RestoreMerges"] = snapMutant(nil, func(ctx context.Context, m *memory.Backend, d json.RawMessage) error {
-		old, err := m.Read(ctx, "/x", 0, 0)
+		old, readErr := m.Read(ctx, "/x", 0, 0)
 		if err := m.Restore(ctx, d); err != nil {
 			return err
 		}
-		if err == nil && len(old.Lines) > 0 {
+		if readErr == nil && len(old.Lines) > 0 {
 			return m.Write(ctx, "/x", []byte("x\n"))
 		}
 		return nil
@@ -249,7 +257,7 @@ func init() {
 		return err
 	})
 	for k, v := range map[string]string{
-		"exec/Echo": "Echo", "start/StopExitCode": "Stop",
+		"exec/Echo": "Echo", "exec/EchoExitCode": "Echo", "start/StopExitCode": "Stop",
 		"snap/RestoreMerges": "RestoreReplaces", "snap/CancelledSnapshot": "Cancelled",
 		"snap/CancelledRestore": "Cancelled", "snap/BadDataAccepted": "BadData",
 		"snap/BadDataClobbers": "BadData",

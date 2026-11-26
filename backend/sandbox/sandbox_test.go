@@ -83,7 +83,7 @@ func (e *localExec) commands() []string {
 
 func newSandbox(t *testing.T, exec backend.Executor, root string) *sandbox.Backend {
 	t.Helper()
-	b, err := sandbox.New(exec, sandbox.Options{Root: root})
+	b, err := sandbox.New(exec, sandbox.Config{Root: root})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,15 +182,15 @@ func TestSandboxExecuteDir(t *testing.T) {
 func TestNewValidation(t *testing.T) {
 	skipWithoutSh(t)
 	e := newLocalExec(t)
-	if _, err := sandbox.New(nil, sandbox.Options{}); err == nil {
+	if _, err := sandbox.New(nil, sandbox.Config{}); err == nil {
 		t.Fatal("nil executor accepted")
 	}
 	for _, root := range []string{"rel", "/a/../b", "/a/", "/a\x00b"} {
-		if _, err := sandbox.New(e, sandbox.Options{Root: root}); err == nil {
+		if _, err := sandbox.New(e, sandbox.Config{Root: root}); err == nil {
 			t.Fatalf("Root %q accepted", root)
 		}
 	}
-	if _, err := sandbox.New(e, sandbox.Options{}); err != nil {
+	if _, err := sandbox.New(e, sandbox.Config{}); err != nil {
 		t.Fatalf("default root: %v", err)
 	}
 }
@@ -309,4 +309,42 @@ func TestSandboxWriteLongName(t *testing.T) {
 	if got := string(readBytes(t, b, name)); got != "long" {
 		t.Fatalf("Read = %q", got)
 	}
+}
+
+func TestNewRejectsNegativeOpTimeout(t *testing.T) {
+	_, err := sandbox.New(fakeExec{}, sandbox.Config{OpTimeout: -time.Second})
+	if err == nil || err.Error() != "sandbox: OpTimeout is negative" {
+		t.Fatalf("New = %v, want \"sandbox: OpTimeout is negative\"", err)
+	}
+	if _, err := sandbox.NewStarter(&fakeStarter{}, sandbox.Config{OpTimeout: -1}); err == nil {
+		t.Fatal("NewStarter accepted a negative OpTimeout")
+	}
+}
+
+func TestSandboxExecutorConformance(t *testing.T) {
+	skipWithoutSh(t)
+	backendtest.RunExecutor(t, func(t *testing.T) backend.Executor {
+		dir := t.TempDir()
+		sh, err := shell.New(dir, shell.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return newSandbox(t, sh, dir)
+	})
+}
+
+func TestSandboxStarterConformance(t *testing.T) {
+	skipWithoutSh(t)
+	backendtest.RunStarter(t, func(t *testing.T) backend.Starter {
+		dir := t.TempDir()
+		sh, err := shell.New(dir, shell.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := sandbox.NewStarter(sh, sandbox.Config{Root: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	})
 }

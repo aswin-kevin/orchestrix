@@ -71,7 +71,7 @@ func NewManager(opts Options) (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := sandbox.New(nopExec{}, sandbox.Options{Root: o.WorkDir, OpTimeout: o.OpTimeout}); err != nil {
+	if _, err := sandbox.New(nopExec{}, sandbox.Config{Root: o.WorkDir, OpTimeout: o.OpTimeout}); err != nil {
 		return nil, fmt.Errorf("orxdocker: %w", err)
 	}
 	m := &Manager{
@@ -128,7 +128,7 @@ func (m *Manager) Executor(threadID string) *Executor {
 		return e
 	}
 	e := &Executor{m: m, thread: threadID, lastUsed: time.Now()}
-	sb, err := sandbox.NewStarter(e, sandbox.Options{Root: m.opts.WorkDir, OpTimeout: m.opts.OpTimeout})
+	sb, err := sandbox.NewStarter(e, sandbox.Config{Root: m.opts.WorkDir, OpTimeout: m.opts.OpTimeout})
 	if err != nil {
 		panic("orxdocker: sandbox options checked by NewManager: " + err.Error()) // unreachable
 	}

@@ -30,7 +30,7 @@ func (f *fakeStarter) Start(_ context.Context, cmd string, opts backend.ExecOpti
 }
 
 func TestNewDoesNotClaimStarter(t *testing.T) {
-	b, err := sandbox.New(&fakeStarter{}, sandbox.Options{})
+	b, err := sandbox.New(&fakeStarter{}, sandbox.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,17 +40,17 @@ func TestNewDoesNotClaimStarter(t *testing.T) {
 }
 
 func TestNewStarterValidates(t *testing.T) {
-	if _, err := sandbox.NewStarter(nil, sandbox.Options{}); err == nil {
+	if _, err := sandbox.NewStarter(nil, sandbox.Config{}); err == nil {
 		t.Error("nil executor accepted")
 	}
-	if _, err := sandbox.NewStarter(&fakeStarter{}, sandbox.Options{Root: "rel"}); err == nil {
+	if _, err := sandbox.NewStarter(&fakeStarter{}, sandbox.Config{Root: "rel"}); err == nil {
 		t.Error("relative root accepted")
 	}
 }
 
 func TestStartPrefixesQuotedCd(t *testing.T) {
 	f := &fakeStarter{}
-	b, err := sandbox.NewStarter(f, sandbox.Options{Root: "/work space"})
+	b, err := sandbox.NewStarter(f, sandbox.Config{Root: "/work space"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestStartOverShell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := sandbox.NewStarter(sh, sandbox.Options{Root: dir})
+	b, err := sandbox.NewStarter(sh, sandbox.Config{Root: dir})
 	if err != nil {
 		t.Fatal(err)
 	}

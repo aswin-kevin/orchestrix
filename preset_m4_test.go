@@ -276,19 +276,21 @@ func (c *closeCounter) Close() error {
 	return nil
 }
 
-// Agent.Close still closes a WithBackend backend that WithMount wrapped.
-func TestWithMountKeepsBackendClose(t *testing.T) {
+// Agent.Close closes a WithBackend backend that WithMount wrapped and the
+// mounted backends, each exactly once (through the composite's Close).
+func TestWithMountClosesEachBackendOnce(t *testing.T) {
 	inner := &closeCounter{Backend: testutil.Memory(t)}
+	mounted := &closeCounter{Backend: testutil.Memory(t)}
 	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithBackend(inner),
-		orchestrix.WithMount("/kv", kvBackend(t)))
+		orchestrix.WithMount("/kv", mounted))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := a.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if inner.closed != 1 {
-		t.Errorf("backend closed %d times, want 1", inner.closed)
+	if inner.closed != 1 || mounted.closed != 1 {
+		t.Errorf("closed backend %d, mount %d times; want 1 each", inner.closed, mounted.closed)
 	}
 }
 

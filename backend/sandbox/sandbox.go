@@ -3,7 +3,7 @@
 // backend.Executor; every file operation (read, write, edit, ls, glob, grep,
 // delete) is built from POSIX sh scripts sent through it.
 //
-// Virtual paths map below Options.Root inside the sandbox: "/src/a.go" is
+// Virtual paths map below Config.Root inside the sandbox: "/src/a.go" is
 // <Root>/src/a.go. Paths are confined lexically (backend.Clean never climbs
 // above "/"); symlinks inside the sandbox are followed by the commands, so
 // the sandbox itself, not this package, is the security boundary.
@@ -55,7 +55,7 @@
 //
 //	sh, err := shell.New(dir, shell.Config{})
 //	...
-//	b, err := sandbox.New(sh, sandbox.Options{Root: dir})
+//	b, err := sandbox.New(sh, sandbox.Config{Root: dir})
 package sandbox
 
 import (
@@ -78,15 +78,16 @@ const (
 	ChunkBytes = 48 << 10
 )
 
-// Options configures a Backend. The zero value uses DefaultRoot and
+// Config configures a Backend. The zero value uses DefaultRoot and
 // DefaultOpTimeout.
-type Options struct {
+type Config struct {
 	// Root is the absolute, clean directory inside the sandbox that backend
 	// path "/" maps to; "" means DefaultRoot. It need not exist yet: the
 	// first Write creates it.
 	Root string
 	// OpTimeout bounds each command a file operation sends; 0 means
-	// DefaultOpTimeout. It does not apply to Execute.
+	// DefaultOpTimeout and a negative value is an error. It does not apply
+	// to Execute.
 	OpTimeout time.Duration
 }
 
@@ -112,20 +113,23 @@ var (
 )
 
 // New returns a Backend running its commands through exec. It fails when exec
-// is nil or Root is not an absolute, clean path.
-func New(exec backend.Executor, opts Options) (*Backend, error) {
+// is nil, Root is not an absolute, clean path or OpTimeout is negative.
+func New(exec backend.Executor, cfg Config) (*Backend, error) {
 	if exec == nil {
 		return nil, errors.New("sandbox: nil executor")
 	}
-	root := opts.Root
+	root := cfg.Root
 	if root == "" {
 		root = DefaultRoot
 	}
 	if clean, err := backend.Clean(root); err != nil || clean != root {
-		return nil, fmt.Errorf("sandbox: root %q must be an absolute, clean path", opts.Root)
+		return nil, fmt.Errorf("sandbox: root %q must be an absolute, clean path", cfg.Root)
 	}
-	timeout := opts.OpTimeout
-	if timeout <= 0 {
+	if cfg.OpTimeout < 0 {
+		return nil, errors.New("sandbox: OpTimeout is negative")
+	}
+	timeout := cfg.OpTimeout
+	if timeout == 0 {
 		timeout = DefaultOpTimeout
 	}
 	return &Backend{exec: exec, root: root, timeout: timeout}, nil

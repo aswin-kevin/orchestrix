@@ -122,7 +122,7 @@ type Options struct {
 	// find idle executors to evict.
 	MaxThreads int
 	// OpTimeout bounds each command a sandbox file operation sends; 0 means
-	// sandbox.DefaultOpTimeout.
+	// sandbox.DefaultOpTimeout and a negative value makes NewManager fail.
 	OpTimeout time.Duration
 	// Labels are added to every container.
 	Labels map[string]string

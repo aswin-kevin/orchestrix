@@ -8,6 +8,10 @@ Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `or
 
 - `backend.OutputCapture` and `backend.NewOutputCapture`: the bounded head-and-tail output capture that `backend/shell` and `orxdocker` each carried a private copy of is now one exported type, with `Truncated` and `Omitted`. A `maxBytes` of zero or less keeps nothing.
 
+### Behaviour changes
+
+- `backend/composite`: the backend `composite.New` returns now implements `backend.Closer`. Its `Close(ctx)` closes the default backend, then each route's backend in the order given, each once, and joins their errors. So `Agent.Close` now also closes the backends mounted with `WithMount` when the agent's backend comes from `WithBackend` (or `WithShell`); with the default per-thread workspace or `WithBackendFactory`, mounted backends are still left to the host.
+
 ## v0.9.0 — 2026-11-21
 
 Crash recovery for side-effecting tools: middleware can now tell the model what really happened to a tool call whose result a crash, a token limit or an abandoned interrupt left out of State.

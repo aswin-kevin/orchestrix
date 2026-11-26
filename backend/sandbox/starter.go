@@ -29,11 +29,11 @@ var (
 // The Backend New returns never implements backend.Starter, so a type check
 // for it tells the truth about what the executor can do. NewStarter fails
 // like New.
-func NewStarter(exec backend.ExecStarter, opts Options) (*StarterBackend, error) {
+func NewStarter(exec backend.ExecStarter, cfg Config) (*StarterBackend, error) {
 	if exec == nil {
 		return nil, errors.New("sandbox: nil executor")
 	}
-	b, err := New(exec, opts)
+	b, err := New(exec, cfg)
 	if err != nil {
 		return nil, err
 	}

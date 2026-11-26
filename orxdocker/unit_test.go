@@ -166,6 +166,7 @@ func TestOptionsValidation(t *testing.T) {
 		"comma workdir":    {WorkDir: "/a,b", Socket: "/s"},
 		"bad scope":        {Scope: "a b", Socket: "/s"},
 		"bad env":          {Env: map[string]string{"A=B": "x"}, Socket: "/s"},
+		"negative op":      {OpTimeout: -time.Second, Socket: "/s"},
 	} {
 		if _, err := NewManager(o); err == nil {
 			t.Errorf("%s: accepted", name)
