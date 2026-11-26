@@ -102,8 +102,8 @@ func newClient(cc ClientConfig, policy dialPolicy) (*http.Client, error) {
 	}
 	return &http.Client{
 		Transport:     guard,
-		Timeout:       positive(cc.Timeout, DefaultTimeout),
-		CheckRedirect: checkRedirect(positive(cc.MaxRedirects, DefaultMaxRedirects)),
+		Timeout:       cmp.Or(cc.Timeout, DefaultTimeout),
+		CheckRedirect: checkRedirect(cmp.Or(cc.MaxRedirects, DefaultMaxRedirects)),
 	}, nil
 }
 
@@ -212,7 +212,9 @@ var errNoPEM = errors.New("no PEM certificates")
 // webScheme reports whether scheme is http or https.
 func webScheme(scheme string) bool { return scheme == "http" || scheme == "https" }
 
-func positive[T int | int64 | time.Duration](v, def T) T {
+// positive returns v, or def when v is not positive. It is for model input,
+// which no constructor has validated.
+func positive(v, def int) int {
 	if v <= 0 {
 		return def
 	}

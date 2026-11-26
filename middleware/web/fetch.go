@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,9 +52,9 @@ type fetcher struct {
 func newFetchTool(src Fetcher, cfg Config) *fetcher {
 	return &fetcher{
 		src:      src,
-		maxBytes: positive(cfg.MaxBytes, DefaultMaxBytes),
-		maxChars: positive(cfg.MaxChars, DefaultMaxChars),
-		timeout:  positive(cfg.Timeout, DefaultTimeout),
+		maxBytes: cmp.Or(cfg.MaxBytes, DefaultMaxBytes),
+		maxChars: cmp.Or(cfg.MaxChars, DefaultMaxChars),
+		timeout:  cmp.Or(cfg.Timeout, DefaultTimeout),
 	}
 }
 

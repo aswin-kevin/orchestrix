@@ -164,6 +164,8 @@ func (c *converter) node(n *html.Node) {
 	c.children(n)
 }
 
+// blockquote writes the children of n as a block, each line prefixed with the
+// quote marker.
 func (c *converter) blockquote(n *html.Node) {
 	c.block(paragraph)
 	pushed := c.pushPrefix(quotePrefix)
@@ -172,6 +174,7 @@ func (c *converter) blockquote(n *html.Node) {
 	c.block(paragraph)
 }
 
+// rule writes a thematic break on a line of its own.
 func (c *converter) rule(*html.Node) {
 	c.block(paragraph)
 	c.word("---")

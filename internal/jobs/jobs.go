@@ -817,7 +817,7 @@ func (m *Manager[H]) shutdown(ctx context.Context, wait time.Duration) bool {
 
 // WaitLimit turns a requested number of seconds into a wait, capped at max;
 // zero or less means max. A request too large to convert to a Duration
-// also means max.
+// also means max. max must be a whole number of seconds.
 func WaitLimit(seconds int, max time.Duration) time.Duration {
 	if seconds <= 0 || time.Duration(seconds) >= max/time.Second {
 		return max

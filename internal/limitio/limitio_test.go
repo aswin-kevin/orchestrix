@@ -24,6 +24,8 @@ func TestReadAll(t *testing.T) {
 		{"far over limit", strings.Repeat("x", 100), 4, "xxxx", true},
 		{"limit zero, empty", "", 0, "", false},
 		{"limit zero, one byte", "a", 0, "", true},
+		{"negative limit, empty", "", -5, "", false},
+		{"negative limit, one byte", "a", -5, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

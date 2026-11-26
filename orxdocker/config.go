@@ -166,12 +166,14 @@ type Config struct {
 // scopePattern restricts scopes to label-friendly values.
 var scopePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$`)
 
-// withDefaults validates c and fills in its defaults.
+// withDefaults validates c and fills in its defaults. DOCKER_HOST is read
+// once here and its result passed down.
 func (c Config) withDefaults() (Config, error) {
-	if err := c.validate(); err != nil {
+	sock, sockErr := dockerHostSocket()
+	if err := c.validate(sockErr); err != nil {
 		return c, err
 	}
-	return c.applyDefaults(), nil
+	return c.applyDefaults(sock), nil
 }
 
 // dockerHostSocket returns the socket named by DOCKER_HOST, or DefaultSocket
@@ -189,14 +191,15 @@ func dockerHostSocket() (string, error) {
 }
 
 // validate rejects an invalid c. It looks at the fields as set, before any
-// default: every default is valid.
-func (c Config) validate() error {
+// default: every default is valid. hostErr is the error of reading
+// DOCKER_HOST; it counts only when the socket comes from there.
+func (c Config) validate(hostErr error) error {
 	switch {
 	case c.Dial != nil && c.Socket != "":
 		return errors.New("orxdocker: set at most one of Socket and Dial")
 	case c.Dial == nil && c.Socket == "":
-		if _, err := dockerHostSocket(); err != nil {
-			return err
+		if hostErr != nil {
+			return hostErr
 		}
 	}
 	if c.Scope != "" && !scopePattern.MatchString(c.Scope) {
@@ -261,12 +264,12 @@ func (c Config) validateLimits() error {
 	return nil
 }
 
-// applyDefaults fills in the zero fields of a validated c. Unlimited is
-// negative, so it survives.
-func (c Config) applyDefaults() Config {
+// applyDefaults fills in the zero fields of a validated c; hostSocket is the
+// socket DOCKER_HOST names. Unlimited is negative, so it survives.
+func (c Config) applyDefaults(hostSocket string) Config {
 	c.Image = cmp.Or(c.Image, DefaultImage)
 	if c.Dial == nil && c.Socket == "" {
-		c.Socket, _ = dockerHostSocket() // validated
+		c.Socket = hostSocket
 	}
 	c.APIVersion = cmp.Or(c.APIVersion, DefaultAPIVersion)
 	c.Scope = cmp.Or(c.Scope, DefaultScope)
