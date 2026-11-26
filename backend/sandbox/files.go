@@ -109,9 +109,7 @@ func (b *Backend) write(ctx context.Context, op, clean string, content []byte) e
 	}
 	realPath := b.real(clean)
 	suffix := make([]byte, tmpRandomBytes)
-	if _, err := rand.Read(suffix); err != nil {
-		return fmt.Errorf("sandbox: %s %s: %w", op, clean, err)
-	}
+	_, _ = rand.Read(suffix) // never fails since Go 1.24
 	// A short name, so a target near the file-name length limit still works.
 	tmp := path.Join(path.Dir(realPath), tmpPrefix+hex.EncodeToString(suffix))
 	head := b.prelude(realPath) + "t=" + quote(tmp) + "\n"

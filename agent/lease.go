@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -152,7 +151,5 @@ func (l *runLease) lost() error {
 
 // leaseOwner returns a fresh owner id for one run.
 func leaseOwner() string {
-	var b [12]byte
-	_, _ = rand.Read(b[:])
-	return "run-" + hex.EncodeToString(b[:])
+	return "run-" + rand.Text()
 }

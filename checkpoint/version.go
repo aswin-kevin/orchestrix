@@ -13,7 +13,7 @@ import (
 // one, so its versions never match those of the deleted thread.
 func NewGeneration() string {
 	var b [12]byte
-	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails
+	_, _ = rand.Read(b[:]) // never fails since Go 1.24
 	return hex.EncodeToString(b[:])
 }
 

@@ -50,7 +50,7 @@ func TestHTTPHandlerRejects(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 	sid := resp.Header.Get("Mcp-Session-Id")
-	if resp.StatusCode != http.StatusOK || len(sid) < 32 {
+	if resp.StatusCode != http.StatusOK || len(sid) < 26 {
 		t.Fatalf("initialize: status %d, session id %q; want 200 and a random id", resp.StatusCode, sid)
 	}
 

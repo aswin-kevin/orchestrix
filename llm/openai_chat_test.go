@@ -250,7 +250,7 @@ func TestOpenAIChatToolCallExtraContentAndMissingID(t *testing.T) {
 	if use.ProviderData[openAIExtraContentKey] != `{"k":"v"}` {
 		t.Errorf("provider data = %v", use.ProviderData)
 	}
-	if !strings.HasPrefix(use.ID, "call_") || !strings.HasSuffix(use.ID, "_0") || len(use.ID) != len("call_12345678_0") {
+	if !strings.HasPrefix(use.ID, "call_") || !strings.HasSuffix(use.ID, "_0") || len(use.ID) != len("call_")+26+len("_0") {
 		t.Errorf("synthesised id = %q", use.ID)
 	}
 	if resp.StopReason != StopToolUse {

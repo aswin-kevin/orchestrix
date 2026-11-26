@@ -3,16 +3,11 @@ package mcp
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
 )
-
-// sessionIDBytes is how many random bytes a session id holds; it is sent
-// hex-encoded.
-const sessionIDBytes = 16
 
 // pendingSessionTTL is how long a session may stay without
 // notifications/initialized before newSession may evict it to make room.
@@ -73,11 +68,9 @@ func (st *outStream) deliver(ctx context.Context, m outMsg) error {
 // keeps its session while there is room. When the cap is still reached it
 // writes 503 and returns nil.
 func (h *httpHandler) newSession(w http.ResponseWriter) *httpSession {
-	buf := make([]byte, sessionIDBytes)
-	_, _ = rand.Read(buf) // never fails
 	now := h.now()
 	hs := &httpSession{
-		id:              hex.EncodeToString(buf),
+		id:              rand.Text(),
 		streamResponses: !h.opts.JSONResponses,
 		now:             h.now,
 		created:         now,

@@ -644,8 +644,6 @@ func (r *run) abandoned() bool {
 // newRunID returns 16 random hex characters.
 func newRunID() string {
 	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err) // crypto/rand.Read does not fail
-	}
+	_, _ = rand.Read(b[:]) // never fails since Go 1.24
 	return hex.EncodeToString(b[:])
 }

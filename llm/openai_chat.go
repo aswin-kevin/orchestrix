@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -362,9 +361,7 @@ type toolSlot struct {
 }
 
 func newOpenAIStreamState(t *Transport) *openAIStreamState {
-	var b [4]byte
-	_, _ = rand.Read(b[:])
-	return &openAIStreamState{t: t, slots: make(map[int]*toolSlot), runID: hex.EncodeToString(b[:])}
+	return &openAIStreamState{t: t, slots: make(map[int]*toolSlot), runID: rand.Text()}
 }
 
 // translate maps one chunk to stream events.

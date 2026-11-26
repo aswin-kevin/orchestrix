@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -364,10 +363,7 @@ func (e *Executor) Start(ctx context.Context, cmd string, opts backend.ExecOptio
 	}
 	timeout := positiveOr(opts.Timeout, o.Timeout)
 	maxOutput := positiveOr(opts.MaxOutputBytes, o.MaxOutputBytes)
-	token, err := newToken()
-	if err != nil {
-		return nil, err
-	}
+	token := rand.Text()
 	backstop := int64((timeout+killGrace+time.Second)/time.Second) + 1
 
 	e.acquire()
@@ -561,15 +557,6 @@ func mergeEnv(envs ...map[string]string) ([]string, error) {
 
 // b64 encodes a wrapper argument.
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
-
-// newToken returns a random hex name for a command's pid file.
-func newToken() (string, error) {
-	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("orxdocker: token: %w", err)
-	}
-	return hex.EncodeToString(b[:]), nil
-}
 
 // process is a started command; it implements backend.Process.
 type process struct {
