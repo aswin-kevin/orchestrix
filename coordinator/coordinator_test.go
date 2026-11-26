@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/async"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // obj is a tool input.
@@ -316,5 +318,80 @@ func TestNewWithProviderNil(t *testing.T) {
 	}
 	if c != nil {
 		t.Error("coordinator returned alongside the error")
+	}
+}
+
+// settled is one OnSettled call.
+type settled struct {
+	thread string
+	rec    async.TaskRecord
+}
+
+func TestCoordinatorResolvesWaitingWorker(t *testing.T) {
+	var runs atomic.Int32
+	publish := tool.New("publish", "Publishes.", func(context.Context, struct{}, *tool.Call) (tool.Result, error) {
+		runs.Add(1)
+		return tool.Text("written"), nil
+	})
+	w := worker("writer", llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "w1", Name: "publish", Input: obj{}}}},
+		llmtest.Turn{Text: "wrote it"},
+	))
+	w.Tools = []tool.Tool{publish}
+	reports := make(chan settled, 4)
+	var events atomic.Int32
+	var mu sync.Mutex
+	eventThreads := map[string]bool{}
+	cfg := Config{
+		Workers: []subagents.Subagent{w},
+		OnSettled: func(_ context.Context, threadID string, rec async.TaskRecord) {
+			reports <- settled{threadID, rec}
+		},
+		OnEvent: func(threadID, taskID string, _ agent.Event) {
+			events.Add(1)
+			mu.Lock()
+			eventThreads[threadID+" "+taskID] = true
+			mu.Unlock()
+		},
+	}
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "s1", Name: async.ToolStart, Input: obj{"subagent_type": "writer", "description": "Write."}}}},
+		llmtest.Turn{Text: "started"},
+		llmtest.Turn{Text: "still started"}, // after the stop reminder
+	)
+	c := newCoordinator(t, p, cfg)
+	run(t, c, "Go.")
+
+	next := func() settled {
+		t.Helper()
+		select {
+		case s := <-reports:
+			return s
+		case <-time.After(testTimeout):
+			t.Fatal("no OnSettled report")
+			return settled{}
+		}
+	}
+	first := next()
+	if first.thread != "t" || first.rec.Status != async.StatusWaiting || first.rec.Pending == nil {
+		t.Fatalf("first report = %+v, want async_1 waiting on t", first)
+	}
+	var decisions []agent.Decision
+	for _, req := range first.rec.Pending.Requests {
+		decisions = append(decisions, agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Approve})
+	}
+	if err := c.Resolve(context.Background(), "t", first.rec.ID, decisions); err != nil {
+		t.Fatalf("Resolve = %v", err)
+	}
+	if second := next(); second.rec.Status != async.StatusCompleted || second.rec.Result != "wrote it" {
+		t.Fatalf("second report = %+v, want the worker completed", second)
+	}
+	if runs.Load() != 1 {
+		t.Fatalf("publish ran %d times, want once", runs.Load())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if events.Load() == 0 || len(eventThreads) != 1 || !eventThreads["t async_1"] {
+		t.Fatalf("OnEvent saw %d events from %v, want async_1 on t", events.Load(), eventThreads)
 	}
 }
