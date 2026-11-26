@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,18 +17,18 @@ import (
 
 // connect returns a client for s over an in-process session, closed when the
 // test ends.
-func connect(t *testing.T, s *Server, opts ClientOptions) *Client {
+func connect(t *testing.T, s *Server, opts ClientConfig) *Client {
 	t.Helper()
 	c, err := NewClient(context.Background(), InProcess(s), opts)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	t.Cleanup(func() { _ = c.Close() })
+	t.Cleanup(func() { _ = c.Close(context.Background()) })
 	return c
 }
 
 func TestInProcessRoundTrip(t *testing.T) {
-	c := connect(t, newTestServer(nil), ClientOptions{})
+	c := connect(t, newTestServer(nil), ClientConfig{})
 	ctx := context.Background()
 
 	if got := c.ServerInfo(); got != (Implementation{Name: "test-server", Version: "1.2.3"}) {
@@ -95,7 +97,7 @@ func TestListToolsPagination(t *testing.T) {
 			return TextResult("ok"), nil
 		})
 	}
-	c := connect(t, s, ClientOptions{})
+	c := connect(t, s, ClientConfig{})
 
 	tools, err := c.ListTools(context.Background())
 	if err != nil {
@@ -112,7 +114,7 @@ func TestListToolsPagination(t *testing.T) {
 
 func TestCallTimeoutCancels(t *testing.T) {
 	blocked := make(chan error, 1)
-	c := connect(t, newTestServer(blocked), ClientOptions{RequestTimeout: 200 * time.Millisecond})
+	c := connect(t, newTestServer(blocked), ClientConfig{RequestTimeout: 200 * time.Millisecond})
 
 	start := time.Now()
 	_, err := c.CallTool(context.Background(), "block", nil)
@@ -141,7 +143,7 @@ func TestCallTimeoutCancels(t *testing.T) {
 }
 
 func TestCallCtxCancelIsNotTimeout(t *testing.T) {
-	c := connect(t, newTestServer(nil), ClientOptions{})
+	c := connect(t, newTestServer(nil), ClientConfig{})
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
 	_, err := c.CallTool(ctx, "block", nil)
@@ -153,7 +155,7 @@ func TestCallCtxCancelIsNotTimeout(t *testing.T) {
 func TestToolListChangedNotifies(t *testing.T) {
 	s := newTestServer(nil)
 	notes := make(chan string, 4)
-	connect(t, s, ClientOptions{OnNotification: func(method string, _ json.RawMessage) { notes <- method }})
+	connect(t, s, ClientConfig{OnNotification: func(method string, _ json.RawMessage) { notes <- method }})
 
 	s.AddTool(ToolInfo{Name: "late"}, func(context.Context, json.RawMessage) (*CallToolResult, error) { return nil, nil })
 	select {
@@ -181,7 +183,7 @@ func TestHandlerNotificationDelivered(t *testing.T) {
 		return TextResult("done"), nil
 	})
 	notes := make(chan string, 1)
-	c := connect(t, s, ClientOptions{OnNotification: func(method string, params json.RawMessage) {
+	c := connect(t, s, ClientConfig{OnNotification: func(method string, params json.RawMessage) {
 		notes <- method + " " + string(params)
 	}})
 
@@ -207,11 +209,11 @@ func TestHandlerNotificationDelivered(t *testing.T) {
 
 func TestPingFromServerAnswered(t *testing.T) {
 	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
-	c, err := NewClient(context.Background(), f, ClientOptions{})
+	c, err := NewClient(context.Background(), f, ClientConfig{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	defer c.Close()
+	defer c.Close(context.Background())
 
 	f.push(`{"jsonrpc":"2.0","id":"p1","method":"ping"}`)
 	f.push(`{"jsonrpc":"2.0","id":7,"method":"sampling/createMessage","params":{}}`)
@@ -229,7 +231,7 @@ func TestPingFromServerAnswered(t *testing.T) {
 
 func TestUnsupportedVersionRejected(t *testing.T) {
 	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, "1999-01-01") })
-	_, err := NewClient(context.Background(), f, ClientOptions{})
+	_, err := NewClient(context.Background(), f, ClientConfig{})
 	if err == nil || !strings.Contains(err.Error(), "1999-01-01") {
 		t.Fatalf("err = %v, want an error naming the unsupported version", err)
 	}
@@ -240,11 +242,11 @@ func TestUnsupportedVersionRejected(t *testing.T) {
 
 func TestInitializeHandshake(t *testing.T) {
 	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, "2025-03-26") })
-	c, err := NewClient(context.Background(), f, ClientOptions{})
+	c, err := NewClient(context.Background(), f, ClientConfig{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	defer c.Close()
+	defer c.Close(context.Background())
 
 	init := f.waitSent(t, func(m map[string]any) bool { return m["method"] == "initialize" })
 	params, _ := init["params"].(map[string]any)
@@ -266,7 +268,7 @@ func TestInitializeHandshake(t *testing.T) {
 
 func TestServerEchoesSupportedVersion(t *testing.T) {
 	sess := InProcess(newTestServer(nil))
-	defer sess.Close()
+	defer sess.Close(context.Background())
 	for _, tc := range []struct{ asked, want string }{
 		{"2024-11-05", "2024-11-05"},
 		{"2099-01-01", ProtocolVersion},
@@ -290,8 +292,8 @@ func TestServerEchoesSupportedVersion(t *testing.T) {
 }
 
 func TestClosedClientFailsCalls(t *testing.T) {
-	c := connect(t, newTestServer(nil), ClientOptions{})
-	if err := c.Close(); err != nil {
+	c := connect(t, newTestServer(nil), ClientConfig{})
+	if err := c.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	select {
@@ -302,7 +304,7 @@ func TestClosedClientFailsCalls(t *testing.T) {
 	if _, err := c.ListTools(context.Background()); !errors.Is(err, ErrClosed) {
 		t.Fatalf("err = %v, want ErrClosed", err)
 	}
-	if err := c.Close(); err != nil {
+	if err := c.Close(context.Background()); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
 }
@@ -319,12 +321,12 @@ func TestReplyBeforeEndIsDelivered(t *testing.T) {
 			return []string{fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"t","inputSchema":{}}]}}`, id)}
 		})
 		f.endAfter = isMethod("tools/list")
-		c, err := NewClient(context.Background(), f, ClientOptions{})
+		c, err := NewClient(context.Background(), f, ClientConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		tools, err := c.ListTools(context.Background())
-		_ = c.Close()
+		_ = c.Close(context.Background())
 		if err != nil || len(tools) != 1 {
 			t.Fatalf("iteration %d: ListTools = %v, %v; want the reply that arrived before the end", i, tools, err)
 		}
@@ -334,11 +336,11 @@ func TestReplyBeforeEndIsDelivered(t *testing.T) {
 func TestCancelSentWhenSendTimesOut(t *testing.T) {
 	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
 	f.hold = isMethod("tools/call")
-	c, err := NewClient(context.Background(), f, ClientOptions{})
+	c, err := NewClient(context.Background(), f, ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer c.Close(context.Background())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -370,11 +372,11 @@ func TestServerRequestFloodBounded(t *testing.T) {
 	// Every reply to the server gets stuck in the transport, so replies pile
 	// up unless the client bounds them.
 	f.hold = isResponse
-	c, err := NewClient(context.Background(), f, ClientOptions{})
+	c, err := NewClient(context.Background(), f, ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer c.Close(context.Background())
 
 	baseline := runtime.NumGoroutine()
 	limit := baseline + 10
@@ -407,7 +409,7 @@ func TestServerRequestFloodBounded(t *testing.T) {
 func TestCloseWithFullReplyQueue(t *testing.T) {
 	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
 	f.hold = isResponse
-	c, err := NewClient(context.Background(), f, ClientOptions{RequestTimeout: time.Hour})
+	c, err := NewClient(context.Background(), f, ClientConfig{RequestTimeout: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +418,7 @@ func TestCloseWithFullReplyQueue(t *testing.T) {
 	}
 	f.waitSent(t, isResponse) // the replier is stuck in Send
 	closed := make(chan error, 1)
-	go func() { closed <- c.Close() }()
+	go func() { closed <- c.Close(context.Background()) }()
 	select {
 	case <-closed:
 	case <-time.After(2 * time.Second):
@@ -426,15 +428,82 @@ func TestCloseWithFullReplyQueue(t *testing.T) {
 
 func TestVersionUsed(t *testing.T) {
 	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
-	c, err := NewClient(context.Background(), f, ClientOptions{})
+	c, err := NewClient(context.Background(), f, ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer c.Close(context.Background())
 	init := f.waitSent(t, isMethod("initialize"))
 	params, _ := init["params"].(map[string]any)
 	info, _ := params["clientInfo"].(map[string]any)
 	if info["version"] != version.Version {
 		t.Errorf("clientInfo.version = %v, want %q", info["version"], version.Version)
+	}
+}
+
+func TestSupportedVersionsIsCopy(t *testing.T) {
+	v := SupportedVersions()
+	v[0] = "mutated"
+	if got := SupportedVersions()[0]; got != ProtocolVersion {
+		t.Errorf("SupportedVersions()[0] = %q after mutation, want %q", got, ProtocolVersion)
+	}
+}
+
+// versionRecorder wraps InProcess and records the negotiated version.
+type versionRecorder struct {
+	Transport
+	version atomic.Value
+}
+
+func (v *versionRecorder) SetProtocolVersion(version string) { v.version.Store(version) }
+
+func TestProtocolVersionSetterCalled(t *testing.T) {
+	var _ ProtocolVersionSetter = (*versionRecorder)(nil)
+	v := &versionRecorder{Transport: InProcess(newTestServer(nil))}
+	c, err := NewClient(context.Background(), v, ClientConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close(context.Background()) })
+	if got := v.version.Load(); got != ProtocolVersion {
+		t.Errorf("SetProtocolVersion got %v, want %q", got, ProtocolVersion)
+	}
+}
+
+func TestClientCloseIdempotent(t *testing.T) {
+	c := connect(t, newTestServer(nil), ClientConfig{})
+	for range 2 {
+		if err := c.Close(t.Context()); err != nil {
+			t.Fatalf("sequential Close: %v", err)
+		}
+	}
+	c = connect(t, newTestServer(nil), ClientConfig{})
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Go(func() { errs <- c.Close(t.Context()) })
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent Close: %v", err)
+		}
+	}
+	select {
+	case <-c.Done():
+	default:
+		t.Error("Done not closed after Close returned nil")
+	}
+}
+
+func TestNewClientRejectsNegativeRequestTimeout(t *testing.T) {
+	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
+	_, err := NewClient(context.Background(), f, ClientConfig{RequestTimeout: -time.Second})
+	if err == nil || err.Error() != "mcp: RequestTimeout is negative" {
+		t.Fatalf("err = %v, want mcp: RequestTimeout is negative", err)
+	}
+	if !f.isClosed() {
+		t.Error("transport left open after rejection")
 	}
 }

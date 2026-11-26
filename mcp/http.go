@@ -83,7 +83,7 @@ type httpTransport struct {
 	err       error
 	wg        sync.WaitGroup // Sends, response streams and the GET listener
 
-	closeOnce sync.Once
+	rel release
 }
 
 // DialHTTP returns a Transport speaking the streamable HTTP transport to
@@ -251,22 +251,24 @@ func (t *httpTransport) Err() error {
 }
 
 // Close ends every stream, sends DELETE for the session and waits for the
-// transport's goroutines. It is idempotent.
-func (t *httpTransport) Close() error {
-	t.closeOnce.Do(func() {
+// transport's goroutines. The DELETE runs in the release, bounded by
+// DefaultCloseGrace and not by ctx; see Transport for the contract.
+func (t *httpTransport) Close(ctx context.Context) error {
+	t.rel.start(func() error {
 		t.mu.Lock()
 		sid, expired := t.sessionID, errors.Is(t.err, ErrSessionExpired)
 		t.mu.Unlock()
 		t.end(nil)
 		if sid != "" && !expired {
-			t.deleteSession()
+			t.deleteSession(context.WithoutCancel(ctx))
 		}
 		<-t.finished
 		if t.own != nil {
 			t.own.CloseIdleConnections()
 		}
+		return nil
 	})
-	return nil
+	return t.rel.wait(ctx)
 }
 
 // track counts a goroutine or call in wg unless the transport has ended.
@@ -355,9 +357,9 @@ func (t *httpTransport) push(msg json.RawMessage) bool {
 }
 
 // deleteSession tells the server, best-effort and within
-// DefaultCloseGrace, that the session is over.
-func (t *httpTransport) deleteSession() {
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultCloseGrace)
+// DefaultCloseGrace, that the session is over. ctx supplies values only.
+func (t *httpTransport) deleteSession(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, DefaultCloseGrace)
 	defer cancel()
 	req, _, err := t.newRequest(ctx, http.MethodDelete, nil)
 	if err != nil {

@@ -78,7 +78,7 @@ func (s *serverConn) connect(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, positiveOr(s.cfg.ConnectTimeout, DefaultConnectTimeout))
 	defer cancel()
-	client, err := NewClient(ctx, t, ClientOptions{
+	client, err := NewClient(ctx, t, ClientConfig{
 		RequestTimeout: s.requestTimeout(),
 		OnNotification: s.notified,
 	})
@@ -88,7 +88,7 @@ func (s *serverConn) connect(ctx context.Context) error {
 	if client.HasTools() {
 		tools, err := s.listTools(ctx, client)
 		if err != nil {
-			_ = client.Close()
+			_ = client.Close(context.WithoutCancel(ctx))
 			return err
 		}
 		s.tools.Store(&tools)
@@ -308,14 +308,14 @@ func (s *serverConn) status() ServerStatus {
 }
 
 // close ends the connection and waits for a running refresh.
-func (s *serverConn) close() error {
+func (s *serverConn) close(ctx context.Context) error {
 	s.mu.Lock()
 	s.closed = true
 	s.mu.Unlock()
 	s.cancel()
 	var err error
 	if s.client != nil {
-		err = s.client.Close()
+		err = s.client.Close(ctx)
 	}
 	s.refreshes.Wait()
 	return err

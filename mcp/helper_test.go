@@ -108,7 +108,7 @@ func (f *fakeTransport) Send(ctx context.Context, raw json.RawMessage) error {
 	end := f.endAfter != nil && f.endAfter(msg)
 	f.mu.Unlock()
 	if end {
-		_ = f.Close()
+		_ = f.Close(context.Background())
 		time.Sleep(10 * time.Millisecond)
 	}
 	return nil
@@ -120,7 +120,7 @@ func (f *fakeTransport) push(raw string) { f.msgs <- json.RawMessage(raw) }
 func (f *fakeTransport) Messages() <-chan json.RawMessage { return f.msgs }
 func (f *fakeTransport) Err() error                       { return nil }
 
-func (f *fakeTransport) Close() error {
+func (f *fakeTransport) Close(context.Context) error {
 	f.once.Do(func() {
 		f.mu.Lock()
 		close(f.closed)

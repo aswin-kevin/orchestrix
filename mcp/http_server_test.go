@@ -110,7 +110,7 @@ func TestHTTPHandlerRejects(t *testing.T) {
 
 func TestHTTPHandlerSecondGETConflicts(t *testing.T) {
 	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{})
-	connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientOptions{})
+	connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientConfig{})
 	rec.waitGETOpen(t)
 	req, _ := http.NewRequest(http.MethodGet, ts.URL, nil)
 	req.Header.Set("Accept", "text/event-stream")

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -58,7 +59,7 @@ func TestCloseKillsServerThatLeftItsGroup(t *testing.T) {
 	}
 
 	closed := make(chan error, 1)
-	go func() { closed <- c.Close() }()
+	go func() { closed <- c.Close(context.Background()) }()
 	select {
 	case err := <-closed:
 		if err != nil {
@@ -82,7 +83,7 @@ func TestCloseKillsStubbornServer(t *testing.T) {
 	}
 
 	start := time.Now()
-	if err := c.Close(); err != nil {
+	if err := c.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed >= 1500*time.Millisecond {
@@ -104,7 +105,7 @@ func TestCloseKillsGrandchild(t *testing.T) {
 		t.Fatal("grandchild not running before Close")
 	}
 
-	if err := c.Close(); err != nil {
+	if err := c.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -198,4 +199,38 @@ func TestDelayedKillSkippedOnceGroupGone(t *testing.T) {
 		t.Fatalf("stop: %v", err)
 	}
 	requireAlive(t, tr.cmd, "SIGKILL after the group was gone")
+}
+
+func TestClientCloseContextExpired(t *testing.T) {
+	baseline := runtime.NumGoroutine()
+	tr := startHelper(t, "stubborn", StdioConfig{CloseGrace: 200 * time.Millisecond})
+	c := clientFor(t, tr)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := c.Close(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close = %v, want DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed >= time.Second {
+		t.Fatalf("Close took %v, want < 1s", elapsed)
+	}
+	if err := c.Close(t.Context()); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	select {
+	case <-c.Done():
+	default:
+		t.Fatal("Done not closed after Close returned nil")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for runtime.NumGoroutine() > baseline {
+		if time.Now().After(deadline) {
+			buf := make([]byte, 1<<16)
+			t.Fatalf("goroutines: %d, baseline %d\n%s", runtime.NumGoroutine(), baseline, buf[:runtime.Stack(buf, true)])
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }

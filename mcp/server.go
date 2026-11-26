@@ -196,7 +196,7 @@ func (s *Server) initialize(params json.RawMessage) (any, *RPCError) {
 		return nil, invalidParams(err)
 	}
 	version := ProtocolVersion
-	if slices.Contains(SupportedVersions, p.ProtocolVersion) {
+	if slices.Contains(supportedVersions, p.ProtocolVersion) {
 		version = p.ProtocolVersion
 	}
 	caps := serverCapabilities{Tools: &listChangedCapability{ListChanged: true}}

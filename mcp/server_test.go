@@ -12,7 +12,7 @@ import (
 func rawSession(t *testing.T, s *Server) Transport {
 	t.Helper()
 	sess := InProcess(s)
-	t.Cleanup(func() { _ = sess.Close() })
+	t.Cleanup(func() { _ = sess.Close(context.Background()) })
 	send(t, sess, `{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`)
 	<-sess.Messages()
 	return sess
@@ -77,14 +77,14 @@ func TestNotifyAfterSessionClosed(t *testing.T) {
 		return TextResult("ok"), nil
 	})
 	for range 20 {
-		c, err := NewClient(context.Background(), InProcess(s), ClientOptions{})
+		c, err := NewClient(context.Background(), InProcess(s), ClientConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, err := c.CallTool(context.Background(), "keep", nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.Close(); err != nil {
+		if err := c.Close(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		if err := Notify(<-kept, "notifications/progress", nil); err == nil {

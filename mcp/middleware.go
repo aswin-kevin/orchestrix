@@ -156,7 +156,7 @@ func Connect(ctx context.Context, servers []ServerConfig) (*Middleware, error) {
 	if err := validateServers(servers); err != nil {
 		for _, cfg := range servers {
 			if cfg.Transport != nil {
-				_ = cfg.Transport.Close()
+				_ = cfg.Transport.Close(context.WithoutCancel(ctx))
 			}
 		}
 		return nil, err
@@ -188,7 +188,7 @@ func Connect(ctx context.Context, servers []ServerConfig) (*Middleware, error) {
 	}
 	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
-		m.closeAll()
+		m.closeAll(ctx)
 		return nil, err
 	}
 	if slices.ContainsFunc(m.servers, func(s *serverConn) bool { return s.client != nil && s.client.HasResources() }) {
@@ -238,12 +238,12 @@ func (m *Middleware) HasHiddenTools() bool {
 // ctx.Err() and the closing goes on in the background.
 func (m *Middleware) Close(ctx context.Context) error {
 	if ctx.Done() == nil {
-		m.closeAll()
+		m.closeAll(ctx)
 		return m.closeErr
 	}
 	done := make(chan struct{})
 	go func() {
-		m.closeAll()
+		m.closeAll(ctx)
 		close(done)
 	}()
 	select {
@@ -254,12 +254,15 @@ func (m *Middleware) Close(ctx context.Context) error {
 	}
 }
 
-// closeAll closes every server once and records the joined errors.
-func (m *Middleware) closeAll() {
+// closeAll closes every server once and records the joined errors. The
+// clients get ctx without its cancellation: their transports bound their own
+// cleanup, so Close keeps its semantics.
+func (m *Middleware) closeAll(ctx context.Context) {
+	ctx = context.WithoutCancel(ctx)
 	m.closeOnce.Do(func() {
 		var errs []error
 		for _, s := range m.servers {
-			errs = append(errs, s.close())
+			errs = append(errs, s.close(ctx))
 		}
 		m.closeErr = errors.Join(errs...)
 	})

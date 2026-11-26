@@ -30,13 +30,13 @@ const cancelNotifyTimeout = time.Second
 // returning cursors cannot keep the client busy forever.
 const maxListPages = 1000
 
-// ClientOptions configure a Client.
-type ClientOptions struct {
+// ClientConfig configures a Client.
+type ClientConfig struct {
 	// Info identifies the client to the server; zero → {"orchestrix", the
 	// SDK version}.
 	Info Implementation
 	// RequestTimeout bounds each request whose context has no deadline;
-	// 0 → DefaultRequestTimeout.
+	// 0 → DefaultRequestTimeout. A negative value is rejected by NewClient.
 	RequestTimeout time.Duration
 	// OnNotification, when non-nil, receives every notification from the
 	// server. It is called on the reader goroutine and must not block.
@@ -47,7 +47,7 @@ type ClientOptions struct {
 // for concurrent use.
 type Client struct {
 	t    Transport
-	opts ClientOptions
+	cfg  ClientConfig
 	init initializeResult
 
 	nextID  atomic.Int64
@@ -61,22 +61,25 @@ type Client struct {
 	replies    sync.WaitGroup  // the replier goroutine
 	ctx        context.Context // cancelled by Close; bounds the replies
 	cancel     context.CancelFunc
-	closeOnce  sync.Once
-	closeErr   error
+	rel        release
 }
 
 // NewClient runs the initialize handshake over t and sends
 // notifications/initialized. On failure it closes t.
-func NewClient(ctx context.Context, t Transport, opts ClientOptions) (*Client, error) {
-	if opts.Info == (Implementation{}) {
-		opts.Info = Implementation{Name: clientName, Version: version.Version}
+func NewClient(ctx context.Context, t Transport, cfg ClientConfig) (*Client, error) {
+	if cfg.RequestTimeout < 0 {
+		_ = t.Close(context.WithoutCancel(ctx))
+		return nil, errors.New("mcp: RequestTimeout is negative")
 	}
-	if opts.RequestTimeout <= 0 {
-		opts.RequestTimeout = DefaultRequestTimeout
+	if cfg.Info == (Implementation{}) {
+		cfg.Info = Implementation{Name: clientName, Version: version.Version}
+	}
+	if cfg.RequestTimeout == 0 {
+		cfg.RequestTimeout = DefaultRequestTimeout
 	}
 	c := &Client{
 		t:          t,
-		opts:       opts,
+		cfg:        cfg,
 		pending:    map[int64]chan *message{},
 		done:       make(chan struct{}),
 		replyQueue: make(chan message, replyQueueSize),
@@ -86,21 +89,21 @@ func NewClient(ctx context.Context, t Transport, opts ClientOptions) (*Client, e
 	go c.replier()
 	go c.read()
 	if err := c.initialize(ctx); err != nil {
-		_ = c.Close()
+		_ = c.Close(context.WithoutCancel(ctx))
 		return nil, err
 	}
 	return c, nil
 }
 
 func (c *Client) initialize(ctx context.Context) error {
-	params := initializeParams{ProtocolVersion: ProtocolVersion, Capabilities: map[string]any{}, ClientInfo: c.opts.Info}
+	params := initializeParams{ProtocolVersion: ProtocolVersion, Capabilities: map[string]any{}, ClientInfo: c.cfg.Info}
 	if err := c.request(ctx, methodInitialize, params, &c.init); err != nil {
 		return fmt.Errorf("mcp: initialize: %w", err)
 	}
-	if !slices.Contains(SupportedVersions, c.init.ProtocolVersion) {
+	if !slices.Contains(supportedVersions, c.init.ProtocolVersion) {
 		return fmt.Errorf("mcp: initialize: unsupported protocol version %q", c.init.ProtocolVersion)
 	}
-	if setter, ok := c.t.(protocolVersionSetter); ok {
+	if setter, ok := c.t.(ProtocolVersionSetter); ok {
 		setter.SetProtocolVersion(c.init.ProtocolVersion)
 	}
 	if err := c.notify(ctx, notifyInitialized, nil); err != nil {
@@ -185,15 +188,21 @@ func (c *Client) Err() error {
 }
 
 // Close closes the transport and waits for the client's goroutines. It is
-// idempotent.
-func (c *Client) Close() error {
-	c.closeOnce.Do(func() {
+// idempotent and safe for concurrent use: the first call starts the
+// release, and every call returns when the release is done (with the
+// transport's result) or with ctx.Err() when ctx ends first, the release
+// going on in the background. When Close returns nil, Done is closed. The
+// transport bounds its own cleanup, so the release does not stop when ctx
+// ends.
+func (c *Client) Close(ctx context.Context) error {
+	c.rel.start(func() error {
 		c.cancel()
-		c.closeErr = c.t.Close()
+		err := c.t.Close(context.WithoutCancel(ctx))
 		<-c.done
 		c.replies.Wait()
+		return err
 	})
-	return c.closeErr
+	return c.rel.wait(ctx)
 }
 
 // paginate requests method page by page; each page's result goes to add,
@@ -226,7 +235,7 @@ func (c *Client) request(ctx context.Context, method string, params, result any)
 	if _, ok := ctx.Deadline(); ok {
 		ctx, cancel = context.WithCancel(ctx)
 	} else {
-		ctx, cancel = context.WithTimeout(ctx, c.opts.RequestTimeout)
+		ctx, cancel = context.WithTimeout(ctx, c.cfg.RequestTimeout)
 	}
 	defer cancel()
 	rawParams, err := marshalParams(params)
@@ -338,8 +347,8 @@ func (c *Client) read() {
 		case m.isRequest():
 			c.answer(m)
 		case m.isNotification():
-			if c.opts.OnNotification != nil {
-				c.opts.OnNotification(m.Method, m.Params)
+			if c.cfg.OnNotification != nil {
+				c.cfg.OnNotification(m.Method, m.Params)
 			}
 		default:
 			c.deliver(m)
@@ -391,7 +400,7 @@ func (c *Client) replier() {
 	for {
 		select {
 		case reply := <-c.replyQueue:
-			ctx, cancel := context.WithTimeout(c.ctx, c.opts.RequestTimeout)
+			ctx, cancel := context.WithTimeout(c.ctx, c.cfg.RequestTimeout)
 			_ = c.send(ctx, reply)
 			cancel()
 		case <-c.ctx.Done():

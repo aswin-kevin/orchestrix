@@ -72,10 +72,10 @@ type stdioTransport struct {
 	errMu sync.Mutex
 	err   error
 
-	closing   chan struct{}
-	closeOnce sync.Once
-	closeErr  error
-	wg        sync.WaitGroup
+	closing  chan struct{}
+	rel      release
+	closeErr error
+	wg       sync.WaitGroup
 }
 
 // writeRequest is one message for the writer goroutine; the write's error is
@@ -182,9 +182,10 @@ func (t *stdioTransport) Err() error {
 // Close stops the server: it closes stdin, then after CloseGrace sends
 // SIGTERM to the process group, then after another CloseGrace SIGKILL, and
 // waits for the process, its leftovers (up to two more CloseGrace periods)
-// and the transport's goroutines. It is idempotent.
-func (t *stdioTransport) Close() error {
-	t.closeOnce.Do(func() {
+// and the transport's goroutines. See Transport for the contract; the
+// escalation keeps going in the background when ctx ends first.
+func (t *stdioTransport) Close(ctx context.Context) error {
+	t.rel.start(func() error {
 		close(t.closing)
 		t.closeErr = t.stop()
 		<-t.exited
@@ -192,8 +193,9 @@ func (t *stdioTransport) Close() error {
 		_ = t.stdout.Close()
 		_ = t.stderr.Close()
 		t.wg.Wait()
+		return t.closeErr
 	})
-	return t.closeErr
+	return t.rel.wait(ctx)
 }
 
 // stop escalates until the server has exited and its leftovers are reaped.

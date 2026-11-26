@@ -336,9 +336,9 @@ type closeRecorder struct {
 	closed atomic.Bool
 }
 
-func (c *closeRecorder) Close() error {
+func (c *closeRecorder) Close(ctx context.Context) error {
 	c.closed.Store(true)
-	return c.Transport.Close()
+	return c.Transport.Close(ctx)
 }
 
 func TestConnectFailureClosesOthers(t *testing.T) {

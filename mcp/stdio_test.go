@@ -114,18 +114,18 @@ func startHelper(t *testing.T, mode string, cfg StdioConfig) Transport {
 	if err != nil {
 		t.Fatalf("StartStdio: %v", err)
 	}
-	t.Cleanup(func() { _ = tr.Close() })
+	t.Cleanup(func() { _ = tr.Close(context.Background()) })
 	return tr
 }
 
 // clientFor connects a client over tr, closed when the test ends.
 func clientFor(t *testing.T, tr Transport) *Client {
 	t.Helper()
-	c, err := NewClient(context.Background(), tr, ClientOptions{})
+	c, err := NewClient(context.Background(), tr, ClientConfig{})
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	t.Cleanup(func() { _ = c.Close() })
+	t.Cleanup(func() { _ = c.Close(context.Background()) })
 	return c
 }
 
@@ -161,7 +161,7 @@ func TestStdioHelperServer(t *testing.T) {
 	if err != nil || len(contents) != 1 || contents[0].Text != "hello" {
 		t.Errorf("ReadResource = %+v, %v", contents, err)
 	}
-	if err := c.Close(); err != nil {
+	if err := c.Close(context.Background()); err != nil {
 		t.Errorf("Close: %v", err)
 	}
 }
@@ -240,12 +240,12 @@ func TestStartStdioErrors(t *testing.T) {
 func TestNoGoroutineLeak(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
-	inproc, err := NewClient(context.Background(), InProcess(newTestServer(nil)), ClientOptions{})
+	inproc, err := NewClient(context.Background(), InProcess(newTestServer(nil)), ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	tr := startHelper(t, "serve", StdioConfig{})
-	stdio, err := NewClient(context.Background(), tr, ClientOptions{})
+	stdio, err := NewClient(context.Background(), tr, ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestNoGoroutineLeak(t *testing.T) {
 		if got := callText(t, c, "echo", `{"text":"x"}`); got != "x" {
 			t.Fatalf("echo = %q", got)
 		}
-		if err := c.Close(); err != nil {
+		if err := c.Close(context.Background()); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	}

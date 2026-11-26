@@ -9,10 +9,10 @@ import (
 
 // inProcess is a Transport connected to a Server session in memory.
 type inProcess struct {
-	sess      *session
-	msgs      chan json.RawMessage
-	closed    chan struct{}
-	closeOnce sync.Once
+	sess   *session
+	msgs   chan json.RawMessage
+	closed chan struct{}
+	rel    release
 
 	// msgsMu guards closing msgs: deliver holds it shared while sending,
 	// Close exclusively while closing, so nothing sends on a closed channel.
@@ -25,7 +25,9 @@ type inProcess struct {
 // for tests and for embedding a server in the same program.
 //
 // Close cancels the session's requests and waits for their handlers to
-// return; it is unbounded, so a handler that ignores its ctx blocks it.
+// return. A handler that ignores its ctx keeps the release running, so a
+// Close whose ctx ends first returns ctx.Err() and the release goes on in
+// the background.
 func InProcess(s *Server) Transport {
 	t := &inProcess{msgs: make(chan json.RawMessage), closed: make(chan struct{})}
 	t.sess = s.newSession(context.Background(), t.deliver)
@@ -67,15 +69,17 @@ func (t *inProcess) Messages() <-chan json.RawMessage { return t.msgs }
 // Err is always nil: an in-process session only ends when closed.
 func (t *inProcess) Err() error { return nil }
 
-// Close ends the session, waiting for its requests' handlers to return.
-func (t *inProcess) Close() error {
-	t.closeOnce.Do(func() {
+// Close ends the session, waiting for its requests' handlers to return or
+// for ctx to end.
+func (t *inProcess) Close(ctx context.Context) error {
+	t.rel.start(func() error {
 		close(t.closed) // unblocks deliver, which holds msgsMu shared
 		t.sess.close()
 		t.msgsMu.Lock()
 		t.msgsClosed = true
 		close(t.msgs)
 		t.msgsMu.Unlock()
+		return nil
 	})
-	return nil
+	return t.rel.wait(ctx)
 }

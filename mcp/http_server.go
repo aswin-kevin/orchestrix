@@ -128,7 +128,7 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
-	if v := r.Header.Get(headerProtocolVersion); v != "" && !slices.Contains(SupportedVersions, v) {
+	if v := r.Header.Get(headerProtocolVersion); v != "" && !slices.Contains(supportedVersions, v) {
 		http.Error(w, "unsupported protocol version: "+v, http.StatusBadRequest)
 		return
 	}

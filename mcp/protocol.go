@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -37,9 +38,13 @@ const (
 	DefaultStderrBytes = 8 << 10
 )
 
-// SupportedVersions lists the protocol revisions the client accepts from a
-// server and the server echoes to a client, newest first.
-var SupportedVersions = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
+// supportedVersions is the list SupportedVersions returns a copy of.
+var supportedVersions = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
+
+// SupportedVersions returns the protocol revisions the client accepts from a
+// server and the server echoes to a client, newest first. The slice is a
+// copy; changing it changes nothing.
+func SupportedVersions() []string { return slices.Clone(supportedVersions) }
 
 var (
 	// ErrClosed reports that the connection to the server has ended.
