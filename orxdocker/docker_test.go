@@ -223,9 +223,9 @@ func TestDockerNonUTF8Name(t *testing.T) {
 
 func TestDockerNoHostEnvironment(t *testing.T) {
 	t.Setenv("ORX_HOST_CANARY", "host-secret-value")
-	m := newTestManager(t, Options{Env: []string{"FROM_OPTIONS=1", "SHARED=options"}})
+	m := newTestManager(t, Options{Env: map[string]string{"FROM_OPTIONS": "1", "SHARED": "options"}})
 	e := m.Executor("env")
-	res := run(t, e, "env", backend.ExecOptions{Env: []string{"FROM_CALL=1", "SHARED=call"}})
+	res := run(t, e, "env", backend.ExecOptions{Env: map[string]string{"FROM_CALL": "1", "SHARED": "call"}})
 	if strings.Contains(res.Output, "host-secret-value") || strings.Contains(res.Output, "ORX_HOST_CANARY") {
 		t.Fatalf("host environment leaked: %q", res.Output)
 	}

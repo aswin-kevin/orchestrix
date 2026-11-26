@@ -15,10 +15,12 @@
 // DefaultKillGrace for such a process to release the output pipe, then
 // returns without it. Use an OS-level sandbox when commands must not escape.
 //
-// Commands get no stdin, a small allowlisted environment plus
-// NonInteractiveEnv and SafeGitEnv (the host environment, which may hold API
-// keys, is not inherited unless Options.InheritEnv is set), and output capped
-// at a head and a tail so memory stays bounded.
+// Commands get no stdin, a small allowlisted environment (InheritedEnv) plus
+// the variables of NonInteractiveEnv and SafeGitEnv (the host environment,
+// which may hold API keys, is not inherited unless Options.InheritEnv is
+// set), and output capped at a head and a tail so memory stays bounded.
+// Those three functions return copies: changing what they return does not
+// change what commands get.
 //
 // Commands need Shell (/bin/sh), so they run on Unix only. On Windows the
 // file operations work, but every command fails to start; use a disk
@@ -31,6 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"time"
@@ -57,28 +60,40 @@ const (
 	Shell = "/bin/sh"
 )
 
-// NonInteractiveEnv keeps tools from paging, prompting or emitting terminal
-// control codes, any of which would hang or garble a command with no
-// terminal attached.
-var NonInteractiveEnv = []string{"PAGER=cat", "GIT_PAGER=cat", "MANPAGER=cat", "GIT_TERMINAL_PROMPT=0",
-	"DEBIAN_FRONTEND=noninteractive", "NO_COLOR=1", "TERM=dumb"}
+// nonInteractiveEnv backs NonInteractiveEnv; commands read it, so callers
+// changing a returned map cannot change what commands get.
+var nonInteractiveEnv = map[string]string{
+	"PAGER": "cat", "GIT_PAGER": "cat", "MANPAGER": "cat", "GIT_TERMINAL_PROMPT": "0",
+	"DEBIAN_FRONTEND": "noninteractive", "NO_COLOR": "1", "TERM": "dumb",
+}
 
-// SafeGitEnv sets safe.bareRepository=explicit, so git uses a bare
-// repository only when one is named with --git-dir or GIT_DIR, never one it
-// merely finds: a directory with HEAD, config, objects and refs, which an
+// safeGitEnv backs SafeGitEnv; commands read it, so callers changing a
+// returned map cannot weaken the git hardening.
+var safeGitEnv = map[string]string{
+	"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.bareRepository", "GIT_CONFIG_VALUE_0": "explicit",
+}
+
+// NonInteractiveEnv returns the variables that keep tools from paging,
+// prompting or emitting terminal control codes, any of which would hang or
+// garble a command with no terminal attached. Each call returns a fresh copy.
+func NonInteractiveEnv() map[string]string { return maps.Clone(nonInteractiveEnv) }
+
+// SafeGitEnv returns the variables that set safe.bareRepository=explicit, so
+// git uses a bare repository only when one is named with --git-dir or
+// GIT_DIR, never one it merely finds: a directory with HEAD, config, objects and refs, which an
 // agent could write with file tools, would otherwise let its config run
 // commands (an alias, core.fsmonitor) from any git call made inside it.
 // Configuration set through the environment overrides the repository's, and
 // git 2.38 and later honour this setting. It replaces any GIT_CONFIG_COUNT
 // settings an inherited environment carries; Options.Env can restore them.
-var SafeGitEnv = []string{
-	"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.bareRepository", "GIT_CONFIG_VALUE_0=explicit",
-}
+// Each call returns a fresh copy.
+func SafeGitEnv() map[string]string { return maps.Clone(safeGitEnv) }
 
-// InheritedEnv names the host variables passed to commands by default: enough
-// for tools to find binaries, a home and a locale, and nothing secret. MCP
-// stdio servers get the same list.
-var InheritedEnv = hostenv.DefaultNames
+// InheritedEnv returns the names of the host variables passed to commands by
+// default: enough for tools to find binaries, a home and a locale, and
+// nothing secret. MCP stdio servers get the same list. Each call returns a
+// fresh copy.
+func InheritedEnv() []string { return hostenv.DefaultNames() }
 
 // Options configures a Backend. The zero value is ready to use.
 type Options struct {
@@ -187,12 +202,12 @@ func (b *Backend) workDir(dir string) (string, error) {
 
 // environ builds a command's environment, lowest precedence first. exec.Cmd
 // keeps only the last value of a repeated key, so later entries override.
-func (b *Backend) environ(extra []string) []string {
-	env := hostenv.Inherited(InheritedEnv, b.opts.InheritEnv)
-	env = append(env, NonInteractiveEnv...)
-	env = append(env, SafeGitEnv...)
+func (b *Backend) environ(extra map[string]string) []string {
+	env := hostenv.Inherited(hostenv.DefaultNames(), b.opts.InheritEnv)
+	env = append(env, hostenv.Pairs(nonInteractiveEnv)...)
+	env = append(env, hostenv.Pairs(safeGitEnv)...)
 	env = append(env, hostenv.Pairs(b.opts.Env)...)
-	return append(env, extra...)
+	return append(env, hostenv.Pairs(extra)...)
 }
 
 func (b *Backend) timeout(opts backend.ExecOptions) time.Duration {

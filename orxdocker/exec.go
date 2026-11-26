@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -531,24 +533,22 @@ func (e *Executor) runQuick(ctx context.Context, id string, argv []string) (int,
 	}
 }
 
-// mergeEnv combines environment lists, later entries overriding earlier
-// ones with the same key, keeping first-seen order.
-func mergeEnv(lists ...[]string) ([]string, error) {
-	index := map[string]int{}
-	var out []string
-	for _, list := range lists {
-		for _, kv := range list {
-			k, _, ok := strings.Cut(kv, "=")
-			if !ok || k == "" {
-				return nil, fmt.Errorf("orxdocker: env entry %q is not KEY=value", kv)
+// mergeEnv combines environment maps into KEY=value entries sorted by key, a
+// later map's value winning over an earlier one's. A key that is empty or
+// holds "=" or NUL is an error.
+func mergeEnv(envs ...map[string]string) ([]string, error) {
+	merged := map[string]string{}
+	for _, env := range envs {
+		for k, v := range env {
+			if k == "" || strings.ContainsAny(k, "=\x00") {
+				return nil, fmt.Errorf("orxdocker: env key %q is invalid", k)
 			}
-			if i, seen := index[k]; seen {
-				out[i] = kv
-				continue
-			}
-			index[k] = len(out)
-			out = append(out, kv)
+			merged[k] = v
 		}
+	}
+	var out []string
+	for _, k := range slices.Sorted(maps.Keys(merged)) {
+		out = append(out, k+"="+merged[k])
 	}
 	return out, nil
 }

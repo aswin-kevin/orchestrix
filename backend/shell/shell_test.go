@@ -144,15 +144,34 @@ func TestExecuteRunsInRootAndDir(t *testing.T) {
 	}
 }
 
-func TestEnvAllowlistAndInjection(t *testing.T) {
+func TestEnvAllowlist(t *testing.T) {
 	t.Setenv("ORX_SECRET_TEST", "leaked")
-	b, _ := newShell(t, shell.Options{Env: map[string]string{"A": "1", "B": "options", "TERM": "xterm"}})
-	res := execute(t, b, "env", backend.ExecOptions{Env: []string{"B=exec"}})
+	b, _ := newShell(t, shell.Options{})
+	res := execute(t, b, "env", backend.ExecOptions{})
 	if strings.Contains(res.Output, "ORX_SECRET_TEST") {
 		t.Errorf("host secret leaked into the command env:\n%s", res.Output)
 	}
+	if !containsLine(strings.Split(res.Output, "\n"), "PATH="+os.Getenv("PATH")) {
+		t.Errorf("env lacks the inherited PATH:\n%s", res.Output)
+	}
+
+	inherit, _ := newShell(t, shell.Options{InheritEnv: true})
+	if res := execute(t, inherit, "env", backend.ExecOptions{}); !containsLine(strings.Split(res.Output, "\n"), "ORX_SECRET_TEST=leaked") {
+		t.Errorf("InheritEnv must pass the host env:\n%s", res.Output)
+	}
+}
+
+// TestEnvPrecedence pins the order: inherited host variables, then
+// NonInteractiveEnv, then SafeGitEnv, then Options.Env, then
+// ExecOptions.Env, each overriding the ones before.
+func TestEnvPrecedence(t *testing.T) {
+	b, _ := newShell(t, shell.Options{Env: map[string]string{"A": "1", "B": "options", "TERM": "xterm"}})
+	res := execute(t, b, "env", backend.ExecOptions{Env: map[string]string{"B": "exec"}})
 	lines := strings.Split(res.Output, "\n")
-	for _, want := range []string{"A=1", "B=exec", "PAGER=cat", "GIT_TERMINAL_PROMPT=0", "TERM=xterm", "PATH=" + os.Getenv("PATH")} {
+	for _, want := range []string{
+		"A=1", "B=exec", "TERM=xterm", "PAGER=cat", "GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.bareRepository", "GIT_CONFIG_VALUE_0=explicit",
+	} {
 		if !containsLine(lines, want) {
 			t.Errorf("env lacks %q:\n%s", want, res.Output)
 		}
@@ -163,16 +182,44 @@ func TestEnvAllowlistAndInjection(t *testing.T) {
 		}
 	}
 
+	// An inherited environment's git settings are replaced by SafeGitEnv, and
+	// an inherited TERM by NonInteractiveEnv; Options.Env can restore them.
+	t.Setenv("GIT_CONFIG_COUNT", "5")
+	t.Setenv("GIT_CONFIG_VALUE_0", "all")
+	t.Setenv("TERM", "xterm-256color")
 	inherit, _ := newShell(t, shell.Options{InheritEnv: true})
-	if res := execute(t, inherit, "env", backend.ExecOptions{}); !containsLine(strings.Split(res.Output, "\n"), "ORX_SECRET_TEST=leaked") {
-		t.Errorf("InheritEnv must pass the host env:\n%s", res.Output)
+	lines = strings.Split(execute(t, inherit, "env", backend.ExecOptions{}).Output, "\n")
+	for _, want := range []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_VALUE_0=explicit", "TERM=dumb"} {
+		if !containsLine(lines, want) {
+			t.Errorf("inherited env: lacks %q:\n%s", want, strings.Join(lines, "\n"))
+		}
 	}
+	restore, _ := newShell(t, shell.Options{InheritEnv: true, Env: map[string]string{"GIT_CONFIG_COUNT": "0"}})
+	lines = strings.Split(execute(t, restore, "env", backend.ExecOptions{}).Output, "\n")
+	if !containsLine(lines, "GIT_CONFIG_COUNT=0") {
+		t.Errorf("Options.Env did not override SafeGitEnv:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// TestGitHardeningSurvivesCallerMutation checks that changing the map
+// SafeGitEnv returns does not weaken the environment commands get.
+func TestGitHardeningSurvivesCallerMutation(t *testing.T) {
+	env := shell.SafeGitEnv()
+	env["GIT_CONFIG_VALUE_0"] = "all"
+	requireBareRepositoryIgnored(t)
 }
 
 // TestGitIgnoresImplicitBareRepository plants a bare repository whose config
 // defines an alias that runs a command, and checks that git, run inside it,
 // does not use it.
 func TestGitIgnoresImplicitBareRepository(t *testing.T) {
+	requireBareRepositoryIgnored(t)
+}
+
+// requireBareRepositoryIgnored runs TestGitIgnoresImplicitBareRepository's
+// scenario.
+func requireBareRepositoryIgnored(t *testing.T) {
+	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}

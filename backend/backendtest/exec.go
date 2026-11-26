@@ -51,7 +51,7 @@ func RunExecutor(t *testing.T, newExecutor func(t *testing.T) backend.Executor) 
 		}
 	})
 	t.Run("Env", func(t *testing.T) {
-		res := exec(t, "echo $ORX_KIT", backend.ExecOptions{Env: []string{"ORX_KIT=v"}})
+		res := exec(t, "echo $ORX_KIT", backend.ExecOptions{Env: map[string]string{"ORX_KIT": "v"}})
 		if res.Output != "v\n" {
 			t.Fatalf("Output = %q, want %q", res.Output, "v\n")
 		}

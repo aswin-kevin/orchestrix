@@ -122,9 +122,9 @@ type Backend interface {
 type ExecOptions struct {
 	// Timeout stops the command after this long; 0 means the backend default.
 	Timeout time.Duration
-	// Env holds extra "KEY=value" entries that override the backend's
-	// environment; nil adds none.
-	Env []string
+	// Env holds variables that override the backend's environment; nil adds
+	// none. Implementations must not modify it.
+	Env map[string]string
 	// Dir is the working directory as a backend path; empty means the root.
 	Dir string
 	// MaxOutputBytes caps the captured output; 0 means the backend default.

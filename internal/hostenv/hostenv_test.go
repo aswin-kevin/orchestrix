@@ -32,3 +32,15 @@ func TestPairsSortedByKey(t *testing.T) {
 		t.Fatal("Pairs(nil) is not nil")
 	}
 }
+
+func TestDefaultNamesIsCopy(t *testing.T) {
+	names := DefaultNames()
+	names[0] = "X"
+	if got := DefaultNames()[0]; got != "PATH" {
+		t.Fatalf("DefaultNames()[0] = %q after a caller mutation, want PATH", got)
+	}
+	want := []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TMPDIR", "TZ"}
+	if got := DefaultNames(); !slices.Equal(got, want) {
+		t.Fatalf("DefaultNames() = %v, want %v", got, want)
+	}
+}

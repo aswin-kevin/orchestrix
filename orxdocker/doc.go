@@ -41,7 +41,8 @@
 //     network instead, and filtering that network's traffic, the cloud
 //     metadata address included, is then the network's job
 //   - no host environment: a command sees the image's environment,
-//     Options.Env and ExecOptions.Env only
+//     Options.Env and ExecOptions.Env only, the latter winning on a shared
+//     key
 //
 // The workspace is a tmpfs: it lives as long as the container, counts
 // against the memory limit, and is gone when the container is removed.

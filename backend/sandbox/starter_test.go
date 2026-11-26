@@ -54,7 +54,7 @@ func TestStartPrefixesQuotedCd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := backend.ExecOptions{Dir: "/sub/../it's", Timeout: time.Minute, Env: []string{"A=1"}, MaxOutputBytes: 7}
+	in := backend.ExecOptions{Dir: "/sub/../it's", Timeout: time.Minute, Env: map[string]string{"A": "1"}, MaxOutputBytes: 7}
 	if _, err := b.Start(ctx, "make", in); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestStartPrefixesQuotedCd(t *testing.T) {
 		t.Fatalf("command = %q, want %q", f.cmds, want)
 	}
 	got := f.opts[0]
-	if got.Dir != "" || got.Timeout != time.Minute || len(got.Env) != 1 || got.Env[0] != "A=1" || got.MaxOutputBytes != 7 {
+	if got.Dir != "" || got.Timeout != time.Minute || len(got.Env) != 1 || got.Env["A"] != "1" || got.MaxOutputBytes != 7 {
 		t.Fatalf("options = %+v", got)
 	}
 	if _, err := b.Start(ctx, "make", backend.ExecOptions{Dir: "a\x00b"}); !errors.Is(err, backend.ErrInvalidPath) || len(f.cmds) != 1 {

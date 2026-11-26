@@ -79,18 +79,24 @@ func TestSplitRef(t *testing.T) {
 }
 
 func TestMergeEnv(t *testing.T) {
-	got, err := mergeEnv([]string{"A=1", "B=2"}, []string{"B=3", "C=x=y"})
+	got, err := mergeEnv(map[string]string{"A": "1", "SHARED": "cfg"}, map[string]string{"SHARED": "call"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"A=1", "B=3", "C=x=y"}; !slices.Equal(got, want) {
+	if want := []string{"A=1", "SHARED=call"}; !slices.Equal(got, want) {
 		t.Fatalf("mergeEnv = %q, want %q", got, want)
 	}
-	if _, err := mergeEnv([]string{"NOVALUE"}); err == nil {
-		t.Error("entry without = accepted")
+	got, err = mergeEnv(map[string]string{"C": "x=y", "B": ""}, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := mergeEnv([]string{"=x"}); err == nil {
-		t.Error("entry without a key accepted")
+	if want := []string{"B=", "C=x=y"}; !slices.Equal(got, want) {
+		t.Fatalf("mergeEnv = %q, want %q", got, want)
+	}
+	for _, bad := range []map[string]string{{"": "x"}, {"A=B": "x"}, {"A\x00B": "x"}} {
+		if _, err := mergeEnv(bad); err == nil || !strings.Contains(err.Error(), "env key") {
+			t.Errorf("mergeEnv(%q) = %v, want an env key error", bad, err)
+		}
 	}
 }
 
@@ -159,7 +165,7 @@ func TestOptionsValidation(t *testing.T) {
 		"unclean workdir":  {WorkDir: "/a/../b", Socket: "/s"},
 		"comma workdir":    {WorkDir: "/a,b", Socket: "/s"},
 		"bad scope":        {Scope: "a b", Socket: "/s"},
-		"bad env":          {Env: []string{"X"}, Socket: "/s"},
+		"bad env":          {Env: map[string]string{"A=B": "x"}, Socket: "/s"},
 	} {
 		if _, err := NewManager(o); err == nil {
 			t.Errorf("%s: accepted", name)

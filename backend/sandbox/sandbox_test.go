@@ -3,6 +3,7 @@ package sandbox_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/backendtest"
 	"github.com/aswin-kevin/orchestrix/backend/sandbox"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/internal/hostenv"
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 )
 
@@ -57,7 +59,7 @@ func (e *localExec) Execute(ctx context.Context, cmd string, opts backend.ExecOp
 	}
 	c := exec.CommandContext(ctx, "/bin/sh", "-c", cmd)
 	c.Dir = e.dir
-	c.Env = append(append(os.Environ(), e.env...), opts.Env...)
+	c.Env = append(append(os.Environ(), e.env...), hostenv.Pairs(opts.Env)...)
 	out, err := c.CombinedOutput()
 	res := backend.ExecResult{Output: string(out)}
 	var exitErr *exec.ExitError
@@ -201,6 +203,36 @@ type fakeExec struct {
 
 func (f fakeExec) Execute(context.Context, string, backend.ExecOptions) (backend.ExecResult, error) {
 	return f.res, f.err
+}
+
+// recordingExec records the options of every command and answers each with
+// exit code 3 (not found).
+type recordingExec struct {
+	opts []backend.ExecOptions
+}
+
+func (r *recordingExec) Execute(_ context.Context, _ string, opts backend.ExecOptions) (backend.ExecResult, error) {
+	r.opts = append(r.opts, opts)
+	return backend.ExecResult{ExitCode: 3}, nil
+}
+
+func TestScriptEnvFreshPerCall(t *testing.T) {
+	rec := &recordingExec{}
+	b := newSandbox(t, rec, "/work")
+	if _, err := b.Read(ctx, "/f.txt", 0, 0); !errors.Is(err, backend.ErrNotFound) {
+		t.Fatalf("Read = %v, want ErrNotFound", err)
+	}
+	if len(rec.opts) != 1 {
+		t.Fatalf("Read ran %d commands, want 1", len(rec.opts))
+	}
+	rec.opts[0].Env["LC_ALL"] = "en_US.UTF-8"
+	rec.opts[0].Env["EXTRA"] = "1"
+	if _, err := b.Read(ctx, "/f.txt", 0, 0); !errors.Is(err, backend.ErrNotFound) {
+		t.Fatalf("Read = %v, want ErrNotFound", err)
+	}
+	if got, want := rec.opts[1].Env, map[string]string{"LC_ALL": "C"}; !maps.Equal(got, want) {
+		t.Fatalf("second Read's env = %v, want %v", got, want)
+	}
 }
 
 func TestSandboxErrorMapping(t *testing.T) {

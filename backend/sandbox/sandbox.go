@@ -191,7 +191,7 @@ func cleanBase(p string) (string, error) {
 func (b *Backend) run(ctx context.Context, op, p, script string, maxOutput int) (string, error) {
 	res, err := b.exec.Execute(ctx, script, backend.ExecOptions{
 		Timeout:        b.timeout,
-		Env:            scriptEnv,
+		Env:            scriptEnv(),
 		MaxOutputBytes: maxOutput,
 	})
 	if err != nil {

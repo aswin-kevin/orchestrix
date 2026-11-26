@@ -36,9 +36,10 @@ const (
 	errTailBytes = 512
 )
 
-// scriptEnv pins the locale of file-operation scripts so tool output is
-// byte-oriented and parseable.
-var scriptEnv = []string{"LC_ALL=C"}
+// scriptEnv returns the environment that pins the locale of file-operation
+// scripts so tool output is byte-oriented and parseable. Each call returns a
+// fresh map, so an executor that modifies one cannot affect later scripts.
+func scriptEnv() map[string]string { return map[string]string{"LC_ALL": "C"} }
 
 // quote returns s as one POSIX single-quoted shell word. Inside single quotes
 // nothing is special; a single quote in s closes the quoting, appears as an

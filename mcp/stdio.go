@@ -142,7 +142,7 @@ func StartStdio(cfg StdioConfig) (Transport, error) {
 // environment, then cfg.Env in key order. exec.Cmd keeps the last value of a
 // repeated key, so cfg.Env overrides.
 func environ(cfg StdioConfig) []string {
-	env := hostenv.Inherited(hostenv.DefaultNames, cfg.InheritEnv)
+	env := hostenv.Inherited(hostenv.DefaultNames(), cfg.InheritEnv)
 	return append(env, hostenv.Pairs(cfg.Env)...)
 }
 

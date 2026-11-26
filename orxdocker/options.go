@@ -99,9 +99,10 @@ type Options struct {
 	// out of scope is the network's job, for instance an internal network
 	// whose only way out is a filtering proxy.
 	Network string
-	// Env is added to every command's environment (KEY=value entries);
-	// ExecOptions.Env wins over it. The host environment is never passed.
-	Env []string
+	// Env is added to every command's environment; ExecOptions.Env wins
+	// over it. A key must be non-empty and hold no "=" or NUL. The host
+	// environment is never passed.
+	Env map[string]string
 	// Timeout applies to commands whose ExecOptions.Timeout is 0; 0 means
 	// DefaultTimeout.
 	Timeout time.Duration
@@ -197,10 +198,8 @@ func (o Options) withDefaults() (Options, error) {
 	if o.IdleTTL == 0 {
 		o.IdleTTL = DefaultIdleTTL
 	}
-	for _, e := range o.Env {
-		if !strings.Contains(e, "=") {
-			return o, fmt.Errorf("orxdocker: env entry %q is not KEY=value", e)
-		}
+	if _, err := mergeEnv(o.Env); err != nil {
+		return o, err
 	}
 	return o, nil
 }

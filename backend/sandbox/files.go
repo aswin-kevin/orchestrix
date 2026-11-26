@@ -163,7 +163,7 @@ func chunk(content []byte) [][]byte {
 func (b *Backend) removeTemp(ctx context.Context, tmp string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
-	_, _ = b.exec.Execute(ctx, "rm -f -- "+quote(tmp), backend.ExecOptions{Timeout: cleanupTimeout, Env: scriptEnv})
+	_, _ = b.exec.Execute(ctx, "rm -f -- "+quote(tmp), backend.ExecOptions{Timeout: cleanupTimeout, Env: scriptEnv()})
 }
 
 // Edit replaces old with replacement in the file at p.

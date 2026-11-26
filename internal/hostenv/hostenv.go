@@ -9,10 +9,13 @@ import (
 	"slices"
 )
 
-// DefaultNames names the host variables a child process receives by
-// default: enough for tools to find binaries, a home and a locale, and
-// nothing secret.
-var DefaultNames = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TMPDIR", "TZ"}
+// defaultNames backs DefaultNames; it is never handed out.
+var defaultNames = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TMPDIR", "TZ"}
+
+// DefaultNames returns the names of the host variables a child process
+// receives by default: enough for tools to find binaries, a home and a
+// locale, and nothing secret. Each call returns a fresh copy.
+func DefaultNames() []string { return slices.Clone(defaultNames) }
 
 // Inherited returns the host variables a child receives: the whole host
 // environment when all is set, otherwise only the named variables that are
