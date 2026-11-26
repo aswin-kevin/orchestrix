@@ -482,7 +482,7 @@ func pinRun(t *testing.T, ckptDir string, pinned []string, turns ...llmtest.Turn
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := filecp.New(ckptDir)
+	store, err := filecp.New(ckptDir, filecp.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

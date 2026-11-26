@@ -32,7 +32,7 @@ func mustThread(t *testing.T, a *Agent, id string) *Thread {
 // would.
 func mustFileCheckpointer(t *testing.T, dir string) *file.Checkpointer {
 	t.Helper()
-	cp, err := file.New(dir)
+	cp, err := file.New(dir, file.Config{})
 	if err != nil {
 		t.Fatalf("file.New: %v", err)
 	}

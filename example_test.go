@@ -122,7 +122,7 @@ func ExampleWithInterruptOn() {
 
 func ExampleWithCheckpointer() {
 	ctx := context.Background()
-	cp, err := file.New("./checkpoints")
+	cp, err := file.New("./checkpoints", file.Config{})
 	if err != nil {
 		log.Fatal(err)
 	}

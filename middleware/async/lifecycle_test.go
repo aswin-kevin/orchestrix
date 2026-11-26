@@ -185,7 +185,7 @@ func TestUpdateReachesOnlyTheTask(t *testing.T) {
 func TestLostAfterRestart(t *testing.T) {
 	dir := t.TempDir()
 	newAgent := func(m *Middleware, p llm.Provider) *agent.Agent {
-		cp, err := file.New(dir)
+		cp, err := file.New(dir, file.Config{})
 		if err != nil {
 			t.Fatal(err)
 		}

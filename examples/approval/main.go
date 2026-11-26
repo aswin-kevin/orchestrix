@@ -54,7 +54,7 @@ func run(ctx context.Context, w io.Writer) error {
 	}
 	defer os.RemoveAll(dir)
 
-	checkpoints, err := file.New(filepath.Join(dir, "checkpoints"))
+	checkpoints, err := file.New(filepath.Join(dir, "checkpoints"), file.Config{})
 	if err != nil {
 		return err
 	}

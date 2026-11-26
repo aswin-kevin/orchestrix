@@ -254,7 +254,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 			orchestrix.WithShell(o.dir, shell.Config{}), orchestrix.WithTasks(jobs))
 	}
 	if o.store != "" {
-		cp, err := file.New(o.store)
+		cp, err := file.New(o.store, file.Config{})
 		if err != nil {
 			return fail(exitError, "open store: %v", err)
 		}

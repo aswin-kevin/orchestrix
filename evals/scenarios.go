@@ -137,7 +137,7 @@ func crossProcessApproval(ctx context.Context, env Env, t *T) {
 	// fresh stands in for a new process: its own checkpointer on the shared
 	// directory and its own agent.
 	fresh := func() (*agent.Agent, error) {
-		cp, err := checkpointfile.New(dir)
+		cp, err := checkpointfile.New(dir, checkpointfile.Config{})
 		if err != nil {
 			return nil, err
 		}
@@ -716,7 +716,7 @@ func concurrentThreads(ctx context.Context, env Env, t *T) {
 		t.Errorf("temp dir: %v", err)
 		return
 	}
-	store, err := checkpointfile.New(dir)
+	store, err := checkpointfile.New(dir, checkpointfile.Config{})
 	if err != nil {
 		t.Errorf("checkpointer: %v", err)
 		return
@@ -814,7 +814,7 @@ func concurrentThreads(ctx context.Context, env Env, t *T) {
 
 	// The stored thread holds the winner's turn, not the loser's, also for
 	// a Checkpointer opened afterwards on the same directory.
-	cp, err := checkpointfile.New(dir)
+	cp, err := checkpointfile.New(dir, checkpointfile.Config{})
 	if err != nil {
 		t.Errorf("checkpointer: %v", err)
 		return

@@ -200,7 +200,7 @@ func TestExitEmptyPlanErrors(t *testing.T) {
 
 func newCheckpointed(t *testing.T, dir string, cfg Config, mode permission.Mode, w *writes, turns ...llmtest.Turn) (*agent.Agent, *llmtest.Scripted) {
 	t.Helper()
-	cp, err := file.New(dir)
+	cp, err := file.New(dir, file.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,9 +27,14 @@ var (
 	todoList = state.NewKey[[]string]("filetest.todos")
 )
 
-func newCP(t *testing.T, dir string, opts ...file.Option) *file.Checkpointer {
+func newCP(t *testing.T, dir string) *file.Checkpointer {
 	t.Helper()
-	c, err := file.New(dir, opts...)
+	return newCPWith(t, dir, file.Config{})
+}
+
+func newCPWith(t *testing.T, dir string, cfg file.Config) *file.Checkpointer {
+	t.Helper()
+	c, err := file.New(dir, cfg)
 	if err != nil {
 		t.Fatalf("file.New: %v", err)
 	}
@@ -44,7 +49,7 @@ func TestConformance(t *testing.T) {
 
 func TestConformanceWithoutSyncAndTinySnapshots(t *testing.T) {
 	checkpointtest.Run(t, func(t *testing.T) checkpoint.Checkpointer {
-		return newCP(t, t.TempDir(), file.WithSync(false), file.WithSnapshotEvery(1))
+		return newCPWith(t, t.TempDir(), file.Config{DisableSync: true, SnapshotEvery: 1})
 	})
 }
 
@@ -149,15 +154,15 @@ func runHistory(t *testing.T, c *file.Checkpointer) *state.State {
 func TestFileDeltaReplayEqualsState(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		opts      []file.Option
+		cfg       file.Config
 		wantSnaps func(int) bool
 	}{
-		{"default", nil, func(n int) bool { return n == 1 }},
-		{"every10", []file.Option{file.WithSnapshotEvery(10)}, func(n int) bool { return n >= 3 }},
+		{"default", file.Config{}, func(n int) bool { return n == 1 }},
+		{"every10", file.Config{SnapshotEvery: 10}, func(n int) bool { return n >= 3 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			c := newCP(t, dir, tc.opts...)
+			c := newCPWith(t, dir, tc.cfg)
 			last := runHistory(t, c)
 
 			if got, want := stateJSON(t, load(t, c, "thread")), stateJSON(t, last); got != want {
@@ -504,5 +509,72 @@ func TestThreadFileCompacts(t *testing.T) {
 	}
 	if got, want := stateJSON(t, load(t, newCP(t, dir), "t")), stateJSON(t, s); got != want {
 		t.Fatalf("after torn tail:\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestNewRejectsEmptyDir(t *testing.T) {
+	_, err := file.New("", file.Config{})
+	if err == nil || err.Error() != "checkpoint/file: empty directory" {
+		t.Fatalf("got %v, want empty directory error", err)
+	}
+}
+
+func TestNewRejectsNegativeSnapshotEvery(t *testing.T) {
+	_, err := file.New(t.TempDir(), file.Config{SnapshotEvery: -1})
+	if err == nil || err.Error() != "checkpoint/file: SnapshotEvery is negative" {
+		t.Fatalf("got %v, want negative SnapshotEvery error", err)
+	}
+}
+
+// The zero Config must keep the historical cadence: a snapshot on the first
+// save and one after every DefaultSnapshotEvery deltas.
+func TestZeroConfigSnapshotCadence(t *testing.T) {
+	if file.DefaultSnapshotEvery != 50 {
+		t.Fatalf("DefaultSnapshotEvery = %d, want 50", file.DefaultSnapshotEvery)
+	}
+	dir := t.TempDir()
+	c := newCP(t, dir)
+	s := state.New()
+	for i := range 52 { // snapshot, 50 deltas, snapshot
+		s.AppendMessages(llm.UserText(fmt.Sprintf("m%d", i)))
+		save(t, c, "t", s)
+	}
+	if got := countKind(t, onlyFile(t, dir), "snapshot"); got != 2 {
+		t.Fatalf("snapshots after 52 saves = %d, want 2", got)
+	}
+	s.AppendMessages(llm.UserText("more"))
+	save(t, c, "t", s)
+	if got := countKind(t, onlyFile(t, dir), "snapshot"); got != 2 {
+		t.Fatalf("snapshots after 53 saves = %d, want 2", got)
+	}
+}
+
+func TestSnapshotEveryTwoLayout(t *testing.T) {
+	dir := t.TempDir()
+	c := newCPWith(t, dir, file.Config{SnapshotEvery: 2})
+	s := state.New()
+	for i := range 3 {
+		s.AppendMessages(llm.UserText(fmt.Sprintf("m%d", i)))
+		save(t, c, "t", s)
+	}
+	lines := readLines(t, onlyFile(t, dir))
+	if len(lines) != 3 {
+		t.Fatalf("want 3 records, got %d", len(lines))
+	}
+	if got := countKind(t, onlyFile(t, dir), "snapshot"); got != 1 {
+		t.Fatalf("snapshots = %d, want 1", got)
+	}
+}
+
+func TestZeroConfigDefaultsDurable(t *testing.T) {
+	c := newCP(t, t.TempDir())
+	if !c.Synced() {
+		t.Fatal("zero Config must fsync every append")
+	}
+	if c.Every() != file.DefaultSnapshotEvery {
+		t.Fatalf("Every = %d, want %d", c.Every(), file.DefaultSnapshotEvery)
+	}
+	if newCPWith(t, t.TempDir(), file.Config{DisableSync: true}).Synced() {
+		t.Fatal("DisableSync must turn fsync off")
 	}
 }

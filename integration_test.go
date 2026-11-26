@@ -317,7 +317,7 @@ func TestLiveCheckpointResumeAcrossAgents(t *testing.T) {
 	// newAgent stands in for a fresh process: its own checkpointer on the
 	// shared directory and its own preset with a per-thread workspace.
 	newAgent := func() *agent.Agent {
-		cp, err := checkpointfile.New(dir)
+		cp, err := checkpointfile.New(dir, checkpointfile.Config{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -534,7 +534,7 @@ func TestLivePlanModeApproval(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
 	defer cancel()
 
-	cp, err := checkpointfile.New(t.TempDir())
+	cp, err := checkpointfile.New(t.TempDir(), checkpointfile.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

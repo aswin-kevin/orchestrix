@@ -161,7 +161,7 @@ func TestPermissionModeSurvivesCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	open := func(turns ...llmtest.Turn) *Agent {
-		cp, err := file.New(dir)
+		cp, err := file.New(dir, file.Config{})
 		if err != nil {
 			t.Fatal(err)
 		}

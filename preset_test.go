@@ -76,7 +76,7 @@ func TestWithoutDefaultMiddleware(t *testing.T) {
 
 func mustFileCheckpointer(t *testing.T) *file.Checkpointer {
 	t.Helper()
-	c, err := file.New(t.TempDir())
+	c, err := file.New(t.TempDir(), file.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func mustFileCheckpointer(t *testing.T) *file.Checkpointer {
 func TestDefaultWorkspaceSurvivesCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	newAgent := func(m *llmtest.Scripted) *agent.Agent {
-		c, err := file.New(dir)
+		c, err := file.New(dir, file.Config{})
 		if err != nil {
 			t.Fatal(err)
 		}

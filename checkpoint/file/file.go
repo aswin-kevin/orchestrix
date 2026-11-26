@@ -23,11 +23,11 @@
 // # Durability
 //
 // A record is written with a single Write on an O_APPEND handle and, unless
-// WithSync(false) is set, fsynced before Save returns; a thread's first save
+// Config.DisableSync is set, fsynced before Save returns; a thread's first save
 // also fsyncs the directory so the new file's entry survives a crash. After
 // Save returns nil the checkpoint survives process and OS crashes (subject
 // to the storage device honoring fsync). Windows has no directory fsync, so
-// there the directory step is skipped: WithSync(true) covers the records but
+// there the directory step is skipped: the default sync covers the records but
 // not a new or compacted file's directory entry, which is as durable as the
 // file system makes it on its own. A crash mid-write can
 // leave a torn final line, one without its newline: readers ignore it, and
@@ -94,24 +94,19 @@ const (
 	appendFlags = os.O_WRONLY | os.O_APPEND | os.O_CREATE
 )
 
-// Option configures a Checkpointer.
-type Option func(*Checkpointer)
+// Config holds the optional settings of a Checkpointer. The zero value is
+// valid and selects the defaults: a snapshot every DefaultSnapshotEvery
+// deltas and an fsync on every append.
+type Config struct {
+	// SnapshotEvery is how many delta records follow a snapshot before the
+	// next snapshot is written. Zero means DefaultSnapshotEvery; negative
+	// values are rejected by New.
+	SnapshotEvery int
 
-// WithSnapshotEvery sets how many deltas follow a snapshot. Values below 1
-// are ignored and leave DefaultSnapshotEvery in place.
-func WithSnapshotEvery(n int) Option {
-	return func(c *Checkpointer) {
-		if n >= 1 {
-			c.snapshotEvery = n
-		}
-	}
-}
-
-// WithSync controls whether each append is fsynced before Save returns. The
-// default is true; disabling it trades crash durability for speed (data is
-// still safe against process exit, not against power loss).
-func WithSync(sync bool) Option {
-	return func(c *Checkpointer) { c.sync = sync }
+	// DisableSync skips the fsync after each append. It trades crash
+	// durability for speed: data is still safe against process exit, not
+	// against power loss. The default (false) fsyncs before Save returns.
+	DisableSync bool
 }
 
 // threadState is what Save needs to diff against: the last state written for
@@ -152,16 +147,22 @@ func (ts *threadState) version() checkpoint.Version {
 }
 
 // New returns a Checkpointer storing files in dir, creating it (mode 0o700)
-// when needed.
-func New(dir string, opts ...Option) (*Checkpointer, error) {
+// when needed. It fails when dir is empty or cfg.SnapshotEvery is negative.
+func New(dir string, cfg Config) (*Checkpointer, error) {
+	if dir == "" {
+		return nil, errors.New("checkpoint/file: empty directory")
+	}
+	if cfg.SnapshotEvery < 0 {
+		return nil, errors.New("checkpoint/file: SnapshotEvery is negative")
+	}
 	c := &Checkpointer{
 		dir:           dir,
-		snapshotEvery: DefaultSnapshotEvery,
-		sync:          true,
+		snapshotEvery: cfg.SnapshotEvery,
+		sync:          !cfg.DisableSync,
 		threads:       make(map[string]*threadState),
 	}
-	for _, opt := range opts {
-		opt(c)
+	if c.snapshotEvery == 0 {
+		c.snapshotEvery = DefaultSnapshotEvery
 	}
 	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return nil, fmt.Errorf("checkpoint/file: create %s: %w", dir, err)
