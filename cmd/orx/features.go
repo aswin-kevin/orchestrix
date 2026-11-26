@@ -196,7 +196,11 @@ func scaleOptions(o options) (opts []orchestrix.Option, stop func(), err error) 
 		if err != nil {
 			return nil, nil, err
 		}
-		opts, stop = append(opts, orchestrix.WithAsync(m)), func() { _ = m.Close(context.Background()) }
+		opts, stop = append(opts, orchestrix.WithAsync(m)), func() {
+			ctx, cancel := context.WithTimeout(context.Background(), async.DefaultStopWait)
+			defer cancel()
+			_ = m.Close(ctx)
+		}
 	}
 	if o.compress {
 		opts = append(opts, orchestrix.WithCompress(compress.Config{}))

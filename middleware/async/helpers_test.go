@@ -214,13 +214,12 @@ func waitEnded(t *testing.T, m *Middleware, id string) {
 // record returns the stored record id.
 func record(t *testing.T, s *state.State, id string) TaskRecord {
 	t.Helper()
-	records, _ := TasksKey.Get(s)
-	for _, r := range records {
+	for _, r := range Tasks(s) {
 		if r.ID == id {
 			return r
 		}
 	}
-	t.Fatalf("no record %s in %+v", id, records)
+	t.Fatalf("no record %s in %+v", id, Tasks(s))
 	return TaskRecord{}
 }
 
@@ -237,7 +236,7 @@ func outcomeOf(t *testing.T, m *Middleware, s *state.State, id string) Outcome {
 		}
 	}
 	r := record(t, s, id)
-	if !r.finished() {
+	if !r.terminal() {
 		t.Fatalf("task %s has no live job and its record is not final: %+v", id, r)
 	}
 	return Outcome{Status: r.Status, Text: r.Result, Error: r.Error}
@@ -264,11 +263,11 @@ type fakeHandle struct {
 	out  Outcome
 }
 
-func (h *fakeHandle) Done() <-chan struct{}      { return h.done }
-func (h *fakeHandle) Outcome() (Outcome, bool)   { return h.out, true }
-func (h *fakeHandle) Progress() string           { return "" }
-func (h *fakeHandle) Send(string) error          { return nil }
-func (h *fakeHandle) Stop(context.Context) error { return nil }
+func (h *fakeHandle) Done() <-chan struct{}              { return h.done }
+func (h *fakeHandle) Outcome() (Outcome, bool)           { return h.out, true }
+func (h *fakeHandle) Progress() string                   { return "" }
+func (h *fakeHandle) Send(context.Context, string) error { return ErrFinished }
+func (h *fakeHandle) Stop(context.Context) error         { return nil }
 
 // requestText joins the text of every message of req, tool results
 // included.
@@ -320,9 +319,11 @@ type ctlHandle struct {
 	onStop Outcome
 	stops  atomic.Int32
 
-	mu       sync.Mutex
-	out      Outcome
-	progress string
+	mu          sync.Mutex
+	out         Outcome
+	progress    string
+	lastStop    context.Context
+	lastStopErr error
 }
 
 func newCtlHandle(onStop Outcome) *ctlHandle {
@@ -357,12 +358,31 @@ func (h *ctlHandle) Progress() string {
 	return h.progress
 }
 
-func (h *ctlHandle) Send(string) error { return nil }
+func (h *ctlHandle) Send(context.Context, string) error { return nil }
 
-func (h *ctlHandle) Stop(context.Context) error {
+// Stop records ctx (see stopCtx) and ends the handle with onStop.
+func (h *ctlHandle) Stop(ctx context.Context) error {
 	h.stops.Add(1)
+	h.mu.Lock()
+	h.lastStop, h.lastStopErr = ctx, ctx.Err()
+	h.mu.Unlock()
 	h.end(h.onStop)
 	return nil
+}
+
+// stopCtx returns the ctx of the last Stop; nil before any.
+func (h *ctlHandle) stopCtx() context.Context {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lastStop
+}
+
+// stopCtxErr returns the error the ctx of the last Stop had when Stop was
+// called.
+func (h *ctlHandle) stopCtxErr() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lastStopErr
 }
 
 // ended returns a handle that already ended with out.
@@ -374,6 +394,5 @@ func ended(out Outcome) *ctlHandle {
 
 // hasRecord reports whether s holds a record id.
 func hasRecord(s *state.State, id string) bool {
-	records, _ := TasksKey.Get(s)
-	return slices.ContainsFunc(records, func(r TaskRecord) bool { return r.ID == id })
+	return slices.ContainsFunc(Tasks(s), func(r TaskRecord) bool { return r.ID == id })
 }

@@ -2,7 +2,6 @@ package async
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -19,9 +18,6 @@ type UpdateInput struct {
 	// Message is the new instructions or information for the running task.
 	Message string `json:"message" desc:"New instructions or information for the running task."`
 }
-
-// ErrFinished is the error of a message sent to a task that already ended.
-var ErrFinished = errors.New("async: task already finished")
 
 // MaxUpdateBytes caps, in bytes, a message update_task sends.
 const MaxUpdateBytes = 8_000

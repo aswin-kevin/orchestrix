@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
-	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -16,21 +14,55 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-// The values of Outcome.Status and TaskRecord.Status.
+// Status is the state of a task: of a Handle's episode in Outcome.Status,
+// and of the task in TaskRecord.Status.
+type Status string
+
+// The statuses of a task. StatusRunning, StatusWaiting and StatusLost never
+// end a task for good; the others are terminal.
 const (
-	StatusRunning   = "running"
-	StatusCompleted = "completed"
-	StatusFailed    = "failed"
+	// StatusRunning marks a task whose current episode has not stopped.
+	StatusRunning Status = "running"
+	// StatusWaiting marks a task that stopped to wait for a decision on the
+	// actions in its Outcome.Pending (a tool call that needs approval when
+	// nobody can be asked in-band). It has not ended: the decision starts
+	// its next episode (see Resolver).
+	StatusWaiting Status = "waiting"
+	// StatusCompleted marks a task that finished its work.
+	StatusCompleted Status = "completed"
+	// StatusFailed marks a task that ended on an error, including a refusal
+	// of the model running it.
+	StatusFailed Status = "failed"
 	// StatusCancelled marks a task stopped by cancel_task or Close.
-	StatusCancelled = "cancelled"
+	StatusCancelled Status = "cancelled"
 	// StatusTimedOut marks a task stopped at its time limit.
-	StatusTimedOut = "timed_out"
-	// StatusBlocked marks a task that needed a decision it could not ask
-	// for: a background run has no one to ask in-band.
-	StatusBlocked = "blocked"
+	StatusTimedOut Status = "timed_out"
 	// StatusLost marks a task recorded as running that this process does not
 	// know, typically because the State was saved before a restart.
-	StatusLost = "lost"
+	StatusLost Status = "lost"
+)
+
+// terminal reports whether s ends a task for good: every status but running
+// and waiting (nothing in this process can resume a lost task).
+func (s Status) terminal() bool { return s != StatusRunning && s != StatusWaiting }
+
+// Errors of the async contract. A Runner's Handle reports ErrFinished (or an
+// error wrapping it); the others are reported by the middleware and by the
+// optional interfaces' implementations.
+var (
+	// ErrFinished is the error of a message sent to an episode that
+	// stopped, by Handle.Send or update_task.
+	ErrFinished = errors.New("async: task already finished")
+	// ErrUnknownTask reports a task id the middleware has no record of.
+	ErrUnknownTask = errors.New("async: unknown task")
+	// ErrNotWaiting reports a decision for a task that is not waiting.
+	ErrNotWaiting = errors.New("async: task is not waiting")
+	// ErrWaiting reports a message or follow-up for a task that waits for
+	// a decision, which must come first.
+	ErrWaiting = errors.New("async: task is waiting for a decision")
+	// ErrCannotReattach reports a task this process cannot take over from
+	// its record (see Reattacher).
+	ErrCannotReattach = errors.New("async: task cannot be reattached")
 )
 
 // Request describes a task to start.
@@ -39,6 +71,11 @@ type Request struct {
 	TaskID string
 	// ThreadID is the thread of the run that starts the task; never empty.
 	ThreadID string
+	// TaskThreadID is the thread the task should run on, ThreadID+"/"+TaskID;
+	// never empty. A runner that keeps the task's history (to continue it,
+	// resume it after a decision or reattach it after a restart) keys it by
+	// this id.
+	TaskThreadID string
 	// SubagentType is one of the subagent types the middleware offers.
 	SubagentType string
 	// Description is the task as the model wrote it.
@@ -50,43 +87,98 @@ type Request struct {
 	Call *tool.Call
 }
 
-// Outcome is how a task ended.
+// Outcome is how an episode of a task stopped.
 type Outcome struct {
-	// Status is one of the Status constants other than StatusRunning and
-	// StatusLost; an empty or unknown one is recorded as StatusFailed.
-	Status string
+	// Status is StatusWaiting or a terminal status (StatusCompleted,
+	// StatusFailed, StatusCancelled, StatusTimedOut). Any other value, empty
+	// included, is recorded as StatusFailed.
+	Status Status
 	// Text is the task's final answer; empty when it gave none.
 	Text string
 	// Error says why a task that did not complete ended; empty otherwise.
 	Error string
-	// Usage is the tokens the task used; zero when unknown.
+	// Usage is the tokens the episode used; zero when unknown.
 	Usage llm.Usage
+	// Pending is what a waiting task needs a decision on; set exactly when
+	// Status is StatusWaiting, with at least one request. A waiting Outcome
+	// without it is recorded as StatusFailed, and it is dropped from any
+	// other Outcome.
+	Pending *agent.Interrupt
 }
 
-// Handle is one started task.
+// Handle is one episode of a task: from its start (or a Continue or Resolve)
+// until it ends or starts waiting. Interfaces never gain methods;
+// capabilities are the optional Continuer and Resolver, which a Handle may
+// also implement. Every method is safe for concurrent use, and the
+// middleware may call any of them from any goroutine.
+//
+// An episode stops once: Done closes, Outcome turns ok, and both stay so. A
+// later episode of the same task is a new Handle (see Continuer and
+// Resolver); a Handle is never reopened. The package asynctest checks these
+// rules.
 type Handle interface {
-	// Done is closed once the task has ended and its Outcome is set.
+	// Done is closed once the episode stopped, because the task ended or
+	// because it now waits, and its Outcome is set; it stays closed. Every
+	// call returns the same channel.
 	Done() <-chan struct{}
-	// Outcome returns how the task ended; ok is false until Done is closed.
+	// Outcome returns how the episode stopped; ok is false until Done is
+	// closed. Once ok, it returns the same Outcome on every call.
 	Outcome() (out Outcome, ok bool)
-	// Progress returns recent output of a running task; "" when there is
-	// none or the runner reports none.
+	// Progress returns recent output of a running episode; "" when there is
+	// none or the runner reports none. It must not block.
 	Progress() string
-	// Send delivers a message to the running task, which should read it
-	// before its next step; ErrFinished (or an error wrapping it) once the
-	// task ended, another error when it cannot take messages.
-	Send(message string) error
-	// Stop asks the task to end; it is a no-op once the task ended. The task
-	// should then end promptly with StatusCancelled. ctx bounds the request
-	// itself (a remote runner that calls out), not the wait for Done.
+	// Send delivers a message to the running episode, which should read it
+	// before its next step. It returns ErrFinished (or an error wrapping
+	// it) once Done is closed, and another error when the task cannot take
+	// messages. ctx bounds the delivery itself (a remote runner that calls
+	// out), not the task's reading of the message.
+	Send(ctx context.Context, message string) error
+	// Stop asks the episode to end; the task should then end promptly with
+	// StatusCancelled. It is a no-op returning nil once Done is closed, and
+	// calling it again is safe. ctx bounds the request itself (a remote
+	// runner that calls out), not the wait for Done; an error means the
+	// request failed, and the middleware still waits for Done.
 	Stop(ctx context.Context) error
+}
+
+// Continuer is implemented by a Handle whose task can take a follow-up after
+// it ended.
+type Continuer interface {
+	// Continue starts the next episode of the ended task with message, on
+	// the same history, and returns its Handle; the receiver's Done stays
+	// closed. It fails with ErrWaiting for a waiting episode and with
+	// another error while the episode runs. ctx carries the caller's values
+	// but the new episode must not end with it (as for Runner.Start).
+	Continue(ctx context.Context, message string) (Handle, error)
+}
+
+// Resolver is implemented by a Handle whose task can be resumed after it
+// stopped waiting.
+type Resolver interface {
+	// Resolve answers the waiting episode's Pending with decisions, one per
+	// request, and returns the Handle of the next episode; the receiver's
+	// Done stays closed. It fails with ErrNotWaiting when the episode did
+	// not stop waiting. ctx is handled as by Continue.
+	Resolve(ctx context.Context, decisions []agent.Decision) (Handle, error)
+}
+
+// Reattacher is implemented by a Runner that can take over a task this
+// process does not hold.
+type Reattacher interface {
+	// Attach returns a Handle for the task of rec, which this process does
+	// not hold (after a restart, or after the middleware released it). It
+	// fails with an error wrapping ErrCannotReattach when the task's
+	// history is gone. ctx is handled as by Runner.Start.
+	Attach(ctx context.Context, rec TaskRecord) (Handle, error)
 }
 
 // Runner starts background tasks; the default runs them as subagents in this
 // process. ctx is the start_task call's context: it carries the run's
 // agent.Info but is cancelled when the call returns, so a Runner must detach.
 // Start may block (a remote runner may call out); it must return once the
-// task is started, not when it ends.
+// task is started, not when it ends. It is called concurrently, for tasks of
+// any thread. A Runner may also implement Reattacher, and its Handles
+// Continuer and Resolver.
 type Runner interface {
 	Start(ctx context.Context, req Request) (Handle, error)
 }
@@ -110,9 +202,9 @@ type localRunner struct {
 }
 
 // Start implements Runner: it prepares the subagent like the task tool does
-// and runs it on a context detached from the call, so the run keeps the
-// call's values (its Depth is the parent's plus one) but not its
-// cancellation.
+// and runs it on req.TaskThreadID, on a context detached from the call, so
+// the run keeps the call's values (its Depth is the parent's plus one) but
+// not its cancellation.
 func (l *localRunner) Start(ctx context.Context, req Request) (Handle, error) {
 	info, ok := agent.Info(ctx)
 	if !ok {
@@ -130,6 +222,7 @@ func (l *localRunner) Start(ctx context.Context, req Request) (Handle, error) {
 	if err != nil {
 		return nil, err
 	}
+	in.ThreadID = req.TaskThreadID
 	box, err := l.inboxes.open(in.ThreadID)
 	if err != nil {
 		return nil, err
@@ -179,7 +272,8 @@ func (t *localTask) run(ctx context.Context, child *agent.Agent, in agent.Input,
 
 // localOutcome maps a subagent's Final to the task's outcome. A run that
 // completed (or reached its own turn or time limit) completed, even when a
-// stop raced its end. A refusal failed with the child's reply as the error.
+// stop raced its end. An interrupted run waits for a decision on its pending
+// actions. A refusal failed with the child's reply as the error.
 func localOutcome(final *agent.Final, stopped, timedOut bool) Outcome {
 	if final == nil {
 		return Outcome{Status: StatusFailed, Error: "the subagent ended without a result"}
@@ -191,7 +285,11 @@ func localOutcome(final *agent.Final, stopped, timedOut bool) Outcome {
 	case final.Reason == agent.ReasonMaxTurns || final.Reason == agent.ReasonTokenLimit || final.Reason == agent.ReasonTimeout:
 		out.Status, out.Text = StatusCompleted, fmt.Sprintf("%s\n[stopped: %s]", finalText(final), final.Reason)
 	case final.Reason == agent.ReasonInterrupted:
-		out.Status, out.Error = StatusBlocked, "needs approval for: "+strings.Join(pendingTools(final), ", ")
+		if intr, ok := agent.Pending(final.State); ok && len(intr.Requests) > 0 {
+			out.Status, out.Pending = StatusWaiting, intr
+		} else {
+			out.Status, out.Error = StatusFailed, "the subagent was interrupted with no pending action"
+		}
 	case final.Reason == agent.ReasonRefusal:
 		out.Status, out.Error = StatusFailed, "refused"
 		if final.Text != "" {
@@ -213,23 +311,6 @@ func finalText(final *agent.Final) string {
 		return noTextResult
 	}
 	return final.Text
-}
-
-// pendingTools lists, once each, the tools an interrupted run waits for a
-// decision on.
-func pendingTools(final *agent.Final) []string {
-	var names []string
-	if intr, ok := agent.Pending(final.State); ok {
-		for _, r := range intr.Requests {
-			if !slices.Contains(names, r.Tool) {
-				names = append(names, r.Tool)
-			}
-		}
-	}
-	if len(names) == 0 {
-		return []string{"(unknown)"}
-	}
-	return names
 }
 
 // addProgress appends text to the progress, keeping its last
@@ -263,10 +344,11 @@ func (t *localTask) Progress() string {
 }
 
 // Send implements Handle: the subagent reads message before its next model
-// call, or before it would end.
-func (t *localTask) Send(message string) error { return t.inbox.send(message) }
+// call, or before it would end. Queuing it never blocks, so ctx is unused.
+func (t *localTask) Send(_ context.Context, message string) error { return t.inbox.send(message) }
 
-// Stop implements Handle: it cancels the subagent's run.
+// Stop implements Handle: it cancels the subagent's run; once the run ended
+// the cancel is a no-op.
 func (t *localTask) Stop(context.Context) error {
 	t.stop(errStopped)
 	return nil

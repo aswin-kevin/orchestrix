@@ -2,6 +2,11 @@
 // into subtasks, delegates them to worker subagents and combines their
 // results, and RunParallel, which runs many agent runs at once with bounded
 // concurrency.
+//
+// Coordinator embeds *agent.Agent on purpose: it is an agent with a fixed
+// configuration, not a wrapper, so every Agent method (Run, Thread, Resume,
+// Close, ...) is a Coordinator method and a Coordinator goes wherever an
+// *agent.Agent does through its Agent field.
 package coordinator
 
 import (
@@ -31,6 +36,10 @@ type Config struct {
 	// MaxConcurrency is how many background workers may run at once per
 	// thread; 0 means DefaultMaxConcurrency. Negative values are rejected.
 	MaxConcurrency int
+	// Runner starts the background workers (async.Config.Runner); the
+	// request's SubagentType is the worker's name. nil runs them as
+	// subagents in this process.
+	Runner async.Runner
 }
 
 // Coordinator is an agent that plans, delegates to its workers (task for
@@ -47,7 +56,7 @@ type Coordinator struct {
 
 // New builds it with orchestrix.New(spec, …): the system prompt, subagents
 // with Workers only (no general-purpose, no fork), async with the same
-// Workers (MaxRunning = MaxConcurrency), then opts (later options win).
+// Workers (MaxRunning = MaxConcurrency, and Runner), then opts (later options win).
 // A worker leaving Middleware nil
 // inherits the coordinator's stack, as with the task tool. Specs given with
 // orchestrix.WithSubagents join the task tool only, not start_task. A host
@@ -98,6 +107,7 @@ func build(cfg Config, newAgent func([]orchestrix.Option) (*agent.Agent, error),
 		Subagents:             cfg.Workers,
 		DisableGeneralPurpose: true,
 		MaxRunning:            maxRunning,
+		Runner:                cfg.Runner,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("coordinator: %w", err)

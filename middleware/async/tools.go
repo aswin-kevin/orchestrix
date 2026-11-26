@@ -24,22 +24,35 @@ func (m *Middleware) Tools() []tool.Tool { return m.tools }
 // The "capped at 300" in the descriptions below is DefaultMaxWait in
 // seconds; struct tags cannot refer to the constant.
 
-type startInput struct {
-	Description  string `json:"description" desc:"The complete task, with every detail the subagent needs; it does not see this conversation."`
+// StartInput is the input of start_task.
+type StartInput struct {
+	// Description is the whole task; the subagent sees nothing else of the
+	// conversation.
+	Description string `json:"description" desc:"The complete task, with every detail the subagent needs; it does not see this conversation."`
+	// SubagentType is the subagent to start, one of those the middleware
+	// offers.
 	SubagentType string `json:"subagent_type" desc:"Which subagent to use."`
 }
 
-type checkInput struct {
-	TaskID         string `json:"task_id" desc:"Id of the background task, such as async_1."`
-	Wait           bool   `json:"wait,omitempty" desc:"Wait for the task to finish before answering."`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty" desc:"Most seconds to wait when wait is set; capped at 300."`
+// CheckInput is the input of check_task.
+type CheckInput struct {
+	// TaskID is the id of the task to show.
+	TaskID string `json:"task_id" desc:"Id of the background task, such as async_1."`
+	// Wait makes the tool wait for a running task to stop before answering.
+	Wait bool `json:"wait,omitempty" desc:"Wait for the task to finish before answering."`
+	// TimeoutSeconds bounds the wait; zero or less means DefaultMaxWait,
+	// which also caps it.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty" desc:"Most seconds to wait when wait is set; capped at 300."`
 }
 
-type taskIDInput struct {
+// CancelInput is the input of cancel_task.
+type CancelInput struct {
+	// TaskID is the id of the task to cancel.
 	TaskID string `json:"task_id" desc:"Id of the background task, such as async_1."`
 }
 
-type listInput struct{}
+// ListInput is the input of list_tasks, which takes none.
+type ListInput struct{}
 
 func (m *Middleware) buildTools() []tool.Tool {
 	return []tool.Tool{
@@ -61,10 +74,10 @@ func (m *Middleware) buildTools() []tool.Tool {
 	}
 }
 
-// startSchema is startInput's schema with subagent_type limited to the
+// startSchema is StartInput's schema with subagent_type limited to the
 // offered names, which are only known at New.
 func startSchema(order []string) map[string]any {
-	schema := tool.SchemaFor[startInput]()
+	schema := tool.SchemaFor[StartInput]()
 	props := maps.Clone(schema["properties"].(map[string]any))
 	typ := maps.Clone(props["subagent_type"].(map[string]any))
 	enum := make([]any, len(order)) // tool.Validate reads enum as []any
@@ -89,7 +102,7 @@ func (m *Middleware) describeStart() string {
 }
 
 func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool.Call) (tool.Result, error) {
-	var in startInput
+	var in StartInput
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return tool.Errorf("invalid input: %v", err), nil
 	}
@@ -122,7 +135,8 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 	case err != nil:
 		return tool.Errorf("cannot start background task: %v", err), nil
 	}
-	h, err := m.runner.Start(ctx, Request{TaskID: j.ID, ThreadID: c.ThreadID, SubagentType: in.SubagentType, Description: in.Description, Call: c})
+	taskThread := c.ThreadID + "/" + j.ID
+	h, err := m.runner.Start(ctx, Request{TaskID: j.ID, ThreadID: c.ThreadID, TaskThreadID: taskThread, SubagentType: in.SubagentType, Description: in.Description, Call: c})
 	if err == nil && h == nil {
 		err = errNoHandle
 	}
@@ -140,7 +154,7 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 		return tool.Errorf("background tasks are shut down; task %s was stopped as it started", j.ID), nil
 	}
 	addRecord(c.State, TaskRecord{
-		ID: j.ID, ThreadID: c.ThreadID, SubagentType: in.SubagentType, Description: in.Description,
+		ID: j.ID, ThreadID: c.ThreadID, TaskThreadID: taskThread, SubagentType: in.SubagentType, Description: in.Description,
 		Status: StatusRunning, Started: j.Started,
 	})
 	return tool.Text(fmt.Sprintf("Started background task %s (%s). You will be notified when it finishes; use %s to see its progress.",
@@ -156,15 +170,15 @@ func waitLimit(seconds int) time.Duration {
 	return min(time.Duration(seconds)*time.Second, DefaultMaxWait)
 }
 
-// checkTask reports a task's status with its progress or, once it ended, its
-// full result. Showing the result counts as telling the model the task
-// ended, so no notification repeats it.
-func (m *Middleware) checkTask(ctx context.Context, in checkInput, c *tool.Call) (tool.Result, error) {
+// checkTask reports a task's status with its progress, what it waits for,
+// or, once it ended, its full result. Showing the result counts as telling
+// the model the task ended, so no notification repeats it.
+func (m *Middleware) checkTask(ctx context.Context, in CheckInput, c *tool.Call) (tool.Result, error) {
 	j, r, ok := m.lookup(c, in.TaskID)
 	if !ok {
 		return tool.Errorf("unknown task %q", in.TaskID), nil
 	}
-	if in.Wait && j != nil && !r.finished() {
+	if in.Wait && j != nil && r.Status == StatusRunning {
 		timer := time.NewTimer(waitLimit(in.TimeoutSeconds))
 		defer timer.Stop()
 		select {
@@ -176,7 +190,10 @@ func (m *Middleware) checkTask(ctx context.Context, in checkInput, c *tool.Call)
 		j, r, _ = m.lookup(c, in.TaskID)
 	}
 	now := time.Now()
-	if !r.finished() {
+	if r.Status == StatusWaiting {
+		return tool.Text(summary(r, now)), nil
+	}
+	if !r.terminal() {
 		progress := ""
 		if j != nil {
 			progress = j.Handle.progress()
@@ -201,12 +218,21 @@ func (m *Middleware) checkTask(ctx context.Context, in checkInput, c *tool.Call)
 	return tool.Text(body), nil
 }
 
-func (m *Middleware) cancelTask(ctx context.Context, in taskIDInput, c *tool.Call) (tool.Result, error) {
+// cancelTask stops a running task, or ends a waiting one: nothing runs
+// there, so its record is cancelled at once.
+func (m *Middleware) cancelTask(ctx context.Context, in CancelInput, c *tool.Call) (tool.Result, error) {
 	j, r, ok := m.lookup(c, in.TaskID)
 	switch {
 	case !ok:
 		return tool.Errorf("unknown task %q", in.TaskID), nil
-	case r.finished():
+	case r.Status == StatusWaiting:
+		m.updateRecords(c.State, c.ThreadID, func(r *TaskRecord) {
+			if r.ID == in.TaskID && r.Status == StatusWaiting {
+				m.cancelWaiting(r)
+			}
+		})
+		return tool.Text(fmt.Sprintf("Cancelled task %s.", in.TaskID)), nil
+	case r.terminal():
 		return tool.Text(fmt.Sprintf("Task %s already ended: %s.", r.ID, r.Status)), nil
 	}
 	if err := jobs.Stop(ctx, j, DefaultStopWait); err != nil {
@@ -222,7 +248,7 @@ func (m *Middleware) cancelTask(ctx context.Context, in taskIDInput, c *tool.Cal
 }
 
 // updateTask sends a message to a running task.
-func (m *Middleware) updateTask(_ context.Context, in UpdateInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) updateTask(ctx context.Context, in UpdateInput, c *tool.Call) (tool.Result, error) {
 	switch {
 	case strings.TrimSpace(in.Message) == "":
 		return tool.Errorf("the message must not be empty"), nil
@@ -233,9 +259,14 @@ func (m *Middleware) updateTask(_ context.Context, in UpdateInput, c *tool.Call)
 	if !ok {
 		return tool.Errorf("unknown task %q", in.TaskID), nil
 	}
-	err := ErrFinished
-	if !r.finished() && j != nil {
-		err = j.Handle.send(in.Message)
+	var err error
+	switch {
+	case r.Status == StatusWaiting:
+		err = ErrWaiting
+	case r.Status == StatusRunning && j != nil:
+		err = j.Handle.send(ctx, in.Message)
+	default:
+		err = ErrFinished
 	}
 	if err != nil {
 		return tool.Errorf("cannot update task %s: %v", in.TaskID, err), nil
@@ -243,7 +274,7 @@ func (m *Middleware) updateTask(_ context.Context, in UpdateInput, c *tool.Call)
 	return tool.Text(fmt.Sprintf("Sent the message to task %s; it reads it before its next step.", in.TaskID)), nil
 }
 
-func (m *Middleware) listTasks(_ context.Context, _ listInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) listTasks(_ context.Context, _ ListInput, c *tool.Call) (tool.Result, error) {
 	records := m.updateRecords(c.State, c.ThreadID, nil)
 	if len(records) == 0 {
 		return tool.Text("No background tasks."), nil

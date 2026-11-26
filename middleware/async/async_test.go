@@ -2,6 +2,8 @@ package async
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -32,10 +34,10 @@ func TestStartTaskRunsInBackground(t *testing.T) {
 	if res.IsError || res.Flatten() != want {
 		t.Fatalf("start = %+v", res)
 	}
-	if list := result(t, evs, ToolList).Flatten(); !strings.Contains(list, "async_1") || !strings.Contains(list, StatusRunning) {
+	if list := result(t, evs, ToolList).Flatten(); !strings.Contains(list, "async_1") || !strings.Contains(list, string(StatusRunning)) {
 		t.Fatalf("list = %q", list)
 	}
-	if r := record(t, h.st, "async_1"); r.Status != StatusRunning || r.Description != "find x" || r.SubagentType != "researcher" {
+	if r := record(t, h.st, "async_1"); r.Status != StatusRunning || r.Description != "find x" || r.SubagentType != "researcher" || r.TaskThreadID != "t/async_1" {
 		t.Fatalf("record = %+v", r)
 	}
 
@@ -99,13 +101,13 @@ func TestCheckTaskWait(t *testing.T) {
 	if len(checks) != 2 {
 		t.Fatalf("checks = %+v", checks)
 	}
-	if first := checks[0].Flatten(); !strings.Contains(first, StatusRunning) || strings.Contains(first, "the answer") {
+	if first := checks[0].Flatten(); !strings.Contains(first, string(StatusRunning)) || strings.Contains(first, "the answer") {
 		t.Fatalf("first check = %q", first)
 	}
 	if time.Since(begin) < time.Second {
 		t.Fatal("the bounded wait returned early")
 	}
-	if second := checks[1].Flatten(); !strings.Contains(second, StatusCompleted) || !strings.Contains(second, "the answer") {
+	if second := checks[1].Flatten(); !strings.Contains(second, string(StatusCompleted)) || !strings.Contains(second, "the answer") {
 		t.Fatalf("second check = %q", second)
 	}
 	// check_task showed the whole result, so no notification repeats it.
@@ -160,25 +162,124 @@ func TestMaxRunning(t *testing.T) {
 	}
 }
 
-func TestBlockedOnApproval(t *testing.T) {
+// writeFileSpec is a researcher whose model is p and which has a write_file
+// tool that needs approval in the default mode.
+func writeFileSpec(p llm.Provider) subagents.Subagent {
 	writeFile := tool.New("write_file", "Writes.", func(context.Context, struct{}, *tool.Call) (tool.Result, error) {
 		return tool.Text("written"), nil
 	})
-	child := llmtest.New(call("w1", "write_file", obj{}), llmtest.Turn{Text: "unreachable"})
-	spec := researcher(child)
+	spec := researcher(p)
 	spec.Tools = []tool.Tool{writeFile}
-	h := newHarness(t, Config{Subagents: []subagents.Subagent{spec}, DisableStopReminder: true},
-		start("s1", "researcher", "write"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"})
+	return spec
+}
+
+func TestWaitingOnApproval(t *testing.T) {
+	child := llmtest.New(call("w1", "write_file", obj{}), llmtest.Turn{Text: "unreachable"})
+	h := newHarness(t, Config{Subagents: []subagents.Subagent{writeFileSpec(child)}, DisableStopReminder: true},
+		start("s1", "researcher", "write"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"}, llmtest.Turn{Text: "again"})
 	h.run(t, context.Background(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	h.run(t, context.Background(), "next", nil)
 	r := record(t, h.st, "async_1")
-	if r.Status != StatusBlocked || !strings.Contains(r.Error, "write_file") {
+	if r.Status != StatusWaiting || r.Error != "" || r.Pending == nil || len(r.Pending.Requests) != 1 || r.Pending.Requests[0].Tool != "write_file" {
 		t.Fatalf("record = %+v", r)
 	}
+	if !r.Ended.IsZero() {
+		t.Errorf("a waiting task has an end time: %v", r.Ended)
+	}
 	notes := notifications(h.p)
-	if len(notes) != 1 || !strings.Contains(notes[0].Text(), "blocked") || !strings.Contains(notes[0].Text(), "write_file") {
+	if len(notes) != 1 || !strings.Contains(notes[0].Text(), "waiting for a decision on: write_file") {
 		t.Fatalf("notifications = %+v", notes)
+	}
+	// A waiting task is not settled: its job stays held and its record is
+	// announced once but kept.
+	if j := h.m.jobs.Get("t", "async_1"); j == nil || j.Notified() {
+		t.Fatalf("job = %+v", j)
+	}
+	h.run(t, context.Background(), "again", nil)
+	if notes := notifications(h.p); len(notes) != 1 {
+		t.Fatalf("the waiting task was announced again: %+v", notes)
+	}
+	if r := record(t, h.st, "async_1"); r.Status != StatusWaiting || !r.Notified {
+		t.Fatalf("record after another turn = %+v", r)
+	}
+}
+
+// waitingHandle is a Handle that already stopped waiting for write_file.
+func waitingHandle() *ctlHandle {
+	return ended(Outcome{Status: StatusWaiting, Pending: &agent.Interrupt{Requests: []agent.ActionRequest{{ToolUseID: "w1", Tool: "write_file"}}}})
+}
+
+func TestWaitingTaskTools(t *testing.T) {
+	runner := funcRunner(func(context.Context, Request) (Handle, error) { return waitingHandle(), nil })
+	h := newHarness(t, Config{Runner: runner, DisableStopReminder: true},
+		start("s1", gp, "d"),
+		call("c1", ToolCheck, obj{"task_id": "async_1", "wait": true, "timeout_seconds": 5}),
+		call("u1", ToolUpdate, obj{"task_id": "async_1", "message": "go on"}),
+		call("x1", ToolCancel, obj{"task_id": "async_1"}),
+		llmtest.Turn{Text: "x"})
+	evs, _ := h.run(t, context.Background(), "go", nil)
+	if res := result(t, evs, ToolCheck).Flatten(); !strings.Contains(res, "waiting for a decision on: write_file") {
+		t.Fatalf("check = %q", res)
+	}
+	if res := result(t, evs, ToolUpdate); !res.IsError || !strings.Contains(res.Flatten(), ErrWaiting.Error()) {
+		t.Fatalf("update = %+v", res)
+	}
+	if res := result(t, evs, ToolCancel); res.IsError || res.Flatten() != "Cancelled task async_1." {
+		t.Fatalf("cancel = %+v", res)
+	}
+	if r := record(t, h.st, "async_1"); r.Status != StatusCancelled || !r.Notified || r.Pending != nil || r.Ended.IsZero() {
+		t.Fatalf("record = %+v", r)
+	}
+	if j := h.m.jobs.Get("t", "async_1"); j != nil && !j.Notified() {
+		t.Fatal("the cancelled waiting task's job is still unannounced")
+	}
+}
+
+func TestRefusedTaskFails(t *testing.T) {
+	child := llmtest.New(llmtest.Turn{Text: "I can't help with that.", StopReason: llm.StopRefusal})
+	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(child)}, DisableStopReminder: true},
+		start("s1", "researcher", "do it"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"})
+	h.run(t, context.Background(), "go", nil)
+	waitEnded(t, h.m, "async_1")
+	h.run(t, context.Background(), "next", nil)
+	r := record(t, h.st, "async_1")
+	if r.Status != StatusFailed || !strings.HasPrefix(r.Error, "refused") {
+		t.Fatalf("record = %+v", r)
+	}
+	if notes := notifications(h.p); len(notes) != 1 || !strings.Contains(notes[0].Text(), "failed: refused") {
+		t.Fatalf("notifications = %+v", notes)
+	}
+}
+
+func TestTasksAccessor(t *testing.T) {
+	s := state.New()
+	if got := Tasks(s); got != nil {
+		t.Fatalf("Tasks of an empty State = %+v, want nil", got)
+	}
+	started := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	want := []TaskRecord{
+		{ID: "async_1", ThreadID: "t1", TaskThreadID: "t1/async_1", SubagentType: "researcher", Description: "d", Status: StatusCompleted, Started: started, Ended: started.Add(time.Second), Result: "r", Notified: true},
+		{ID: "async_2", ThreadID: "t1", TaskThreadID: "t1/async_2", SubagentType: "researcher", Description: "e", Status: StatusWaiting, Started: started,
+			Pending: &agent.Interrupt{Requests: []agent.ActionRequest{{ToolUseID: "w1", Tool: "write_file"}}}},
+	}
+	tasksKey.Set(s, want)
+	got := Tasks(s)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Tasks = %+v, want %+v", got, want)
+	}
+	got[0].Status = StatusLost
+	if again := Tasks(s); again[0].Status != StatusCompleted {
+		t.Fatal("changing the returned records changed the State")
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{`"async.tasks"`, `"status":"waiting"`, `"task_thread_id":"t1/async_2"`, `"pending":{"requests":[`} {
+		if !strings.Contains(string(data), part) {
+			t.Fatalf("State JSON lacks %s: %s", part, data)
+		}
 	}
 }
 
@@ -195,7 +296,7 @@ func TestCustomRunner(t *testing.T) {
 		t.Fatal("request has no call")
 	}
 	got.Call = nil
-	if want := (Request{TaskID: "async_1", ThreadID: "t", SubagentType: "general-purpose", Description: "d"}); got != want {
+	if want := (Request{TaskID: "async_1", ThreadID: "t", TaskThreadID: "t/async_1", SubagentType: "general-purpose", Description: "d"}); got != want {
 		t.Fatalf("request = %+v", got)
 	}
 	waitEnded(t, h.m, "async_1")

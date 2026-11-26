@@ -3,11 +3,13 @@ package async
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 )
@@ -83,7 +85,7 @@ func TestRunnerStartFailureFreesSlot(t *testing.T) {
 				t.Fatalf("start = %q", rs[0].Flatten())
 			}
 			// The failed start left no record; the slot it took is free again.
-			if records, _ := TasksKey.Get(h.st); len(records) != 1 || records[0].Description != "b" {
+			if records := Tasks(h.st); len(records) != 1 || records[0].Description != "b" {
 				t.Fatalf("records = %+v", records)
 			}
 		})
@@ -91,17 +93,100 @@ func TestRunnerStartFailureFreesSlot(t *testing.T) {
 }
 
 func TestUnknownRunnerStatusIsFailed(t *testing.T) {
+	// "blocked" was a status before waiting replaced it; it is now unknown.
+	for _, status := range []Status{"weird", "blocked", StatusRunning, StatusLost} {
+		t.Run(string(status), func(t *testing.T) {
+			runner := funcRunner(func(context.Context, Request) (Handle, error) {
+				return ended(Outcome{Status: status, Error: "lost track"}), nil
+			})
+			h := newHarness(t, Config{Runner: runner, DisableStopReminder: true},
+				start("s1", gp, "d"), llmtest.Turn{Text: "x"}, llmtest.Turn{Text: "ok"})
+			h.run(t, context.Background(), "go", nil)
+			waitEnded(t, h.m, "async_1")
+			h.run(t, context.Background(), "next", nil)
+			want := fmt.Sprintf("the runner reported status %q: lost track", status)
+			if r := record(t, h.st, "async_1"); r.Status != StatusFailed || r.Error != want {
+				t.Fatalf("record = %+v", r)
+			}
+		})
+	}
+}
+
+func TestWaitingWithoutPendingIsFailed(t *testing.T) {
 	runner := funcRunner(func(context.Context, Request) (Handle, error) {
-		return ended(Outcome{Status: "weird", Error: "lost track"}), nil
+		return ended(Outcome{Status: StatusWaiting}), nil
 	})
 	h := newHarness(t, Config{Runner: runner, DisableStopReminder: true},
 		start("s1", gp, "d"), llmtest.Turn{Text: "x"}, llmtest.Turn{Text: "ok"})
 	h.run(t, context.Background(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	h.run(t, context.Background(), "next", nil)
-	if r := record(t, h.st, "async_1"); r.Status != StatusFailed || r.Error != `the runner reported status "weird": lost track` {
+	if r := record(t, h.st, "async_1"); r.Status != StatusFailed || !strings.Contains(r.Error, "no pending action") || r.Pending != nil {
 		t.Fatalf("record = %+v", r)
 	}
+}
+
+func TestPendingDroppedUnlessWaiting(t *testing.T) {
+	pending := &agent.Interrupt{Requests: []agent.ActionRequest{{ToolUseID: "w1", Tool: "write_file"}}}
+	runner := funcRunner(func(context.Context, Request) (Handle, error) {
+		return ended(Outcome{Status: StatusCompleted, Text: "r", Pending: pending}), nil
+	})
+	h := newHarness(t, Config{Runner: runner, DisableStopReminder: true},
+		start("s1", gp, "d"), llmtest.Turn{Text: "x"}, llmtest.Turn{Text: "ok"})
+	h.run(t, context.Background(), "go", nil)
+	waitEnded(t, h.m, "async_1")
+	h.run(t, context.Background(), "next", nil)
+	if r := record(t, h.st, "async_1"); r.Status != StatusCompleted || r.Pending != nil {
+		t.Fatalf("record = %+v", r)
+	}
+}
+
+func TestStopGetsContext(t *testing.T) {
+	// A regression test: cancel_task hands the Runner's Stop the call's
+	// context, so a remote runner's stop request is bounded by the run.
+	hd := newCtlHandle(Outcome{Status: StatusCancelled})
+	runner := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
+	h := newHarness(t, Config{Runner: runner, DisableStopReminder: true},
+		start("s1", gp, "d"), call("x1", ToolCancel, obj{"task_id": "async_1"}), llmtest.Turn{Text: "x"})
+	deadline := time.Now().Add(time.Minute)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	h.run(t, ctx, "go", nil)
+	got := hd.stopCtx()
+	if got == nil {
+		t.Fatal("Stop was not called")
+	}
+	if d, ok := got.Deadline(); !ok || !d.Equal(deadline) {
+		t.Fatalf("Stop ctx deadline = %v, %v; want the run's %v", d, ok, deadline)
+	}
+}
+
+func TestAttachReplaysStopWithCallerContext(t *testing.T) {
+	// A stop that came before the Runner's Handle is replayed on it with the
+	// caller's values, not a bare background context.
+	type ctxKey struct{}
+	tk := newTask()
+	caller, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "caller"))
+	if err := tk.Stop(caller); err != nil {
+		t.Fatal(err)
+	}
+	cancel() // the caller has returned by the time the Handle arrives
+	hd := newCtlHandle(Outcome{Status: StatusCancelled})
+	tk.attach(hd)
+	got := hd.stopCtx()
+	if got == nil {
+		t.Fatal("the stop was not replayed")
+	}
+	if got.Value(ctxKey{}) != "caller" {
+		t.Error("the replayed stop lost the caller's values")
+	}
+	if err := hd.stopCtxErr(); err != nil {
+		t.Errorf("the replayed stop's ctx had ended with the caller's: %v", err)
+	}
+	if _, ok := got.Deadline(); !ok {
+		t.Error("the replayed stop is not bounded")
+	}
+	<-tk.Done()
 }
 
 func TestTaskTimeout(t *testing.T) {

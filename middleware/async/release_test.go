@@ -13,8 +13,8 @@ import (
 )
 
 // childThread is the thread of the background child started as async_1 of
-// thread "t" with type researcher.
-const childThread = "t/researcher/async_1"
+// thread "t": its Request.TaskThreadID.
+const childThread = "t/async_1"
 
 func TestTopLevelThreadReleasedAfterRun(t *testing.T) {
 	var m *Middleware // set before the run starts
@@ -33,7 +33,7 @@ func TestTopLevelThreadReleasedAfterRun(t *testing.T) {
 
 	h.run(t, context.Background(), "go", nil)
 
-	if r := record(t, h.st, "async_1"); !r.finished() || !r.Notified {
+	if r := record(t, h.st, "async_1"); !r.terminal() || !r.Notified {
 		t.Fatalf("record = %+v, want an ended task the model was told about", r)
 	}
 	if n := h.m.jobs.ThreadCount(); n != 0 {

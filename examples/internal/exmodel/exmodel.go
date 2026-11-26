@@ -178,9 +178,8 @@ func WaitTasks(ctx context.Context, a *agent.Agent, th *agent.Thread) error {
 		if _, err := list.Call(ctx, json.RawMessage(`{}`), &tool.Call{ThreadID: th.ID(), State: s}); err != nil {
 			return err
 		}
-		records, _ := async.TasksKey.Get(s)
 		running := false
-		for _, r := range records {
+		for _, r := range async.Tasks(s) {
 			running = running || r.Status == async.StatusRunning
 		}
 		if !running {

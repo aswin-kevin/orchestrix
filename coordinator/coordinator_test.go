@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -101,7 +102,7 @@ func TestCoordinatorDelegates(t *testing.T) {
 		t.Errorf("system prompt does not start with DefaultPrompt: %q", got)
 	}
 
-	records, _ := async.TasksKey.Get(final.State)
+	records := async.Tasks(final.State)
 	if len(records) != 2 {
 		t.Fatalf("records = %+v, want two tasks", records)
 	}
@@ -112,6 +113,55 @@ func TestCoordinatorDelegates(t *testing.T) {
 	}
 	closeBounded(t, c)
 	closeBounded(t, c) // idempotent
+}
+
+// remoteRunner records the requests it gets and ends each task at once.
+type remoteRunner struct {
+	mu   sync.Mutex
+	reqs []async.Request
+}
+
+func (r *remoteRunner) Start(_ context.Context, req async.Request) (async.Handle, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.reqs = append(r.reqs, req)
+	return &doneHandle{done: closedChan()}, nil
+}
+
+func closedChan() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+// doneHandle is a task that completed remotely.
+type doneHandle struct{ done chan struct{} }
+
+func (h *doneHandle) Done() <-chan struct{} { return h.done }
+func (h *doneHandle) Outcome() (async.Outcome, bool) {
+	return async.Outcome{Status: async.StatusCompleted, Text: "remote notes"}, true
+}
+func (h *doneHandle) Progress() string                   { return "" }
+func (h *doneHandle) Send(context.Context, string) error { return async.ErrFinished }
+func (h *doneHandle) Stop(context.Context) error         { return nil }
+
+func TestConfigRunner(t *testing.T) {
+	runner := &remoteRunner{}
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "s1", Name: async.ToolStart, Input: obj{"subagent_type": "writer", "description": "Write the draft."}}}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "c1", Name: async.ToolCheck, Input: obj{"task_id": "async_1", "wait": true}}}},
+		llmtest.Turn{Text: "done"},
+	)
+	c := newCoordinator(t, p, Config{Workers: workers(), Runner: runner})
+	evs, _ := run(t, c, "Write a report.")
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	if len(runner.reqs) != 1 || runner.reqs[0].SubagentType != "writer" || runner.reqs[0].Description != "Write the draft." {
+		t.Fatalf("runner requests = %+v", runner.reqs)
+	}
+	if checks := strings.Join(results(evs, async.ToolCheck), "\n"); !strings.Contains(checks, "remote notes") {
+		t.Fatalf("check_task results = %q, want the runner's answer", checks)
+	}
 }
 
 // requestHas reports whether any message of req contains text.

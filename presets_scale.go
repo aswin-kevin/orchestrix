@@ -18,7 +18,9 @@ import (
 // WithAsync adds background subagents (start_task and friends). Agent.Close
 // stops the tasks still running (m is an agent.Closer); a host that does not
 // close the agent calls m.Close instead. A nil m makes New fail.
-// start_task needs a thread: run the agent with Input.ThreadID set.
+// start_task needs a thread: run the agent with Input.ThreadID set. With
+// WithApprover a task asks the Approver for its approvals; without one, a
+// task that needs approval stops as async.StatusWaiting (see async).
 func WithAsync(m *async.Middleware) Option {
 	return func(s *settings) {
 		if m == nil {

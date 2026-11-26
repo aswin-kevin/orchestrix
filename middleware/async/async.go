@@ -12,9 +12,13 @@
 // process; Config.Runner runs tasks elsewhere instead.
 //
 // A background run has nobody to ask for approval in-band: with an Approver
-// on the parent agent the subagent inherits it, otherwise a subagent that
-// needs a decision ends as StatusBlocked, naming the tools it wanted to
-// call. Its permission mode is fixed when it starts (the stricter of the
+// on the parent agent the subagent inherits it and keeps asking it.
+// Otherwise a subagent that needs a decision stops as StatusWaiting, with the
+// actions it waits for in Outcome.Pending and TaskRecord.Pending. The parent
+// model is told the task waits and on what, but it cannot answer: no tool
+// approves another run's actions. The host cannot answer it yet either (an
+// API for that is planned); until then cancel_task ends a waiting task. Its
+// permission mode is fixed when it starts (the stricter of the
 // parent's mode at that moment and the spec's): a parent that later enters
 // plan mode or a stricter mode does not change the mode of a task already
 // running. A background subagent's State is not merged into the parent's (the
@@ -34,7 +38,7 @@
 // it. Close stops every task; call it (or Agent.Close) before the program
 // exits.
 //
-// Task records live in the run's State (TasksKey); a run only reads,
+// Task records live in the run's State (see Tasks); a run only reads,
 // announces and cancels the tasks of its own thread. While tasks run, the
 // system prompt lists them from those records, so the model still knows of
 // them after a compaction. Tasks are not re-attached in a new process: a
@@ -142,6 +146,9 @@ type Config struct {
 	DisableStopReminder bool
 }
 
+// Name is the name of the async middleware.
+const Name = "async"
+
 // Middleware is the async middleware. Unlike most middleware it holds state
 // of its own, the live tasks, which it shares between every run and agent it
 // is used with; that state is safe for concurrent use. Create it with New.
@@ -219,7 +226,7 @@ func positiveOr[T int | time.Duration](v, fallback T) T {
 }
 
 // Name implements agent.Middleware.
-func (m *Middleware) Name() string { return "async" }
+func (m *Middleware) Name() string { return Name }
 
 // Close implements agent.Closer, so Agent.Close stops the tasks: it stops
 // every task of every thread and waits up to DefaultStopWait for them to
@@ -239,9 +246,11 @@ func (m *Middleware) Close(ctx context.Context) error {
 func (m *Middleware) Drain(ctx context.Context) error { return m.Close(ctx) }
 
 // BeforeModel implements agent.BeforeModel: every task of the run's thread
-// that ended since the last turn is announced with one user message (see
-// notification). Records of other threads are left alone, so a run never
-// takes another thread's notifications.
+// that ended, or started waiting, since the last turn is announced with one
+// user message (see notification). Records of other threads are left alone,
+// so a run never takes another thread's notifications. A waiting task is
+// announced once but stays unsettled: its job is not marked notified, so
+// neither its record nor the thread's entry is dropped.
 //
 // Before that, a thread whose tasks all ended and were announced in earlier
 // turns is released (see jobs.Manager.Release); check_task then reports the
@@ -253,7 +262,12 @@ func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
 	}
 	var notices []llm.Message
 	m.updateRecords(s, threadID, func(r *TaskRecord) {
-		if r.finished() && !r.Notified {
+		switch {
+		case r.Notified || r.Status == StatusRunning:
+		case r.Status == StatusWaiting:
+			notices = append(notices, notification(*r))
+			r.Notified = true
+		default:
 			notices = append(notices, notification(*r))
 			m.markNotified(r)
 		}
@@ -277,7 +291,7 @@ func (m *Middleware) BeforeAgent(_ context.Context, s *state.State) error {
 func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	var add []string
 	if req.State != nil {
-		records, _ := TasksKey.Get(req.State)
+		records, _ := tasksKey.Get(req.State)
 		threadID, _ := agent.ThreadID(ctx)
 		if list := runningList(jobs.ThreadRecords(records, threadID, recordAccessors), time.Now()); list != "" {
 			add = append(add, list)
@@ -311,7 +325,8 @@ func (m *Middleware) BeforeStop(ctx context.Context, s *state.State, _ *llm.Resp
 // AfterAgent implements agent.AfterAgent: a nested run's tasks are stopped
 // and forgotten when it ends, so a subagent's background tasks never outlive
 // it; their records end cancelled, and as seen, since nobody is left to be
-// told, and so do the records of its tasks that ended unannounced. A
+// told, and so do the records of its waiting tasks (nobody is left to
+// decide) and of its tasks that ended unannounced. A
 // top-level run's tasks keep running for later runs of the thread. Only
 // tasks of the run's own thread are stopped.
 //
@@ -330,10 +345,10 @@ func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 	return nil
 }
 
-// endNested stops the running tasks of a nested run's thread and marks every
-// ended task of it as seen.
+// endNested stops the running tasks of a nested run's thread, cancels its
+// waiting ones and marks every ended task of it as seen.
 func (m *Middleware) endNested(ctx context.Context, s *state.State, threadID string) {
-	records, _ := TasksKey.Get(s)
+	records, _ := tasksKey.Get(s)
 	if ids := runningIDs(jobs.ThreadRecords(records, threadID, recordAccessors)); len(ids) > 0 {
 		m.jobs.StopAndForget(ctx, threadID, ids, DefaultStopWait, func() {
 			m.updateRecords(s, threadID, func(r *TaskRecord) {
@@ -344,10 +359,20 @@ func (m *Middleware) endNested(ctx context.Context, s *state.State, threadID str
 		})
 	}
 	m.updateRecords(s, threadID, func(r *TaskRecord) {
-		if r.finished() && !r.Notified {
+		if r.Status == StatusWaiting {
+			m.cancelWaiting(r)
+		}
+		if r.terminal() && !r.Notified {
 			m.markNotified(r)
 		}
 	})
+}
+
+// cancelWaiting ends the record of a waiting task as cancelled and seen, and
+// marks its job notified. Nothing runs, so there is nothing to stop.
+func (m *Middleware) cancelWaiting(r *TaskRecord) {
+	r.Status, r.Pending, r.Ended = StatusCancelled, nil, time.Now()
+	m.markNotified(r)
 }
 
 // runningIDs returns the ids of the running records.

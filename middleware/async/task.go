@@ -14,13 +14,14 @@ import (
 // start failed.
 //
 // Its outcome is published before done closes, so a job seen as ended always
-// has one.
+// has one. done closes when the Handle's episode stops, also when the task
+// now waits for a decision.
 type task struct {
 	done chan struct{}
 
 	mu      sync.Mutex
-	h       Handle // nil until attached
-	stopped bool   // Stop came before attach
+	h       Handle          // nil until attached
+	stopCtx context.Context // set when Stop came before attach
 	out     Outcome
 	ended   time.Time
 }
@@ -31,11 +32,14 @@ func newTask() *task { return &task{done: make(chan struct{})} }
 func (t *task) Done() <-chan struct{} { return t.done }
 
 // Stop implements jobs.Handle: it stops the attached Handle with ctx, or the
-// one attached later under a detached ctx bounded by DefaultStopWait.
+// one attached later under ctx detached from its cancellation (it keeps its
+// values) and bounded by DefaultStopWait.
 func (t *task) Stop(ctx context.Context) error {
 	t.mu.Lock()
 	h := t.h
-	t.stopped = true
+	if h == nil && t.stopCtx == nil {
+		t.stopCtx = context.WithoutCancel(ctx)
+	}
 	t.mu.Unlock()
 	if h == nil {
 		return nil
@@ -43,14 +47,14 @@ func (t *task) Stop(ctx context.Context) error {
 	return h.Stop(ctx)
 }
 
-// attach hands t the started Handle and follows it until it ends.
+// attach hands t the started Handle and follows it until its episode stops.
 func (t *task) attach(h Handle) {
 	t.mu.Lock()
 	t.h = h
-	stop := t.stopped
+	stopCtx := t.stopCtx
 	t.mu.Unlock()
-	if stop {
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultStopWait)
+	if stopCtx != nil {
+		ctx, cancel := context.WithTimeout(stopCtx, DefaultStopWait)
 		_ = h.Stop(ctx) // the outcome reports what the stop achieved
 		cancel()
 	}
@@ -69,16 +73,22 @@ func (t *task) fail(err error) {
 	t.finish(Outcome{Status: StatusFailed, Error: err.Error()})
 }
 
-// finish publishes out, normalized, and then closes done.
+// finish publishes out, normalized, and then closes done: a status other
+// than waiting or terminal (lost included: only the middleware decides a
+// task is lost), or waiting without a pending action, is failed, and Pending
+// is kept only for a waiting task.
 func (t *task) finish(out Outcome) {
 	switch out.Status {
-	case StatusCompleted, StatusFailed, StatusCancelled, StatusTimedOut, StatusBlocked:
-	default:
-		msg := fmt.Sprintf("the runner reported status %q", out.Status)
-		if out.Error != "" {
-			msg += ": " + out.Error
+	case StatusCompleted, StatusFailed, StatusCancelled, StatusTimedOut:
+		out.Pending = nil
+	case StatusWaiting:
+		if out.Pending == nil || len(out.Pending.Requests) == 0 {
+			out.Status, out.Pending = StatusFailed, nil
+			out.Error = joinError("the runner reported a waiting task with no pending action", out.Error)
 		}
-		out.Status, out.Error = StatusFailed, msg
+	default:
+		out.Error = joinError(fmt.Sprintf("the runner reported status %q", out.Status), out.Error)
+		out.Status, out.Pending = StatusFailed, nil
 	}
 	t.mu.Lock()
 	t.out, t.ended = out, time.Now()
@@ -86,7 +96,16 @@ func (t *task) finish(out Outcome) {
 	close(t.done)
 }
 
-// outcome returns how the task ended and when; ok is false while it runs.
+// joinError is msg, followed by the runner's own error when there is one.
+func joinError(msg, runnerErr string) string {
+	if runnerErr != "" {
+		return msg + ": " + runnerErr
+	}
+	return msg
+}
+
+// outcome returns how the episode stopped and when; ok is false while it
+// runs.
 func (t *task) outcome() (out Outcome, ended time.Time, ok bool) {
 	select {
 	case <-t.done:
@@ -110,13 +129,14 @@ func (t *task) progress() string {
 	return tail(h.Progress(), DefaultProgressBytes)
 }
 
-// send delivers msg to the attached Handle; ErrFinished once the task ended.
-func (t *task) send(msg string) error {
+// send delivers msg to the attached Handle with ctx; ErrFinished once the
+// episode stopped.
+func (t *task) send(ctx context.Context, msg string) error {
 	t.mu.Lock()
 	h := t.h
 	t.mu.Unlock()
 	if _, _, ok := t.outcome(); ok || h == nil {
 		return ErrFinished
 	}
-	return h.Send(msg)
+	return h.Send(ctx, msg)
 }

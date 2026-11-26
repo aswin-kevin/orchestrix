@@ -101,7 +101,7 @@ func TestUpdateAfterChildEndedIsReported(t *testing.T) {
 	late := &hooks{afterAgent: func(ctx context.Context, _ *state.State) {
 		if info, _ := agent.Info(ctx); info.Depth == 1 {
 			// The child drained its inbox for the last time.
-			if err := h.m.jobs.Get("t", "async_1").Handle.send("late news"); err != nil {
+			if err := h.m.jobs.Get("t", "async_1").Handle.send(ctx, "late news"); err != nil {
 				t.Errorf("send = %v", err)
 			}
 		}
@@ -281,7 +281,7 @@ func TestNestedRunStopsItsTasks(t *testing.T) {
 	if r := record(t, childState, "async_1"); r.Status != StatusCancelled || !r.Notified {
 		t.Fatalf("child's record = %+v", r)
 	}
-	if h.m.jobs.Get("t/researcher/async_1", "async_1") != nil {
+	if h.m.jobs.Get("t/async_1", "async_1") != nil {
 		t.Fatal("the child's task was not forgotten")
 	}
 	if out := outcomeOf(t, h.m, h.st, "async_1"); out.Status != StatusCompleted {

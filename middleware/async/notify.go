@@ -2,6 +2,7 @@ package async
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,8 +47,8 @@ func frame(tag, body string) string {
 	return fmt.Sprintf("<%s>\n%s\n</%s>", tag, body, tag)
 }
 
-// notification is the message announcing that the task of r ended: its
-// status, then for a task with an answer an excerpt of it.
+// notification is the message announcing that the task of r ended, or now
+// waits: its status, then for a task with an answer an excerpt of it.
 func notification(r TaskRecord) llm.Message {
 	var b strings.Builder
 	fmt.Fprintf(&b, "<%s>Background task %s (%s) %s", tagNotification, r.ID, r.SubagentType, outcomeLine(r))
@@ -60,15 +61,18 @@ func notification(r TaskRecord) llm.Message {
 	return msg
 }
 
-// outcomeLine says how the task of an ended record ended, as a sentence
-// that follows the task's name; the error is excerpted and neutralized. A
-// completed or cancelled task may carry an error too, such as updates that
-// arrived after it finished, which is added as a note.
+// outcomeLine says how the task of an ended or waiting record stopped, as a
+// sentence that follows the task's name; the error is excerpted and
+// neutralized. A completed or cancelled task may carry an error too, such as
+// updates that arrived after it finished, which is added as a note.
 func outcomeLine(r TaskRecord) string {
-	if r.Status == StatusLost {
+	switch r.Status {
+	case StatusLost:
 		return lostNote
+	case StatusWaiting:
+		return waitingLine(r) + "."
 	}
-	status := strings.ReplaceAll(r.Status, "_", " ")
+	status := strings.ReplaceAll(string(r.Status), "_", " ")
 	switch {
 	case r.Error == "":
 		return status + "."
@@ -78,13 +82,39 @@ func outcomeLine(r TaskRecord) string {
 	return fmt.Sprintf("%s: %s.", status, excerpt(r.Error, DefaultMaxResultBytes))
 }
 
-// summary renders a task's one-line status: running for how long, or how it
-// ended after how long.
+// waitingLine says what a waiting task waits for: "is waiting for a
+// decision on: " and the tools of its pending actions, once each.
+func waitingLine(r TaskRecord) string {
+	return "is waiting for a decision on: " + strings.Join(pendingTools(r.Pending), ", ")
+}
+
+// pendingTools lists, once each, the tools of the actions intr waits for, or
+// "(unknown)" when it names none. The names come from a model, so they are
+// neutralized.
+func pendingTools(intr *agent.Interrupt) []string {
+	var names []string
+	if intr != nil {
+		for _, req := range intr.Requests {
+			if name := neutralize(req.Tool); !slices.Contains(names, name) {
+				names = append(names, name)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return []string{"(unknown)"}
+	}
+	return names
+}
+
+// summary renders a task's one-line status: running for how long, what it
+// waits for, or how it ended after how long.
 func summary(r TaskRecord, now time.Time) string {
 	head := fmt.Sprintf("Task %s (%s)", r.ID, r.SubagentType)
 	switch {
 	case r.Status == StatusRunning:
 		return fmt.Sprintf("%s: %s for %s.", head, StatusRunning, elapsed(r.Started, now))
+	case r.Status == StatusWaiting:
+		return fmt.Sprintf("%s: waiting for a decision on: %s.", head, strings.Join(pendingTools(r.Pending), ", "))
 	case r.Status == StatusLost:
 		return head + " " + lostNote
 	case r.Error != "":
