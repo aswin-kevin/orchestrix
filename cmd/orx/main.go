@@ -52,7 +52,8 @@ const (
 
 func main() {
 	// SIGTERM and SIGHUP end the whole process, cleanly: run returns through
-	// its deferred shutdown. Ctrl-C is handled inside run, per prompt and turn.
+	// its deferred shutdown. Ctrl-C is handled inside run, per prompt and
+	// turn.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGHUP)
 	code := run(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, llm.New)
 	stop()

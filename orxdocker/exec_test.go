@@ -26,9 +26,10 @@ type fakeEngine struct {
 	socket string
 	closed chan struct{}
 
-	mu           sync.Mutex
-	nextID       int
-	containers   map[string]chan struct{} // closed when the container is removed
+	mu     sync.Mutex
+	nextID int
+	// closed when the container is removed
+	containers   map[string]chan struct{}
 	labels       map[string]map[string]string
 	execs        map[string]*fakeExec
 	created      []string // container ids, in creation order
@@ -63,7 +64,8 @@ type fakeExec struct {
 
 func newFakeEngine(t *testing.T) *fakeEngine {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "orxd") // short: Unix socket paths are limited
+	// short: Unix socket paths are limited
+	dir, err := os.MkdirTemp("", "orxd")
 	if err != nil {
 		t.Fatal(err)
 	}

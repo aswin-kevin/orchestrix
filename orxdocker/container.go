@@ -156,7 +156,8 @@ type containerSummary struct {
 // listContainers lists the containers (running or not) carrying every
 // label filter ("key" or "key=value").
 func (c *client) listContainers(ctx context.Context, labels ...string) ([]containerSummary, error) {
-	filters, _ := json.Marshal(map[string][]string{"label": labels}) // strings: cannot fail
+	// strings: cannot fail
+	filters, _ := json.Marshal(map[string][]string{"label": labels})
 	q := url.Values{"all": {"true"}, "filters": {string(filters)}}
 	var out []containerSummary
 	if err := c.do(ctx, http.MethodGet, "/containers/json", q, nil, &out); err != nil {

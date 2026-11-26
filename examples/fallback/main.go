@@ -4,8 +4,9 @@
 // the backup and the callback reports the switch (the primary entry is named
 // "primary").
 //
-//	go run ./examples/fallback                                   # offline, scripted
-//	ORX_MODEL=anthropic:claude-sonnet-4-5 ORX_FALLBACK_MODEL=openai:gpt-4o go run ./examples/fallback
+//	go run ./examples/fallback  # offline, scripted
+//	ORX_MODEL=anthropic:claude-sonnet-4-5 ORX_FALLBACK_MODEL=openai:gpt-4o \
+//	  go run ./examples/fallback
 //
 // Offline, the scripted primary fails with a 529 (overloaded) and the
 // scripted backup answers. Live, ORX_MODEL is the primary and
@@ -37,7 +38,8 @@ import (
 const fallbackEnv = "ORX_FALLBACK_MODEL"
 
 func main() {
-	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	// live: fail early when the provider's API key is missing
+	err := exmodel.Check()
 	if err == nil {
 		err = run(context.Background(), os.Stdout)
 	}
@@ -65,7 +67,8 @@ func run(ctx context.Context, w io.Writer) error {
 				fmt.Fprintf(w, "switched: %s -> %s\n", exmodel.Safe(ev.From), exmodel.Safe(ev.To))
 			},
 		}),
-		orchestrix.WithoutMiddleware(filesystem.Name, planning.Name, subagents.Name), // nothing to explore: answer directly
+		// nothing to explore: answer directly
+		orchestrix.WithoutMiddleware(filesystem.Name, planning.Name, subagents.Name),
 		orchestrix.WithMaxTurns(3),
 	)
 	if err != nil {

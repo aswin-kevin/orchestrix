@@ -9,7 +9,8 @@
 //
 // Copying an example out of this repository: this package and the termsafe
 // package it uses are internal, so they cannot be imported from another
-// module. Replace exmodel.Model(...), exmodel.New(model, ...) and exmodel.Coordinator(model, ...) with
+// module. Replace exmodel.Model(...), exmodel.New(model, ...) and
+// exmodel.Coordinator(model, ...) with
 // orchestrix.New("anthropic:claude-sonnet-4-5", ...) or
 // orchestrix.NewWithProvider(provider, ...), drop exmodel.Sub and
 // exmodel.SubHeld (a subagent without a Provider uses its parent's model),

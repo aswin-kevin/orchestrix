@@ -34,7 +34,8 @@ var _ backend.Executor = (*fakeShell)(nil)
 func newFakeShell() *fakeShell {
 	mem, err := membackend.New(membackend.Config{})
 	if err != nil {
-		panic("evals: memory backend with the zero config: " + err.Error()) // cannot happen
+		// cannot happen
+		panic("evals: memory backend with the zero config: " + err.Error())
 	}
 	return &fakeShell{Backend: mem}
 }

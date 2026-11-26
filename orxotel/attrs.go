@@ -5,7 +5,8 @@ package orxotel
 // as a plain string: a renamed convention is a change in one place. Keys
 // the conventions do not define are prefixed "orchestrix.".
 
-// Span name prefixes (operation names). A span is named "<operation> <target>".
+// Span name prefixes (operation names). A span is named "<operation>
+// <target>".
 const (
 	opInvokeAgent = "invoke_agent"
 	opChat        = "chat"

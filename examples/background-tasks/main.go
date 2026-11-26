@@ -3,7 +3,7 @@
 // ends, the thread's next model call is told with a task notification, and
 // the agent answers from it.
 //
-//	go run ./examples/background-tasks                           # offline, scripted
+//	go run ./examples/background-tasks  # offline, scripted
 //	ORX_MODEL=openai:gpt-4o go run ./examples/background-tasks
 //
 // The model gets start_task, check_task, update_task, cancel_task and
@@ -30,7 +30,8 @@ import (
 
 func main() {
 	ctx := context.Background()
-	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	// live: fail early when the provider's API key is missing
+	err := exmodel.Check()
 	if err == nil {
 		err = run(ctx, os.Stdout)
 	}

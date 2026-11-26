@@ -188,7 +188,8 @@ func (r *renderer) text(agentName, pre, s string) {
 		if !r.midLine {
 			s = pre + s
 		}
-		// Prefix each further line, but not the empty one after a final newline.
+		// Prefix each further line, but not the empty one after a final
+		// newline.
 		body := strings.TrimSuffix(s, "\n")
 		s = strings.ReplaceAll(body, "\n", "\n"+pre) + s[len(body):]
 	}
@@ -268,7 +269,8 @@ func firstLine(s string) string {
 	return line
 }
 
-// truncate shortens s to at most limit runes, marking the cut with an ellipsis.
+// truncate shortens s to at most limit runes, marking the cut with an
+// ellipsis.
 func truncate(s string, limit int) string {
 	runes := []rune(s)
 	if len(runes) <= limit {

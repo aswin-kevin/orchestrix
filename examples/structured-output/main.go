@@ -2,7 +2,7 @@
 // agent asks the model for a JSON object, checks the reply against the
 // struct's schema and asks again when it does not match.
 //
-//	go run ./examples/structured-output                                 # offline, scripted
+//	go run ./examples/structured-output  # offline, scripted
 //	ORX_MODEL=openai:gpt-4o go run ./examples/structured-output
 //
 // Offline, the scripted model first answers in prose, then with the JSON
@@ -26,7 +26,8 @@ import (
 )
 
 func main() {
-	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	// live: fail early when the provider's API key is missing
+	err := exmodel.Check()
 	if err == nil {
 		err = run(context.Background(), os.Stdout)
 	}
@@ -49,12 +50,14 @@ const report = "Users report that a run sometimes never ends after the turn limi
 
 func run(ctx context.Context, w io.Writer) error {
 	model := exmodel.Model(
-		llmtest.Turn{Text: "This looks serious: the loop may not stop at the turn limit."}, // prose: not valid
+		// prose: not valid
+		llmtest.Turn{Text: "This looks serious: the loop may not stop at the turn limit."},
 		llmtest.Turn{Text: `{"severity":"high","summary":"The loop may not stop at the turn limit.","files":["agent/loop.go","agent/budget.go"]}`},
 	)
 	a, err := exmodel.New(model,
 		orchestrix.WithSystemPrompt("You triage bug reports. Answer from the report alone; you have no files or tools to look at."),
-		orchestrix.WithoutMiddleware(filesystem.Name, planning.Name, subagents.Name), // nothing to explore: answer from the report
+		// nothing to explore: answer from the report
+		orchestrix.WithoutMiddleware(filesystem.Name, planning.Name, subagents.Name),
 		orchestrix.WithOutputType[Triage](),
 		orchestrix.WithMaxTurns(5),
 	)

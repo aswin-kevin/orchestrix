@@ -52,8 +52,9 @@ type Manager struct {
 	// written before, is its result.
 	closeDone chan struct{}
 	closeErr  error
-	threads   map[string]*Executor   // the executor Executor and Backend return
-	live      map[*Executor]struct{} // executors that may own a container
+	// the executor Executor and Backend return
+	threads map[string]*Executor
+	live    map[*Executor]struct{} // executors that may own a container
 	// removing counts the removals in flight per container id; adopt and
 	// track skip those containers.
 	removing  map[string]int
@@ -63,9 +64,12 @@ type Manager struct {
 	janitorDone chan struct{}
 
 	// Waits, changed only by tests.
-	killGrace time.Duration // between SIGTERM, SIGKILL and removing the container
-	hardGrace time.Duration // after a command's timeout before its container is removed
-	exitWait  time.Duration // for an exec to report its exit once its output ended
+	// between SIGTERM, SIGKILL and removing the container
+	killGrace time.Duration
+	// after a command's timeout before its container is removed
+	hardGrace time.Duration
+	// for an exec to report its exit once its output ended
+	exitWait time.Duration
 }
 
 // NewManager validates cfg and returns a Manager. It does not contact the
@@ -136,7 +140,8 @@ func (m *Manager) Executor(threadID string) *Executor {
 	e := &Executor{m: m, thread: threadID, lastUsed: time.Now()}
 	sb, err := sandbox.NewStarter(e, sandbox.Config{Root: m.cfg.WorkDir, OpTimeout: m.cfg.OpTimeout})
 	if err != nil {
-		panic("orxdocker: sandbox options checked by NewManager: " + err.Error()) // unreachable
+		// unreachable
+		panic("orxdocker: sandbox options checked by NewManager: " + err.Error())
 	}
 	e.sb = sb
 	if m.closed {

@@ -2,7 +2,7 @@
 // run ends; an answer that falls short goes back to the model with the
 // grader's feedback until it passes or the revisions run out.
 //
-//	go run ./examples/self-check                                 # offline, scripted
+//	go run ./examples/self-check  # offline, scripted
 //	ORX_MODEL=openai:gpt-4o go run ./examples/self-check
 //
 // Offline, a small Go function grades the answer. Live, the default model
@@ -25,7 +25,8 @@ import (
 )
 
 func main() {
-	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	// live: fail early when the provider's API key is missing
+	err := exmodel.Check()
 	if err == nil {
 		err = run(context.Background(), os.Stdout)
 	}
@@ -61,7 +62,8 @@ func run(ctx context.Context, w io.Writer) error {
 		cfg.Grader = mentionsUnits // nil (live) means rubric.ModelGrader{}
 	}
 	model := exmodel.Model(
-		llmtest.Turn{Text: "The Moon is on average 384,400 away from Earth."}, // fails: no unit
+		// fails: no unit
+		llmtest.Turn{Text: "The Moon is on average 384,400 away from Earth."},
 		llmtest.Turn{Text: "The Moon is on average 384,400 km (238,855 miles) away from Earth."},
 	)
 	a, err := exmodel.New(model, orchestrix.WithRubric(cfg), orchestrix.WithMaxTurns(5))

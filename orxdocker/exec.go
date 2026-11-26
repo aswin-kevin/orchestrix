@@ -331,7 +331,8 @@ func (e *Executor) Execute(ctx context.Context, cmd string, opts backend.ExecOpt
 	// ctx has ended, so the stop request gets a context of its own that
 	// keeps ctx's values: with ctx itself the signal exec would fail at once.
 	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signalTimeout)
-	_ = p.Stop(stopCtx) // the timeout's backstop still ends the command if this fails
+	// the timeout's backstop still ends the command if this fails
+	_ = p.Stop(stopCtx)
 	cancel()
 	select {
 	case <-p.Done():
@@ -729,7 +730,8 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 	copied := make(chan struct{})
 	go func() {
 		defer close(copied)
-		_ = demux(body, p.out) // a broken stream ends the copy; the exec state decides
+		// a broken stream ends the copy; the exec state decides
+		_ = demux(body, p.out)
 	}()
 	timer := time.AfterFunc(timeout, func() {
 		p.timedOut.Store(true)
@@ -799,7 +801,8 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 // command, which runs as the same user, may have killed the wrapper and
 // deleted its pid file.
 func (p *process) confirmKill(held bool, exitCode int, err error) error {
-	<-p.termSent // stop is running or about to: the timer fired or Stop was called
+	// stop is running or about to: the timer fired or Stop was called
+	<-p.termSent
 	wrapperKilled := err != nil || exitCode >= 128
 	if !held && !(p.unconfirmed.Load() && wrapperKilled) {
 		return nil
@@ -832,7 +835,8 @@ func (p *process) waitExit(copied, removed <-chan struct{}) (int, error) {
 		}
 		select {
 		case <-copied: // nil once closed
-			copied = nil // the stream ended: the exec is about to report its exit
+			// the stream ended: the exec is about to report its exit
+			copied = nil
 			deadline = time.Now().Add(exitWait)
 		case <-time.After(poll):
 		case <-removed:

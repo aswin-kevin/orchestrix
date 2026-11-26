@@ -15,7 +15,8 @@
 //	if err != nil {
 //		log.Fatal(err)
 //	}
-//	a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithCheckpointer(cp))
+//	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
+//		orchestrix.WithCheckpointer(cp))
 //
 // Checkpointer implements checkpoint.Checkpointer, Lister, Deleter and
 // Leaser; Store implements kv.Store and kv.Stater, for use with kv.New.

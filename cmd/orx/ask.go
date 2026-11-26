@@ -21,14 +21,14 @@ const (
 	multiAnswerPrompt  = "Answer (option numbers, comma-separated, or your own words): "
 )
 
-// Ask implements askuser.Asker on the terminal. It prints each question
-// with its numbered options and reads one line per question: an option
-// number (comma-separated numbers for a multi-choice question) selects
-// options, anything else is the user's own answer. It shares the approver's input and prompt lock, so its
-// questions never interleave with approval prompts. End of input or
-// cancellation fails the call, which the model sees as a tool error, and so
-// does a question asked while no turn runs or still open when it ends (see
-// approver).
+// Ask implements askuser.Asker on the terminal. It prints each question with
+// its numbered options and reads one line per question: an option number
+// (comma-separated numbers for a multi-choice question) selects options,
+// anything else is the user's own answer. It shares the approver's input and
+// prompt lock, so its questions never interleave with approval prompts. End of
+// input or cancellation fails the call, which the model sees as a tool error,
+// and so does a question asked while no turn runs or still open when it ends
+// (see approver).
 //
 // askuser already strips control characters from the questions; the text is
 // still passed through termsafe.String, since it is written by the model.

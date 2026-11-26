@@ -1,7 +1,7 @@
 // Command quickstart builds an agent with one typed tool and asks it a
 // question it answers by calling that tool.
 //
-//	go run ./examples/quickstart                                  # offline, scripted
+//	go run ./examples/quickstart  # offline, scripted
 //	ORX_MODEL=anthropic:claude-sonnet-4-5 go run ./examples/quickstart
 package main
 
@@ -20,7 +20,8 @@ import (
 )
 
 func main() {
-	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	// live: fail early when the provider's API key is missing
+	err := exmodel.Check()
 	if err == nil {
 		err = run(context.Background(), os.Stdout)
 	}

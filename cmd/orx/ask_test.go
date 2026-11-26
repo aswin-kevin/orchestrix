@@ -137,7 +137,8 @@ func TestAskPromptMatchesQuestionKind(t *testing.T) {
 
 func TestQuestionsWhileIdleFailWithoutPrompt(t *testing.T) {
 	out := &promptLog{}
-	ap := newApprover(newLineReader(strings.NewReader("1\n")), out) // no turn runs
+	// no turn runs
+	ap := newApprover(newLineReader(strings.NewReader("1\n")), out)
 
 	_, err := ap.Ask(context.Background(), []askuser.Question{{Question: "Which?", Options: []askuser.Choice{{Label: "a"}, {Label: "b"}}}})
 

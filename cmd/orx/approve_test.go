@@ -314,7 +314,8 @@ func TestPlanPromptCancelled(t *testing.T) {
 
 func TestApprovalWhileIdleDeniedWithoutPrompt(t *testing.T) {
 	out := &promptLog{}
-	ap := newApprover(newLineReader(strings.NewReader("y\n")), out) // no turn runs
+	// no turn runs
+	ap := newApprover(newLineReader(strings.NewReader("y\n")), out)
 
 	d := ap.decide(context.Background(), permission.Request{Tool: "write_file", Subject: "/x"}, "")
 

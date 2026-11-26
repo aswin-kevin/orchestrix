@@ -2,7 +2,7 @@
 // coordinator agent that delegates to worker subagents and combines their
 // results, and RunParallel, which runs many independent prompts at once.
 //
-//	go run ./examples/coordinator                                # offline, scripted
+//	go run ./examples/coordinator  # offline, scripted
 //	ORX_MODEL=anthropic:claude-sonnet-4-5 go run ./examples/coordinator
 package main
 
@@ -22,7 +22,8 @@ import (
 )
 
 func main() {
-	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	// live: fail early when the provider's API key is missing
+	err := exmodel.Check()
 	if err == nil {
 		err = run(context.Background(), os.Stdout)
 	}
@@ -77,7 +78,8 @@ func delegate(ctx context.Context, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = c.Close(context.Background()) }() // stops background workers still running
+	// stops background workers still running
+	defer func() { _ = c.Close(context.Background()) }()
 
 	// Background workers belong to a thread, so the run gets one.
 	in := orchestrix.Text("Write a two-line pitch for home battery storage: one fact, one tagline.")
@@ -88,7 +90,8 @@ func delegate(ctx context.Context, w io.Writer) error {
 		}
 		switch ev.Kind {
 		case agent.KindToolUse:
-			if ev.ParentToolID == "" { // the coordinator's own calls, not its workers'
+			// the coordinator's own calls, not its workers'
+			if ev.ParentToolID == "" {
 				fmt.Fprintf(w, "tool call: %s %s\n", exmodel.Safe(ev.ToolName), exmodel.Safe(string(ev.Input)))
 			}
 		case agent.KindToolResult:

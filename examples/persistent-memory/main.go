@@ -2,8 +2,8 @@
 // shared by every thread and kept on disk: a preference recorded in one
 // conversation is recalled in another.
 //
-//	go run ./examples/persistent-memory                          # offline, scripted
-//	go run ./examples/persistent-memory -store ./memories        # keep the store
+//	go run ./examples/persistent-memory  # offline, scripted
+//	go run ./examples/persistent-memory -store ./memories  # keep the store
 //	ORX_MODEL=anthropic:claude-sonnet-4-5 go run ./examples/persistent-memory
 //
 // Without -store the memories go to a temporary directory that is removed
@@ -33,7 +33,8 @@ var storeDir = flag.String("store", "", "directory that keeps the memories acros
 
 func main() {
 	flag.Parse()
-	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	// live: fail early when the provider's API key is missing
+	err := exmodel.Check()
 	if err == nil {
 		err = run(context.Background(), os.Stdout)
 	}
@@ -80,14 +81,17 @@ func run(ctx context.Context, w io.Writer) error {
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "call_2", Name: memory.ToolRecall, Input: memory.RecallInput{Query: "coffee"}}}},
 		llmtest.Turn{Text: "One coffee, black, no sugar, coming up."},
 	)
-	entries, err := memory.NewFileStore(memory.FileStoreConfig{}) // under memory.DefaultDir
+	// under memory.DefaultDir
+	entries, err := memory.NewFileStore(memory.FileStoreConfig{})
 	if err != nil {
 		return err
 	}
 	a, err := exmodel.New(model,
-		orchestrix.WithMemory(memory.Config{Store: entries}), // recall_memory and record_memory
+		// recall_memory and record_memory
+		orchestrix.WithMemory(memory.Config{Store: entries}),
 		orchestrix.WithMount(memory.DefaultDir, memories),
-		orchestrix.WithPermissionMode(permission.ModeAcceptEdits), // recording a memory is a file edit
+		// recording a memory is a file edit
+		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
 		orchestrix.WithMaxTurns(5),
 	)
 	if err != nil {

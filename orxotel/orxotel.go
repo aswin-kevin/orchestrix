@@ -197,8 +197,8 @@ func (m *Middleware) WrapRun(ctx context.Context, info agent.RunInfo) (context.C
 }
 
 // runFailed reports whether a run that ended for reason failed. A run that
-// completed, ran out of turns, tokens or time, paused for a decision or was stopped
-// on purpose by a hook did what it was configured to do.
+// completed, ran out of turns, tokens or time, paused for a decision or was
+// stopped on purpose by a hook did what it was configured to do.
 func runFailed(reason agent.TerminalReason) bool {
 	switch reason {
 	case agent.ReasonCompleted, agent.ReasonMaxTurns, agent.ReasonTokenLimit, agent.ReasonTimeout,
@@ -269,12 +269,12 @@ func responseSource(resp *llm.Response) string {
 // span's context goes to next, so a subagent run started by the tool is a
 // child of this span.
 //
-// Captured arguments are call.Input as this middleware receives it. A Go
-// error from next is recorded as Config describes (its message only with
+// Captured arguments are call.Input as this middleware receives it. A Go error
+// from next is recorded as Config describes (its message only with
 // CaptureContent or through RedactError), except an *agent.Interrupt or
 // agent.ErrStopRun: they pause or stop the run on purpose, so the span keeps
-// status Unset and gets orchestrix.tool.outcome instead. A panic marks the span as an error and
-// is re-raised for the agent loop to recover.
+// status Unset and gets orchestrix.tool.outcome instead. A panic marks the
+// span as an error and is re-raised for the agent loop to recover.
 func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	attrs := []attribute.KeyValue{
 		attribute.String(keyOperationName, opExecuteTool),

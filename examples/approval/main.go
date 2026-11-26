@@ -1,7 +1,7 @@
 // Command approval pauses a run before the agent writes a file, shows the
 // pending action to a human, and resumes the run once it is approved.
 //
-//	go run ./examples/approval                                  # offline, scripted
+//	go run ./examples/approval  # offline, scripted
 //	ORX_MODEL=openai:gpt-4o go run ./examples/approval
 //
 // The paused run is saved by a file checkpointer, so the decision could just
@@ -29,7 +29,8 @@ import (
 )
 
 func main() {
-	err := exmodel.Check() // live: fail early when the provider's API key is missing
+	// live: fail early when the provider's API key is missing
+	err := exmodel.Check()
 	if err == nil {
 		err = run(context.Background(), os.Stdout)
 	}
@@ -62,7 +63,8 @@ func run(ctx context.Context, w io.Writer) error {
 	if err := os.Mkdir(root, 0o755); err != nil {
 		return err
 	}
-	workspace, err := disk.New(root, disk.Config{}) // the agent's files live here
+	// the agent's files live here
+	workspace, err := disk.New(root, disk.Config{})
 	if err != nil {
 		return err
 	}
