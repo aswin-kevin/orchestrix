@@ -288,8 +288,9 @@ func TestNewRejectsBadPaths(t *testing.T) {
 }
 
 func TestNewRejectsNegativeMaxFileBytes(t *testing.T) {
-	if _, err := New(Config{MaxFileBytes: -1}); err == nil {
-		t.Fatal("New accepted a negative MaxFileBytes")
+	_, err := New(Config{MaxFileBytes: -1})
+	if err == nil || err.Error() != "middleware/memory: MaxFileBytes is negative" {
+		t.Fatalf("New(MaxFileBytes: -1) error = %v, want the MaxFileBytes is negative text", err)
 	}
 }
 
@@ -377,6 +378,13 @@ func TestErrorPrefix(t *testing.T) {
 		if err == nil || !strings.HasPrefix(err.Error(), "middleware/memory: ") {
 			t.Errorf("%s: err = %v, want a middleware/memory: error", name, err)
 		}
+	}
+}
+
+func TestNegativeStaleAfterText(t *testing.T) {
+	_, err := New(Config{StaleAfter: -time.Hour})
+	if err == nil || err.Error() != "middleware/memory: StaleAfter is negative" {
+		t.Fatalf("New(StaleAfter: -1h) error = %v, want the StaleAfter is negative text", err)
 	}
 }
 

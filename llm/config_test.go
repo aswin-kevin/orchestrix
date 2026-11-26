@@ -79,7 +79,8 @@ func TestConfigNegatives(t *testing.T) {
 		check func(*Transport) bool // the accepted value's meaning
 	}{
 		{"zero", func(*Config) {}, "", func(tr *Transport) bool {
-			return tr.maxRetries() == DefaultMaxRetries && tr.streamIdleTimeout() == DefaultStreamIdleTimeout
+			return tr.maxRetries() == DefaultMaxRetries && tr.streamIdleTimeout() == DefaultStreamIdleTimeout &&
+				(&openAIProvider{cfg: tr.cfg}).emptyRetries() == DefaultEmptyResponseRetries
 		}},
 		{"MaxRetries NoRetries", func(c *Config) { c.MaxRetries = NoRetries }, "",
 			func(tr *Transport) bool { return tr.maxRetries() == 0 }},

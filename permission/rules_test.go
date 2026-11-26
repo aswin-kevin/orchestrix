@@ -171,3 +171,17 @@ func TestParseRuleErrorPrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRuleErrorTexts(t *testing.T) {
+	for in, want := range map[string]string{
+		"":         "permission: rule: empty rule",
+		"Bash(":    `permission: rule "Bash(": unbalanced parentheses`,
+		"Bash()":   `permission: rule "Bash()": empty pattern`,
+		"Bash)":    `permission: rule "Bash)": unbalanced parentheses`,
+		"Bash(a))": `permission: rule "Bash(a))": unbalanced parentheses`,
+	} {
+		if _, err := ParseRule(in); err == nil || err.Error() != want {
+			t.Errorf("ParseRule(%q) error = %v, want %q", in, err, want)
+		}
+	}
+}

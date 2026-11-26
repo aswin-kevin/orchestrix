@@ -67,7 +67,11 @@ func TestExtraNestedKeys(t *testing.T) {
 				t.Fatalf("nested value under \"model\": err = %v, want ErrExtraConflict", err)
 			}
 			req.Extra = map[string]any{"metadata": map[string]any{"model": "x", "stream": true}}
-			_, _ = f.make(t, url).Complete(t.Context(), req)
+			// The server answers 400 to every request; the request was sent.
+			if _, err := f.make(t, url).Complete(t.Context(), req); err == nil || errors.Is(err, ErrExtraConflict) ||
+				!strings.Contains(err.Error(), "status 400") {
+				t.Fatalf("nested keys under another name: err = %v, want the server's 400", err)
+			}
 			if len(*bodies) != 1 {
 				t.Fatalf("got %d requests, want 1", len(*bodies))
 			}
