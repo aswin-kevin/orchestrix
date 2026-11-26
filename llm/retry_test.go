@@ -12,14 +12,19 @@ import (
 	"time"
 )
 
-// testConfig returns a prepared Config with a tiny fixed retry wait.
-func testConfig(t *testing.T) *Config {
+// testTransport returns a Transport with a tiny fixed retry wait, after
+// applying mutate to its Config.
+func testTransport(t *testing.T, mutate ...func(*Config)) *Transport {
 	t.Helper()
-	cfg := &Config{RetryInterval: time.Millisecond}
-	if err := cfg.Prepare(); err != nil {
-		t.Fatalf("Prepare: %v", err)
+	cfg := Config{RetryInterval: time.Millisecond}
+	for _, m := range mutate {
+		m(&cfg)
 	}
-	return cfg
+	tr, err := NewTransport(cfg)
+	if err != nil {
+		t.Fatalf("NewTransport: %v", err)
+	}
+	return tr
 }
 
 func requestTo(url string) func() (*http.Request, error) {
@@ -40,7 +45,7 @@ func TestDoRetries429ThenSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resp, err := testConfig(t).Do(context.Background(), requestTo(srv.URL))
+	resp, err := testTransport(t).Do(context.Background(), requestTo(srv.URL))
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
@@ -58,7 +63,7 @@ func TestDoDoesNotRetry400(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := testConfig(t).Do(context.Background(), requestTo(srv.URL))
+	_, err := testTransport(t).Do(context.Background(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
 		t.Fatalf("err = %v, want *APIError with status 400", err)
@@ -79,9 +84,8 @@ func TestDoHonorsMaxRetriesNegative(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := testConfig(t)
-	cfg.MaxRetries = -1
-	if _, err := cfg.Do(context.Background(), requestTo(srv.URL)); err == nil {
+	tr := testTransport(t, func(c *Config) { c.MaxRetries = -1 })
+	if _, err := tr.Do(context.Background(), requestTo(srv.URL)); err == nil {
 		t.Fatal("want error")
 	}
 	if got := hits.Load(); got != 1 {
@@ -97,9 +101,8 @@ func TestDoGivesUpAfterMaxRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := testConfig(t)
-	cfg.MaxRetries = 2
-	if _, err := cfg.Do(context.Background(), requestTo(srv.URL)); !IsRetryable(err) {
+	tr := testTransport(t, func(c *Config) { c.MaxRetries = 2 })
+	if _, err := tr.Do(context.Background(), requestTo(srv.URL)); !IsRetryable(err) {
 		t.Fatalf("err = %v, want the last retryable APIError", err)
 	}
 	if got := hits.Load(); got != 3 {
@@ -119,7 +122,7 @@ func TestDoStopsOnContextCancel(t *testing.T) {
 	cancel()
 
 	start := time.Now()
-	_, err := testConfig(t).Do(ctx, requestTo(srv.URL))
+	_, err := testTransport(t).Do(ctx, requestTo(srv.URL))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -137,12 +140,11 @@ func TestDoCancelDuringRetryWait(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := testConfig(t)
-	cfg.RetryInterval = time.Minute
+	tr := testTransport(t, func(c *Config) { c.RetryInterval = time.Minute })
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
 
-	_, err := cfg.Do(ctx, requestTo(srv.URL))
+	_, err := tr.Do(ctx, requestTo(srv.URL))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -163,7 +165,7 @@ func TestDoSkipsWaitPastDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
-	_, err := testConfig(t).Do(ctx, requestTo(srv.URL))
+	_, err := testTransport(t).Do(ctx, requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTooManyRequests {
 		t.Fatalf("err = %v, want the 429 APIError", err)
@@ -187,7 +189,7 @@ func TestDoHandsOffToFallback(t *testing.T) {
 	defer srv.Close()
 
 	ctx := withHandoff(context.Background(), DefaultShouldFallback)
-	if _, err := testConfig(t).Do(ctx, requestTo(srv.URL)); err == nil {
+	if _, err := testTransport(t).Do(ctx, requestTo(srv.URL)); err == nil {
 		t.Fatal("want an error")
 	}
 	if got := hits.Load(); got != 1 {
@@ -197,7 +199,7 @@ func TestDoHandsOffToFallback(t *testing.T) {
 	// An error the fallback would not switch on is retried as usual.
 	hits.Store(0)
 	ctx = withHandoff(context.Background(), func(error) bool { return false })
-	if _, err := testConfig(t).Do(ctx, requestTo(srv.URL)); err == nil {
+	if _, err := testTransport(t).Do(ctx, requestTo(srv.URL)); err == nil {
 		t.Fatal("want an error")
 	}
 	if got, want := hits.Load(), int32(DefaultMaxRetries+1); got != want {
@@ -206,13 +208,13 @@ func TestDoHandsOffToFallback(t *testing.T) {
 }
 
 func TestRetryDelay(t *testing.T) {
-	cfg := &Config{}
+	tr := &Transport{}
 	rateLimited := &APIError{Status: 429, RetryAfter: 3 * time.Second, hasRetryAfter: true}
 	plain := &APIError{Status: 500}
 
 	// Retry-After is honoured and only ever lengthened, by at most a tenth.
 	for range 100 {
-		if got := cfg.retryDelay(0, rateLimited); got < 3*time.Second || got > 3300*time.Millisecond {
+		if got := tr.retryDelay(0, rateLimited); got < 3*time.Second || got > 3300*time.Millisecond {
 			t.Fatalf("Retry-After delay = %v, want within [3s, 3.3s]", got)
 		}
 	}
@@ -221,20 +223,20 @@ func TestRetryDelay(t *testing.T) {
 			t.Errorf("backoff(%d) = %v, want %v", attempt, got, ceiling)
 		}
 		for range 100 {
-			if got := cfg.retryDelay(attempt, plain); got < ceiling/2 || got > ceiling {
+			if got := tr.retryDelay(attempt, plain); got < ceiling/2 || got > ceiling {
 				t.Fatalf("retryDelay(%d) = %v, want within [%v, %v]", attempt, got, ceiling/2, ceiling)
 			}
 		}
 	}
-	cfg.RetryInterval = 40 * time.Millisecond
-	if got := cfg.retryDelay(5, plain); got != 40*time.Millisecond {
+	tr.cfg.RetryInterval = 40 * time.Millisecond
+	if got := tr.retryDelay(5, plain); got != 40*time.Millisecond {
 		t.Errorf("fixed interval delay = %v", got)
 	}
 
 	// A huge Retry-After is capped at maxRetryAfter, plus its jitter.
 	huge := &APIError{Status: 429, RetryAfter: time.Hour, hasRetryAfter: true}
 	for range 100 {
-		if got := cfg.retryDelay(0, huge); got < maxRetryAfter || got > maxRetryAfter+maxRetryAfter/retryAfterJitterDivisor {
+		if got := tr.retryDelay(0, huge); got < maxRetryAfter || got > maxRetryAfter+maxRetryAfter/retryAfterJitterDivisor {
 			t.Fatalf("capped Retry-After delay = %v, want within [%v, %v]", got, maxRetryAfter, maxRetryAfter+maxRetryAfter/retryAfterJitterDivisor)
 		}
 	}
@@ -243,12 +245,12 @@ func TestRetryDelay(t *testing.T) {
 // TestRetryDelaySpreadsCallers checks that callers failing together do not
 // all wait the same time before retrying.
 func TestRetryDelaySpreadsCallers(t *testing.T) {
-	cfg := &Config{}
+	tr := &Transport{}
 	rateLimited := &APIError{Status: 429, RetryAfter: 3 * time.Second, hasRetryAfter: true}
 	for _, err := range []error{&APIError{Status: 500}, rateLimited} {
 		seen := make(map[time.Duration]bool)
 		for range 20 {
-			seen[cfg.retryDelay(2, err)] = true
+			seen[tr.retryDelay(2, err)] = true
 		}
 		if len(seen) < 2 {
 			t.Errorf("retryDelay(2, %v) returned the same delay 20 times", err)
@@ -281,8 +283,8 @@ func TestParseRetryAfter(t *testing.T) {
 
 func TestDoBuildErrorIsNotRetried(t *testing.T) {
 	var builds int
-	cfg := testConfig(t)
-	_, err := cfg.Do(context.Background(), func() (*http.Request, error) {
+	tr := testTransport(t)
+	_, err := tr.Do(context.Background(), func() (*http.Request, error) {
 		builds++
 		return http.NewRequest(http.MethodPost, "http://bad host/", nil)
 	})
@@ -309,12 +311,13 @@ func TestDoRetryAfterZeroRetriesImmediately(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := &Config{} // default backoff would wait 500ms
-	if err := cfg.Prepare(); err != nil {
+	// The default backoff would wait 500ms.
+	tr, err := NewTransport(Config{})
+	if err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	resp, err := cfg.Do(context.Background(), requestTo(srv.URL))
+	resp, err := tr.Do(context.Background(), requestTo(srv.URL))
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
@@ -386,9 +389,8 @@ func TestDoRetriesNetworkError(t *testing.T) {
 	url := srv.URL
 	srv.Close() // connections to url are now refused
 
-	cfg := testConfig(t)
-	cfg.MaxRetries = 1
-	if _, err := cfg.Do(context.Background(), requestTo(url)); !IsRetryable(err) {
+	tr := testTransport(t, func(c *Config) { c.MaxRetries = 1 })
+	if _, err := tr.Do(context.Background(), requestTo(url)); !IsRetryable(err) {
 		t.Fatalf("err = %v, want a retryable network error", err)
 	}
 }

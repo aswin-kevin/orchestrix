@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"iter"
 	"net/http"
 	"net/url"
@@ -46,16 +45,18 @@ const (
 // openAIProvider speaks the OpenAI Chat Completions API, which many other
 // servers also implement.
 type openAIProvider struct {
-	cfg *Config
+	cfg Config
+	t   *Transport
 }
 
 // newOpenAI returns an adapter for cfg. It keeps its own copy of the
 // configuration, so later changes to the caller's value have no effect.
 func newOpenAI(cfg Config) (*openAIProvider, error) {
-	if err := cfg.Prepare(); err != nil {
+	t, err := NewTransport(cfg)
+	if err != nil {
 		return nil, err
 	}
-	return &openAIProvider{cfg: &cfg}, nil
+	return &openAIProvider{cfg: t.Config(), t: t}, nil
 }
 
 // configuredModel implements modelReporter.
@@ -200,7 +201,7 @@ func (p *openAIProvider) Stream(ctx context.Context, req Request) iter.Seq2[Stre
 				return
 			}
 			discarded = gate.usage
-			if err := sleepContext(ctx, p.cfg.retryDelay(attempt, nil)); err != nil {
+			if err := sleepContext(ctx, p.t.retryDelay(attempt, nil)); err != nil {
 				yield(StreamEvent{}, err)
 				return
 			}
@@ -223,14 +224,7 @@ func (p *openAIProvider) emptyRetries() int {
 // closed on every exit, including the consumer breaking out of the loop,
 // which releases the connection promptly.
 func (p *openAIProvider) streamAttempt(ctx context.Context, body []byte, gate *emptyReplyGate) error {
-	ctx, idle, release := p.cfg.watchIdle(ctx)
-	defer release()
-	resp, err := p.send(ctx, body)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	return streamOpenAIChunks(ctx, p.cfg, resp.Body, idle, gate.emit)
+	return streamOpenAIChunks(p.t, p.t.Stream(ctx, p.request(body)), gate.emit)
 }
 
 // emptyReplyGate holds back events until the reply proves non-empty. Until
@@ -295,18 +289,23 @@ func (g *emptyReplyGate) flush() bool {
 	return true
 }
 
-// streamOpenAIChunks translates the SSE body into events passed to emit. A
-// body that ends with neither [DONE] nor a finish_reason is reported as an
-// error so truncated replies are never mistaken for complete ones. It returns
-// nil without further reading once emit reports the consumer is gone.
-func streamOpenAIChunks(ctx context.Context, cfg *Config, body io.Reader, idle *idleTimer, emit func(StreamEvent) bool) error {
-	state := newOpenAIStreamState(cfg)
-	if !emit(StreamEvent{Type: EventMessageStart}) {
-		return nil
-	}
-	for sse, err := range readSSE(body, idle) {
+// streamOpenAIChunks translates the SSE events into events passed to emit,
+// starting with a message start once the request has succeeded. A body that
+// ends with neither [DONE] nor a finish_reason is reported as an error so
+// truncated replies are never mistaken for complete ones. It returns nil
+// without further reading once emit reports the consumer is gone.
+func streamOpenAIChunks(t *Transport, events iter.Seq2[SSEEvent, error], emit func(StreamEvent) bool) error {
+	state := newOpenAIStreamState(t)
+	started := false
+	for sse, err := range events {
 		if err != nil {
-			return streamReadError(ctx, err)
+			return err
+		}
+		if !started {
+			started = true
+			if !emit(StreamEvent{Type: EventMessageStart}) {
+				return nil
+			}
 		}
 		if strings.TrimSpace(sse.Data) == openAIDoneSentinel {
 			state.complete(emit)
@@ -322,6 +321,9 @@ func streamOpenAIChunks(ctx context.Context, cfg *Config, body io.Reader, idle *
 			return err
 		}
 	}
+	if !started && !emit(StreamEvent{Type: EventMessageStart}) {
+		return nil
+	}
 	if state.finishReason == "" {
 		return errors.New("llm: openai stream ended before finish_reason or [DONE]")
 	}
@@ -333,8 +335,8 @@ func streamOpenAIChunks(ctx context.Context, cfg *Config, body io.Reader, idle *
 // stop reason are held until the stream ends because they may arrive in
 // separate chunks and some servers repeat usage in every chunk.
 type openAIStreamState struct {
-	// cfg redacts credentials from errors reported in the stream.
-	cfg *Config
+	// t redacts credentials from errors reported in the stream.
+	t *Transport
 	// slots maps a wire tool-call index to the call currently open there.
 	slots map[int]*toolSlot
 	// next is the number of calls started so far.
@@ -357,10 +359,10 @@ type toolSlot struct {
 	index     int
 }
 
-func newOpenAIStreamState(cfg *Config) *openAIStreamState {
+func newOpenAIStreamState(t *Transport) *openAIStreamState {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
-	return &openAIStreamState{cfg: cfg, slots: make(map[int]*toolSlot), runID: hex.EncodeToString(b[:])}
+	return &openAIStreamState{t: t, slots: make(map[int]*toolSlot), runID: hex.EncodeToString(b[:])}
 }
 
 // translate maps one chunk to stream events.
@@ -371,7 +373,7 @@ func (s *openAIStreamState) translate(data string) ([]StreamEvent, error) {
 	}
 	if len(chunk.Error) > 0 && string(chunk.Error) != "null" {
 		// Status 0: the HTTP exchange itself succeeded.
-		return nil, s.cfg.streamError(data)
+		return nil, s.t.StreamError(data)
 	}
 	s.model = firstNonEmpty(s.model, chunk.Model)
 	s.id = firstNonEmpty(s.id, chunk.ID)
@@ -484,9 +486,10 @@ func (s *openAIStreamState) stopReason() StopReason {
 	return StopReason(s.finishReason)
 }
 
-// send issues the HTTP request, returning the 2xx response.
-func (p *openAIProvider) send(ctx context.Context, body []byte) (*http.Response, error) {
-	return p.cfg.Do(ctx, func() (*http.Request, error) {
+// request returns the func that builds the HTTP request for body, once per
+// attempt.
+func (p *openAIProvider) request(body []byte) func() (*http.Request, error) {
+	return func() (*http.Request, error) {
 		target, err := endpoint(p.cfg.BaseURL, "chat/completions")
 		if err != nil {
 			return nil, err
@@ -497,7 +500,7 @@ func (p *openAIProvider) send(ctx context.Context, body []byte) (*http.Response,
 		}
 		p.setHeaders(httpReq)
 		return httpReq, nil
-	})
+	}
 }
 
 func (p *openAIProvider) setHeaders(r *http.Request) {

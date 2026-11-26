@@ -3,9 +3,7 @@ package llm
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -46,11 +44,8 @@ const (
 	defaultOpenAIBaseURL    = "https://api.openai.com/v1"
 )
 
-// Config configures a provider adapter.
-//
-// An adapter calls Prepare once in its constructor and then shares the
-// resulting HTTP client and rate limiter, so a Config must not be copied
-// after that point; adapters keep it by pointer.
+// Config configures a provider adapter. It is plain data: New and
+// NewTransport copy it, so a Config may be reused or changed afterwards.
 type Config struct {
 	// Format selects the provider wire protocol; New and ParseModel set it
 	// from the model spec.
@@ -95,10 +90,10 @@ type Config struct {
 	EmptyResponseRetries int
 	// StreamIdleTimeout bounds how long a model reply may go silent once its
 	// response headers have arrived: any bytes received, keep-alive
-	// comments included, count as activity, for a stream and for a
-	// non-streaming Anthropic reply body alike. When it runs out the call
-	// fails with ErrStreamIdle. 0
-	// selects DefaultStreamIdleTimeout and a negative value disables it. The
+	// comments included, count as activity, for a stream (Transport.Stream)
+	// and for a non-streaming reply body (Transport.Fetch) alike. When it
+	// runs out the call fails with ErrStreamIdle. 0 selects
+	// DefaultStreamIdleTimeout and a negative value disables it. The
 	// time the consumer spends handling an event does not count. It does not
 	// bound the wait for response headers or the call as a whole; use the
 	// context's deadline for that. A decision format (NewDecider) does not
@@ -124,26 +119,13 @@ type Config struct {
 	// DefaultMaxTokens is used when a request sets no limit; 0 selects
 	// DefaultMaxTokens.
 	DefaultMaxTokens int
-
-	client  *http.Client
-	limiter *limiter
-}
-
-// streamIdleTimeout is the effective StreamIdleTimeout; zero means none.
-func (c *Config) streamIdleTimeout() time.Duration {
-	switch {
-	case c.StreamIdleTimeout == 0:
-		return DefaultStreamIdleTimeout
-	case c.StreamIdleTimeout < 0:
-		return 0
-	}
-	return c.StreamIdleTimeout
 }
 
 // ParseModel builds a Config from a "format:model" spec such as
 // "openai:my-model:v2". Only the first colon separates the format, so model
 // names may contain colons. The API key and base URL come from the format's
-// environment variables.
+// environment variables. Formats added with RegisterProvider get only Format
+// and Model; their builder reads its own environment.
 func ParseModel(spec string) (Config, error) {
 	prefix, model, ok := strings.Cut(spec, ":")
 	if !ok || model == "" {
@@ -172,49 +154,6 @@ func envOr(name, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// Prepare builds the HTTP client and rate limiter and takes a private copy
-// of Headers, so the caller's map may change afterwards. Call it once before
-// Do (adapters do so from their constructor); it is not safe to call
-// concurrently with Do.
-func (c *Config) Prepare() error {
-	c.Headers = maps.Clone(c.Headers)
-	client, err := c.newHTTPClient()
-	if err != nil {
-		return err
-	}
-	c.client = client
-	c.limiter = newLimiter(c.RateLimit)
-	return nil
-}
-
-// httpClient returns the client built by Prepare.
-func (c *Config) httpClient() *http.Client {
-	return c.client
-}
-
-func (c *Config) newHTTPClient() (*http.Client, error) {
-	if c.HTTPClient != nil {
-		return c.HTTPClient, nil
-	}
-	transport := &http.Transport{}
-	if def, ok := http.DefaultTransport.(*http.Transport); ok {
-		transport = def.Clone()
-	}
-	if c.Proxy != "" {
-		proxyURL, err := url.Parse(c.Proxy)
-		if err != nil {
-			return nil, fmt.Errorf("llm: parse proxy URL: %w", err)
-		}
-		transport.Proxy = http.ProxyURL(proxyURL)
-	}
-	if c.Proxy == "" {
-		transport.Proxy = http.ProxyFromEnvironment
-	}
-	// No overall client timeout: streams are
-	// long-lived and callers bound them with a context.
-	return &http.Client{Transport: transport}, nil
 }
 
 // New returns the Provider for cfg.Format. The configuration is copied, so

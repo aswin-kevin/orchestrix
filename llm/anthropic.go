@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"iter"
 	"net/http"
 )
@@ -28,16 +27,18 @@ const (
 
 // anthropicProvider speaks the Anthropic Messages API.
 type anthropicProvider struct {
-	cfg *Config
+	cfg Config
+	t   *Transport
 }
 
 // newAnthropic returns an adapter for cfg. It keeps its own copy of the
 // configuration, so later changes to the caller's value have no effect.
 func newAnthropic(cfg Config) (*anthropicProvider, error) {
-	if err := cfg.Prepare(); err != nil {
+	t, err := NewTransport(cfg)
+	if err != nil {
 		return nil, err
 	}
-	return &anthropicProvider{cfg: &cfg}, nil
+	return &anthropicProvider{cfg: t.Config(), t: t}, nil
 }
 
 // configuredModel implements modelReporter.
@@ -159,20 +160,16 @@ type anthropicEvent struct {
 
 // Complete implements Provider with a non-streaming request.
 func (p *anthropicProvider) Complete(ctx context.Context, req Request) (*Response, error) {
-	ctx, idle, release := p.cfg.watchIdle(ctx)
-	defer release()
-	resp, err := p.send(ctx, req, false)
+	build, err := p.request(req, false)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
+	body, err := p.t.Fetch(ctx, build)
+	if err != nil {
+		return nil, err
+	}
 	var wire anthropicResponse
-	idle.resume()
-	if err := json.NewDecoder(idleReader{resp.Body, idle}).Decode(&wire); err != nil {
-		if cause := idleCause(ctx); cause != nil {
-			return nil, cause
-		}
+	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, fmt.Errorf("llm: decode anthropic response: %w", err)
 	}
 	return wire.toResponse(), nil
@@ -220,30 +217,26 @@ func fromAnthropicBlock(b anthropicBlock) (Block, bool) {
 // the consumer has already seen part of it.
 func (p *anthropicProvider) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
-		ctx, idle, release := p.cfg.watchIdle(ctx)
-		defer release()
-		resp, err := p.send(ctx, req, true)
+		build, err := p.request(req, true)
 		if err != nil {
 			yield(StreamEvent{}, err)
 			return
 		}
-		// Closing on every exit, including the consumer breaking out of the
-		// loop, releases the connection promptly.
-		defer resp.Body.Close()
-		streamAnthropicEvents(ctx, p.cfg, resp.Body, idle, yield)
+		streamAnthropicEvents(p.t, p.t.Stream(ctx, build), yield)
 	}
 }
 
-// streamAnthropicEvents translates the SSE body into stream events. A body
+// streamAnthropicEvents translates the SSE events into stream events. A body
 // that ends before message_stop is reported as an error so truncated replies
-// are never mistaken for complete ones.
-func streamAnthropicEvents(ctx context.Context, cfg *Config, body io.Reader, idle *idleTimer, yield func(StreamEvent, error) bool) {
-	for sse, err := range readSSE(body, idle) {
+// are never mistaken for complete ones. Breaking out of events closes the
+// response body.
+func streamAnthropicEvents(t *Transport, events iter.Seq2[SSEEvent, error], yield func(StreamEvent, error) bool) {
+	for sse, err := range events {
 		if err != nil {
-			yield(StreamEvent{}, streamReadError(ctx, err))
+			yield(StreamEvent{}, err)
 			return
 		}
-		events, done, err := translateAnthropicEvent(cfg, sse)
+		events, done, err := translateAnthropicEvent(t, sse)
 		for _, ev := range events {
 			if !yield(ev, nil) {
 				return
@@ -262,7 +255,7 @@ func streamAnthropicEvents(ctx context.Context, cfg *Config, body io.Reader, idl
 
 // translateAnthropicEvent maps one SSE event to zero or more stream events.
 // done is true once the message is complete.
-func translateAnthropicEvent(cfg *Config, sse sseEvent) (events []StreamEvent, done bool, err error) {
+func translateAnthropicEvent(t *Transport, sse SSEEvent) (events []StreamEvent, done bool, err error) {
 	var ev anthropicEvent
 	if err := json.Unmarshal([]byte(sse.Data), &ev); err != nil {
 		return nil, false, fmt.Errorf("llm: decode anthropic event: %w", err)
@@ -280,7 +273,7 @@ func translateAnthropicEvent(cfg *Config, sse sseEvent) (events []StreamEvent, d
 		return []StreamEvent{{Type: EventMessageStop}}, true, nil
 	case "error":
 		// Status 0: the HTTP exchange itself succeeded.
-		return nil, false, cfg.streamError(sse.Data)
+		return nil, false, t.StreamError(sse.Data)
 	}
 	// ping and unknown event types carry nothing we need.
 	return nil, false, nil
@@ -357,13 +350,14 @@ func messageDeltaEvents(ev anthropicEvent) []StreamEvent {
 	return []StreamEvent{out}
 }
 
-// send builds and issues the HTTP request, returning the 2xx response.
-func (p *anthropicProvider) send(ctx context.Context, req Request, stream bool) (*http.Response, error) {
+// request encodes req and returns the func that builds its HTTP request,
+// once per attempt.
+func (p *anthropicProvider) request(req Request, stream bool) (func() (*http.Request, error), error) {
 	body, err := json.Marshal(p.buildRequest(req, stream))
 	if err != nil {
 		return nil, fmt.Errorf("llm: encode anthropic request: %w", err)
 	}
-	return p.cfg.Do(ctx, func() (*http.Request, error) {
+	return func() (*http.Request, error) {
 		target, err := p.messagesURL()
 		if err != nil {
 			return nil, err
@@ -374,7 +368,7 @@ func (p *anthropicProvider) send(ctx context.Context, req Request, stream bool) 
 		}
 		p.setHeaders(httpReq, stream)
 		return httpReq, nil
-	})
+	}, nil
 }
 
 func (p *anthropicProvider) messagesURL() (string, error) {

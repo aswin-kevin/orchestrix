@@ -67,11 +67,11 @@ func TestTransportErrorKeepsDeadline(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := &Config{MaxRetries: -1, HTTPClient: &http.Client{Timeout: 20 * time.Millisecond}}
-	if err := cfg.Prepare(); err != nil {
+	tr, err := NewTransport(Config{MaxRetries: -1, HTTPClient: &http.Client{Timeout: 20 * time.Millisecond}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := cfg.Do(context.Background(), requestTo(srv.URL+"?key="+testSecret))
+	_, err = tr.Do(context.Background(), requestTo(srv.URL+"?key="+testSecret))
 	if err == nil {
 		t.Fatal("want a timeout")
 	}
@@ -88,8 +88,8 @@ func TestTransportErrorKeepsDeadline(t *testing.T) {
 }
 
 func TestBuildErrorRedactsURL(t *testing.T) {
-	cfg := testConfig(t)
-	_, err := cfg.Do(context.Background(), requestTo("http://h/\x7f?key="+testSecret))
+	tr := testTransport(t)
+	_, err := tr.Do(context.Background(), requestTo("http://h/\x7f?key="+testSecret))
 	if err == nil {
 		t.Fatal("want a build error")
 	}
@@ -104,9 +104,8 @@ func TestAPIErrorRedactsKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := testConfig(t)
-	cfg.APIKey = testSecret
-	_, err := cfg.Do(context.Background(), requestTo(srv.URL))
+	tr := testTransport(t, func(c *Config) { c.APIKey = testSecret })
+	_, err := tr.Do(context.Background(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("err = %v, want *APIError", err)
@@ -128,9 +127,9 @@ func TestAPIErrorShortKeyNotRedacted(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := testConfig(t)
-	cfg.APIKey = "the" // too short to redact without mangling the body
-	_, err := cfg.Do(context.Background(), requestTo(srv.URL))
+	// "the" is too short to redact without mangling the body.
+	tr := testTransport(t, func(c *Config) { c.APIKey = "the" })
+	_, err := tr.Do(context.Background(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Body, "the request was bad") {
 		t.Fatalf("err = %v, want the body unchanged", err)
@@ -180,7 +179,7 @@ func TestAPIErrorRequestID(t *testing.T) {
 			w.Header().Set("X-Other", "kept")
 			w.WriteHeader(http.StatusBadRequest)
 		}))
-		_, err := testConfig(t).Do(context.Background(), requestTo(srv.URL))
+		_, err := testTransport(t).Do(context.Background(), requestTo(srv.URL))
 		srv.Close()
 		var apiErr *APIError
 		if !errors.As(err, &apiErr) {
@@ -219,7 +218,7 @@ func TestEndpoint(t *testing.T) {
 }
 
 func TestVersionedEndpoints(t *testing.T) {
-	anth := &anthropicProvider{cfg: &Config{BaseURL: "https://h?key=k"}}
+	anth := &anthropicProvider{cfg: Config{BaseURL: "https://h?key=k"}}
 	if got, err := anth.messagesURL(); err != nil || got != "https://h/v1/messages?key=k" {
 		t.Errorf("anthropic URL = %q, %v", got, err)
 	}
@@ -227,7 +226,7 @@ func TestVersionedEndpoints(t *testing.T) {
 	if got, err := anth.messagesURL(); err != nil || got != "https://h/v1/messages?key=k" {
 		t.Errorf("anthropic /v1 URL = %q, %v", got, err)
 	}
-	s1 := &systemOne{cfg: &Config{BaseURL: "https://h/v1?key=k"}}
+	s1 := &systemOne{cfg: Config{BaseURL: "https://h/v1?key=k"}}
 	if got, err := s1.url(); err != nil || got != "https://h/v1/systemone?key=k" {
 		t.Errorf("systemone URL = %q, %v", got, err)
 	}
@@ -252,9 +251,9 @@ func TestRedactURL(t *testing.T) {
 	}
 }
 
-// secretConfig returns a prepared Config whose API key, sensitive headers
-// and BaseURL password all hold distinct secrets.
-func secretConfig(t *testing.T, base string) (*Config, []string) {
+// secretConfig returns a Config whose API key, sensitive headers and BaseURL
+// password all hold distinct secrets.
+func secretConfig(t *testing.T, base string) (Config, []string) {
 	t.Helper()
 	secrets := []string{"SECRET-apikey-1", "SECRET-bearer-2", "SECRET-header-3", "SECRET-token-4", "SECRET-password-5"}
 	u, err := url.Parse(base)
@@ -262,7 +261,7 @@ func secretConfig(t *testing.T, base string) (*Config, []string) {
 		t.Fatal(err)
 	}
 	u.User = url.UserPassword("user", secrets[4])
-	cfg := &Config{
+	cfg := Config{
 		BaseURL:    u.String(),
 		APIKey:     secrets[0],
 		MaxRetries: -1,
@@ -272,9 +271,6 @@ func secretConfig(t *testing.T, base string) (*Config, []string) {
 			"X-Session-Token":     secrets[3],
 			"X-Trace":             "not-a-secret-value",
 		},
-	}
-	if err := cfg.Prepare(); err != nil {
-		t.Fatal(err)
 	}
 	return cfg, secrets
 }
@@ -288,7 +284,11 @@ func TestAPIErrorRedactsConfiguredSecrets(t *testing.T) {
 
 	cfg, secrets := secretConfig(t, srv.URL)
 	echo.Store("got " + strings.Join(secrets, " ") + " and not-a-secret-value")
-	_, err := cfg.Do(context.Background(), requestTo(srv.URL))
+	tr, err := NewTransport(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = tr.Do(context.Background(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("err = %v, want *APIError", err)
@@ -309,10 +309,11 @@ func TestTransportErrorRedactsConfiguredSecrets(t *testing.T) {
 		return nil, errors.New("proxy said: " + strings.Join(secrets, " "))
 	})}
 	cfg.HTTPClient = failing
-	if err := cfg.Prepare(); err != nil {
+	tr, err := NewTransport(cfg)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := cfg.Do(context.Background(), requestTo("http://h/x"))
+	_, err = tr.Do(context.Background(), requestTo("http://h/x"))
 	if err == nil {
 		t.Fatal("want a transport error")
 	}
@@ -396,9 +397,8 @@ func TestAPIErrorHeaderDropsCookies(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cfg := testConfig(t)
-	cfg.MaxRetries = -1
-	_, err := cfg.Do(context.Background(), requestTo(srv.URL))
+	tr := testTransport(t, func(c *Config) { c.MaxRetries = -1 })
+	_, err := tr.Do(context.Background(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("err = %v, want *APIError", err)

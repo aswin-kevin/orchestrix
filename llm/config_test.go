@@ -54,17 +54,14 @@ func TestParseModelErrors(t *testing.T) {
 	}
 }
 
-func TestPrepareProxy(t *testing.T) {
-	cfg := &Config{Proxy: "http://proxy.local:3128"}
-	if err := cfg.Prepare(); err != nil {
-		t.Fatal(err)
-	}
+func TestNewTransportProxy(t *testing.T) {
+	tr := testTransport(t, func(c *Config) { c.Proxy = "http://proxy.local:3128" })
 	req, _ := http.NewRequest(http.MethodGet, "http://example.com/", nil)
-	got, err := cfg.httpClient().Transport.(*http.Transport).Proxy(req)
+	got, err := tr.client.Transport.(*http.Transport).Proxy(req)
 	if err != nil || got.Host != "proxy.local:3128" {
 		t.Errorf("proxy = %v, %v", got, err)
 	}
-	if err := (&Config{Proxy: "http://bad host"}).Prepare(); err == nil {
+	if _, err := NewTransport(Config{Proxy: "http://bad host"}); err == nil {
 		t.Error("invalid proxy URL should fail")
 	}
 }

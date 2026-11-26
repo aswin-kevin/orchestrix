@@ -27,7 +27,8 @@ const (
 
 // systemOne speaks the System One decision API.
 type systemOne struct {
-	cfg *Config
+	cfg Config
+	t   *Transport
 }
 
 // newSystemOne returns an adapter for cfg. It keeps its own copy of the
@@ -36,10 +37,11 @@ func newSystemOne(cfg Config) (*systemOne, error) {
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("llm: systemone needs a BaseURL (or SYSTEMONE_BASE_URL)")
 	}
-	if err := cfg.Prepare(); err != nil {
+	t, err := NewTransport(cfg)
+	if err != nil {
 		return nil, err
 	}
-	return &systemOne{cfg: &cfg}, nil
+	return &systemOne{cfg: t.Config(), t: t}, nil
 }
 
 // Wire types.
@@ -91,7 +93,7 @@ func (s *systemOne) Decide(ctx context.Context, req DecisionRequest) (*DecisionR
 	if err != nil {
 		return nil, err
 	}
-	resp, err := postDecision(ctx, s.cfg, target, body)
+	resp, err := postDecision(ctx, s.t, target, body)
 	if err != nil {
 		return nil, err
 	}

@@ -20,7 +20,7 @@ func TestReadSSEParsesEventsAndMultilineData(t *testing.T) {
 		"data: {\"n\":1}\r\n\r\n" +
 		"event: last\ndata: tail"
 
-	var got []sseEvent
+	var got []SSEEvent
 	for ev, err := range readSSE(strings.NewReader(input), nil) {
 		if err != nil {
 			t.Fatalf("readSSE error: %v", err)
@@ -28,7 +28,7 @@ func TestReadSSEParsesEventsAndMultilineData(t *testing.T) {
 		got = append(got, ev)
 	}
 
-	want := []sseEvent{
+	want := []SSEEvent{
 		{Event: "a", Data: "x\ny"},
 		{Data: `{"n":1}`},
 		{Event: "last", Data: "tail"},
@@ -211,8 +211,8 @@ func TestStreamIdleTimeoutDefault(t *testing.T) {
 	for _, tc := range []struct {
 		set, want time.Duration
 	}{{0, DefaultStreamIdleTimeout}, {-1, 0}, {time.Second, time.Second}} {
-		c := Config{StreamIdleTimeout: tc.set}
-		if got := c.streamIdleTimeout(); got != tc.want {
+		tr := testTransport(t, func(c *Config) { c.StreamIdleTimeout = tc.set })
+		if got := tr.streamIdleTimeout(); got != tc.want {
 			t.Errorf("streamIdleTimeout(%v) = %v, want %v", tc.set, got, tc.want)
 		}
 	}

@@ -30,30 +30,29 @@ const (
 // retrying transient failures, and returns the first 2xx response; the caller
 // closes its body. build runs once per attempt so every retry gets a fresh
 // request body. Retries cover only establishing the response, never reading
-// it. Context errors are returned as-is and never retried.
-//
-// Adapters outside this package use it to get the same retries, Retry-After
-// handling and rate limiting. Call Prepare first.
+// it, and Config.StreamIdleTimeout does not apply (Stream and Fetch add it).
+// Context errors are returned as-is and never retried. Other errors have
+// configured credentials redacted, and a non-2xx reply becomes an *APIError.
 //
 // A retryable error is returned at once, without waiting, when a fallback
-// provider will switch to another entry for it (see withHandoff), or when
-// the wait before the next attempt would end after ctx's deadline: the
+// provider will switch to another entry for it (see FallbackPending), or
+// when the wait before the next attempt would end after ctx's deadline: the
 // caller gets the provider's error while ctx is still live, rather than a
 // deadline error once the wait has used up the time left.
-func (c *Config) Do(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
-	if c.client == nil {
-		return nil, errors.New("llm: Config.Do called before Prepare")
+func (t *Transport) Do(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
+	if t == nil || t.client == nil {
+		return nil, errNoTransport
 	}
-	maxRetries := c.maxRetries()
+	maxRetries := t.maxRetries()
 	for attempt := 0; ; attempt++ {
-		resp, err := c.attempt(ctx, build)
+		resp, err := t.attempt(ctx, build)
 		if err == nil {
 			return resp, nil
 		}
-		if attempt >= maxRetries || !IsRetryable(err) || handsOff(ctx, err) {
+		if attempt >= maxRetries || !IsRetryable(err) || FallbackPending(ctx, err) {
 			return nil, err
 		}
-		delay := c.retryDelay(attempt, err)
+		delay := t.retryDelay(attempt, err)
 		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= delay {
 			return nil, err
 		}
@@ -65,8 +64,8 @@ func (c *Config) Do(ctx context.Context, build func() (*http.Request, error)) (*
 
 // attempt makes a single rate-limited request and converts a non-2xx reply
 // into an *APIError.
-func (c *Config) attempt(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
-	if err := c.limiter.acquire(ctx); err != nil {
+func (t *Transport) attempt(ctx context.Context, build func() (*http.Request, error)) (*http.Response, error) {
+	if err := t.limiter.acquire(ctx); err != nil {
 		return nil, err
 	}
 	req, err := build()
@@ -74,16 +73,16 @@ func (c *Config) attempt(ctx context.Context, build func() (*http.Request, error
 		// %v, not %w: a malformed URL surfaces as *url.Error, which would
 		// otherwise be mistaken for a retryable network failure. Its URL is
 		// redacted because BaseURL may carry a key.
-		return nil, c.redactError(fmt.Errorf("llm: build request: %v", redactURLError(err)))
+		return nil, t.Redact(fmt.Errorf("llm: build request: %v", redactURLError(err)))
 	}
-	resp, err := c.httpClient().Do(req.WithContext(ctx))
+	resp, err := t.client.Do(req.WithContext(ctx))
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		// The URL may carry a key in its query or userinfo, and a proxy may
 		// echo a credential in its error.
-		return nil, c.redactError(fmt.Errorf("llm: send request: %w", redactURLError(err)))
+		return nil, t.Redact(fmt.Errorf("llm: send request: %w", redactURLError(err)))
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return resp, nil
@@ -98,21 +97,23 @@ func (c *Config) attempt(ctx context.Context, build func() (*http.Request, error
 	header.Del("Set-Cookie2")
 	return nil, &APIError{
 		Status:        resp.StatusCode,
-		Body:          c.redact(string(body)),
+		Body:          t.redact(string(body)),
 		RequestID:     firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("request-id")),
 		Header:        header,
 		RetryAfter:    retryAfter,
 		hasRetryAfter: hasRetryAfter,
 	}
 }
-func (c *Config) maxRetries() int {
+
+// maxRetries is the effective MaxRetries.
+func (t *Transport) maxRetries() int {
 	switch {
-	case c.MaxRetries == 0:
+	case t.cfg.MaxRetries == 0:
 		return DefaultMaxRetries
-	case c.MaxRetries < 0:
+	case t.cfg.MaxRetries < 0:
 		return 0
 	}
-	return c.MaxRetries
+	return t.cfg.MaxRetries
 }
 
 // retryDelay prefers the server's Retry-After, then the fixed interval, then
@@ -121,14 +122,14 @@ func (c *Config) maxRetries() int {
 // retries out instead of all retrying at the same moment. A Retry-After is
 // only ever lengthened by the jitter, and is capped at maxRetryAfter first;
 // a fixed interval is used as given.
-func (c *Config) retryDelay(attempt int, err error) time.Duration {
+func (t *Transport) retryDelay(attempt int, err error) time.Duration {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) && apiErr.hasRetryAfter {
 		wait := min(apiErr.RetryAfter, maxRetryAfter)
 		return wait + randomUpTo(wait/retryAfterJitterDivisor)
 	}
-	if c.RetryInterval > 0 {
-		return c.RetryInterval
+	if t.cfg.RetryInterval > 0 {
+		return t.cfg.RetryInterval
 	}
 	return equalJitter(backoff(attempt))
 }

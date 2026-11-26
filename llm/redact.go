@@ -27,15 +27,15 @@ var (
 // error: the API key, the values of sensitive Headers (and the credential
 // after a scheme such as "Bearer "), and BaseURL's password and query
 // values. Values shorter than minSecretLen are left out.
-func (c *Config) secrets() []string {
+func (t *Transport) secrets() []string {
 	var out []string
 	add := func(v string) {
 		if len(v) >= minSecretLen {
 			out = append(out, v)
 		}
 	}
-	add(c.APIKey)
-	for name, value := range c.Headers {
+	add(t.cfg.APIKey)
+	for name, value := range t.cfg.Headers {
 		if !isSensitiveHeader(name) {
 			continue
 		}
@@ -44,7 +44,7 @@ func (c *Config) secrets() []string {
 			add(strings.TrimSpace(credential))
 		}
 	}
-	if u, err := url.Parse(c.BaseURL); err == nil {
+	if u, err := url.Parse(t.cfg.BaseURL); err == nil {
 		if password, ok := u.User.Password(); ok {
 			add(password)
 		}
@@ -75,17 +75,11 @@ func isSensitiveHeader(name string) bool {
 
 // redact replaces every configured secret in s with [REDACTED], since some
 // servers and proxies echo credentials in their errors.
-func (c *Config) redact(s string) string {
-	for _, secret := range c.secrets() {
+func (t *Transport) redact(s string) string {
+	for _, secret := range t.secrets() {
 		s = strings.ReplaceAll(s, secret, redactedSecret)
 	}
 	return s
-}
-
-// streamError is the error a provider reported inside a stream that started
-// with a 200 (Status 0), with configured secrets redacted from its body.
-func (c *Config) streamError(body string) *APIError {
-	return &APIError{Body: c.redact(body)}
 }
 
 // redactedError carries a message with secrets redacted while still
@@ -99,14 +93,27 @@ type redactedError struct {
 func (e *redactedError) Error() string { return e.msg }
 func (e *redactedError) Unwrap() error { return e.err }
 
-// redactError returns err unchanged when its message holds no configured
-// secret, and otherwise wraps it with the redacted message.
-func (c *Config) redactError(err error) error {
+// Redact returns err with every configured credential (the API key,
+// sensitive Headers values and BaseURL's password and query values)
+// replaced by [REDACTED] in its message. It returns err unchanged when the
+// message holds none, and otherwise an error that still unwraps to err, so
+// errors.Is and errors.As see through it. Redact(nil) is nil.
+func (t *Transport) Redact(err error) error {
+	if err == nil {
+		return nil
+	}
 	msg := err.Error()
-	if redacted := c.redact(msg); redacted != msg {
+	if redacted := t.redact(msg); redacted != msg {
 		return &redactedError{msg: redacted, err: err}
 	}
 	return err
+}
+
+// StreamError returns the error for a failure a provider reported inside a
+// stream that started with a 2xx: an *APIError with Status 0 and body as
+// its Body, with configured credentials redacted.
+func (t *Transport) StreamError(body string) *APIError {
+	return &APIError{Body: t.redact(body)}
 }
 
 // redactURL returns s without its userinfo and with every query value

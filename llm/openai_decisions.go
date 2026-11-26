@@ -29,16 +29,18 @@ const (
 // published API reference and has not yet been verified against a live
 // endpoint.
 type openAIDecisions struct {
-	cfg *Config
+	cfg Config
+	t   *Transport
 }
 
 // newOpenAIDecisions returns an adapter for cfg. It keeps its own copy of the
 // configuration, so later changes to the caller's value have no effect.
 func newOpenAIDecisions(cfg Config) (*openAIDecisions, error) {
-	if err := cfg.Prepare(); err != nil {
+	t, err := NewTransport(cfg)
+	if err != nil {
 		return nil, err
 	}
-	return &openAIDecisions{cfg: &cfg}, nil
+	return &openAIDecisions{cfg: t.Config(), t: t}, nil
 }
 
 // Wire types.
@@ -124,7 +126,7 @@ func (o *openAIDecisions) Decide(ctx context.Context, req DecisionRequest) (*Dec
 	if err != nil {
 		return nil, err
 	}
-	resp, err := postDecision(ctx, o.cfg, target, body)
+	resp, err := postDecision(ctx, o.t, target, body)
 	if err != nil {
 		return nil, err
 	}

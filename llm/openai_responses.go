@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"iter"
 	"net/http"
 )
@@ -32,16 +31,18 @@ const (
 
 // responsesProvider speaks the OpenAI Responses API.
 type responsesProvider struct {
-	cfg *Config
+	cfg Config
+	t   *Transport
 }
 
 // newResponses returns an adapter for cfg. It keeps its own copy of the
 // configuration, so later changes to the caller's value have no effect.
 func newResponses(cfg Config) (*responsesProvider, error) {
-	if err := cfg.Prepare(); err != nil {
+	t, err := NewTransport(cfg)
+	if err != nil {
 		return nil, err
 	}
-	return &responsesProvider{cfg: &cfg}, nil
+	return &responsesProvider{cfg: t.Config(), t: t}, nil
 }
 
 // configuredModel implements modelReporter.
@@ -61,25 +62,19 @@ func (p *responsesProvider) Stream(ctx context.Context, req Request) iter.Seq2[S
 			yield(StreamEvent{}, fmt.Errorf("llm: encode responses request: %w", err))
 			return
 		}
-		ctx, idle, release := p.cfg.watchIdle(ctx)
-		defer release()
-		resp, err := p.send(ctx, body)
-		if err != nil {
-			yield(StreamEvent{}, err)
-			return
-		}
-		// Closed on every exit, including the consumer breaking out of the
-		// loop, which releases the connection promptly.
-		defer resp.Body.Close()
+		// The body is closed on every exit, including the consumer breaking
+		// out of the loop, which releases the connection promptly.
 		emit := func(ev StreamEvent) bool { return yield(ev, nil) }
-		if err := streamResponsesEvents(ctx, p.cfg, resp.Body, idle, emit); err != nil {
+		if err := streamResponsesEvents(p.t, p.t.Stream(ctx, p.request(body)), emit); err != nil {
 			yield(StreamEvent{}, err)
 		}
 	}
 }
 
-func (p *responsesProvider) send(ctx context.Context, body []byte) (*http.Response, error) {
-	return p.cfg.Do(ctx, func() (*http.Request, error) {
+// request returns the func that builds the HTTP request for body, once per
+// attempt.
+func (p *responsesProvider) request(body []byte) func() (*http.Request, error) {
+	return func() (*http.Request, error) {
 		target, err := endpoint(p.cfg.BaseURL, "responses")
 		if err != nil {
 			return nil, err
@@ -90,7 +85,7 @@ func (p *responsesProvider) send(ctx context.Context, body []byte) (*http.Respon
 		}
 		p.setHeaders(httpReq)
 		return httpReq, nil
-	})
+	}
 }
 
 func (p *responsesProvider) setHeaders(r *http.Request) {
@@ -134,18 +129,23 @@ type responsesEvent struct {
 	} `json:"response"`
 }
 
-// streamResponsesEvents translates the SSE body into events passed to emit.
-// A body that ends without a terminal event is reported as an error so
+// streamResponsesEvents translates the SSE events into events passed to
+// emit, starting with a message start once the request has succeeded. A
+// body that ends without a terminal event is reported as an error so
 // truncated replies are never mistaken for complete ones. It returns nil
 // without further reading once emit reports the consumer is gone.
-func streamResponsesEvents(ctx context.Context, cfg *Config, body io.Reader, idle *idleTimer, emit func(StreamEvent) bool) error {
-	state := &responsesStreamState{cfg: cfg, argumentsSeen: make(map[int]bool), startedTools: make(map[int]bool)}
-	if !emit(StreamEvent{Type: EventMessageStart}) {
-		return nil
-	}
-	for sse, err := range readSSE(body, idle) {
+func streamResponsesEvents(t *Transport, events iter.Seq2[SSEEvent, error], emit func(StreamEvent) bool) error {
+	state := &responsesStreamState{t: t, argumentsSeen: make(map[int]bool), startedTools: make(map[int]bool)}
+	started := false
+	for sse, err := range events {
 		if err != nil {
-			return streamReadError(ctx, err)
+			return err
+		}
+		if !started {
+			started = true
+			if !emit(StreamEvent{Type: EventMessageStart}) {
+				return nil
+			}
 		}
 		events, done, err := state.translate(sse.Data)
 		for _, ev := range events {
@@ -160,13 +160,16 @@ func streamResponsesEvents(ctx context.Context, cfg *Config, body io.Reader, idl
 			return nil
 		}
 	}
+	if !started && !emit(StreamEvent{Type: EventMessageStart}) {
+		return nil
+	}
 	return errors.New("llm: responses stream ended before a terminal event")
 }
 
 // responsesStreamState carries what must survive between events.
 type responsesStreamState struct {
-	// cfg redacts credentials from errors reported in the stream.
-	cfg *Config
+	// t redacts credentials from errors reported in the stream.
+	t *Transport
 	// argumentsSeen records tool calls whose arguments streamed as deltas, so
 	// the full text on the finished item is not applied twice.
 	argumentsSeen map[int]bool
@@ -204,7 +207,7 @@ func (s *responsesStreamState) translate(data string) (events []StreamEvent, don
 		return s.closingEvents(ev), true, nil
 	case respEvFailed, respEvError:
 		// Status 0: the HTTP exchange itself succeeded.
-		return nil, false, s.cfg.streamError(data)
+		return nil, false, s.t.StreamError(data)
 	}
 	return nil, false, nil
 }

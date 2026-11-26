@@ -22,25 +22,34 @@ var ErrStreamIdle = errors.New("llm: stream idle timeout")
 // final response snapshots, which repeat the whole reply.
 const maxSSEEventBytes = 16 << 20
 
-// sseEvent is one server-sent event.
-type sseEvent = sse.Event
+// SSEEvent is one server-sent event, as Transport.Stream yields it.
+type SSEEvent struct {
+	// Event is the "event:" field; empty when absent, which means the
+	// default type ("message").
+	Event string
+	// Data is the event's "data:" lines joined by "\n".
+	Data string
+	// ID is the stream's last event ID (the latest "id:" field so far, which
+	// carries over to later events); empty when none was sent.
+	ID string
+}
 
 // readSSE yields the events of a text/event-stream body (see sse.Events). An
 // event over maxSSEEventBytes or a read failure ends the sequence with an
 // error. idle, when not nil, restarts whenever bytes arrive, so keep-alive
 // comments count as activity, and is paused while the consumer handles an
 // event, so it measures only the silence of the stream.
-func readSSE(r io.Reader, idle *idleTimer) iter.Seq2[sseEvent, error] {
-	return func(yield func(sseEvent, error) bool) {
+func readSSE(r io.Reader, idle *idleTimer) iter.Seq2[SSEEvent, error] {
+	return func(yield func(SSEEvent, error) bool) {
 		idle.resume()
 		defer idle.pause()
 		for ev, err := range sse.Events(idleReader{r, idle}, maxSSEEventBytes) {
 			idle.pause()
 			if err != nil {
-				yield(sseEvent{}, fmt.Errorf("llm: read event stream: %w", err))
+				yield(SSEEvent{}, fmt.Errorf("llm: read event stream: %w", err))
 				return
 			}
-			if !yield(ev, nil) {
+			if !yield(SSEEvent(ev), nil) {
 				return
 			}
 			idle.resume()
@@ -85,8 +94,8 @@ type idleTimer struct {
 // starts on its first resume, once the response headers have arrived, so
 // HTTP-level retries are unaffected. release stops the timer and frees the
 // context; call it when the call ends.
-func (c *Config) watchIdle(ctx context.Context) (_ context.Context, idle *idleTimer, release func()) {
-	d := c.streamIdleTimeout()
+func (t *Transport) watchIdle(ctx context.Context) (_ context.Context, idle *idleTimer, release func()) {
+	d := t.streamIdleTimeout()
 	if d <= 0 {
 		return ctx, nil, func() {}
 	}
