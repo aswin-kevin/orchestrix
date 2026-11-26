@@ -109,8 +109,14 @@ func TestStackOrder(t *testing.T) {
 	want := []string{summarize.Name, compress.Name, cache.Name, hooks.Name, hitl.Name, rubric.Name,
 		memory.Name, skills.Name, planmode.Name, filesystem.Name, planning.Name, subagents.Name,
 		async.Name, deferred.Name, mcp.Name, web.Name, askuser.Name, jobs.Name, profiles.Name}
-	if got := stackNames(a); !slices.Equal(got, want) {
+	got := stackNames(a)
+	if !slices.Equal(got, want) {
 		t.Errorf("stack = %v, want %v", got, want)
+	}
+	// Every slot is on here, so each built middleware's Name must be its
+	// slot's name: WithMiddleware and WithoutMiddleware match by it.
+	if slots := orchestrix.PresetStackNames(); !slices.Equal(got, slots) {
+		t.Errorf("built names = %v, slot names = %v", got, slots)
 	}
 }
 

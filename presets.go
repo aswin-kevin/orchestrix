@@ -193,11 +193,12 @@ type stackEntry struct {
 }
 
 // presetStack is the preset's middleware in its fixed order, outermost
-// first (see New). summarize comes first because it rebuilds the request messages from
-// State, which would discard the rewrites of any model wrapper before it.
-// rubric sits early, so that BeforeStop (reverse order) consults the async
-// reminder before grading, and hooks after grading. profiles is last, so that
-// its suffix is the last segment and its overrides see the final tool list.
+// first (see New). summarize comes first because it rebuilds the request
+// messages from State, which would discard the rewrites of any model wrapper
+// before it. rubric sits early, so that BeforeStop (reverse order) consults
+// the async reminder before grading, and hooks after grading. profiles is
+// last, so that its suffix is the last segment and its overrides see the
+// final tool list.
 var presetStack = []stackEntry{
 	{name: summarize.Name, option: "WithSummarize", build: func(s *settings) (agent.Middleware, error) { return summarize.New(s.summarize) }},
 	{name: compress.Name, option: "WithCompress", on: func(s *settings) bool { return s.compress != nil },
