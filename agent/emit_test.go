@@ -77,7 +77,10 @@ func TestEmitFromBeforeModel(t *testing.T) {
 	if got, ok := ev.Data.(note); !ok || got != (note{"hi"}) {
 		t.Fatalf("custom Data = %#v, want note{hi}", ev.Data)
 	}
-	if text >= 0 && text < custom {
+	if text < 0 {
+		t.Fatal("stream has no KindText event")
+	}
+	if text < custom {
 		t.Fatalf("custom event at %d follows the turn's text at %d", custom, text)
 	}
 }
