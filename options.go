@@ -189,26 +189,29 @@ func WithMaxTurns(n int) Option {
 }
 
 // WithMaxTotalTokens sets a hard cap on the tokens one run may spend (see
-// agent.Config.MaxTotalTokens); zero means no cap. Nested subagent runs are
-// not counted against it: each run counts only its own tokens.
+// agent.Config.MaxTotalTokens); zero means no cap and a negative value makes
+// New fail. Nested subagent runs are not counted against it: each run counts
+// only its own tokens.
 func WithMaxTotalTokens(n int) Option {
 	return func(s *settings) { s.cfg.MaxTotalTokens = n }
 }
 
 // WithMaxDuration limits the wall-clock time of one run; zero means
-// unbounded.
+// unbounded and a negative value makes New fail.
 func WithMaxDuration(d time.Duration) Option {
 	return func(s *settings) { s.cfg.MaxDuration = d }
 }
 
 // WithModelTimeout bounds each model call, retries included; zero means no
-// limit beyond the run's own (see agent.Config.ModelTimeout).
+// limit beyond the run's own and a negative value makes New fail (see
+// agent.Config.ModelTimeout).
 func WithModelTimeout(d time.Duration) Option {
 	return func(s *settings) { s.cfg.ModelTimeout = d }
 }
 
 // WithMaxTokens caps the output tokens of each model response; zero uses the
-// model profile's output limit (see agent.Config.MaxTokens).
+// model profile's output limit and a negative value makes New fail (see
+// agent.Config.MaxTokens).
 func WithMaxTokens(n int) Option {
 	return func(s *settings) { s.cfg.MaxTokens = n }
 }
