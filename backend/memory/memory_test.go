@@ -154,3 +154,7 @@ func TestSnapshotHonoursCtx(t *testing.T) {
 		t.Errorf("a refused Restore must leave the backend untouched: %v", err)
 	}
 }
+
+func TestMemorySnapshotterKit(t *testing.T) {
+	backendtest.RunSnapshotter(t, func(t *testing.T) backend.Backend { return memory.New() })
+}
