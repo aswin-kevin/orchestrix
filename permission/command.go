@@ -105,68 +105,92 @@ func (p *commandParser) step() {
 	c := p.src[p.pos]
 	afterDollar := p.afterDollar
 	p.afterDollar = false
-	switch {
-	case c == ' ' || c == '\t':
+	switch c {
+	case ' ', '\t':
 		p.endWord()
 		p.pos++
-	case c == '\n' || c == ';' || c == '|':
+	case '\n', ';', '|':
 		p.endSegment()
 		p.pos++
-	case c == '&':
+	case '&':
 		p.ampersand()
-	case c == '>':
+	case '>':
 		p.redirect(p.takeFD())
-	case c == '<':
+	case '<':
 		// Input redirection, heredocs and process substitution.
 		p.reject()
 		p.endWord()
 		p.pos++
-	case c == '(' || c == ')' || c == '`':
+	case '(', ')', '`':
 		// Grouping and command substitution: what follows is another command.
 		p.reject()
 		p.endSegment()
 		p.pos++
-	case c == '$' && p.peek(1) == '(':
+	case '$':
+		p.dollar(afterDollar)
+	case '#':
+		// A '#' inside a word is an ordinary byte, not a comment.
+		if !p.inWord {
+			p.comment()
+			return
+		}
+		p.plainByte(c, afterDollar)
+	case '\'':
+		p.singleQuoted()
+	case '"':
+		p.doubleQuoted()
+	case '\\':
+		p.escaped()
+	default:
+		p.plainByte(c, afterDollar)
+	}
+}
+
+// dollar consumes an unquoted '$' at p.pos: command substitution "$(",
+// ANSI-C quoting "$'" and locale translation "$\"" are special; any other
+// '$' is an ordinary word byte. afterDollar is as for plainByte.
+func (p *commandParser) dollar(afterDollar bool) {
+	switch p.peek(1) {
+	case '(':
 		p.reject()
 		p.endSegment()
 		p.pos += 2
-	case c == '#' && !p.inWord:
-		p.comment()
-	case c == '$' && p.peek(1) == '\'':
+	case '\'':
 		p.reject()
 		p.ansiCQuoted()
-	case c == '$' && p.peek(1) == '"':
+	case '"':
 		// Locale translation: the content is not what the shell runs, so
 		// never vouch; the quoting itself is that of a double quote.
 		p.reject()
 		p.pos++
-	case c == '\'':
-		p.singleQuoted()
-	case c == '"':
-		p.doubleQuoted()
-	case c == '\\':
-		p.escaped()
 	default:
-		if strings.IndexByte(expansionChars, c) >= 0 || (c == '~' && !p.inWord) {
-			p.wordExpands = true
-		}
-		switch {
-		case c == '{' && afterDollar:
-			// ${...}, not a brace expansion.
-		case c == '{':
-			p.braceOpen = true
-		case p.braceOpen && (c == ',' || (c == '.' && p.peek(1) == '.')):
-			p.wordExpands = true
-		}
-		if c == '$' {
-			p.afterDollar = true
-			p.checkArithmetic()
-			p.checkParameterBlanks()
-		}
-		p.inWord = true
-		p.buf.WriteByte(c)
-		p.pos++
+		p.plainByte('$', afterDollar)
 	}
+}
+
+// plainByte adds the unquoted byte c at p.pos to the current word, noting
+// whether it makes the word expand. afterDollar reports whether the previous
+// byte was an unquoted '$'.
+func (p *commandParser) plainByte(c byte, afterDollar bool) {
+	if strings.IndexByte(expansionChars, c) >= 0 || (c == '~' && !p.inWord) {
+		p.wordExpands = true
+	}
+	switch {
+	case c == '{' && afterDollar:
+		// ${...}, not a brace expansion.
+	case c == '{':
+		p.braceOpen = true
+	case p.braceOpen && (c == ',' || (c == '.' && p.peek(1) == '.')):
+		p.wordExpands = true
+	}
+	if c == '$' {
+		p.afterDollar = true
+		p.checkArithmetic()
+		p.checkParameterBlanks()
+	}
+	p.inWord = true
+	p.buf.WriteByte(c)
+	p.pos++
 }
 
 // peek returns the byte off positions ahead, or 0 past the end.
