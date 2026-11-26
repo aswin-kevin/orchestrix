@@ -7,8 +7,10 @@ import "maps"
 // a copy of the Spec it was built from. For any other tool it takes Name,
 // Description, Schema and Call from t and every optional func from the
 // capability interfaces As finds in t; ShellSubject and RawInput are read
-// once, here. Schema is a shallow copy, so setting one of its keys leaves t
-// unchanged. Build(SpecOf(t)) never panics for a tool with a valid name.
+// once, here. Schema is a shallow copy: setting or deleting one of its
+// top-level keys leaves t unchanged, but maps nested in it (such as
+// "properties") are still shared with t, so copy one before changing it.
+// Build(SpecOf(t)) never panics for a tool with a valid name.
 //
 // Markers defined outside this package, such as those of the deferred
 // middleware, are not part of a Spec and are lost.

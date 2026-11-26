@@ -531,6 +531,7 @@ func TestGateForwardsPermissionInterfaces(t *testing.T) {
 	in := json.RawMessage(`{"path":"/secret/k","content":"x"}`)
 	innerPaths, _ := tool.As[tool.PathAccessor](inner)
 	innerEdit, _ := tool.As[tool.Editor](inner)
+	innerRaw, _ := tool.As[tool.RawInputer](inner)
 	for _, wrapped := range []tool.Tool{Gate(inner), Defer(inner), Defer(Gate(inner))} {
 		paths, ok := tool.As[tool.PathAccessor](wrapped)
 		if !ok || !slices.Equal(paths.Paths(in), innerPaths.Paths(in)) {
@@ -538,6 +539,9 @@ func TestGateForwardsPermissionInterfaces(t *testing.T) {
 		}
 		if e, ok := tool.As[tool.Editor](wrapped); !ok || e.IsEdit(in) != innerEdit.IsEdit(in) {
 			t.Fatalf("%T does not report the inner IsEdit", wrapped)
+		}
+		if r, ok := tool.As[tool.RawInputer](wrapped); !ok || r.AcceptsRawInput() != innerRaw.AcceptsRawInput() {
+			t.Fatalf("%T does not report the inner AcceptsRawInput", wrapped)
 		}
 		if u, ok := wrapped.(interface{ Unwrap() tool.Tool }); !ok || u.Unwrap() != inner {
 			t.Fatalf("%T does not unwrap to the inner tool", wrapped)
@@ -603,6 +607,27 @@ type opaqueTool struct{ tool.Tool }
 func has[T any](t tool.Tool) bool {
 	_, ok := tool.As[T](t)
 	return ok
+}
+
+func TestWrappedRawInputSkipsValidation(t *testing.T) {
+	inner := tool.Build(tool.Spec{
+		Name: "raw",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"n": map[string]any{"type": "integer"}},
+			"required":   []any{"n"},
+		},
+		RawInput: true,
+		Run: func(context.Context, json.RawMessage, *tool.Call) (tool.Result, error) {
+			return tool.Text("ok"), nil
+		},
+	})
+	in := json.RawMessage(`{"n":"str"}`)
+	for name, wrapped := range map[string]tool.Tool{"inner": inner, "Defer": Defer(inner), "Gate": Gate(inner), "Defer(Gate)": Defer(Gate(inner))} {
+		if err := tool.CheckInput(wrapped, in); err != nil {
+			t.Errorf("CheckInput(%s) = %v, want raw input passed through", name, err)
+		}
+	}
 }
 
 func TestGateKeepsInnerPermission(t *testing.T) {

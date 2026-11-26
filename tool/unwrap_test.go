@@ -58,3 +58,19 @@ func TestAsPrefersOutermost(t *testing.T) {
 		t.Fatalf("As returned %T, want the outer writable", r)
 	}
 }
+
+func TestCheckInputFindsRawInputerThroughUnwrap(t *testing.T) {
+	inner := Build(Spec{
+		Name:     "raw",
+		Schema:   map[string]any{"type": "object", "properties": map[string]any{"n": map[string]any{"type": "integer"}}},
+		RawInput: true,
+		Run:      noopRun,
+	})
+	in := json.RawMessage(`{"n":"str"}`)
+	if err := CheckInput(logged{inner}, in); err != nil {
+		t.Fatalf("CheckInput through Unwrap = %v, want raw input passed through", err)
+	}
+	if err := CheckInput(opaque{inner}, in); err == nil {
+		t.Fatal("CheckInput through a wrapper without Unwrap skipped validation")
+	}
+}

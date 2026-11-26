@@ -10,9 +10,10 @@ import (
 const codeFence = "```"
 
 // CheckInput checks in against t's schema (see Validate), unless t takes raw
-// input (RawInputer), whose input is passed through as is.
+// input (RawInputer, found with As, so also through wrappers), whose input
+// is passed through as is.
 func CheckInput(t Tool, in json.RawMessage) error {
-	if raw, ok := t.(RawInputer); ok && raw.AcceptsRawInput() {
+	if raw, ok := As[RawInputer](t); ok && raw.AcceptsRawInput() {
 		return nil
 	}
 	return Validate(t.Schema(), in)
