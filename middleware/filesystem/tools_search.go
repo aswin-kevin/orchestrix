@@ -16,9 +16,9 @@ const maxGlobResults = 1000
 
 // GlobInput is the input of glob.
 type GlobInput struct {
-	// Pattern is a tool parameter. Glob pattern such as "**/*.go" or "src/*.ts".
+	// Pattern is the glob the paths must match, such as "**/*.go".
 	Pattern string `json:"pattern" desc:"Glob pattern such as \"**/*.go\" or \"src/*.ts\"."`
-	// Path is a tool parameter. Directory to search under. Defaults to "/".
+	// Path is the directory searched; empty searches from "/".
 	Path string `json:"path,omitempty" desc:"Directory to search under. Defaults to \"/\"."`
 }
 
@@ -58,17 +58,20 @@ func (m *Middleware) glob(ctx context.Context, in GlobInput, c *tool.Call) (tool
 
 // GrepInput is the input of grep.
 type GrepInput struct {
-	// Pattern is a tool parameter. Regular expression (RE2 syntax), or plain text when literal is set.
+	// Pattern is the RE2 regular expression searched for, or plain text
+	// when Literal is set.
 	Pattern string `json:"pattern" desc:"Regular expression (RE2 syntax), or plain text when literal is set."`
-	// Path is a tool parameter. Directory or file to search. Defaults to "/".
+	// Path is the directory or file searched; empty searches from "/".
 	Path string `json:"path,omitempty" desc:"Directory or file to search. Defaults to \"/\"."`
-	// Glob is a tool parameter. Only search files whose path matches this glob, e.g. "*.go".
+	// Glob, when set, limits the search to files whose path matches it.
 	Glob string `json:"glob,omitempty" desc:"Only search files whose path matches this glob, e.g. \"*.go\"."`
-	// Mode is a tool parameter. files_with_matches (default) lists paths; content lists path:line:text; count lists path:count.
+	// Mode is what the result lists: "files_with_matches" (the default)
+	// the matching paths, "content" each match as path:line:text, and
+	// "count" the number of matches per path.
 	Mode string `json:"mode,omitempty" enum:"files_with_matches,content,count" desc:"files_with_matches (default) lists paths; content lists path:line:text; count lists path:count."`
-	// IgnoreCase is a tool parameter. Match case-insensitively.
+	// IgnoreCase makes the match case-insensitive.
 	IgnoreCase bool `json:"ignore_case,omitempty" desc:"Match case-insensitively."`
-	// Literal is a tool parameter. Treat pattern as plain text, not a regular expression.
+	// Literal makes Pattern plain text rather than a regular expression.
 	Literal bool `json:"literal,omitempty" desc:"Treat pattern as plain text, not a regular expression."`
 }
 

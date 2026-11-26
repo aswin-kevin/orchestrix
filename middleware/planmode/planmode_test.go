@@ -270,7 +270,7 @@ func TestExitInterruptsAndApproveRestores(t *testing.T) {
 		t.Fatalf("mode = %s, want acceptEdits", got)
 	}
 	if plan, _ := Plan(final.State); plan != "1. write a.txt" {
-		t.Fatalf("planKey = %q", plan)
+		t.Fatalf("Plan = %q", plan)
 	}
 	if _, ok := previousKey.Get(final.State); ok {
 		t.Fatal("previousKey not deleted")
@@ -323,7 +323,7 @@ func TestRespondIsFeedback(t *testing.T) {
 func TestEditReplacesPlan(t *testing.T) {
 	a, _, final := resumeWith(t, Config{}, agent.Decision{Type: agent.Edit, Input: []byte(`{"plan":"v2"}`)})
 	if plan, _ := Plan(final.State); plan != "v2" {
-		t.Fatalf("planKey = %q, want v2", plan)
+		t.Fatalf("Plan = %q, want v2", plan)
 	}
 	if got := effectiveMode(a, final.State); got != permission.ModeAcceptEdits {
 		t.Fatalf("mode = %s", got)
@@ -520,7 +520,7 @@ func TestApproverUpdatedInputReplacesPlan(t *testing.T) {
 	)
 	final := runToEnd(t, a)
 	if plan, _ := Plan(final.State); plan != "edited plan" {
-		t.Fatalf("planKey = %q, want the edited plan", plan)
+		t.Fatalf("Plan = %q, want the edited plan", plan)
 	}
 	if got := text(resultFor(t, p, "x")); !strings.Contains(got, "edited plan") {
 		t.Fatalf("result = %q", got)

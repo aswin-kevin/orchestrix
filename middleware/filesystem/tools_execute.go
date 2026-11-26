@@ -13,9 +13,10 @@ import (
 
 // ExecuteInput is the input of execute.
 type ExecuteInput struct {
-	// Command is a tool parameter. Shell command to run.
+	// Command is the shell command the backend runs.
 	Command string `json:"command" desc:"Shell command to run."`
-	// TimeoutSeconds is a tool parameter. Seconds to wait before the command is stopped. Defaults to the configured timeout and is capped at the configured maximum.
+	// TimeoutSeconds is how long the command may run before it is stopped;
+	// 0 means Config.ExecTimeout, and Config.MaxExecTimeout caps it.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty" desc:"Seconds to wait before the command is stopped. Defaults to the configured timeout and is capped at the configured maximum."`
 }
 
@@ -24,7 +25,8 @@ type ExecuteInput struct {
 type BackgroundExecuteInput struct {
 	// ExecuteInput holds the parameters execute has without background support.
 	ExecuteInput
-	// RunInBackground is a tool parameter. Start the command and return immediately; you will be notified when it finishes.
+	// RunInBackground starts the command as a background job and returns
+	// at once; the model is notified when the job ends.
 	RunInBackground bool `json:"run_in_background,omitempty" desc:"Start the command and return immediately; you will be notified when it finishes."`
 }
 

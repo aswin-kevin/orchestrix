@@ -28,7 +28,8 @@ const MaxMediaBytes = 5 << 20
 
 // LsInput is the input of ls.
 type LsInput struct {
-	// Path is a tool parameter. Directory to list, absolute from the workspace root. Defaults to "/".
+	// Path is the absolute directory to list; empty lists the workspace
+	// root, "/".
 	Path string `json:"path,omitempty" desc:"Directory to list, absolute from the workspace root. Defaults to \"/\"."`
 }
 
@@ -77,11 +78,11 @@ func formatEntries(entries []backend.FileInfo) string {
 
 // ReadFileInput is the input of read_file.
 type ReadFileInput struct {
-	// Path is a tool parameter. File to read, absolute from the workspace root.
+	// Path is the absolute path of the file to read.
 	Path string `json:"path" desc:"File to read, absolute from the workspace root."`
-	// Offset is a tool parameter. 1-based line number to start from. Defaults to 1.
+	// Offset is the 1-based line the page starts at; 0 starts at line 1.
 	Offset int `json:"offset,omitempty" desc:"1-based line number to start from. Defaults to 1."`
-	// Limit is a tool parameter. Maximum number of lines to return. Defaults to the configured page size.
+	// Limit is the most lines the page holds; 0 means Config.ReadLimit.
 	Limit int `json:"limit,omitempty" desc:"Maximum number of lines to return. Defaults to the configured page size."`
 }
 

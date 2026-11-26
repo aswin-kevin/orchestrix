@@ -258,7 +258,10 @@ func TestWriteTodosInputExported(t *testing.T) {
 			final = ev.Final
 		}
 	}
-	if final == nil || !slices.Equal(Todos(final.State), want) {
-		t.Fatalf("todos = %v, want %v", Todos(final.State), want)
+	if final == nil {
+		t.Fatal("no final event")
+	}
+	if got := Todos(final.State); !slices.Equal(got, want) {
+		t.Fatalf("todos = %v, want %v", got, want)
 	}
 }

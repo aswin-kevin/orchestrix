@@ -40,9 +40,10 @@ func (m *Middleware) resolveTarget(ctx context.Context, c *tool.Call, rawPath st
 
 // WriteFileInput is the input of write_file.
 type WriteFileInput struct {
-	// Path is a tool parameter. File to write, absolute from the workspace root. Parent directories are created.
+	// Path is the absolute path of the file to write; missing parent
+	// directories are created.
 	Path string `json:"path" desc:"File to write, absolute from the workspace root. Parent directories are created."`
-	// Content is a tool parameter. Complete new content of the file.
+	// Content is the file's complete new content.
 	Content string `json:"content" desc:"Complete new content of the file."`
 }
 
@@ -71,13 +72,15 @@ func (m *Middleware) writeFile(ctx context.Context, in WriteFileInput, c *tool.C
 
 // EditFileInput is the input of edit_file.
 type EditFileInput struct {
-	// Path is a tool parameter. File to edit, absolute from the workspace root.
+	// Path is the absolute path of the file to edit.
 	Path string `json:"path" desc:"File to edit, absolute from the workspace root."`
-	// OldString is a tool parameter. Exact text to replace, including whitespace. Must be unique in the file unless replace_all is set.
+	// OldString is the exact text replaced, whitespace included; it must
+	// occur once in the file unless ReplaceAll is set.
 	OldString string `json:"old_string" desc:"Exact text to replace, including whitespace. Must be unique in the file unless replace_all is set."`
-	// NewString is a tool parameter. Replacement text. Must differ from old_string.
+	// NewString is the replacement text; it must differ from OldString.
 	NewString string `json:"new_string" desc:"Replacement text. Must differ from old_string."`
-	// ReplaceAll is a tool parameter. Replace every occurrence instead of requiring a unique match.
+	// ReplaceAll replaces every occurrence of OldString instead of
+	// requiring exactly one.
 	ReplaceAll bool `json:"replace_all,omitempty" desc:"Replace every occurrence instead of requiring a unique match."`
 }
 
@@ -107,19 +110,21 @@ func (m *Middleware) editFile(ctx context.Context, in EditFileInput, c *tool.Cal
 
 // EditStep is one replacement of a MultiEditInput.
 type EditStep struct {
-	// OldString is a tool parameter. Exact text to replace.
+	// OldString is the exact text replaced, whitespace included.
 	OldString string `json:"old_string" desc:"Exact text to replace."`
-	// NewString is a tool parameter. Replacement text.
+	// NewString is the replacement text.
 	NewString string `json:"new_string" desc:"Replacement text."`
-	// ReplaceAll is a tool parameter. Replace every occurrence instead of requiring a unique match.
+	// ReplaceAll replaces every occurrence of OldString instead of
+	// requiring exactly one.
 	ReplaceAll bool `json:"replace_all,omitempty" desc:"Replace every occurrence instead of requiring a unique match."`
 }
 
 // MultiEditInput is the input of multi_edit.
 type MultiEditInput struct {
-	// Path is a tool parameter. File to edit, absolute from the workspace root.
+	// Path is the absolute path of the file to edit.
 	Path string `json:"path" desc:"File to edit, absolute from the workspace root."`
-	// Edits is a tool parameter. Edits applied in order; each sees the result of the previous ones.
+	// Edits are applied in order, each to the result of the ones before
+	// it; the file is written only when all of them apply.
 	Edits []EditStep `json:"edits" desc:"Edits applied in order; each sees the result of the previous ones."`
 }
 
@@ -168,7 +173,7 @@ func multiEditFailure(err error, path string) tool.Result {
 
 // DeleteInput is the input of delete.
 type DeleteInput struct {
-	// Path is a tool parameter. File or directory to delete, absolute from the workspace root.
+	// Path is the absolute path of the file or directory to delete.
 	Path string `json:"path" desc:"File or directory to delete, absolute from the workspace root."`
 }
 

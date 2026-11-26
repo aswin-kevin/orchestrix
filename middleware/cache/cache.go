@@ -48,8 +48,9 @@ func New(cfg Config) (*Middleware, error) {
 // Name implements agent.Middleware.
 func (m *Middleware) Name() string { return Name }
 
-// WrapModel implements agent.ModelWrapper.
-
+// WrapModel implements agent.ModelWrapper: for a model whose profile
+// supports caching, it asks the provider to mark the request's last Recent
+// user messages as cache breakpoints (llm.Request.CacheRecent).
 func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if req.Profile.Caching {
 		req.Request.CacheRecent = m.recent
