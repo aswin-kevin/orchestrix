@@ -23,8 +23,9 @@ func TestVersionUsed(t *testing.T) {
 	}
 }
 
-// TestVersionMatchesChangelog keeps Version in step with the newest release
-// heading in CHANGELOG.md, so a release cannot ship an old number.
+// TestVersionMatchesChangelog keeps Version equal to the newest release
+// heading in CHANGELOG.md. It cannot tell a release whose "## Unreleased"
+// heading was never renamed, so bumping both stays a release step.
 func TestVersionMatchesChangelog(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", "CHANGELOG.md"))
 	if err != nil {
