@@ -101,7 +101,9 @@ func restoreEmpty(ctx context.Context, be backend.Backend, ws backend.Snapshotte
 // it so that its files add to the thread's saved ones: a later run finds
 // the backend filled, so it skips the restore and captures what it holds,
 // which must then include the saved files. s may be nil (nothing is
-// restored). It fails when the restore fails.
+// restored). It fails when the restore fails. It must not be called while a
+// run of threadID is live: that run restores and captures the same backend
+// itself.
 func (a *Agent) ThreadBackend(ctx context.Context, threadID string, s *state.State) (backend.Backend, error) {
 	be := a.backendFor(Input{ThreadID: threadID})
 	if be == nil || s == nil {

@@ -30,8 +30,7 @@ type TaskRecord struct {
 	// StartMode is the parent run's permission mode when it started the
 	// task. A follow-up or decision through a Runner other than the
 	// built-in one is refused while the parent's mode is stricter (see
-	// FollowUpMode); empty in records saved before it existed, which then
-	// count as permission.ModeDefault.
+	// FollowUpMode). Empty counts as permission.ModeDefault.
 	StartMode permission.Mode `json:"start_mode,omitempty"`
 	// Status is one of the Status constants.
 	Status Status `json:"status"`

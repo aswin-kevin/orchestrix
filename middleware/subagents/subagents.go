@@ -172,8 +172,11 @@ func New(cfg Config) (*Middleware, error) {
 	return m, nil
 }
 
-// BeforeAgent implements agent.BeforeAgent: it drops suspended subagents
-// whose task call no longer awaits a decision (see pruneSuspended).
+// BeforeAgent implements agent.BeforeAgent: it drops the saved state of
+// suspended subagents whose task call no longer awaits a decision (a new Run
+// abandoned the interrupt, or the call was settled without the task tool),
+// so it does not ride along in every checkpoint. A resumed run's suspended
+// subagents are kept.
 func (m *Middleware) BeforeAgent(_ context.Context, s *state.State) error {
 	pruneSuspended(s)
 	return nil

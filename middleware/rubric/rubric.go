@@ -6,9 +6,10 @@
 // Only top-level runs (agent.RunInfo.Depth 0) are graded; subagents that
 // inherit the stack are not. Grading is advisory and fails open: when the
 // grader returns an error the run completes and the error is recorded in
-// Grades. The answer is model output and may be untrusted, so it is framed
-// and neutralized (internal/promptsafe) before a ModelGrader sees it, and the
-// grader's feedback is framed as <rubric_feedback> when sent back.
+// Grades. The answer is model output and may be untrusted, so before a
+// ModelGrader sees it, it is framed in tags and any tag in it that could
+// close or open such a frame is escaped; the grader's feedback is framed as
+// <rubric_feedback>, escaped the same way, when sent back.
 //
 // What is graded: the text of the reply that would end the run
 // (resp.Message), not earlier assistant messages; an answer split across

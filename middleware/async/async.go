@@ -180,7 +180,9 @@ type Config struct {
 	// package doc): those threads are never deleted, only the in-memory
 	// entries kept when the agent has no Checkpointer are pruned with their
 	// records, so delete the task threads of the store yourself once no
-	// longer needed.
+	// longer needed. A task's thread is <parent thread>/async_N (IDPrefix
+	// and a number): that shape is reserved, so never give a thread of
+	// your own a segment of it after its first.
 	Runner Runner
 	// MaxRunning is how many tasks may run at once per thread; 0 means
 	// DefaultMaxRunning. Negative values are rejected.
@@ -362,6 +364,11 @@ func (m *Middleware) Bind(a *agent.Agent) error {
 // cancelled (as the runner reports them). It returns an error when a task
 // had not ended by then (ctx's error when ctx ended). Calling it more than
 // once is safe.
+//
+// Close does not wait for Config.OnSettled: a report in flight, or the
+// cancelled report of a waiting task Close ended, may run after it
+// returns, so an OnSettled that uses resources the host frees after Close
+// must check for that itself.
 func (m *Middleware) Close(ctx context.Context) error {
 	var waiting []*jobs.Job[*task]
 	for _, j := range m.jobs.All() {
@@ -403,7 +410,18 @@ func (m *Middleware) Close(ctx context.Context) error {
 // threadID naming a task's own thread (<thread>/async_N) fails with
 // ErrCannotReattach, since that task's next run takes over its tasks, under
 // the task's agent and depth. One live process must own a thread's tasks
-// at a time: two that take over the same task both run it.
+// at a time: two that take over the same task both run it. A task taken
+// over runs on the backend the bound agent resolves for the thread
+// (BackendFactory, else Config.Backend): a host that only passes
+// agent.Input.Backend per run has neither, and Resolve then fails with
+// ErrCannotReattach ("no backend to run it on"). Taking over reads and,
+// for a synced workspace, restores the thread's saved State and backend, so
+// it must not run while a run of the same thread is live: resolve between
+// runs.
+//
+// threadID is the thread of the run that started the task, as OnSettled
+// reports it; task threads (<thread>/async_N, see Config.Runner) are
+// reserved for the tasks themselves.
 //
 // Only one decision per wait wins: a concurrent or later Resolve, a
 // cancel_task or an update_task fails, so the approved actions run at most
@@ -560,14 +578,15 @@ func (m *Middleware) Drain(ctx context.Context) error { return m.Close(ctx) }
 
 // BeforeModel implements agent.BeforeModel: every task of the run's thread
 // that ended, or started waiting, since the last turn is announced with one
-// user message (see notification). Records of other threads are left alone,
-// so a run never takes another thread's notifications. A waiting task is
-// announced once but stays unsettled: its job is not marked notified, so
-// neither its record nor the thread's entry is dropped.
+// user message (a task notification, marked with NotificationMetaKey) that
+// says how it stopped, with an excerpt of its result. Records of other
+// threads are left alone, so a run never takes another thread's
+// notifications. A waiting task is announced once but stays unsettled: it
+// is still held, so neither its record nor its live task is dropped.
 //
-// Before that, a thread whose tasks all ended and were announced in earlier
-// turns is released (see jobs.Manager.Release); check_task then reports the
-// recorded outcome.
+// Before that, the live tasks of a thread whose tasks all ended and were
+// announced in earlier turns are released from memory; check_task then
+// reports the recorded outcome.
 func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
 	threadID, _ := agent.ThreadID(ctx)
 	if threadID != "" {
@@ -602,7 +621,8 @@ func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
 // BeforeAgent implements agent.BeforeAgent: each run may be reminded of its
 // running tasks once, and the running tasks of the run's thread that this
 // process does not hold, typically recorded before a restart, are taken
-// over (see reattachRunning).
+// over through the Runner's Reattacher (see "After a restart" in the
+// package doc); one that cannot be is reported lost.
 func (m *Middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 	remindedKey.Delete(s)
 	m.reattachRunning(ctx, s)
@@ -645,8 +665,9 @@ func (m *Middleware) reattachRunning(ctx context.Context, s *state.State) {
 }
 
 // WrapModel implements agent.ModelWrapper. While tasks of the run's thread
-// run, it appends a list of them (see runningList) after the host's system
-// segments, then the prompt; both stay outside the cached prefix. The list
+// run, it appends a list of them (id, subagent, how long it has run and the
+// start of its description, in a <background_tasks> block) after the host's
+// system segments, then the prompt; both stay outside the cached prefix. The list
 // comes from the records in State, not from the messages, so it survives a
 // compaction that summarized the start_task calls away.
 func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
@@ -691,9 +712,9 @@ func (m *Middleware) BeforeStop(ctx context.Context, s *state.State, _ *llm.Resp
 // top-level run's tasks keep running for later runs of the thread. Only
 // tasks of the run's own thread are stopped.
 //
-// At every depth the thread's entry is then released once no task runs
-// there and every ended one was announced (see jobs.Manager.Release), so
-// idle threads and finished nested ones hold no memory.
+// At every depth the thread's live tasks are then released from memory
+// once none runs there and every ended one was announced, so idle threads
+// and finished nested ones hold no memory.
 func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 	info, ok := agent.Info(ctx)
 	if !ok || info.ThreadID == "" {

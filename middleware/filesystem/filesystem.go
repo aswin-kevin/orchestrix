@@ -88,7 +88,8 @@ type Config struct {
 
 	// OffloadChars is the size, counted in characters (runes), above which
 	// the output of other middleware's tools is saved to the backend and
-	// replaced by a head and a pointer; 0 means DefaultOffloadChars. Negative is an error.
+	// replaced by a head and a pointer; 0 means DefaultOffloadChars.
+	// Negative is an error.
 	OffloadChars int
 
 	// ExecTimeout is the timeout execute uses when the model gives none and
@@ -215,7 +216,9 @@ func (m *Middleware) Tools() []tool.Tool {
 // WrapModel implements agent.ModelWrapper. It appends the tool guidance after
 // the host's system segments, so it stays outside the cached prefix, and
 // drops schemas of tools the allowlist excludes. With a configured backend it
-// also moves oversized user text out of the request (see offloadLargeMessages).
+// also saves each user text block longer than MessageOffloadChars to the
+// backend and replaces it, in the request only, by a preview and the saved
+// file's path; State keeps the original.
 func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if m.prompt != "" {
 		req.Request.System = append(slices.Clone(req.Request.System), m.prompt)
