@@ -31,7 +31,32 @@ go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 
 CI runs the same checks for every module, the core tests on Linux and Windows with the minimum supported Go (1.26) and the latest stable release, a 60-second differential fuzz of the shell parser against `sh` and `bash`, and `govulncheck`.
 
-Tests that run real shells live in `_test.go` files with a `//go:build unix` constraint and skip when the shell is missing. Exported struct fields need a doc comment or a line comment; `internal/doccheck` fails otherwise.
+Tests that run real shells live in `_test.go` files with a `//go:build unix` constraint and skip when the shell is missing. `internal/doccheck` fails when an exported field, type, function or method lacks a doc comment, or when a comment runs past 79 columns (see Code style).
+
+## Code style
+
+`gofmt`, `go vet` and staticcheck catch most problems. The rules below cover what they do not. Each names a file that follows it.
+
+1. **Package comment in `doc.go`.** Every package (commands included, example programs excepted) keeps its `// Package x …` comment in `doc.go`, next to the package clause and nothing else. See `orxpg/doc.go`.
+2. **File names.** snake_case, grouped by subject with a shared prefix; OS-specific files end in `_unix`, `_windows` or `_other`. Tests are named after what they test, never after a milestone or review; helper-only test files are `helpers_test.go`. See `mcp/http.go`, `mcp/http_server.go`, `mcp/http_session.go`.
+3. **Constructors.** `New` builds a package's main type, `NewX` a secondary type, and a verb (`Dial`, `Start`, `Connect`) a value whose construction does I/O. See `tool/registry.go`.
+4. **Configuration.** A `Config` struct passed by value. Its zero value is usable and every field documents its default ("0 means DefaultX"). Defaults are exported `DefaultX` constants. `New` validates and returns `(T, error)`: zero means the default, and the only accepted negative is an exported `= -1` constant named in the field doc (`agent.Unlimited`, `llm.NoRetries`, `llm.NoIdleTimeout`, `llm.NoCooldown`, `agent.NoOutputRetries`, `orxdocker.Unlimited`); any other negative makes `New` fail with "<pkg>: <Field> is negative". Per-call option structs and constructors without an error return document "0 or negative means the default" instead (`mcp.HandlerConfig`, `coordinator.ParallelOptions`; `backend.ExecOptions` says an implementation treats a negative value as 0). A required value may sit in `Config` when it mirrors a JSON config (`mcp.StdioConfig.Command`, `mcp.HTTPConfig.URL`). See `middleware/guard/guard.go`.
+5. **Functional options** only on the `orchestrix` facade and in builders, named `WithX`. A flag that turns something on takes no argument. The `state.KeyOption` constructors (`Private`, `RunLocal`, `MergeWith`) are the accepted exception: key declarations read as adjectives. See `options.go`.
+6. **Per-call parameter structs** are named `XOptions`. See `backend/backend.go`.
+7. **Constructors return concrete exported types.** Callers that want an interface assign the result to one. The exceptions are constructors whose result depends on their input: `llm.New` returns the `Provider` chosen by the configured format, and `composite.New` returns a `backend.Backend` because the result's optional capabilities depend on its default backend. See `middleware/async/async.go`.
+8. **Errors.** An error that crosses a package boundary starts with `"pkg: "`. A package name used twice in the module takes its last two path elements (`backend/memory: `). Errors the model reads have no prefix. Sentinels `ErrX` sit at the top of their file or in `errors.go`; error types are `XError` with documented methods. Wrap with `%w` and test with `errors.Is` / `errors.As`, never `==`. See `backend/errors.go`.
+9. **Panics** only for programmer errors at declaration or registration, with the message `"pkg: Func …"`. Configuration errors are returned. See `llm/registry.go`.
+10. **Typed enums.** `type X string` constants prefixed with the type's noun (`KindFinal`, `ReasonMaxTurns`). The value sets of event kinds, terminal reasons and statuses may grow in minor releases. Verb constants of a decision type (`permission.Allow`, `agent.Approve`) are the accepted exception. See `agent/event.go`.
+11. **Bool fields** read so false is the default: `DisableX`, or `AllowX` for an opt-in risk. See `middleware/web/client.go`.
+12. **Prompts.** A `Prompt *string` field is a prompt segment (nil means the default, a pointer to "" means none). A `Prompt string` field is a whole prompt ("" means the default). See `middleware/compress/compress.go`.
+13. **Names of tools and middleware.** Tool names are `ToolX` constants with verb_noun values; every middleware package exports `const Name`. See `middleware/planning/planning.go`.
+14. **Identifiers.** Initialisms all caps (`ThreadID`, `BaseURL`), no `Get` prefix, the same 1–2 letter receiver on every method of a type, and `-er` names for single-method interfaces (agent hook interfaces are named after their hook). Interfaces never gain methods after v1; new capabilities arrive as optional interfaces found by type assertion, and wrappers expose `Unwrap`. See `agent/agent.go`.
+15. **Doc comments.** Full sentences starting with the identifier, wrapped at 79 columns (tabs count as 4), trailing comments included. Every exported field, type, function and method is documented. `internal/doccheck` enforces this. See `agent/config.go`.
+16. **Context.** `ctx` is the first parameter of anything that may block. Library code uses `context.Background()` only for detached cleanup with a timeout, and `context.WithoutCancel` for work after a run. See `agent/lease.go`.
+17. **Closing.** Anything that may block or do I/O has `Close(ctx) error`, idempotent and safe for concurrent use. `Close() error` is for purely local handles. See `mcp/middleware.go`.
+18. **Logging** goes only through the injected `*slog.Logger`, with messages `"pkg: what happened"` and the error under `"err"`. Never use `log` or the global `slog`. See `agent/log.go`.
+19. **Tests.** Standard library only. Failure messages read `Func(x) = %v, want %v`. Helpers call `t.Helper()`; use `t.TempDir()` and `t.Context()` (`context.Background()` only in cleanups and examples). Table tests use `tests` and `tt`; goroutines use `wg.Go`. Conformance kits for implementers live in `<pkg>test` packages (`backendtest`, `llmtest`), and the main entry points have `Example` tests. See `backend/backendtest/conformance.go`.
+20. **Shared helpers instead of copies.** Before writing a small helper, look in `internal/` (`msgutil` for message predicates, `limitio` for bounded reads) and use `cmp.Or` for defaults. See `internal/limitio/limitio.go`.
 
 ## Commits
 
