@@ -24,8 +24,13 @@ func ExampleNew() {
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "call-1", Name: "echo", Input: map[string]any{"text": "hi"}}}},
 		llmtest.Turn{Text: "done"},
 	)
+	mw, err := orxotel.New(orxotel.Config{TracerProvider: tp})
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	a, err := orchestrix.NewWithProvider(model,
-		orchestrix.WithMiddleware(orxotel.New(orxotel.Config{TracerProvider: tp})),
+		orchestrix.WithMiddleware(mw),
 		orchestrix.WithTools(echoTool("echo")),
 		orchestrix.WithConfig(func(c *agent.Config) { c.Name = "agent" }),
 	)

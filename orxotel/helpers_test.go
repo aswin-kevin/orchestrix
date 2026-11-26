@@ -28,8 +28,12 @@ func newRecorder(t *testing.T) (*tracetest.SpanRecorder, *sdktrace.TracerProvide
 // with cfg.
 func newAgent(t *testing.T, name string, cfg orxotel.Config, turns []llmtest.Turn, opts ...orchestrix.Option) *agent.Agent {
 	t.Helper()
+	mw, err := orxotel.New(cfg)
+	if err != nil {
+		t.Fatalf("orxotel.New: %v", err)
+	}
 	opts = append([]orchestrix.Option{
-		orchestrix.WithMiddleware(orxotel.New(cfg)),
+		orchestrix.WithMiddleware(mw),
 		orchestrix.WithConfig(func(c *agent.Config) { c.Name = name }),
 	}, opts...)
 	a, err := orchestrix.NewWithProvider(llmtest.New(turns...), opts...)

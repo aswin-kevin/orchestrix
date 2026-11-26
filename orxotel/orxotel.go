@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -19,9 +20,12 @@ import (
 // starts.
 const tracerName = "github.com/aswin-kevin/orchestrix/orxotel"
 
-// defaultMaxContentBytes caps a captured value when Config.MaxContentBytes
+// Name is the name of the middleware New returns.
+const Name = "otel"
+
+// DefaultMaxContentBytes caps a captured value when Config.MaxContentBytes
 // is 0.
-const defaultMaxContentBytes = 4096
+const DefaultMaxContentBytes = 4096
 
 // Config configures the tracing middleware.
 type Config struct {
@@ -43,39 +47,56 @@ type Config struct {
 	// place of the default, whatever CaptureContent says. Return "" to
 	// export nothing.
 	RedactError func(error) string
-	// MaxContentBytes caps each captured value; 0 means 4096.
+	// MaxContentBytes caps each captured value; 0 means
+	// DefaultMaxContentBytes and a negative value is an error.
 	MaxContentBytes int
+	// Attributes, when set, returns attributes added to the run span and to
+	// every model and tool span of the run. It is called once per run, in
+	// WrapRun, with the run's context and RunInfo. It only adds: the
+	// attributes this package sets keep their values.
+	Attributes func(ctx context.Context, info agent.RunInfo) []attribute.KeyValue
 }
 
 // New returns a middleware that traces every run of the agent it is added
-// to. Its Name is "otel".
-func New(cfg Config) agent.Middleware {
-	if cfg.MaxContentBytes <= 0 {
-		cfg.MaxContentBytes = defaultMaxContentBytes
+// to. Its Name is Name. It fails when cfg.MaxContentBytes is negative.
+func New(cfg Config) (*Middleware, error) {
+	if cfg.MaxContentBytes < 0 {
+		return nil, errors.New("orxotel: MaxContentBytes is negative")
 	}
-	return &middleware{cfg: cfg}
+	if cfg.MaxContentBytes == 0 {
+		cfg.MaxContentBytes = DefaultMaxContentBytes
+	}
+	return &Middleware{cfg: cfg}, nil
 }
 
-// middleware holds only configuration: an Agent is shared by concurrent
+// Middleware traces agent runs, model calls and tool executions. Create it
+// with New. It holds only configuration: an Agent is shared by concurrent
 // runs, and each run's span lives in that run's context.
-type middleware struct {
+type Middleware struct {
 	cfg Config
 }
 
 var (
-	_ agent.RunWrapper   = (*middleware)(nil)
-	_ agent.ModelWrapper = (*middleware)(nil)
-	_ agent.ToolWrapper  = (*middleware)(nil)
+	_ agent.RunWrapper   = (*Middleware)(nil)
+	_ agent.ModelWrapper = (*Middleware)(nil)
+	_ agent.ToolWrapper  = (*Middleware)(nil)
 )
 
-// Name implements agent.Middleware.
-func (m *middleware) Name() string { return "otel" }
+// Name implements agent.Middleware; it returns Name.
+func (m *Middleware) Name() string { return Name }
 
-// tracerKey is the context key of the tracer a run resolved in WrapRun.
+// tracerKey is the context key of the runState a run resolved in WrapRun.
 type tracerKey struct{}
 
+// runState is what a run keeps in its context: the tracer resolved when it
+// started and the attributes Config.Attributes returned for it.
+type runState struct {
+	tracer trace.Tracer
+	attrs  []attribute.KeyValue
+}
+
 // newTracer resolves the tracer for a new run.
-func (m *middleware) newTracer() trace.Tracer {
+func (m *Middleware) newTracer() trace.Tracer {
 	tp := m.cfg.TracerProvider
 	if tp == nil {
 		tp = otel.GetTracerProvider()
@@ -86,16 +107,26 @@ func (m *middleware) newTracer() trace.Tracer {
 // tracer returns the tracer of the run in ctx, so every span of a run comes
 // from the provider resolved when it started; outside a traced run it
 // resolves a new one.
-func (m *middleware) tracer(ctx context.Context) trace.Tracer {
-	if t, ok := ctx.Value(tracerKey{}).(trace.Tracer); ok {
-		return t
+func (m *Middleware) tracer(ctx context.Context) trace.Tracer {
+	if st, ok := ctx.Value(tracerKey{}).(*runState); ok {
+		return st.tracer
 	}
 	return m.newTracer()
 }
 
+// runAttrs returns a copy of the Config.Attributes result of the run in ctx. Callers
+// put them before their own attributes, so this package's values win a
+// duplicate key.
+func runAttrs(ctx context.Context) []attribute.KeyValue {
+	if st, ok := ctx.Value(tracerKey{}).(*runState); ok {
+		return slices.Clone(st.attrs)
+	}
+	return nil
+}
+
 // WrapRun implements agent.RunWrapper: it starts the run span, which
 // parents every span of the run, and returns the function that ends it.
-func (m *middleware) WrapRun(ctx context.Context, info agent.RunInfo) (context.Context, func(*agent.Final)) {
+func (m *Middleware) WrapRun(ctx context.Context, info agent.RunInfo) (context.Context, func(*agent.Final)) {
 	attrs := []attribute.KeyValue{
 		attribute.String(keyOperationName, opInvokeAgent),
 		attribute.String(keyAgentName, info.AgentName),
@@ -105,8 +136,13 @@ func (m *middleware) WrapRun(ctx context.Context, info agent.RunInfo) (context.C
 	if info.ThreadID != "" {
 		attrs = append(attrs, attribute.String(keyConversationID, info.ThreadID))
 	}
-	tracer := m.newTracer()
-	ctx = context.WithValue(ctx, tracerKey{}, tracer)
+	st := &runState{tracer: m.newTracer()}
+	if m.cfg.Attributes != nil {
+		st.attrs = m.cfg.Attributes(ctx, info)
+		attrs = append(slices.Clone(st.attrs), attrs...)
+	}
+	tracer := st.tracer
+	ctx = context.WithValue(ctx, tracerKey{}, st)
 	ctx, span := tracer.Start(ctx, spanName(opInvokeAgent, info.AgentName),
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attrs...),
@@ -149,7 +185,7 @@ func runFailed(reason agent.TerminalReason) bool {
 // its event on this span. A reply stamped by a fallback provider sets
 // orchestrix.response.source to the entry that answered, which also covers
 // a call where a cooling-down primary was skipped without a switch event.
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	attrs := []attribute.KeyValue{
 		attribute.String(keyOperationName, opChat),
 		attribute.String(keyRequestModel, req.Request.Model),
@@ -162,6 +198,7 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 	if t := req.Request.Temperature; t != nil {
 		attrs = append(attrs, attribute.Float64(keyRequestTemperature, *t))
 	}
+	attrs = append(runAttrs(ctx), attrs...)
 	ctx, span := m.tracer(ctx).Start(ctx, spanName(opChat, req.Request.Model),
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attrs...),
@@ -210,7 +247,7 @@ func responseSource(resp *llm.Response) string {
 // agent.ErrStopRun: they pause or stop the run on purpose, so the span keeps
 // status Unset and gets orchestrix.tool.outcome instead. A panic marks the span as an error and
 // is re-raised for the agent loop to recover.
-func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
+func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	attrs := []attribute.KeyValue{
 		attribute.String(keyOperationName, opExecuteTool),
 		attribute.String(keyToolName, call.Name),
@@ -223,6 +260,7 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 	if m.cfg.CaptureContent {
 		attrs = append(attrs, attribute.String(keyToolCallArguments, m.capped(string(call.Input))))
 	}
+	attrs = append(runAttrs(ctx), attrs...)
 	ctx, span := m.tracer(ctx).Start(ctx, spanName(opExecuteTool, call.Name),
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attrs...),
@@ -273,7 +311,7 @@ func controlOutcome(err error) string {
 }
 
 // capped returns s cut to at most MaxContentBytes, on a rune boundary.
-func (m *middleware) capped(s string) string {
+func (m *Middleware) capped(s string) string {
 	return truncate(s, m.cfg.MaxContentBytes)
 }
 
@@ -337,7 +375,7 @@ func (c *Config) errorText(err error) string {
 // recordError marks span as failed with err and adds an exception event,
 // both with the text errorText allows (span.RecordError would export
 // err.Error() unconditionally).
-func (m *middleware) recordError(span trace.Span, err error) {
+func (m *Middleware) recordError(span trace.Span, err error) {
 	text := m.cfg.errorText(err)
 	span.AddEvent("exception", trace.WithAttributes(
 		attribute.String("exception.type", fmt.Sprintf("%T", err)),

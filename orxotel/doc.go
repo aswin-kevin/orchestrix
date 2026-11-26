@@ -2,10 +2,14 @@
 //
 // Add the middleware to an agent:
 //
+//	mw, err := orxotel.New(orxotel.Config{
+//		TracerProvider: tp, // nil uses otel.GetTracerProvider()
+//	})
+//	if err != nil {
+//		return err
+//	}
 //	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
-//		orchestrix.WithMiddleware(orxotel.New(orxotel.Config{
-//			TracerProvider: tp, // nil uses otel.GetTracerProvider()
-//		})),
+//		orchestrix.WithMiddleware(mw),
 //	)
 //
 // Every run (Run, Resume and ResumeWith alike) gets a span named
@@ -53,6 +57,10 @@
 // call that pauses or stops the run, and gen_ai.tool.call.arguments and
 // gen_ai.tool.call.result with Config.CaptureContent. A Go error from the
 // tool sets status Error and adds an exception event.
+//
+// Config.Attributes adds attributes of the host's own, such as a tenant id,
+// to the run span and to every model and tool span of the run; it is called
+// once per run.
 //
 // The "Tracing" section of the Orchestrix README has the same list as a
 // table.
