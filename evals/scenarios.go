@@ -139,57 +139,69 @@ func crossProcessApproval(ctx context.Context, env Env, t *T) {
 			orchestrix.WithDeny("execute(rm:*)"),
 		)
 	}
+	if approvalFirstProcess(ctx, t, fresh, sh) &&
+		approvalSecondProcess(ctx, t, fresh, sh) {
+		approvalThirdProcess(ctx, t, fresh, sh)
+	}
+}
 
+// approvalFirstProcess runs the prompt until the permission ask interrupts
+// it. It reports whether the scenario can go on.
+func approvalFirstProcess(ctx context.Context, t *T, fresh func() (*agent.Agent, error), sh *fakeShell) bool {
 	first, err := fresh()
 	if err != nil {
 		t.Errorf("new agent: %v", err)
-		return
+		return false
 	}
 	th, err := first.Thread(ctx, "approval")
 	if err != nil {
 		t.Errorf("thread: %v", err)
-		return
+		return false
 	}
 	final, _ := drain(t, th.Prompt(ctx, approvalPrompt))
 	if cmds := sh.commands(); len(cmds) > 0 {
 		t.Violationf("commands ran before any approval: %q", cmds)
 	}
 	if !observe(t, final) {
-		return
+		return false
 	}
 	if final.Reason != agent.ReasonInterrupted {
 		t.Failf("first run ended with %s, want interrupted (the model must call execute); reply: %q", final.Reason, snippet(final.Text))
-		return
+		return false
 	}
+	return true
+}
 
-	// Process two: reload, fork a copy for process three, then resume with
-	// an edit that the deny rule forbids.
+// approvalSecondProcess reloads the thread, forks a copy for process three,
+// then resumes with an edit that the deny rule forbids. It reports whether
+// the scenario can go on.
+func approvalSecondProcess(ctx context.Context, t *T, fresh func() (*agent.Agent, error), sh *fakeShell) bool {
 	second, err := fresh()
 	if err != nil {
 		t.Errorf("new agent: %v", err)
-		return
+		return false
 	}
 	reloaded, err := second.Thread(ctx, "approval")
 	if err != nil {
 		t.Errorf("reload: %v", err)
-		return
+		return false
 	}
 	intr, ok := reloaded.Pending()
 	if !ok {
 		t.Violationf("the reloaded thread has no pending interrupt")
-		return
+		return false
 	}
 	if _, err := reloaded.Fork(ctx, "approval-safe"); err != nil {
 		t.Errorf("fork: %v", err)
-		return
+		return false
 	}
 	const forbidden = `{"command":"rm -rf /srv/data"}`
 	decisions, editedIDs := editAll(intr, forbidden)
 	if len(editedIDs) == 0 {
 		t.Violationf("the interrupt lists no execute request: %+v", intr.Requests)
-		return
+		return false
 	}
-	final, _ = drain(t, reloaded.Resume(ctx, decisions))
+	final, _ := drain(t, reloaded.Resume(ctx, decisions))
 	for _, cmd := range sh.commands() {
 		if strings.HasPrefix(strings.TrimSpace(cmd), "rm") {
 			t.Violationf("the edited input %q ran despite the deny rule", cmd)
@@ -200,11 +212,11 @@ func crossProcessApproval(ctx context.Context, env Env, t *T) {
 	} else if !res.IsError || !strings.Contains(strings.ToLower(blockText(res)), "denied") {
 		t.Violationf("the edited call's result is not a denial: %q", blockText(res))
 	}
-	if !observe(t, final) {
-		return
-	}
+	return observe(t, final)
+}
 
-	// Process three: resume the forked copy with a harmless edit.
+// approvalThirdProcess resumes the forked copy with a harmless edit.
+func approvalThirdProcess(ctx context.Context, t *T, fresh func() (*agent.Agent, error), sh *fakeShell) {
 	third, err := fresh()
 	if err != nil {
 		t.Errorf("new agent: %v", err)
@@ -215,14 +227,14 @@ func crossProcessApproval(ctx context.Context, env Env, t *T) {
 		t.Errorf("reload fork: %v", err)
 		return
 	}
-	intr, ok = safe.Pending()
+	intr, ok := safe.Pending()
 	if !ok {
 		t.Violationf("the forked thread has no pending interrupt")
 		return
 	}
-	decisions, _ = editAll(intr, `{"command":"echo edited"}`)
+	decisions, _ := editAll(intr, `{"command":"echo edited"}`)
 	before := len(sh.commands())
-	final, _ = drain(t, safe.Resume(ctx, decisions))
+	final, _ := drain(t, safe.Resume(ctx, decisions))
 	ran := sh.commands()[before:]
 	if !slices.Contains(ran, "echo edited") {
 		t.Violationf("the approved edit did not run as edited; ran %q", ran)
@@ -717,7 +729,6 @@ func concurrentThreads(ctx context.Context, env Env, t *T) {
 	}
 
 	prompts := []string{"Reply with the word ALPHA.", "Reply with the word BRAVO."}
-	finals := make([]*agent.Final, len(prompts))
 	threads := make([]*agent.Thread, len(prompts))
 	for i := range prompts {
 		a, err := worker()
@@ -734,6 +745,18 @@ func concurrentThreads(ctx context.Context, env Env, t *T) {
 		t.Violationf("the workers opened different versions: %q and %q", threads[0].Version(), threads[1].Version())
 		return
 	}
+	finals := raceWorkers(ctx, t, threads, prompts)
+	winner, ok := judgeRace(t, finals)
+	if !ok {
+		return
+	}
+	checkStoredWinner(ctx, t, dir, finals[winner], prompts[winner], prompts[1-winner])
+}
+
+// raceWorkers prompts every thread at once and returns the finals, indexed
+// like threads.
+func raceWorkers(ctx context.Context, t *T, threads []*agent.Thread, prompts []string) []*agent.Final {
+	finals := make([]*agent.Final, len(prompts))
 	var wg sync.WaitGroup
 	gate := make(chan struct{})
 	var mu sync.Mutex
@@ -752,13 +775,19 @@ func concurrentThreads(ctx context.Context, env Env, t *T) {
 	}
 	close(gate)
 	wg.Wait()
+	return finals
+}
 
+// judgeRace checks that exactly one worker completed and the other lost the
+// thread without spending model turns. It returns the winner's index and
+// whether the scenario can go on.
+func judgeRace(t *T, finals []*agent.Final) (int, bool) {
 	winners, losers := 0, 0
 	winner := -1
 	for i, f := range finals {
 		if f == nil {
 			t.Errorf("worker %d produced no final", i)
-			return
+			return -1, false
 		}
 		t.Observe(f)
 		switch {
@@ -774,19 +803,23 @@ func concurrentThreads(ctx context.Context, env Env, t *T) {
 			t.Note(fmt.Sprintf("loser_reason_%d", i), string(f.Reason))
 		case f.Reason == agent.ReasonModelError:
 			t.Errorf("worker %d: %v", i, f.Err)
-			return
+			return -1, false
 		default:
 			t.Violationf("worker %d ended with %s (%v)", i, f.Reason, f.Err)
 		}
 	}
 	if winners != 1 || losers != 1 {
 		t.Violationf("%d workers completed and %d lost; want exactly one of each", winners, losers)
-		return
+		return -1, false
 	}
 	t.SetReason(finals[winner].Reason)
+	return winner, true
+}
 
-	// The stored thread holds the winner's turn, not the loser's, also for
-	// a Checkpointer opened afterwards on the same directory.
+// checkStoredWinner checks that the stored thread holds the winner's turn,
+// not the loser's, also for a Checkpointer opened afterwards on the same
+// directory.
+func checkStoredWinner(ctx context.Context, t *T, dir string, final *agent.Final, won, lost string) {
 	cp, err := checkpointfile.New(dir, checkpointfile.Config{})
 	if err != nil {
 		t.Errorf("checkpointer: %v", err)
@@ -797,8 +830,8 @@ func concurrentThreads(ctx context.Context, env Env, t *T) {
 		t.Errorf("load: %v", err)
 		return
 	}
-	if v != finals[winner].Version {
-		t.Violationf("stored version %q, the winner saved %q", v, finals[winner].Version)
+	if v != final.Version {
+		t.Violationf("stored version %q, the winner saved %q", v, final.Version)
 	}
 	var texts []string
 	for _, m := range s.Messages() {
@@ -806,7 +839,7 @@ func concurrentThreads(ctx context.Context, env Env, t *T) {
 			texts = append(texts, m.Text())
 		}
 	}
-	if !slices.Contains(texts, prompts[winner]) || slices.Contains(texts, prompts[1-winner]) {
+	if !slices.Contains(texts, won) || slices.Contains(texts, lost) {
 		t.Violationf("stored user messages %q, want the winner's prompt only", texts)
 	}
 }
