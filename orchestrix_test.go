@@ -20,7 +20,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
@@ -398,7 +397,7 @@ func (b *startingBackend) Start(context.Context, string, backend.ExecOptions) (b
 
 func TestOrchestrixCloseStopsMCPAndTasks(t *testing.T) {
 	m := connectMCP(t, false)
-	tm := tasks.New(tasks.Config{})
+	tm := mustJobs(t)
 	b := &startingBackend{Backend: testutil.Memory(t)}
 	p := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e1", Name: filesystem.ToolExecute,
@@ -407,7 +406,7 @@ func TestOrchestrixCloseStopsMCPAndTasks(t *testing.T) {
 	)
 	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithBackend(b),
-		orchestrix.WithTasks(tm),
+		orchestrix.WithJobs(tm),
 		orchestrix.WithMCP(m),
 		orchestrix.WithPermissionMode(permission.ModeBypass),
 	)

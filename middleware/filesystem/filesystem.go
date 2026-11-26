@@ -106,7 +106,7 @@ type Config struct {
 	Execute bool
 
 	// Background offers run_in_background on execute, which hands the
-	// command to tool.Call.Background (set by the tasks middleware) instead
+	// command to tool.Call.Background (set by the jobs middleware) instead
 	// of waiting for it. False leaves the parameter out of the schema.
 	Background bool
 }

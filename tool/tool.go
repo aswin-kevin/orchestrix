@@ -153,7 +153,7 @@ type Call struct {
 	// paths (ls, glob, grep) must drop what this rejects. Use Visible, which
 	// tolerates nil.
 	ReadVisible func(path string) bool
-	// Background starts commands that outlive the call; the tasks middleware
+	// Background starts commands that outlive the call; the jobs middleware
 	// sets it. nil means background execution is unavailable.
 	Background Background
 }

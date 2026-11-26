@@ -52,8 +52,8 @@ var ErrClosed = errors.New("agent: closed")
 // work, and every call returns its result once it is done. That result is
 // final: a later call with a longer deadline does not retry. A host whose
 // first Close ran out of time while background work was still ending can
-// wait longer through the middleware itself (tasks or async Shutdown, for
-// instance).
+// wait longer through the middleware itself (the jobs or async middleware's
+// own Close, for instance, which stops and waits again).
 //
 // Runs already started when Close is called are not waited for or stopped:
 // they keep going, and may fail once the resources they use are closed.

@@ -134,7 +134,7 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 	}
 	t.attach(h)
 	if j.Stopped() {
-		// Shutdown came while the Runner started the task, and attach
+		// Close came while the Runner started the task, and attach
 		// stopped it; as for a failed start, this result is all there is.
 		m.jobs.MarkNotified(c.ThreadID, j.ID)
 		return tool.Errorf("background tasks are shut down; task %s was stopped as it started", j.ID), nil

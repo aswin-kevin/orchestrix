@@ -107,7 +107,7 @@ func main() {
 }
 ```
 
-`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTotalTokens`, `WithModelTimeout`, `WithMaxTokens`, `WithLogger`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithTasks`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithOutputType`/`WithOutputSchema`, `WithFallback`/`WithFallbackConfig`, `WithProfiles`, `WithMount`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
+`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTotalTokens`, `WithModelTimeout`, `WithMaxTokens`, `WithLogger`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithJobs`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithOutputType`/`WithOutputSchema`, `WithFallback`/`WithFallbackConfig`, `WithProfiles`, `WithMount`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
 
 ## Examples
 
@@ -205,11 +205,11 @@ Every event carries `Turn` (1-based model turn, 0 before the first), `Time` and 
 
 ## Shutting down
 
-`Agent.Close(ctx)` releases what an agent holds, once, when the host is done with it. It first drains every middleware that runs work beside the agent's runs (`agent.Drainer`; `WithAsync` stops its background subagents), then closes, in reverse stack order, every middleware that implements `agent.Closer` (MCP connections, `WithTasks` background jobs, `WithAsync`), then the backend and checkpointer when they implement it, and finally drops the default per-thread workspaces. `ctx` bounds how long it waits. Runs already started are neither waited for nor stopped, so cancel their contexts first for a clean stop; a run started after `Close` ends at once with reason `internal_error` and an error wrapping `agent.ErrClosed`. Close only the top-level agent: subagents share its resources. A backend returned by `WithBackendFactory` and satellite resources such as an `orxdocker.Manager` or a `pgxpool.Pool` stay with the host.
+`Agent.Close(ctx)` releases what an agent holds, once, when the host is done with it. It first drains every middleware that runs work beside the agent's runs (`agent.Drainer`; `WithAsync` stops its background subagents), then closes, in reverse stack order, every middleware that implements `agent.Closer` (MCP connections, `WithJobs` background jobs, `WithAsync`), then the backend and checkpointer when they implement it, and finally drops the default per-thread workspaces. `ctx` bounds how long it waits. Runs already started are neither waited for nor stopped, so cancel their contexts first for a clean stop; a run started after `Close` ends at once with reason `internal_error` and an error wrapping `agent.ErrClosed`. Close only the top-level agent: subagents share its resources. A backend returned by `WithBackendFactory` and satellite resources such as an `orxdocker.Manager` or a `pgxpool.Pool` stay with the host.
 
 ```go
-// Imports omitted; tm is a *tasks.Middleware and m an *mcp.Middleware.
-a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithTasks(tm), orchestrix.WithMCP(m))
+// Imports omitted; tm is a *jobs.Middleware and m an *mcp.Middleware.
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithJobs(tm), orchestrix.WithMCP(m))
 if err != nil {
 	log.Fatal(err)
 }
@@ -319,7 +319,7 @@ See [`decider`](example_decider_test.go) for a compiled snippet.
 
 A middleware is any value with a `Name() string` method plus whichever hook interfaces it needs: `BeforeAgent`, `AfterAgent`, `BeforeModel`, `AfterModel`, `BeforeStop`, `ModelWrapper`, `ToolWrapper` and `ToolProvider`. Wrappers nest like an onion: the first middleware in the stack is the outermost, and a wrapper may call `next` zero, one or several times.
 
-The stack order is fixed, outermost first: `summarize`, `compress` (with `WithCompress`), `cache`, `hooks` (with `WithHooks`), `hitl` (with `WithInterruptOn`), `rubric` (with `WithRubric`), `memory` (with `WithMemory`), `skills` (with `WithSkills`), `planmode` (with `WithPlanMode`), `filesystem`, `planning`, `subagents`, `async` (with `WithAsync`), `deferred` (see "Deferred tools"), `mcp` (with `WithMCP`), `web` (with `WithWeb`), `askuser` (with `WithAskUser`), `tasks` (with `WithTasks`), `profiles` (with `WithProfiles`). By default that is `summarize`, `cache`, `filesystem`, `planning` and `subagents`. Adding a middleware with a default's name replaces it; other added middleware runs after `profiles`; `WithoutMiddleware("subagents", "summarize")` removes them. `summarize` rebuilds each request from state, so it must stay first. `BeforeStop` hooks run in reverse order, so `async`'s reminder about running tasks is consulted before `rubric` grades the answer, and `hooks`' `Stop` hooks are consulted after it (see "Self-grading"). `profiles` is last so its prompt suffix is the last segment and its overrides see the final tool list.
+The stack order is fixed, outermost first: `summarize`, `compress` (with `WithCompress`), `cache`, `hooks` (with `WithHooks`), `hitl` (with `WithInterruptOn`), `rubric` (with `WithRubric`), `memory` (with `WithMemory`), `skills` (with `WithSkills`), `planmode` (with `WithPlanMode`), `filesystem`, `planning`, `subagents`, `async` (with `WithAsync`), `deferred` (see "Deferred tools"), `mcp` (with `WithMCP`), `web` (with `WithWeb`), `askuser` (with `WithAskUser`), `jobs` (with `WithJobs`), `profiles` (with `WithProfiles`). By default that is `summarize`, `cache`, `filesystem`, `planning` and `subagents`. Adding a middleware with a default's name replaces it; other added middleware runs after `profiles`; `WithoutMiddleware("subagents", "summarize")` removes them. `summarize` rebuilds each request from state, so it must stay first. `BeforeStop` hooks run in reverse order, so `async`'s reminder about running tasks is consulted before `rubric` grades the answer, and `hooks`' `Stop` hooks are consulted after it (see "Self-grading"). `profiles` is last so its prompt suffix is the last segment and its overrides see the final tool list.
 
 A custom middleware that logs every tool call (imports omitted):
 
@@ -379,10 +379,10 @@ A backend is the file system the file tools operate on.
 
 - **`backend/memory`**: in-memory and safe for concurrent use. This is the default, with one separate workspace per thread ID that lives until the agent is closed. A run without a thread ID gets a fresh, empty workspace of its own that is not kept after the run, so threadless runs never see each other's files (paths mounted with `WithMount` stay shared).
 - **`backend/disk`**: a real directory. Paths the model sees are relative to the root, and access outside it is refused. The backend keeps the directory open until `Close` (which `Agent.Close` calls for `WithBackend` and `WithShell` backends); on Windows the directory cannot be deleted or renamed before that.
-- **`backend/shell`**: a disk backend that can also run commands; see "Shell and background tasks".
+- **`backend/shell`**: a disk backend that can also run commands; see "Shell and background jobs".
 - **`backend/kv`**: files kept in a namespaced key/value `kv.Store`, for state that must outlive a thread. `kv.NewMemoryStore` keeps it in memory; `kv.NewDirStore` keeps it on disk, where several processes can share it. A `DirStore` names each file by the hex SHA-256 of its key and keeps the key in a header inside the file, so no key can name a path outside the store and two keys never collide on a case-insensitive file system (macOS, Windows). Implement `kv.Store` to keep files in a database, add `Stat` (`kv.Stater`) so existence and size checks don't fetch the value, and run `kvtest.Run` against it.
 - **`backend/composite`**: routes each path to a backend by its longest mounted prefix and merges listings, globs and greps across them. `composite.New(def, composite.Route{Prefix: "/memories", Backend: kvb})` serves `/memories/a.md` from `kvb` as `/a.md` and every other path from `def`. Commands run only in `def`: files under a mount are invisible to them, and files of `def` that a mount shadows stay visible to them. Deleting a mount point, or any directory above one, is refused.
-- **`backend/sandbox`**: a backend for a remote container or VM whose only primitive is running a shell command. You supply a `backend.Executor` (only `Execute`); every file operation is a POSIX `sh` script sent through it, with paths single-quoted and content sent as base64. The sandbox needs `sh` with `base64` (and `base64 -d`), `find` (with `-H`, `-mindepth`, `-maxdepth` and `-exec ... {} +`), `wc`, `date -r FILE`, `mkdir`, `mv`, `rm`, `tail -c` and a `true` executable: GNU, busybox, macOS and FreeBSD userlands work; OpenBSD and NetBSD do not. File names that are not valid UTF-8 need tools that accept such arguments (`date -r` has no argument-free form): the Rust coreutils that recent Ubuntu ships by default refuse them, and the sandbox then reports `this userland cannot handle non-UTF-8 file names` for that path. The sandbox itself is the security boundary. When the executor also implements `backend.Starter`, `sandbox.NewStarter` returns a backend that can run background jobs too, for `WithTasks`. For development, `sandbox.New(shellBackend, sandbox.Options{Root: dir})` runs one on the host over a `backend/shell` backend. For a real boundary, use `orxdocker` (see "Untrusted tools in containers").
+- **`backend/sandbox`**: a backend for a remote container or VM whose only primitive is running a shell command. You supply a `backend.Executor` (only `Execute`); every file operation is a POSIX `sh` script sent through it, with paths single-quoted and content sent as base64. The sandbox needs `sh` with `base64` (and `base64 -d`), `find` (with `-H`, `-mindepth`, `-maxdepth` and `-exec ... {} +`), `wc`, `date -r FILE`, `mkdir`, `mv`, `rm`, `tail -c` and a `true` executable: GNU, busybox, macOS and FreeBSD userlands work; OpenBSD and NetBSD do not. File names that are not valid UTF-8 need tools that accept such arguments (`date -r` has no argument-free form): the Rust coreutils that recent Ubuntu ships by default refuse them, and the sandbox then reports `this userland cannot handle non-UTF-8 file names` for that path. The sandbox itself is the security boundary. When the executor also implements `backend.Starter`, `sandbox.NewStarter` returns a backend that can run background jobs too, for `WithJobs`. For development, `sandbox.New(shellBackend, sandbox.Options{Root: dir})` runs one on the host over a `backend/shell` backend. For a real boundary, use `orxdocker` (see "Untrusted tools in containers").
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -512,7 +512,7 @@ tasks, err := async.New(async.Config{MaxRunning: 3})
 if err != nil {
 	log.Fatal(err)
 }
-defer tasks.Shutdown() // stops background subagents still running
+defer func() { _ = tasks.Close(context.Background()) }() // stops background subagents still running
 
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithAsync(tasks))
 _, _ = a, err
@@ -523,7 +523,7 @@ _, _ = a, err
 - **Approvals.** A background run has nobody to ask in-band. With a `WithApprover`, the subagent inherits it; without one, a subagent that needs a decision ends as `blocked`, naming the tools it wanted to call. A task's permission mode is fixed when it starts: switching the parent to plan mode or a stricter mode later does not change the mode of tasks already running.
 - **Runner.** By default tasks run as subagents in this process, with `TaskTimeout` (30 minutes) each and up to `MaxRunning` (4) at once per thread. Implement `async.Runner` to run them elsewhere.
 - **Restarts.** Task records are saved in the thread's state, but live tasks are not re-attached in a new process: a task recorded as running that this process does not know is reported to the model as `lost`.
-- **Shutdown.** The host owns the `async.Middleware`; `Shutdown`, or `Close` of the agent (see "Shutting down"), stops every task and must be called before the program exits.
+- **Shutdown.** The host owns the `async.Middleware`; its `Close`, or `Close` of the agent (see "Shutting down"), stops every task and must be called before the program exits.
 
 A background subagent's state is not merged into the parent's; files are shared through the backend.
 
@@ -546,7 +546,7 @@ c, err := coordinator.New("anthropic:claude-sonnet-4-5", coordinator.Config{
 if err != nil {
 	log.Fatal(err)
 }
-defer c.Shutdown() // stops background workers still running
+defer func() { _ = c.Close(context.Background()) }() // stops background workers still running
 
 in := orchestrix.Text("Write a one-page brief on home battery storage.")
 in.ThreadID = "battery-brief" // start_task needs a thread
@@ -560,7 +560,7 @@ for ev, err := range c.Run(ctx, in) {
 }
 ```
 
-`New` fails when the options replace or remove the coordinator's async middleware, since its workers and `Shutdown` depend on it. That check reads the configured stack, so it cannot see a model profile whose `ExcludeMiddleware` names `async`: for the matching models such a profile removes `start_task`, leaving the coordinator only the `task` tool.
+`New` fails when the options replace or remove the coordinator's async middleware, since its workers and `Close` depend on it. That check reads the configured stack, so it cannot see a model profile whose `ExcludeMiddleware` names `async`: for the matching models such a profile removes `start_task`, leaving the coordinator only the `task` tool.
 
 `coordinator.RunParallel` runs many agent runs at once, with bounded concurrency, and returns one result per job in input order. Jobs may share an agent; give each its own thread ID. Jobs without one each get a fresh workspace with the default per-thread backend (a shared `WithBackend` stays shared), and they cannot start background tasks. One failing job does not stop the others, and cancelling the context stops the running jobs and fails those not started. `ParallelOptions.OnEvent` sees every event of every job, one call at a time; if it panics, every job is cancelled and `RunParallel` re-panics on the caller's goroutine once they have ended.
 
@@ -776,20 +776,23 @@ _, _, _ = a, store, err
 
 A checkpointed workspace is stored whole in the thread's state, so for large workspaces prefer a disk or shell backend (which `WithCheckpointer` leaves alone).
 
-## Shell and background tasks
+## Shell and background jobs
 
 `WithShell(root, shell.Config{})` runs the agent on the real directory `root` and adds the `execute` tool. Commands run with a minimal environment, timeouts and output limits; `shell.Config` adjusts them. `WithShell` cannot be combined with `WithBackend` or `WithBackendFactory`, and the one backend is shared by all threads. Commands run under `/bin/sh`, so `execute` works on Unix (Linux, macOS, the BSDs) only: on Windows the file tools work but every command fails to start; run commands in a container there (`orxdocker`).
 
-`WithTasks` lets `execute` start a command in the background (`run_in_background`) and gives the model `task_output`, `task_stop`, `task_list`, `sleep` and `monitor` to follow it. Finished jobs are announced to the model on its next turn. The host owns the `tasks.Middleware` and must call `Shutdown`, or `Close` the agent, to stop jobs still running:
+`WithJobs` lets `execute` start a command in the background (`run_in_background`) and gives the model `check_job`, `cancel_job`, `list_jobs`, `sleep` and `monitor` to follow it; the job tools take a `job_id`, and `check_job` with `wait` waits for the job to end. Finished jobs are announced to the model on its next turn. A job's records (`jobs.Records(state)`) show it `running`, `completed`, `failed`, `timed_out`, `cancelled` (by `cancel_job`, `Close`, or the end of the subagent run that started it) or `lost` (recorded by an earlier process). The host owns the `jobs.Middleware` and must `Close` it, or `Close` the agent, to stop jobs still running:
 
 ```go
 // Imports omitted; model comes from surrounding code.
-tm := tasks.New(tasks.Config{})
-defer tm.Shutdown() // stops background jobs still running
+tm, err := jobs.New(jobs.Config{})
+if err != nil {
+	log.Fatal(err)
+}
+defer func() { _ = tm.Close(context.Background()) }() // stops background jobs still running
 
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithShell("./workspace", shell.Config{}),
-	orchestrix.WithTasks(tm),
+	orchestrix.WithJobs(tm),
 	orchestrix.WithAllow("execute(git:*)"),
 	orchestrix.WithDeny("execute(rm:*)"),
 )
@@ -818,12 +821,15 @@ if err != nil {
 }
 defer m.Close(context.Background()) // removes this process's containers
 
-tm := tasks.New(tasks.Config{})
-defer tm.Shutdown()
+tm, err := jobs.New(jobs.Config{})
+if err != nil {
+	log.Fatal(err)
+}
+defer func() { _ = tm.Close(context.Background()) }()
 
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithBackendFactory(m.Backend), // file tools and execute run in the container
-	orchestrix.WithTasks(tm),                 // background jobs too
+	orchestrix.WithJobs(tm),                  // background jobs too
 )
 _, _ = a, err
 ```

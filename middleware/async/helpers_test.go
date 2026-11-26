@@ -107,7 +107,7 @@ func newHarnessWith(t *testing.T, cfg Config, before []agent.Middleware, turns .
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(m.Shutdown)
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
 	p := llmtest.New(turns...)
 	mws := append(slices.Clone(before), m)
 	a, err := agent.New(agent.Config{Provider: p, Middleware: mws, PermissionMode: permission.ModeDefault})

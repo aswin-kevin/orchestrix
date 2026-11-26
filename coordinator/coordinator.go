@@ -5,9 +5,9 @@
 package coordinator
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"sync"
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -36,16 +36,13 @@ type Config struct {
 // Coordinator is an agent that plans, delegates to its workers (task for
 // work needed now, start_task for parallel work) and synthesizes their
 // results. Run it with an Input.ThreadID: start_task refuses to start
-// workers in a run without one. Call Shutdown when done, or Close (of the
-// embedded Agent), which stops the workers too and releases the agent's
-// other resources.
+// workers in a run without one. Call Close (of the embedded Agent) when
+// done: it stops the background workers still running and releases the
+// agent's other resources.
 type Coordinator struct {
 	// Agent is the coordinating agent; Run, Thread, Resume and Close come
 	// from it.
 	*agent.Agent
-	// tasks runs the background workers; the Coordinator owns it.
-	tasks    *async.Middleware
-	shutdown sync.Once
 }
 
 // New builds it with orchestrix.New(spec, …): the system prompt, subagents
@@ -120,15 +117,15 @@ func build(cfg Config, newAgent func([]orchestrix.Option) (*agent.Agent, error),
 		err = errReplacedAsync
 	}
 	if err != nil {
-		tasks.Shutdown()
+		_ = tasks.Close(context.Background()) // nothing ran: there is no worker to wait for
 		return nil, fmt.Errorf("coordinator: %w", err)
 	}
-	return &Coordinator{Agent: a, tasks: tasks}, nil
+	return &Coordinator{Agent: a}, nil
 }
 
 // errReplacedAsync reports opts that took the Coordinator's async middleware
 // out of the stack: start_task would then not run the workers, or would run
-// tasks Shutdown does not stop.
+// tasks Close does not stop.
 var errReplacedAsync = errors.New("opts must not replace or remove the async middleware (configure workers with Config)")
 
 // owns reports whether the middleware named "async" in a's stack is tasks.
@@ -139,12 +136,4 @@ func owns(a *agent.Agent, tasks *async.Middleware) bool {
 		}
 	}
 	return false
-}
-
-// Shutdown stops every background worker still running and waits for them
-// to end, up to async.DefaultStopWait. Workers cannot be started in the
-// background afterwards. It is safe to call more than once and from several
-// goroutines; later calls return once the first has finished.
-func (c *Coordinator) Shutdown() {
-	c.shutdown.Do(c.tasks.Shutdown)
 }

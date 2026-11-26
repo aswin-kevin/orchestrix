@@ -1,6 +1,6 @@
 //go:build unix
 
-package tasks
+package jobs
 
 import (
 	"context"
@@ -40,7 +40,7 @@ func forkCall(id string) llmtest.Call {
 }
 
 func TestForkLeavesParentJobRunning(t *testing.T) {
-	m := newTasks(t, Config{})
+	m := newJobs(t, Config{})
 	// The fork runs during the parent's third turn, so it takes the third
 	// scripted response.
 	p := llmtest.New(
@@ -48,24 +48,26 @@ func TestForkLeavesParentJobRunning(t *testing.T) {
 		turn(pidMonitor("m1", "bg_1")),
 		turn(forkCall("f1")),
 		llmtest.Turn{Text: "fork done"},
-		turn(call("l1", ToolTaskList, obj{})),
+		turn(call("l1", ToolList, obj{})),
 		llmtest.Turn{Text: "ok"},
 	)
 	run(t, context.Background(), newForkingAgent(t, p, m), input("parent"))
 
-	if got := resultText(t, p, "l1"); !strings.Contains(got, "bg_1") || !strings.Contains(got, StatusRunning) {
-		t.Fatalf("parent task_list after the fork = %q, want bg_1 running", got)
+	if got := resultText(t, p, "l1"); !strings.Contains(got, "bg_1") || !strings.Contains(got, string(StatusRunning)) {
+		t.Fatalf("parent list_jobs after the fork = %q, want bg_1 running", got)
 	}
 	pid := pidFrom(t, p, "m1")
 	if !alive(pid) {
 		t.Fatalf("the fork stopped the parent's job %d", pid)
 	}
-	m.Shutdown()
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 	waitGone(t, pid)
 }
 
 func TestForkDoesNotTakeParentNotification(t *testing.T) {
-	m := newTasks(t, Config{})
+	m := newJobs(t, Config{})
 	// bg_1 ends while the parent's record of it still says running: sleep
 	// wakes on the end without refreshing records, and the foreground
 	// execute keeps the fork from running alongside the sleep.
@@ -77,7 +79,7 @@ func TestForkDoesNotTakeParentNotification(t *testing.T) {
 			forkCall("f1"),
 		),
 		llmtest.Turn{Text: "fork done"},
-		turn(call("l1", ToolTaskList, obj{})),
+		turn(call("l1", ToolList, obj{})),
 		llmtest.Turn{Text: "ok"},
 	)
 	run(t, context.Background(), newForkingAgent(t, p, m), input("parent"))
@@ -86,10 +88,10 @@ func TestForkDoesNotTakeParentNotification(t *testing.T) {
 	if got := notifications(fork); len(got) != 0 {
 		t.Fatalf("the fork was told about the parent's job: %q", got)
 	}
-	if got := notifications(parent); len(got) != 1 || !strings.Contains(got[0], "bg_1") || !strings.Contains(got[0], StatusCompleted) {
+	if got := notifications(parent); len(got) != 1 || !strings.Contains(got[0], "bg_1") || !strings.Contains(got[0], string(StatusCompleted)) {
 		t.Fatalf("parent notifications after the fork = %q, want bg_1 completed", got)
 	}
-	if got := resultText(t, p, "l1"); !strings.Contains(got, StatusCompleted) {
-		t.Fatalf("parent task_list = %q, want bg_1 completed (not lost)", got)
+	if got := resultText(t, p, "l1"); !strings.Contains(got, string(StatusCompleted)) {
+		t.Fatalf("parent list_jobs = %q, want bg_1 completed (not lost)", got)
 	}
 }

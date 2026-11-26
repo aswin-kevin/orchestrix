@@ -206,7 +206,7 @@ func TestShutdownStopsAllAndRefuses(t *testing.T) {
 	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
 	a, _ := startFake(t, m, "t1")
 	b, _ := startFake(t, m, "t2")
-	m.Shutdown(time.Second)
+	_ = m.Close(context.Background(), time.Second)
 	for _, j := range []*Job[*fake]{m.Get("t1", a.ID), m.Get("t2", b.ID)} {
 		if j == nil || !j.Ended() {
 			t.Fatalf("job not stopped and kept: %+v", j)
@@ -229,7 +229,7 @@ func TestShutdownBoundedWithHungHandle(t *testing.T) {
 	}
 	const wait = 100 * time.Millisecond
 	begin := time.Now()
-	m.Shutdown(wait)
+	_ = m.Close(context.Background(), wait)
 	if d := time.Since(begin); d > wait+100*time.Millisecond {
 		t.Fatalf("Shutdown took %s", d)
 	}
@@ -282,7 +282,7 @@ func TestRequestStopAndStop(t *testing.T) {
 	if err := Stop(context.Background(), j, time.Second); err != nil || !j.Stopped() {
 		t.Fatalf("Stop = %v, stopped %v", err, j.Stopped())
 	}
-	if running, err := RequestStop(t.Context(), j); running || err != nil {
+	if running, err := requestStop(t.Context(), j); running || err != nil {
 		t.Fatalf("RequestStop on ended = %v, %v", running, err)
 	}
 
@@ -307,7 +307,7 @@ func TestShutdownWaitsForWatchers(t *testing.T) {
 	for range 3 {
 		startFake(t, m, "t")
 	}
-	m.Shutdown(time.Second)
+	_ = m.Close(context.Background(), time.Second)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if got := len(m.threads["t"].finished); got != 3 {
@@ -319,7 +319,7 @@ func TestWatcherExitsAfterHungHandleEnds(t *testing.T) {
 	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
 	j, f := startFake(t, m, "t")
 	f.hang = true
-	m.Shutdown(20 * time.Millisecond)
+	_ = m.Close(context.Background(), 20*time.Millisecond)
 	ch, last := m.Changed("t")
 	f.end()
 	waitFor(t, ch)
@@ -343,7 +343,7 @@ func TestConcurrentStartRespectsLimitAndShutdown(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			if i == workers/2 {
-				m.Shutdown(time.Second)
+				_ = m.Close(context.Background(), time.Second)
 				return
 			}
 			j, err := m.Start("t", nil, func() (*fake, error) { return newFake(), nil })
@@ -482,7 +482,7 @@ func TestShutdownDuringStart(t *testing.T) {
 	waitFor(t, entered)
 
 	shut := make(chan struct{})
-	go func() { m.Shutdown(2 * time.Second); close(shut) }()
+	go func() { _ = m.Close(context.Background(), 2*time.Second); close(shut) }()
 	select {
 	case <-shut:
 		t.Fatal("Shutdown returned while a start was in flight")
@@ -509,7 +509,7 @@ func TestShutdownWaitForStartIsBounded(t *testing.T) {
 	waitFor(t, entered)
 	const wait = 50 * time.Millisecond
 	begin := time.Now()
-	m.Shutdown(wait)
+	_ = m.Close(context.Background(), wait)
 	if d := time.Since(begin); d > wait+100*time.Millisecond {
 		t.Fatalf("Shutdown took %s", d)
 	}
@@ -530,7 +530,7 @@ func TestPanickingStartRollsBack(t *testing.T) {
 	if j, _ := startFake(t, m, "t"); j.ID != "x_1" {
 		t.Fatalf("id = %s", j.ID)
 	}
-	m.Shutdown(time.Second) // returns at once: no start is left in flight
+	_ = m.Close(context.Background(), time.Second) // returns at once: no start is left in flight
 }
 
 // TestStartCommittingAfterShutdownTimedOut commits a start after Shutdown
@@ -547,7 +547,7 @@ func TestStartCommittingAfterShutdownTimedOut(t *testing.T) {
 	if _, err := m.Start("a", nil, func() (*fake, error) { return a, nil }); err != nil {
 		t.Fatal(err)
 	}
-	m.Shutdown(20 * time.Millisecond)
+	_ = m.Close(context.Background(), 20*time.Millisecond)
 	o := <-out
 	if o.err != nil || !o.j.Stopped() {
 		t.Fatalf("late start = %+v", o)
@@ -576,5 +576,33 @@ func TestStopRequestsOutliveCallerCtx(t *testing.T) {
 		if *got != nil {
 			t.Errorf("handle %d: Stop got a ctx with Err %v, want a live one", i+1, *got)
 		}
+	}
+}
+
+// stopAll sends its stop requests concurrently: a slow request for one job
+// does not hold back the request for the next.
+func TestStopAllSendsConcurrently(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	j1, f1 := startFake(t, m, "t")
+	j2, f2 := startFake(t, m, "t")
+	entered1, entered2 := make(chan struct{}), make(chan struct{})
+	var overlapped1, overlapped2 atomic.Bool
+	// Each Stop waits briefly for the other to be entered: sent one after
+	// the other, the first gives up before the second is sent.
+	await := func(mine, other chan struct{}, overlapped *atomic.Bool) func() {
+		return func() {
+			close(mine)
+			select {
+			case <-other:
+				overlapped.Store(true)
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+	f1.onStop = await(entered1, entered2, &overlapped1)
+	f2.onStop = await(entered2, entered1, &overlapped2)
+	m.StopAndForget(t.Context(), "t", []string{j1.ID, j2.ID}, time.Second, func() {})
+	if !overlapped1.Load() || !overlapped2.Load() {
+		t.Fatalf("stop requests were sent one after the other (overlapped %v, %v)", overlapped1.Load(), overlapped2.Load())
 	}
 }

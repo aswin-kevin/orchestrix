@@ -20,7 +20,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/middleware/web"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -53,11 +52,10 @@ func connectMCP(t *testing.T, gated bool) *mcp.Middleware {
 }
 
 func TestStackOrderM3(t *testing.T) {
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown()
+	tm := mustJobs(t)
 	a, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithShell(t.TempDir(), shell.Config{}),
-		orchestrix.WithTasks(tm),
+		orchestrix.WithJobs(tm),
 		orchestrix.WithHooks(hooks.Config{}),
 		orchestrix.WithInterruptOn("write_file"),
 		orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles()}),
@@ -73,7 +71,7 @@ func TestStackOrderM3(t *testing.T) {
 	}
 	closeAtEnd(t, a)
 	want := []string{"summarize", "cache", "hooks", "hitl", "memory", "skills", "planmode",
-		"filesystem", "planning", "subagents", "deferred", "mcp", "web", "askuser", "tasks"}
+		"filesystem", "planning", "subagents", "deferred", "mcp", "web", "askuser", "jobs"}
 	if got := stackNames(a); !slices.Equal(got, want) {
 		t.Errorf("stack = %v, want %v", got, want)
 	}

@@ -21,7 +21,7 @@ const (
 	StatusRunning   = "running"
 	StatusCompleted = "completed"
 	StatusFailed    = "failed"
-	// StatusCancelled marks a task stopped by cancel_task or Shutdown.
+	// StatusCancelled marks a task stopped by cancel_task or Close.
 	StatusCancelled = "cancelled"
 	// StatusTimedOut marks a task stopped at its time limit.
 	StatusTimedOut = "timed_out"

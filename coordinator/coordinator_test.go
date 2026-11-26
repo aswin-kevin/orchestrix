@@ -36,7 +36,7 @@ func newCoordinator(t *testing.T, model llm.Provider, cfg Config, opts ...orches
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(c.Shutdown)
+	t.Cleanup(func() { _ = c.Close(context.Background()) })
 	return c
 }
 
@@ -110,8 +110,8 @@ func TestCoordinatorDelegates(t *testing.T) {
 			t.Errorf("task %s status = %s, want completed", r.ID, r.Status)
 		}
 	}
-	shutdownBounded(t, c)
-	shutdownBounded(t, c) // idempotent
+	closeBounded(t, c)
+	closeBounded(t, c) // idempotent
 }
 
 // requestHas reports whether any message of req contains text.
@@ -126,18 +126,18 @@ func requestHas(req llm.Request, text string) bool {
 	return false
 }
 
-func shutdownBounded(t *testing.T, c *Coordinator) {
+func closeBounded(t *testing.T, c *Coordinator) {
 	t.Helper()
 	done := make(chan struct{})
-	go func() { c.Shutdown(); close(done) }()
+	go func() { _ = c.Close(context.Background()); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(async.DefaultStopWait + testTimeout):
-		t.Fatal("Shutdown did not return")
+		t.Fatal("Close did not return")
 	}
 }
 
-func TestCoordinatorShutdownStopsRunningWorkers(t *testing.T) {
+func TestCoordinatorCloseStopsRunningWorkers(t *testing.T) {
 	slow := newEcho()
 	slow.block = true
 	p := llmtest.New(
@@ -154,9 +154,9 @@ func TestCoordinatorShutdownStopsRunningWorkers(t *testing.T) {
 	case <-time.After(testTimeout):
 		t.Fatal("the worker never called its model")
 	}
-	shutdownBounded(t, c)
+	closeBounded(t, c)
 	if running, _ := slow.stats(); running != 0 {
-		t.Errorf("%d worker model calls still running after Shutdown", running)
+		t.Errorf("%d worker model calls still running after Close", running)
 	}
 }
 
@@ -246,7 +246,7 @@ func TestCoordinatorRejectsReplacedAsync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer other.Shutdown()
+	defer func() { _ = other.Close(context.Background()) }()
 	for name, opt := range map[string]orchestrix.Option{
 		"WithAsync":         orchestrix.WithAsync(other),
 		"WithoutMiddleware": orchestrix.WithoutMiddleware("async"),

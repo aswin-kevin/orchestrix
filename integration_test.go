@@ -595,7 +595,7 @@ func TestLiveAsyncBackgroundTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(m.Shutdown)
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
 	a, err := orchestrix.New(spec,
 		orchestrix.WithAsync(m),
 		orchestrix.WithPermissionMode(permission.ModeBypass),
@@ -638,7 +638,7 @@ func TestLiveCoordinatorFanOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(c.Shutdown)
+	t.Cleanup(func() { _ = c.Close(context.Background()) })
 
 	prompt := "Find the capitals of France and Japan using your capital worker, one task per country, in parallel."
 	in := orchestrix.Text(prompt)

@@ -25,6 +25,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/middleware/hitl"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
+	"github.com/aswin-kevin/orchestrix/middleware/jobs"
 	"github.com/aswin-kevin/orchestrix/middleware/memory"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/profiles"
@@ -32,7 +33,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/middleware/web"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -150,12 +150,15 @@ func ExampleWithCheckpointer() {
 }
 
 func ExampleWithShell() {
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown() // stops background jobs still running
+	tm, err := jobs.New(jobs.Config{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = tm.Close(context.Background()) }() // stops background jobs still running
 
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithShell("./workspace", shell.Config{}),
-		orchestrix.WithTasks(tm),
+		orchestrix.WithJobs(tm),
 		orchestrix.WithAllow("execute(git:*)"),
 		orchestrix.WithDeny("execute(rm:*)"),
 	)
@@ -359,7 +362,7 @@ func ExampleWithAsync() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer tasks.Shutdown() // stops background subagents still running
+	defer func() { _ = tasks.Close(context.Background()) }() // stops background subagents still running
 
 	a, err := orchestrix.NewWithProvider(model, orchestrix.WithAsync(tasks))
 	_, _ = a, err
@@ -379,7 +382,7 @@ func Example_coordinator() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer c.Shutdown() // stops background workers still running
+	defer func() { _ = c.Close(context.Background()) }() // stops background workers still running
 
 	in := orchestrix.Text("Write a one-page brief on home battery storage.")
 	in.ThreadID = "battery-brief" // start_task needs a thread

@@ -17,7 +17,7 @@ import (
 
 const gp = subagents.GeneralPurpose
 
-func TestShutdownWhileRunnerStarts(t *testing.T) {
+func TestCloseWhileRunnerStarts(t *testing.T) {
 	entered, proceed := make(chan struct{}), make(chan struct{})
 	hd := newCtlHandle(Outcome{Status: StatusCancelled})
 	runner := funcRunner(func(context.Context, Request) (Handle, error) {
@@ -31,13 +31,13 @@ func TestShutdownWhileRunnerStarts(t *testing.T) {
 		defer close(shutdown)
 		<-entered
 		stopped := make(chan struct{})
-		go func() { h.m.Shutdown(); close(stopped) }()
+		go func() { _ = h.m.Close(context.Background()); close(stopped) }()
 		defer func() { <-stopped }()
-		// Shutdown marks the reserved job stopped before the Runner returns.
+		// Close marks the reserved job stopped before the Runner returns.
 		deadline := time.Now().Add(5 * time.Second)
 		for j := h.m.jobs.Get("t", "async_1"); !j.Stopped(); {
 			if time.Now().After(deadline) {
-				t.Error("Shutdown never stopped the reserved task")
+				t.Error("Close never stopped the reserved task")
 				break
 			}
 			time.Sleep(time.Millisecond)

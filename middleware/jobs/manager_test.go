@@ -1,4 +1,4 @@
-package tasks
+package jobs
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
-	"github.com/aswin-kevin/orchestrix/internal/jobs"
+	registry "github.com/aswin-kevin/orchestrix/internal/jobs"
 )
 
 // fakeProcess is a backend.Process that ends when stopped.
@@ -46,7 +46,7 @@ func TestSlowBackendStartDoesNotBlockOtherThreads(t *testing.T) {
 	slow := &gatedStarter{entered: make(chan struct{}), release: make(chan struct{}), proc: &fakeProcess{done: make(chan struct{})}}
 	go func() { _, _ = startJob(context.Background(), mg, slow, "a", "sleep", time.Minute, nil) }()
 	<-slow.entered
-	defer func() { close(slow.release); mg.Shutdown(time.Second) }()
+	defer func() { close(slow.release); _ = mg.Close(context.Background(), time.Second) }()
 
 	fast := &gatedStarter{entered: make(chan struct{}), release: make(chan struct{}), proc: &fakeProcess{done: make(chan struct{})}}
 	close(fast.release)
@@ -76,13 +76,13 @@ func TestStartJobRefusedWhenShutdownDuringStart(t *testing.T) {
 	}()
 	<-s.entered
 	shut := make(chan struct{})
-	go func() { mg.Shutdown(time.Second); close(shut) }()
+	go func() { _ = mg.Close(context.Background(), time.Second); close(shut) }()
 	// Wait until Shutdown refuses new jobs, so the start commits after it. A
 	// probe whose start fails registers nothing while Shutdown has not begun.
 	probe := errors.New("probe")
 	for {
 		_, err := mg.Start("other", nil, func() (*process, error) { return nil, probe })
-		if errors.Is(err, jobs.ErrShutdown) {
+		if errors.Is(err, registry.ErrShutdown) {
 			break
 		}
 		if !errors.Is(err, probe) {

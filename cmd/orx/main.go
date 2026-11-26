@@ -28,8 +28,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
+	"github.com/aswin-kevin/orchestrix/middleware/jobs"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 )
@@ -246,12 +246,15 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		cleanups = append(cleanups, func() { _ = ws.Close() })
 		agentOpts = append(agentOpts, orchestrix.WithBackend(ws))
 	} else {
-		// The tasks middleware keeps background jobs alive beyond a single
+		// The jobs middleware keeps background jobs alive beyond a single
 		// call, so the caller must stop them on every exit path.
-		jobs := tasks.New(tasks.Config{})
-		cleanups = append(cleanups, jobs.Shutdown)
+		jm, err := jobs.New(jobs.Config{})
+		if err != nil {
+			return fail(exitError, "%v", err)
+		}
+		cleanups = append(cleanups, func() { _ = jm.Close(context.Background()) })
 		agentOpts = append(agentOpts,
-			orchestrix.WithShell(o.dir, shell.Config{}), orchestrix.WithTasks(jobs))
+			orchestrix.WithShell(o.dir, shell.Config{}), orchestrix.WithJobs(jm))
 	}
 	if o.store != "" {
 		cp, err := file.New(o.store, file.Config{})

@@ -17,7 +17,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	checkpointfile "github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/llm"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
+	"github.com/aswin-kevin/orchestrix/middleware/jobs"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -606,11 +606,15 @@ func backgroundJob(ctx context.Context, env Env, t *T) {
 		t.Errorf("temp dir: %v", err)
 		return
 	}
-	m := tasks.New(tasks.Config{JobTimeout: time.Minute})
-	defer m.Shutdown()
+	m, err := jobs.New(jobs.Config{JobTimeout: time.Minute})
+	if err != nil {
+		t.Errorf("jobs: %v", err)
+		return
+	}
+	defer func() { _ = m.Close(context.Background()) }()
 	a, err := newAgent(env,
 		orchestrix.WithShell(dir, shell.Config{}),
-		orchestrix.WithTasks(m),
+		orchestrix.WithJobs(m),
 		// The job's command is allowed; anything else the model runs is
 		// declined rather than left waiting for a human.
 		orchestrix.WithAllow("execute(sleep:*)", "execute(echo:*)"),
@@ -639,8 +643,8 @@ func backgroundJob(ctx context.Context, env Env, t *T) {
 		_ = json.Unmarshal(c.Input, &in)
 		started = started || (in.Background && c.Result != nil && !c.Result.IsError)
 	}
-	records, _ := tasks.JobsKey.Get(th.State())
-	running := slices.ContainsFunc(records, func(r tasks.JobRecord) bool { return r.Status == tasks.StatusRunning })
+	records := jobs.Records(th.State())
+	running := slices.ContainsFunc(records, func(r jobs.Record) bool { return r.Status == jobs.StatusRunning })
 	switch {
 	case !started:
 		t.Failf("the model did not start a background job")
@@ -665,7 +669,7 @@ func backgroundJob(ctx context.Context, env Env, t *T) {
 		return
 	}
 	notified := slices.ContainsFunc(th.Messages()[before:], func(m llm.Message) bool {
-		return m.Meta[tasks.NotificationMetaKey] != ""
+		return m.Meta[jobs.NotificationMetaKey] != ""
 	})
 	switch {
 	case !notified:

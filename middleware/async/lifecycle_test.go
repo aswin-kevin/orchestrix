@@ -214,14 +214,14 @@ func TestLostAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(m1.Shutdown) // G19: agent 1's task must not outlive the test
+	t.Cleanup(func() { _ = m1.Close(context.Background()) }) // G19: agent 1's task must not outlive the test
 	drain(newAgent(m1, llmtest.New(start("s1", "researcher", "slow"), llmtest.Turn{Text: "started"})), "go")
 
 	m2, err := New(Config{Subagents: []subagents.Subagent{researcher(g)}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(m2.Shutdown)
+	t.Cleanup(func() { _ = m2.Close(context.Background()) })
 	p2 := llmtest.New(llmtest.Turn{Text: "ok"})
 	th := drain(newAgent(m2, p2), "next")
 	notes := notifications(p2)

@@ -46,8 +46,8 @@
 //
 // Background commands: the Backend New returns implements backend.Executor
 // only. When the executor also implements backend.Starter, NewStarter
-// returns a StarterBackend that starts commands the same way, which tasks
-// middleware (orchestrix.WithTasks) needs. orxdocker, a separate module,
+// returns a StarterBackend that starts commands the same way, which the jobs
+// middleware (orchestrix.WithJobs) needs. orxdocker, a separate module,
 // provides a Docker executor that does.
 //
 // Local implementation: wrapping a backend/shell Backend gives a sandbox on

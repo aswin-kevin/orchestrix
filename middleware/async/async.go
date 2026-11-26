@@ -31,7 +31,8 @@
 // every other BeforeStop middleware (rubric, hooks Stop hooks), and, placed
 // after them in the stack, it is consulted before them. A nested run's
 // tasks are stopped when it ends, so a subagent's own tasks never outlive
-// it. Shutdown stops every task; call it before the program exits.
+// it. Close stops every task; call it (or Agent.Close) before the program
+// exits.
 //
 // Task records live in the run's State (TasksKey); a run only reads,
 // announces and cancels the tasks of its own thread. While tasks run, the
@@ -77,7 +78,7 @@ const (
 	DefaultTaskTimeout = 30 * time.Minute
 	// DefaultMaxWait caps how long check_task waits for a task to end.
 	DefaultMaxWait = 5 * time.Minute
-	// DefaultStopWait bounds how long cancel_task and Shutdown wait for
+	// DefaultStopWait bounds how long cancel_task and Close wait for
 	// stopped tasks to end.
 	DefaultStopWait = 5 * time.Second
 	// DefaultMaxResultBytes caps, in bytes, the result excerpt shown in a
@@ -220,15 +221,13 @@ func positiveOr[T int | time.Duration](v, fallback T) T {
 // Name implements agent.Middleware.
 func (m *Middleware) Name() string { return "async" }
 
-// Shutdown stops every task of every thread and waits up to DefaultStopWait
-// for them to end. Tasks cannot be started afterwards, and the records of the
-// tasks it stopped show them as cancelled (as the runner reports them).
-func (m *Middleware) Shutdown() { m.jobs.Shutdown(DefaultStopWait) }
-
-// Close implements agent.Closer, so Agent.Close stops the tasks: it is
-// Shutdown with the wait cut to ctx's deadline when that comes sooner. It
-// returns an error when a task had not ended by then (ctx's error when ctx
-// ended). Calling it more than once, or after Shutdown, is safe.
+// Close implements agent.Closer, so Agent.Close stops the tasks: it stops
+// every task of every thread and waits up to DefaultStopWait for them to
+// end, or until ctx's deadline when that comes sooner. Tasks cannot be
+// started afterwards, and the records of the tasks it stopped show them as
+// cancelled (as the runner reports them). It returns an error when a task
+// had not ended by then (ctx's error when ctx ended). Calling it more than
+// once is safe.
 func (m *Middleware) Close(ctx context.Context) error {
 	return m.jobs.Close(ctx, DefaultStopWait)
 }
@@ -280,7 +279,7 @@ func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 	if req.State != nil {
 		records, _ := TasksKey.Get(req.State)
 		threadID, _ := agent.ThreadID(ctx)
-		if list := runningList(jobs.ThreadRecords(records, threadID), time.Now()); list != "" {
+		if list := runningList(jobs.ThreadRecords(records, threadID, recordAccessors), time.Now()); list != "" {
 			add = append(add, list)
 		}
 	}
@@ -335,7 +334,7 @@ func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 // ended task of it as seen.
 func (m *Middleware) endNested(ctx context.Context, s *state.State, threadID string) {
 	records, _ := TasksKey.Get(s)
-	if ids := runningIDs(jobs.ThreadRecords(records, threadID)); len(ids) > 0 {
+	if ids := runningIDs(jobs.ThreadRecords(records, threadID, recordAccessors)); len(ids) > 0 {
 		m.jobs.StopAndForget(ctx, threadID, ids, DefaultStopWait, func() {
 			m.updateRecords(s, threadID, func(r *TaskRecord) {
 				if slices.Contains(ids, r.ID) {

@@ -26,7 +26,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/profiles"
 	"github.com/aswin-kevin/orchestrix/middleware/rubric"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/middleware/web"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
@@ -36,7 +35,7 @@ func TestWithAsyncFollowsSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer m.Shutdown()
+	defer func() { _ = m.Close(context.Background()) }()
 	a, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithAsync(m))
 	if err != nil {
 		t.Fatal(err)
@@ -68,16 +67,15 @@ func passRubric() rubric.Config {
 }
 
 func TestStackOrderM4(t *testing.T) {
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown()
+	tm := mustJobs(t)
 	am, err := async.New(async.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer am.Shutdown()
+	defer func() { _ = am.Close(context.Background()) }()
 	a, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithShell(t.TempDir(), shell.Config{}),
-		orchestrix.WithTasks(tm),
+		orchestrix.WithJobs(tm),
 		orchestrix.WithHooks(hooks.Config{}),
 		orchestrix.WithInterruptOn("write_file"),
 		orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles()}),
@@ -98,7 +96,7 @@ func TestStackOrderM4(t *testing.T) {
 	}
 	closeAtEnd(t, a)
 	want := []string{"summarize", "compress", "cache", "hooks", "hitl", "rubric", "memory", "skills", "planmode",
-		"filesystem", "planning", "subagents", "async", "deferred", "mcp", "web", "askuser", "tasks", "profiles"}
+		"filesystem", "planning", "subagents", "async", "deferred", "mcp", "web", "askuser", "jobs", "profiles"}
 	if got := stackNames(a); !slices.Equal(got, want) {
 		t.Errorf("stack = %v, want %v", got, want)
 	}
@@ -381,7 +379,7 @@ func TestRubricAndAsyncReminderShareContinuations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(am.Shutdown)
+	t.Cleanup(func() { _ = am.Close(context.Background()) })
 	var answers []string
 	grader := rubric.GraderFunc(func(_ context.Context, req rubric.GradeRequest) (rubric.Grade, error) {
 		answers = append(answers, req.Answer)

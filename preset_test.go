@@ -17,9 +17,9 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
+	"github.com/aswin-kevin/orchestrix/middleware/jobs"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
@@ -44,11 +44,10 @@ func TestDefaultStackOrder(t *testing.T) {
 
 func TestFullStackOrder(t *testing.T) {
 	sh := t.TempDir()
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown()
+	tm := mustJobs(t)
 	a, err := orchestrix.NewWithProvider(llmtest.New(),
 		orchestrix.WithShell(sh, shell.Config{}),
-		orchestrix.WithTasks(tm),
+		orchestrix.WithJobs(tm),
 		orchestrix.WithHooks(hooks.Config{}),
 		orchestrix.WithInterruptOn("write_file"),
 		orchestrix.WithCheckpointer(mustFileCheckpointer(t)),
@@ -57,7 +56,7 @@ func TestFullStackOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	closeAtEnd(t, a)
-	want := []string{"summarize", "cache", "hooks", "hitl", "filesystem", "planning", "subagents", "tasks"}
+	want := []string{"summarize", "cache", "hooks", "hitl", "filesystem", "planning", "subagents", "jobs"}
 	if got := stackNames(a); !slices.Equal(got, want) {
 		t.Errorf("full stack = %v, want %v", got, want)
 	}
@@ -207,27 +206,25 @@ func TestWithBackendExecutorRegistersExecute(t *testing.T) {
 	}
 }
 
-func TestWithTasksOffersBackgroundTools(t *testing.T) {
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown()
+func TestWithJobsOffersBackgroundTools(t *testing.T) {
+	tm := mustJobs(t)
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.NewWithProvider(p, orchestrix.WithShell(t.TempDir(), shell.Config{}), orchestrix.WithTasks(tm))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithShell(t.TempDir(), shell.Config{}), orchestrix.WithJobs(tm))
 	if err != nil {
 		t.Fatal(err)
 	}
 	closeAtEnd(t, a)
 	finalOf(t, a, orchestrix.Text("hi"))
-	if !slices.Contains(toolNames(p), "task_output") {
-		t.Errorf("tools %v lack task_output", toolNames(p))
+	if !slices.Contains(toolNames(p), "check_job") {
+		t.Errorf("tools %v lack check_job", toolNames(p))
 	}
 }
 
-func TestWithTasksRequiresShell(t *testing.T) {
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown()
-	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithTasks(tm))
-	if err == nil || !strings.Contains(err.Error(), "WithTasks") {
-		t.Errorf("err = %v, want an error naming WithTasks", err)
+func TestWithJobsRequiresShell(t *testing.T) {
+	tm := mustJobs(t)
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithJobs(tm))
+	if err == nil || !strings.Contains(err.Error(), "WithJobs") {
+		t.Errorf("err = %v, want an error naming WithJobs", err)
 	}
 }
 
@@ -298,10 +295,9 @@ func TestWithSummarizeRejectsBadConfig(t *testing.T) {
 	}
 }
 
-func TestWithTasksOnFactoryBackendOffersBackgroundExecute(t *testing.T) {
+func TestWithJobsOnFactoryBackendOffersBackgroundExecute(t *testing.T) {
 	testutil.RequireUnixShell(t)
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown()
+	tm := mustJobs(t)
 	p := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e1", Name: "execute",
 			Input: map[string]any{"command": "echo hi", "run_in_background": true}}}},
@@ -309,7 +305,7 @@ func TestWithTasksOnFactoryBackendOffersBackgroundExecute(t *testing.T) {
 	)
 	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithBackendFactory(func(string) backend.Backend { return shellBackend(t) }),
-		orchestrix.WithTasks(tm),
+		orchestrix.WithJobs(tm),
 		orchestrix.WithPermissionMode(permission.ModeBypass),
 	)
 	if err != nil {
@@ -340,4 +336,15 @@ func TestWithShellRejectsNegativeTimeout(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "WithShell: shell: Timeout is negative") {
 		t.Errorf("err = %v, want one containing %q", err, "WithShell: shell: Timeout is negative")
 	}
+}
+
+// mustJobs returns a jobs middleware that is closed when the test ends.
+func mustJobs(t *testing.T) *jobs.Middleware {
+	t.Helper()
+	m, err := jobs.New(jobs.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
+	return m
 }

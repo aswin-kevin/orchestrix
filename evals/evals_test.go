@@ -115,7 +115,7 @@ func TestBackgroundJobScripted(t *testing.T) {
 	runScripted(t, "background-job",
 		call("1", "execute", map[string]any{"command": "sleep 2 && echo " + jobMarker, "run_in_background": true}),
 		text("STARTED"),
-		call("2", "task_list", map[string]any{}),
+		call("2", "list_jobs", map[string]any{}),
 		text("It printed "+jobMarker+"."))
 }
 

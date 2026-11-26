@@ -47,12 +47,13 @@ var TasksKey = state.NewKey[[]TaskRecord]("async.tasks", state.RunLocal[[]TaskRe
 // finished reports whether the record describes an ended task.
 func (r TaskRecord) finished() bool { return r.Status != StatusRunning }
 
-// Thread implements jobs.Record: it returns the record's ThreadID.
-func (r TaskRecord) Thread() string { return r.ThreadID }
-
-// Settled implements jobs.Record: it reports whether the task ended and the
-// model was told so, which makes the record one that may be pruned.
-func (r TaskRecord) Settled() bool { return r.finished() && r.Notified }
+// recordAccessors lets the jobs record helpers read a TaskRecord: a record
+// is settled, and so may be pruned, once the task ended and the model was
+// told so.
+var recordAccessors = jobs.Accessors[TaskRecord]{
+	Thread:  func(r TaskRecord) string { return r.ThreadID },
+	Settled: func(r TaskRecord) bool { return r.finished() && r.Notified },
+}
 
 // recordedIDs returns the ids of the run's records.
 func recordedIDs(s *state.State) []string {
@@ -77,7 +78,7 @@ func addRecord(s *state.State, r TaskRecord) {
 // its outcome; one whose task the middleware does not know is lost. Records
 // of other threads are kept untouched. edit may be nil.
 func (m *Middleware) updateRecords(s *state.State, threadID string, edit func(*TaskRecord)) []TaskRecord {
-	return jobs.UpdateRecords(s, TasksKey, threadID, m.jobs.MaxFinished(), func(r *TaskRecord) {
+	return jobs.UpdateRecords(s, TasksKey, threadID, m.jobs.MaxFinished(), recordAccessors, func(r *TaskRecord) {
 		m.refresh(r)
 		if edit != nil {
 			edit(r)

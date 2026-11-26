@@ -8,12 +8,14 @@
 //	m, err := orxdocker.NewManager(orxdocker.Config{})
 //	...
 //	defer m.Close(context.Background())
-//	tm := tasks.New(tasks.Config{})
-//	defer tm.Shutdown()
+//	tm, err := jobs.New(jobs.Config{})
+//	...
 //	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 //		orchestrix.WithBackendFactory(m.Backend),
-//		orchestrix.WithTasks(tm), // background jobs run in the container too
+//		orchestrix.WithJobs(tm), // background jobs run in the container too
 //	)
+//	...
+//	defer a.Close(context.Background()) // stops the jobs too
 //
 // A Manager is an agent.Closer. Agent.Close does not close what a backend
 // factory draws from, so it closes a Manager only when the host passes
@@ -23,7 +25,7 @@
 //
 // Manager.Backend returns a sandbox.StarterBackend (see backend/sandbox):
 // file tools and execute work in the container's workspace, and background
-// jobs work with WithTasks. Containers are removed after Config.IdleTTL
+// jobs work with WithJobs. Containers are removed after Config.IdleTTL
 // without commands, by Manager.Delete when a thread is deleted, and by
 // Manager.Close; Manager.Reap clears containers left by a crashed process.
 // A Manager keeps at most Config.MaxThreads executors, evicting the least

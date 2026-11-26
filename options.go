@@ -16,6 +16,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/middleware/hitl"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
+	"github.com/aswin-kevin/orchestrix/middleware/jobs"
 	"github.com/aswin-kevin/orchestrix/middleware/memory"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/profiles"
@@ -23,7 +24,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/middleware/web"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -43,7 +43,7 @@ type settings struct {
 	hooks          *hooks.Config
 	interruptOn    map[string]hitl.InterruptConfig
 	shell          *shellSpec
-	tasks          *tasks.Middleware
+	jobs           *jobs.Middleware
 	async          *async.Middleware
 	// mounts are the WithMount routes, put over the agent's backend.
 	mounts []composite.Route

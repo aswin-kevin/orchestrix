@@ -3,7 +3,7 @@
 // thread's entry was released and the process restarted (the caller passes the
 // ids it recorded). A thread has a running limit and a bounded history of
 // finished jobs that forgets announced jobs first; the registry offers a change
-// signal, release, stop-and-forget, and a bounded shutdown.
+// signal, release, stop-and-forget, and a bounded Close.
 //
 // It is generic over the job handle, so shell tasks and background subagents
 // share it. All Manager methods are safe for concurrent use.
@@ -33,7 +33,7 @@ type Handle interface {
 }
 
 // stopRequestTimeout bounds a stop request the Manager sends on its own,
-// outside any caller's call: at Shutdown, and for a job committed after it.
+// outside any caller's call: at Close, and for a job committed after it.
 const stopRequestTimeout = backend.DefaultKillGrace
 
 // detachedStop returns a context for a stop request that must go out even
@@ -52,7 +52,7 @@ type Limits struct {
 	MaxFinished int
 }
 
-// ErrShutdown is returned by Start once the Manager was shut down.
+// ErrShutdown is returned by Start once the Manager was closed.
 var ErrShutdown = errors.New("jobs: shut down")
 
 // LimitError reports a thread at its running limit.
@@ -95,7 +95,7 @@ func (j *Job[H]) Ended() bool {
 	}
 }
 
-// Stopped reports whether the job was stopped on purpose (see RequestStop).
+// Stopped reports whether the job was stopped on purpose (see Stop).
 func (j *Job[H]) Stopped() bool { return j.stopped.Load() }
 
 // Notified reports whether MarkNotified was called for the job.
@@ -162,7 +162,7 @@ type Manager[H Handle] struct {
 	threads  map[string]*thread[H]
 	closed   bool
 	watchers sync.WaitGroup
-	// starting tracks the starts in flight, so Shutdown can wait for them.
+	// starting tracks the starts in flight, so Close can wait for them.
 	// Add happens under mu and only before closed is set.
 	starting sync.WaitGroup
 }
@@ -208,10 +208,10 @@ func (m *Manager[H]) thread(threadID string) *thread[H] {
 // Once start returns, the job is committed or, when start failed, the
 // reservation is rolled back: the slot is freed and the number is given to
 // the next job unless a later reservation already took a higher one, in which
-// case it is skipped. A job committed after Shutdown began is stopped at once
-// and returned with Stopped set, so no work outlives Shutdown.
+// case it is skipped. A job committed after Close began is stopped at once
+// and returned with Stopped set, so no work outlives Close.
 //
-// Start returns ErrShutdown after Shutdown and a *LimitError when the thread
+// Start returns ErrShutdown after Close and a *LimitError when the thread
 // runs or is starting MaxRunning jobs; an error from start is returned as is
 // and registers nothing.
 func (m *Manager[H]) Start(threadID string, recordedIDs []string, start func() (H, error)) (*Job[H], error) {
@@ -259,7 +259,7 @@ func (m *Manager[H]) Start(threadID string, recordedIDs []string, start func() (
 	m.mu.Unlock()
 	if closed {
 		ctx, cancel := detachedStop(context.Background())
-		_, _ = RequestStop(ctx, j) // a failed signal still ends in Done via the handle's own escalation
+		_, _ = requestStop(ctx, j) // a failed signal still ends in Done via the handle's own escalation
 		cancel()
 	}
 	return j, nil
@@ -345,10 +345,10 @@ func (m *Manager[H]) Release(threadID string) {
 	}
 }
 
-// RequestStop marks j stopped and calls its Stop with ctx when it is still
+// requestStop marks j stopped and calls its Stop with ctx when it is still
 // running, reporting whether it was. A job that already ended keeps its
 // outcome.
-func RequestStop[H Handle](ctx context.Context, j *Job[H]) (bool, error) {
+func requestStop[H Handle](ctx context.Context, j *Job[H]) (bool, error) {
 	if j.Ended() {
 		return false, nil
 	}
@@ -364,7 +364,7 @@ func Stop[H Handle](ctx context.Context, j *Job[H], wait time.Duration) error {
 	if j == nil {
 		return errors.New("stop: no such job")
 	}
-	if _, err := RequestStop(ctx, j); err != nil {
+	if _, err := requestStop(ctx, j); err != nil {
 		return err
 	}
 	timer := time.NewTimer(wait)
@@ -379,16 +379,22 @@ func Stop[H Handle](ctx context.Context, j *Job[H], wait time.Duration) error {
 	}
 }
 
-// stopAll stops jobs concurrently and waits for them all, sharing one wait
-// deadline; it reports whether every job ended. Each stop request runs under
-// a detached ctx of its own (see detachedStop), since stopAll runs as a run
+// stopAll stops jobs and waits for them all, sharing one wait deadline; it
+// reports whether every job ended. The stop requests are sent concurrently,
+// so a slow one (a container runtime's, say) holds back no other, and all of
+// them have returned before the wait begins. Each runs under a detached ctx
+// of its own (see detachedStop), which bounds it, since stopAll runs as a run
 // or the Manager ends.
 func stopAll[H Handle](ctx context.Context, list []*Job[H], wait time.Duration) bool {
+	var sent sync.WaitGroup
 	for _, j := range list {
-		stopCtx, cancel := detachedStop(ctx)
-		_, _ = RequestStop(stopCtx, j) // a failed signal still ends in Done via the handle's own escalation
-		cancel()
+		sent.Go(func() {
+			stopCtx, cancel := detachedStop(ctx)
+			defer cancel()
+			_, _ = requestStop(stopCtx, j) // a failed signal still ends in Done via the handle's own escalation
+		})
 	}
+	sent.Wait()
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
 	for _, j := range list {
@@ -435,15 +441,23 @@ func (m *Manager[H]) StopAndForget(ctx context.Context, threadID string, ids []s
 	}
 }
 
-// ErrNotEnded is returned by Close when some job had not ended by the end
+// errNotEnded is returned by Close when some job had not ended by the end
 // of its wait.
-var ErrNotEnded = errors.New("jobs: some jobs did not end in time")
+var errNotEnded = errors.New("jobs: some jobs did not end in time")
 
-// Close is Shutdown for a context: it waits up to wait, or until ctx's
-// deadline when that comes first, and not at all when ctx is already done.
-// It returns nil when every job ended in time; otherwise ctx.Err() when ctx
-// is done, context.DeadlineExceeded when ctx's deadline cut the wait short,
-// else ErrNotEnded.
+// Close refuses new jobs, stops every job and waits for them, up to wait, or
+// until ctx's deadline when that comes first, and not at all when ctx is
+// already done. It first waits, within the same wait, for the starts in
+// flight: each one commits its job and stops it at once (see Start), so it is
+// stopped and waited for with the others. A start still in flight when the
+// wait passes stops its job as it commits, after Close returned. The entries
+// are kept, so records refreshed afterwards show the jobs as stopped rather
+// than lost. The stop requests keep ctx's values but not its cancellation.
+//
+// Close returns nil when every job ended in time; otherwise ctx.Err() when
+// ctx is done, context.DeadlineExceeded when ctx's deadline cut the wait
+// short, else errNotEnded. Calling it again is safe: it stops and waits for
+// whatever is still running.
 func (m *Manager[H]) Close(ctx context.Context, wait time.Duration) error {
 	cut := false
 	if deadline, ok := ctx.Deadline(); ok {
@@ -463,19 +477,11 @@ func (m *Manager[H]) Close(ctx context.Context, wait time.Duration) error {
 	case cut:
 		return context.DeadlineExceeded
 	}
-	return ErrNotEnded
+	return errNotEnded
 }
 
-// Shutdown refuses new jobs, stops every job and waits for them, up to wait.
-// It first waits, within the same wait, for the starts in flight: each one
-// commits its job and stops it at once (see Start), so it is stopped and
-// waited for with the others. A start still in flight when wait passes stops
-// its job as it commits, after Shutdown returned. The entries are kept, so
-// records refreshed afterwards show the jobs as stopped rather than lost.
-func (m *Manager[H]) Shutdown(wait time.Duration) { m.shutdown(context.Background(), wait) }
-
-// shutdown is Shutdown; it reports whether every job and start ended within
-// wait. ctx carries the values of the stop requests (see stopAll).
+// shutdown is Close's work; it reports whether every job and start ended
+// within wait. ctx carries the values of the stop requests (see stopAll).
 func (m *Manager[H]) shutdown(ctx context.Context, wait time.Duration) bool {
 	deadline := time.Now().Add(wait)
 	m.mu.Lock()

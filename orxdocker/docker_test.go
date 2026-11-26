@@ -20,7 +20,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/sandbox"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
+	"github.com/aswin-kevin/orchestrix/middleware/jobs"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
@@ -494,38 +494,41 @@ func TestDockerStartAndStop(t *testing.T) {
 	}
 }
 
-func TestDockerWithTasks(t *testing.T) {
+func TestDockerWithJobs(t *testing.T) {
 	m := newTestManager(t, Config{})
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown()
+	tm, err := jobs.New(jobs.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tm.Close(context.Background()) }()
 	call := func(id, name string, in map[string]any) llmtest.Turn {
 		return llmtest.Turn{ToolCalls: []llmtest.Call{{ID: id, Name: name, Input: in}}}
 	}
 	p := llmtest.New(
 		call("e1", "execute", map[string]any{"command": "pwd; echo started; exec sleep 605", "run_in_background": true}),
-		call("m1", tasks.ToolMonitor, map[string]any{"task_id": "bg_1", "pattern": "^started$", "timeout_seconds": 30}),
-		call("o1", tasks.ToolTaskOutput, map[string]any{"task_id": "bg_1"}),
-		call("x1", tasks.ToolTaskStop, map[string]any{"task_id": "bg_1"}),
-		call("o2", tasks.ToolTaskOutput, map[string]any{"task_id": "bg_1", "block": true, "timeout_seconds": 30}),
+		call("m1", jobs.ToolMonitor, map[string]any{"job_id": "bg_1", "pattern": "^started$", "timeout_seconds": 30}),
+		call("o1", jobs.ToolCheck, map[string]any{"job_id": "bg_1"}),
+		call("x1", jobs.ToolCancel, map[string]any{"job_id": "bg_1"}),
+		call("o2", jobs.ToolCheck, map[string]any{"job_id": "bg_1", "wait": true, "timeout_seconds": 30}),
 		llmtest.Turn{Text: "ok"},
 	)
-	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackendFactory(m.Backend), orchestrix.WithTasks(tm),
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackendFactory(m.Backend), orchestrix.WithJobs(tm),
 		orchestrix.WithPermissionMode(permission.ModeBypass))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for ev := range a.Run(t.Context(), agent.Input{ThreadID: "tasks", Messages: []llm.Message{llm.UserText("go")}}) {
+	for ev := range a.Run(t.Context(), agent.Input{ThreadID: "jobs", Messages: []llm.Message{llm.UserText("go")}}) {
 		if ev.Final != nil && ev.Final.Err != nil {
 			t.Fatal(ev.Final.Err)
 		}
 	}
 	if got := toolResult(p, "o1"); !strings.Contains(got, "running") || !strings.Contains(got, "/workspace") {
-		t.Errorf("task_output while running = %q", got)
+		t.Errorf("check_job while running = %q", got)
 	}
-	if got := toolResult(p, "o2"); !strings.Contains(got, "stopped") {
-		t.Errorf("task_output after stop = %q", got)
+	if got := toolResult(p, "o2"); !strings.Contains(got, "cancelled") {
+		t.Errorf("check_job after cancel = %q", got)
 	}
-	if ps := processes(t, m.Executor("tasks")); strings.Contains(ps, "sleep 605") {
+	if ps := processes(t, m.Executor("jobs")); strings.Contains(ps, "sleep 605") {
 		t.Fatalf("stopped job survived:\n%s", ps)
 	}
 }

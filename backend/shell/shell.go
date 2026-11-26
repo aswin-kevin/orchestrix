@@ -6,7 +6,7 @@
 // chain steps with `&&`. On Unix each command leads its own process group:
 // when the shell exits, times out or is stopped, the whole group is killed
 // (SIGTERM, then SIGKILL after DefaultKillGrace), so nothing a command spawns
-// inside the group outlives it. Long-lived work belongs in background tasks
+// inside the group outlives it. Long-lived work belongs in background jobs
 // (Starter), not in `cmd &`.
 //
 // This is cleanup, not containment: a process that leaves the group (setsid,

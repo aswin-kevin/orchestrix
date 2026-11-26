@@ -25,7 +25,7 @@
 //
 // Further features are one option each: WithCheckpointer (threads that survive
 // restarts), WithSubagents, WithSummarize, WithHooks, WithInterruptOn (human
-// approval for chosen tools), WithShell and WithTasks (commands and background
+// approval for chosen tools), WithShell and WithJobs (commands and background
 // jobs), WithMemory (standing instructions and a memory store), WithSkills,
 // WithMCP (tools of MCP servers), WithPlanMode, WithDeferredTools, WithWeb,
 // WithAskUser, WithAsync (background subagents), WithCompress (model-directed

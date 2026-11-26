@@ -17,6 +17,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
 	"github.com/aswin-kevin/orchestrix/middleware/hitl"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
+	"github.com/aswin-kevin/orchestrix/middleware/jobs"
 	"github.com/aswin-kevin/orchestrix/middleware/memory"
 	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/planning"
@@ -25,7 +26,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
 	"github.com/aswin-kevin/orchestrix/middleware/web"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -128,14 +128,14 @@ func WithShell(root string, cfg shell.Config) Option {
 	return func(s *settings) { s.shell = &shellSpec{root: root, cfg: cfg} }
 }
 
-// WithTasks lets execute run commands in the background and adds the tools to
+// WithJobs lets execute run commands in the background and adds the tools to
 // follow them. It needs a backend that can start commands (a
 // backend.Starter): WithShell provides one, and so does a sandbox built with
 // sandbox.NewStarter, passed with WithBackend or from WithBackendFactory.
 // Agent.Close stops the jobs still running (m is an agent.Closer); a host
-// that does not close the agent calls m.Shutdown instead.
-func WithTasks(m *tasks.Middleware) Option {
-	return func(s *settings) { s.tasks = m }
+// that does not close the agent calls m.Close instead.
+func WithJobs(m *jobs.Middleware) Option {
+	return func(s *settings) { s.jobs = m }
 }
 
 // checkPresets records option combinations that cannot work.
@@ -143,8 +143,8 @@ func (s *settings) checkPresets() {
 	if s.shell != nil && (s.cfg.Backend != nil || s.cfg.BackendFactory != nil) {
 		s.errs = append(s.errs, errors.New("WithShell cannot be combined with WithBackend or WithBackendFactory"))
 	}
-	if s.tasks != nil && !s.canStartCommands() {
-		s.errs = append(s.errs, errors.New("WithTasks needs a backend that can start commands: use WithShell, or WithBackend with a backend.Starter such as sandbox.NewStarter's"))
+	if s.jobs != nil && !s.canStartCommands() {
+		s.errs = append(s.errs, errors.New("WithJobs needs a backend that can start commands: use WithShell, or WithBackend with a backend.Starter such as sandbox.NewStarter's"))
 	}
 }
 
@@ -214,11 +214,11 @@ func (s *settings) baseStack() []agent.Middleware {
 	}
 	// A backend given with WithBackend can run commands when it is an
 	// Executor. With a factory the backends are unknown when tools are
-	// collected, so tasks (which needs commands) is the promise that execute
+	// collected, so jobs (which needs commands) is the promise that execute
 	// works.
 	_, canExecute := backend.AsExecutor(s.cfg.Backend)
 	stack = s.appendBuilt(stack, "filesystem", func() (agent.Middleware, error) {
-		return filesystem.New(filesystem.Config{Execute: s.shell != nil || s.tasks != nil || canExecute, Background: s.tasks != nil})
+		return filesystem.New(filesystem.Config{Execute: s.shell != nil || s.jobs != nil || canExecute, Background: s.jobs != nil})
 	})
 	stack = s.appendBuilt(stack, "planning", func() (agent.Middleware, error) { return planning.New(planning.Config{}) })
 	if sub := s.subagentsMiddleware(); sub != nil {
@@ -239,8 +239,8 @@ func (s *settings) baseStack() []agent.Middleware {
 	if s.askUser != nil {
 		stack = s.appendBuilt(stack, "WithAskUser", func() (agent.Middleware, error) { return askuser.New(*s.askUser) })
 	}
-	if s.tasks != nil {
-		stack = append(stack, s.tasks)
+	if s.jobs != nil {
+		stack = append(stack, s.jobs)
 	}
 	if s.profiles != nil {
 		// Last, so that its suffix is the last segment and its overrides see

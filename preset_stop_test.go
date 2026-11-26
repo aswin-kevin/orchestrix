@@ -23,7 +23,7 @@ func TestStopConsultationOrderAndSharedSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(am.Shutdown)
+	t.Cleanup(func() { _ = am.Close(context.Background()) })
 	var log []string
 	grader := rubric.GraderFunc(func(_ context.Context, req rubric.GradeRequest) (rubric.Grade, error) {
 		log = append(log, "rubric: "+req.Answer)

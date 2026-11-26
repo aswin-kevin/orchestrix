@@ -13,23 +13,22 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
-	"github.com/aswin-kevin/orchestrix/middleware/tasks"
+	"github.com/aswin-kevin/orchestrix/middleware/jobs"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
-func TestWithTasksRejectsSandboxWithoutStarter(t *testing.T) {
+func TestWithJobsRejectsSandboxWithoutStarter(t *testing.T) {
 	sb, err := sandbox.New(shellBackend(t).(*shell.Backend), sandbox.Config{Root: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown()
-	if _, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithBackend(sb), orchestrix.WithTasks(tm)); err == nil {
-		t.Fatal("WithTasks accepted a sandbox that cannot start commands")
+	tm := mustJobs(t)
+	if _, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithBackend(sb), orchestrix.WithJobs(tm)); err == nil {
+		t.Fatal("WithJobs accepted a sandbox that cannot start commands")
 	}
 }
 
-func TestWithTasksRunsJobInSandbox(t *testing.T) {
+func TestWithJobsRunsJobInSandbox(t *testing.T) {
 	dir := t.TempDir()
 	sh, err := shell.New(dir, shell.Config{})
 	if err != nil {
@@ -39,18 +38,17 @@ func TestWithTasksRunsJobInSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown()
+	tm := mustJobs(t)
 	p := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e1", Name: "execute", Input: map[string]any{
 			"command": "pwd; echo job-done", "run_in_background": true,
 		}}}},
-		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "o1", Name: tasks.ToolTaskOutput, Input: map[string]any{
-			"task_id": "bg_1", "block": true, "timeout_seconds": 10,
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "o1", Name: jobs.ToolCheck, Input: map[string]any{
+			"job_id": "bg_1", "wait": true, "timeout_seconds": 10,
 		}}}},
 		llmtest.Turn{Text: "ok"},
 	)
-	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackend(sb), orchestrix.WithTasks(tm),
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackend(sb), orchestrix.WithJobs(tm),
 		orchestrix.WithPermissionMode(permission.ModeBypass))
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +67,7 @@ func TestWithTasksRunsJobInSandbox(t *testing.T) {
 	}
 	out := scriptedResult(p, "o1")
 	if !strings.Contains(out, "job-done") || !strings.Contains(out, dir) {
-		t.Fatalf("task_output = %q, want the job's output from %s", out, dir)
+		t.Fatalf("check_job = %q, want the job's output from %s", out, dir)
 	}
 }
 
@@ -101,15 +99,14 @@ func TestPresetReachesCapabilitiesThroughUnwrap(t *testing.T) {
 	if err := sh.Write(t.Context(), "/a.txt", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	tm := tasks.New(tasks.Config{})
-	defer tm.Shutdown()
+	tm := mustJobs(t)
 	p := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "x1", Name: "execute", Input: map[string]any{"command": "echo fg-done"}}}},
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e1", Name: "execute", Input: map[string]any{
 			"command": "echo job-done", "run_in_background": true,
 		}}}},
-		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "o1", Name: tasks.ToolTaskOutput, Input: map[string]any{
-			"task_id": "bg_1", "block": true, "timeout_seconds": 10,
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "o1", Name: jobs.ToolCheck, Input: map[string]any{
+			"job_id": "bg_1", "wait": true, "timeout_seconds": 10,
 		}}}},
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "r1", Name: "read_file", Input: map[string]any{"path": "/a.txt"}}}},
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "m1", Name: "multi_edit", Input: map[string]any{
@@ -117,7 +114,7 @@ func TestPresetReachesCapabilitiesThroughUnwrap(t *testing.T) {
 		}}}},
 		llmtest.Turn{Text: "ok"},
 	)
-	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackend(unwrapping{sh}), orchestrix.WithTasks(tm),
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackend(unwrapping{sh}), orchestrix.WithJobs(tm),
 		orchestrix.WithPermissionMode(permission.ModeBypass))
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +128,7 @@ func TestPresetReachesCapabilitiesThroughUnwrap(t *testing.T) {
 		t.Errorf("execute = %q", out)
 	}
 	if out := scriptedResult(p, "o1"); !strings.Contains(out, "job-done") {
-		t.Errorf("task_output = %q", out)
+		t.Errorf("check_job = %q", out)
 	}
 	if out := scriptedResult(p, "m1"); out != "Applied 1 edit(s) to /a.txt" {
 		t.Errorf("multi_edit = %q", out)

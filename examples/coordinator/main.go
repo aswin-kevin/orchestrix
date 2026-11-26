@@ -77,7 +77,7 @@ func delegate(ctx context.Context, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer c.Shutdown() // stops background workers still running
+	defer func() { _ = c.Close(context.Background()) }() // stops background workers still running
 
 	// Background workers belong to a thread, so the run gets one.
 	in := orchestrix.Text("Write a two-line pitch for home battery storage: one fact, one tagline.")

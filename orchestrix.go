@@ -23,7 +23,7 @@ import (
 // WithInterruptConfig), rubric (WithRubric), memory (WithMemory), skills
 // (WithSkills), planmode (WithPlanMode), filesystem, planning, subagents,
 // async (WithAsync), deferred, mcp (WithMCP), web (WithWeb), askuser
-// (WithAskUser), tasks (WithTasks), profiles (WithProfiles). deferred is
+// (WithAskUser), jobs (WithJobs), profiles (WithProfiles). deferred is
 // present with WithDeferredTools, and otherwise added with a zero
 // deferred.Config when WithSkills has Tools or WithMCP has a deferred or gated
 // server. summarize must stay first: it rebuilds the request from State.

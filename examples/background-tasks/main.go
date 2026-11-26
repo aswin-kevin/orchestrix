@@ -82,7 +82,7 @@ func runModel(ctx context.Context, w io.Writer, model any) error {
 	if err != nil {
 		return err
 	}
-	defer tasks.Shutdown() // stops background subagents still running
+	defer func() { _ = tasks.Close(context.Background()) }() // stops background subagents still running
 
 	a, err := exmodel.New(model,
 		orchestrix.WithSystemPrompt("Delegate research to the researcher in the background. Do not wait for it: end your turn, and report its finding once you are told it finished."),

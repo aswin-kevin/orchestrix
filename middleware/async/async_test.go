@@ -264,7 +264,7 @@ func TestNotificationNeutralized(t *testing.T) {
 	}
 }
 
-func TestShutdownStopsTasks(t *testing.T) {
+func TestCloseStopsTasks(t *testing.T) {
 	g := newGate(llmtest.Turn{Text: "never"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
 		start("s1", "researcher", "a"), start("s2", "researcher", "b"), llmtest.Turn{Text: "started"},
@@ -273,9 +273,11 @@ func TestShutdownStopsTasks(t *testing.T) {
 	h.run(t, context.Background(), "go", nil)
 	g.waitEntered(t, 2)
 	begin := time.Now()
-	h.m.Shutdown()
+	if err := h.m.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 	if d := time.Since(begin); d > DefaultStopWait {
-		t.Fatalf("Shutdown took %s", d)
+		t.Fatalf("Close took %s", d)
 	}
 	evs, _ := h.run(t, context.Background(), "next", nil)
 	for _, id := range []string{"async_1", "async_2"} {
@@ -284,7 +286,7 @@ func TestShutdownStopsTasks(t *testing.T) {
 		}
 	}
 	if res := result(t, evs, ToolStart); !res.IsError || !strings.Contains(res.Flatten(), "shut down") {
-		t.Fatalf("start after Shutdown = %+v", res)
+		t.Fatalf("start after Close = %+v", res)
 	}
 }
 
@@ -295,7 +297,9 @@ func TestNoGoroutineLeak(t *testing.T) {
 		start("s1", "researcher", "a"), start("s2", "researcher", "b"), llmtest.Turn{Text: "started"})
 	h.run(t, context.Background(), "go", nil)
 	g.waitEntered(t, 2)
-	h.m.Shutdown()
+	if err := h.m.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for runtime.NumGoroutine() > baseline {
 		if time.Now().After(deadline) {

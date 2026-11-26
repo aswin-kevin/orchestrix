@@ -116,7 +116,7 @@ func (m *Manager) Ping(ctx context.Context) error {
 // Backend returns the sandboxed backend of a thread: a sandbox.StarterBackend
 // rooted at Config.WorkDir whose commands run in the thread's container. It
 // implements backend.Backend, backend.MultiEditor, backend.Executor and
-// backend.Starter, so it works with orchestrix.WithTasks. Pass the method to
+// backend.Starter, so it works with orchestrix.WithJobs. Pass the method to
 // orchestrix.WithBackendFactory. The empty thread id is rejected with
 // ErrNoThread when a command runs: give every run an Input.ThreadID.
 func (m *Manager) Backend(threadID string) backend.Backend {

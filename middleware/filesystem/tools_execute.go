@@ -97,7 +97,7 @@ func (m *Middleware) executeInBackground(ctx context.Context, in ExecuteInput, c
 	if err != nil {
 		return tool.Errorf("background start failed: %v", err)
 	}
-	return tool.Text(fmt.Sprintf("Started background task %s. Use task_output to read its output; you will be notified when it finishes.", id))
+	return tool.Text(fmt.Sprintf("Started background job %s. Use check_job to read its output; you will be notified when it finishes.", id))
 }
 
 // execTimeout applies the default and the cap to the model's request.

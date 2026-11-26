@@ -609,7 +609,7 @@ func TestExecuteBackgroundSchemaOnlyWhenEnabled(t *testing.T) {
 	bg := &fakeBackground{}
 	f.call.Background = bg
 	wantText(t, f.run(t, "execute", obj{"command": "make", "run_in_background": true}), false,
-		"Started background task bg_7. Use task_output to read its output; you will be notified when it finishes.")
+		"Started background job bg_7. Use check_job to read its output; you will be notified when it finishes.")
 	if bg.gotCmd != "make" || bg.gotTimeout != 0 || eb.gotCmd != "" {
 		t.Fatalf("background got %q/%v, foreground ran %q", bg.gotCmd, bg.gotTimeout, eb.gotCmd)
 	}
