@@ -194,7 +194,7 @@ func TestNoReminderWhenAllCompleted(t *testing.T) {
 }
 
 func TestWriteTodosIsReadOnly(t *testing.T) {
-	if !registeredWriteTodos(t).ReadOnly(json.RawMessage(`{"todos":[]}`)) {
+	if !isReadOnly(registeredWriteTodos(t), json.RawMessage(`{"todos":[]}`)) {
 		t.Fatal("write_todos is not read-only, so plan and dontAsk modes refuse it")
 	}
 }
@@ -209,4 +209,10 @@ func TestTodosKeyIsNamespaced(t *testing.T) {
 	if !strings.Contains(string(data), `"planning.todos"`) {
 		t.Fatalf("serialized state %s lacks the planning.todos key", data)
 	}
+}
+
+// isReadOnly reports whether tool.As finds t read-only for input in.
+func isReadOnly(t tool.Tool, in json.RawMessage) bool {
+	r, ok := tool.As[tool.ReadOnlyer](t)
+	return ok && r.ReadOnly(in)
 }

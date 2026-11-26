@@ -159,7 +159,7 @@ func (r *run) prepare(use llm.Block, via string) (c *toolCall) {
 	if c.blocked = validateInput(t, input); c.blocked != nil {
 		return c
 	}
-	if d, ok := t.(tool.Dispatcher); ok {
+	if d, ok := tool.As[tool.Dispatcher](t); ok {
 		if via != "" {
 			c.blocked = notDispatchable(use.Name, via)
 			return c
@@ -168,7 +168,7 @@ func (r *run) prepare(use llm.Block, via string) (c *toolCall) {
 			return c
 		}
 	}
-	c.concurrent = c.tool.ConcurrencySafe(c.input)
+	c.concurrent = concurrencySafe(c.tool, c.input)
 	return c
 }
 
@@ -186,7 +186,7 @@ func (r *run) resolve(name string) (tool.Tool, *tool.Result) {
 	if !ok {
 		return nil, errorResult("unknown tool %q", name)
 	}
-	if a, ok := t.(tool.Availability); ok {
+	if a, ok := tool.As[tool.Availability](t); ok {
 		if err := a.Available(r.state); err != nil {
 			return nil, errorResult("%v", err)
 		}
@@ -197,9 +197,10 @@ func (r *run) resolve(name string) (tool.Tool, *tool.Result) {
 // dispatch turns c, a call of the dispatcher d with valid input, into a call
 // of the tool d names, with the input d returns, so that everything after
 // preparation sees the target. The target must be a tool of the turn that
-// may be called now, must not itself be a dispatcher, and its input must be
-// valid JSON that passes its schema, exactly as for a direct call. It
-// returns the error result of a dispatch that fails.
+// may be called now, must not itself be a dispatcher (nor wrap one: see
+// tool.As), and its input must be valid JSON that passes its schema, exactly
+// as for a direct call. It returns the error result of a dispatch that
+// fails.
 func (r *run) dispatch(c *toolCall, d tool.Dispatcher) *tool.Result {
 	name, input, err := d.Dispatch(c.input)
 	if err != nil {
@@ -209,7 +210,7 @@ func (r *run) dispatch(c *toolCall, d tool.Dispatcher) *tool.Result {
 	if blocked != nil {
 		return blocked
 	}
-	if _, ok := target.(tool.Dispatcher); ok {
+	if _, ok := tool.As[tool.Dispatcher](target); ok {
 		return notDispatchable(name, c.name)
 	}
 	if !json.Valid(input) {
@@ -221,6 +222,13 @@ func (r *run) dispatch(c *toolCall, d tool.Dispatcher) *tool.Result {
 	c.via, c.dispatcher, c.dispatchInput = c.name, c.tool, c.input
 	c.name, c.tool, c.input = name, target, input
 	return nil
+}
+
+// concurrencySafe reports whether t says (tool.ConcurrencySafer, found with
+// tool.As) that its call with input in may run alongside others.
+func concurrencySafe(t tool.Tool, in json.RawMessage) bool {
+	c, ok := tool.As[tool.ConcurrencySafer](t)
+	return ok && c.ConcurrencySafe(in)
 }
 
 // notDispatchable answers a dispatch whose target is itself a dispatcher.

@@ -190,28 +190,27 @@ func rankKeywords(candidates []tool.Tool, query string) []tool.Tool {
 
 func byName(a, b tool.Tool) int { return cmp.Compare(a.Name(), b.Name()) }
 
-// dispatcher is call_tool: a tool.Dispatcher, so the agent loop runs the
+// callTool returns call_tool: a tool.Dispatcher, so the agent loop runs the
 // named tool in its place. Rules, hitl and hook matchers see that target;
 // policy for call_tool itself belongs in permission rules naming it, which
-// the loop evaluates first, on call_tool's own input.
-type dispatcher struct{ tool.Tool }
-
-// callTool returns call_tool. It has no effect of its own (the target is
-// checked as if called directly), so it is read-only.
+// the loop evaluates first, on call_tool's own input. It has no effect of
+// its own (the target is checked as if called directly), so it is
+// read-only.
 func callTool() tool.Tool {
-	return dispatcher{tool.New(ToolCall,
+	return tool.New(ToolCall,
 		"Call a tool by its exact name, such as one search_tools found, with its input object.",
 		func(context.Context, CallInput, *tool.Call) (tool.Result, error) {
 			// The loop dispatches every valid call; reaching here means
 			// call_tool was run outside it.
 			return tool.Errorf("%s must be dispatched by the agent loop", ToolCall), nil
 		},
-		tool.WithReadOnly())}
+		tool.WithReadOnly(),
+		func(s *tool.Spec) { s.Dispatch = dispatch })
 }
 
-// Dispatch implements tool.Dispatcher: it returns the named tool and its
+// dispatch is call_tool's tool.Dispatcher: it returns the named tool and its
 // input, {} when the input is missing or null.
-func (dispatcher) Dispatch(in json.RawMessage) (string, json.RawMessage, error) {
+func dispatch(in json.RawMessage) (string, json.RawMessage, error) {
 	var ci CallInput
 	if err := json.Unmarshal(in, &ci); err != nil {
 		return "", nil, fmt.Errorf("invalid %s input: %w", ToolCall, err)

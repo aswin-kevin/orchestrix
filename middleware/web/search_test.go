@@ -436,10 +436,10 @@ func TestSearchToolFormatsAndClamps(t *testing.T) {
 func TestSearchToolAttributes(t *testing.T) {
 	tl := searchTool(&fakeBackend{}, false)
 	in := json.RawMessage(`{"query":"find me"}`)
-	if tl.ReadOnly(in) || !tl.ConcurrencySafe(in) {
-		t.Fatalf("readOnly = %v, concurrent = %v", tl.ReadOnly(in), tl.ConcurrencySafe(in))
+	if isReadOnly(tl, in) || !isConcurrent(tl, in) {
+		t.Fatalf("readOnly = %v, concurrent = %v", isReadOnly(tl, in), isConcurrent(tl, in))
 	}
-	if !searchTool(&fakeBackend{}, true).ReadOnly(in) {
+	if !isReadOnly(searchTool(&fakeBackend{}, true), in) {
 		t.Fatal("ReadOnly config not honoured")
 	}
 	if got := searchSubject(in); got != "find me" {

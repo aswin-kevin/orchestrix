@@ -7,6 +7,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/internal/names"
 	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/state"
 )
 
 // Spec describes a tool declaratively. Every optional field defaults to the
@@ -38,16 +39,26 @@ type Spec struct {
 	// absolute paths, because permission checks see nothing else. Nil means
 	// the tool touches no paths.
 	Paths func(json.RawMessage) []permission.PathAccess
-	// Permission is the tool's own verdict; nil asks the user.
+	// Permission is the tool's own verdict (see PermissionChecker); nil
+	// means no opinion, which leaves the call to the rules and the mode and
+	// otherwise asks the user.
 	Permission func(ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision
 	// Run executes the tool and is required.
 	Run func(ctx context.Context, in json.RawMessage, c *Call) (Result, error)
 	// RawInput marks the tool as accepting input that bypasses validation.
 	RawInput bool
+	// Dispatch makes the tool a Dispatcher that stands for the tool it
+	// names; nil means the tool is not a Dispatcher.
+	Dispatch func(in json.RawMessage) (name string, input json.RawMessage, err error)
+	// Available reports whether a run with the given State may call the
+	// tool (see Availability); nil means it always may.
+	Available func(s *state.State) error
 }
 
 // Build turns a Spec into a Tool. It panics on an invalid name or a missing Run,
-// which are programming errors best caught at start-up.
+// which are programming errors best caught at start-up. The tool implements
+// every optional capability interface of this package, except Dispatcher,
+// which it implements only when Spec.Dispatch is set.
 func Build(s Spec) Tool {
 	if err := names.Validate(s.Name); err != nil {
 		panic(fmt.Sprintf("tool.Build: %v", err))
@@ -58,12 +69,26 @@ func Build(s Spec) Tool {
 	if s.Schema == nil {
 		s.Schema = emptyObjectSchema()
 	}
-	return &built{spec: s}
+	b := &built{spec: s}
+	if s.Dispatch != nil {
+		return &builtDispatcher{b}
+	}
+	return b
 }
 
-// built adapts a Spec to Tool and to every optional interface; absent funcs
-// answer with the fail-closed default.
+// built adapts a Spec to Tool and to every optional interface but
+// Dispatcher; absent funcs answer with the fail-closed default.
 type built struct{ spec Spec }
+
+// builtDispatcher is a built tool whose Spec sets Dispatch, so it is a
+// Dispatcher too. Dispatcher is the one capability whose mere presence
+// changes behaviour, so built does not implement it unconditionally.
+type builtDispatcher struct{ *built }
+
+// Dispatch implements Dispatcher.
+func (d *builtDispatcher) Dispatch(in json.RawMessage) (string, json.RawMessage, error) {
+	return d.spec.Dispatch(in)
+}
 
 func (b *built) Name() string           { return b.spec.Name }
 func (b *built) Description() string    { return b.spec.Description }
@@ -92,9 +117,16 @@ func (b *built) Paths(in json.RawMessage) []permission.PathAccess {
 
 func (b *built) CheckPermission(ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision {
 	if b.spec.Permission == nil {
-		return permission.AskUser(fmt.Sprintf("approve %s?", b.spec.Name))
+		return permission.Decision{}
 	}
 	return b.spec.Permission(ctx, in, pc)
+}
+
+func (b *built) Available(s *state.State) error {
+	if b.spec.Available == nil {
+		return nil
+	}
+	return b.spec.Available(s)
 }
 
 func (b *built) Call(ctx context.Context, in json.RawMessage, c *Call) (Result, error) {
@@ -142,3 +174,18 @@ func WithShellSubject(f func(json.RawMessage) string) Option {
 func WithPaths(f func(json.RawMessage) []permission.PathAccess) Option {
 	return func(s *Spec) { s.Paths = f }
 }
+
+// Compile-time checks: built answers every optional interface but
+// Dispatcher, which only builtDispatcher adds.
+var (
+	_ ReadOnlyer        = (*built)(nil)
+	_ ConcurrencySafer  = (*built)(nil)
+	_ PermissionChecker = (*built)(nil)
+	_ Subjecter         = (*built)(nil)
+	_ ShellSubjecter    = (*built)(nil)
+	_ PathAccessor      = (*built)(nil)
+	_ Editor            = (*built)(nil)
+	_ RawInputer        = (*built)(nil)
+	_ Availability      = (*built)(nil)
+	_ Dispatcher        = (*builtDispatcher)(nil)
+)

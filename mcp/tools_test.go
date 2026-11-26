@@ -63,10 +63,10 @@ func TestToolAdapterSchemaAndDescription(t *testing.T) {
 	if !reflect.DeepEqual(titled.Schema(), objectOnly) {
 		t.Fatalf("non-object schema = %v, want %v", titled.Schema(), objectOnly)
 	}
-	if r, ok := titled.(tool.RawInputer); !ok || !r.AcceptsRawInput() {
+	if r, ok := tool.As[tool.RawInputer](titled); !ok || !r.AcceptsRawInput() {
 		t.Fatal("MCP tools must accept raw input")
 	}
-	if titled.ReadOnly(nil) || titled.ConcurrencySafe(nil) {
+	if isReadOnly(titled, nil) || isConcurrent(titled, nil) {
 		t.Fatal("MCP tools must not be read-only or concurrent by default")
 	}
 	if n := len(findTool(t, tools, "mcp__srv__wordy").Description()); n != MaxDescriptionBytes {
@@ -271,7 +271,7 @@ func TestGatedServerLockedUntilUnlocked(t *testing.T) {
 	}
 	s := state.New()
 	want := fmt.Sprintf(deferred.LockedText, "mcp__srv__echo")
-	if a, ok := echo.(tool.Availability); !ok || a.Available(s) == nil || a.Available(s).Error() != want {
+	if a, ok := tool.As[tool.Availability](echo); !ok || a.Available(s) == nil || a.Available(s).Error() != want {
 		t.Fatal("locked tool must report itself unavailable via tool.Availability")
 	}
 	if res := callTool(t, echo, s, `{"text":"x"}`); !res.IsError || res.Flatten() != want {
@@ -348,10 +348,10 @@ func TestMCPToolAsksByDefault(t *testing.T) {
 	cfg.TrustReadOnlyHints = true
 	trusted := connectMiddleware(t, cfg)
 	peek := findTool(t, trusted.DynamicTools(), "mcp__trusted__peek")
-	if !peek.ReadOnly(nil) || !peek.ConcurrencySafe(nil) {
+	if !isReadOnly(peek, nil) || !isConcurrent(peek, nil) {
 		t.Fatal("trusted readOnlyHint must make the tool read-only and concurrent")
 	}
-	if findTool(t, trusted.DynamicTools(), "mcp__trusted__echo").ReadOnly(nil) {
+	if isReadOnly(findTool(t, trusted.DynamicTools(), "mcp__trusted__echo"), nil) {
 		t.Fatal("a tool without the hint must not be read-only")
 	}
 	final := runAgent(t, trusted, agent.Config{Provider: call("mcp__trusted__peek")}, nil)
@@ -482,4 +482,16 @@ func sentCount(f *fakeTransport, method string) int {
 		}
 	}
 	return n
+}
+
+// isReadOnly reports whether tool.As finds t read-only for input in.
+func isReadOnly(t tool.Tool, in json.RawMessage) bool {
+	r, ok := tool.As[tool.ReadOnlyer](t)
+	return ok && r.ReadOnly(in)
+}
+
+// isConcurrent reports whether tool.As finds t concurrency-safe for input in.
+func isConcurrent(t tool.Tool, in json.RawMessage) bool {
+	c, ok := tool.As[tool.ConcurrencySafer](t)
+	return ok && c.ConcurrencySafe(in)
 }

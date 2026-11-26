@@ -180,7 +180,7 @@ func TestResourceTools(t *testing.T) {
 	}
 	list, read := tools[0], tools[1]
 	for _, tl := range tools {
-		if !tl.ReadOnly(nil) || !tl.ConcurrencySafe(nil) {
+		if !isReadOnly(tl, nil) || !isConcurrent(tl, nil) {
 			t.Fatalf("%s must be read-only and concurrent", tl.Name())
 		}
 	}

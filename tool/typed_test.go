@@ -39,7 +39,9 @@ func TestNewTypedDecodesAndValidates(t *testing.T) {
 	}
 
 	in := json.RawMessage(`{}`)
-	if !tl.ReadOnly(in) || !tl.ConcurrencySafe(in) {
+	r, _ := As[ReadOnlyer](tl)
+	c, _ := As[ConcurrencySafer](tl)
+	if !r.ReadOnly(in) || !c.ConcurrencySafe(in) {
 		t.Error("options not applied")
 	}
 }

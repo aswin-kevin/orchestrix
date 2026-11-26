@@ -369,11 +369,11 @@ func TestExecuteTimeoutCappedAndSubject(t *testing.T) {
 	if got := tl.(tool.Subjecter).Subject(raw); got != "ls -l" {
 		t.Fatalf("Subject = %q", got)
 	}
-	if tl.ReadOnly(raw) {
+	if isReadOnly(tl, raw) {
 		t.Fatal("execute must not be read-only")
 	}
-	if d := tl.CheckPermission(context.Background(), raw, permission.Context{}); d.Behavior != permission.Ask {
-		t.Fatalf("execute self-check = %v, want Ask", d.Behavior)
+	if d := selfCheck(tl, context.Background(), raw, permission.Context{}); d.Behavior != "" {
+		t.Fatalf("execute self-check = %v, want no opinion", d.Behavior)
 	}
 }
 
@@ -437,13 +437,13 @@ func TestToolFlags(t *testing.T) {
 	raw := json.RawMessage(`{}`)
 	for _, name := range []string{"ls", "read_file", "glob", "grep"} {
 		tl := f.tools[name]
-		if !tl.ReadOnly(raw) || !tl.ConcurrencySafe(raw) {
+		if !isReadOnly(tl, raw) || !isConcurrent(tl, raw) {
 			t.Errorf("%s must be read-only and concurrency safe", name)
 		}
 	}
 	for _, name := range []string{"write_file", "edit_file", "multi_edit", "delete"} {
 		tl := f.tools[name]
-		if tl.ReadOnly(raw) || tl.ConcurrencySafe(raw) || !tl.(tool.Editor).IsEdit(raw) {
+		if e, ok := tool.As[tool.Editor](tl); isReadOnly(tl, raw) || isConcurrent(tl, raw) || !ok || !e.IsEdit(raw) {
 			t.Errorf("%s must be a serialized edit", name)
 		}
 	}
@@ -630,4 +630,26 @@ func TestExecuteBackgroundSchemaOnlyWhenEnabled(t *testing.T) {
 	if bg.gotTimeout != 99999*time.Second {
 		t.Fatalf("background timeout = %v, want 99999s uncapped", bg.gotTimeout)
 	}
+}
+
+// isReadOnly reports whether tool.As finds t read-only for input in.
+func isReadOnly(t tool.Tool, in json.RawMessage) bool {
+	r, ok := tool.As[tool.ReadOnlyer](t)
+	return ok && r.ReadOnly(in)
+}
+
+// isConcurrent reports whether tool.As finds t concurrency-safe for input in.
+func isConcurrent(t tool.Tool, in json.RawMessage) bool {
+	c, ok := tool.As[tool.ConcurrencySafer](t)
+	return ok && c.ConcurrencySafe(in)
+}
+
+// selfCheck is t's own permission verdict, found with tool.As; the zero
+// Decision when t has none.
+func selfCheck(t tool.Tool, ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision {
+	c, ok := tool.As[tool.PermissionChecker](t)
+	if !ok {
+		return permission.Decision{}
+	}
+	return c.CheckPermission(ctx, in, pc)
 }

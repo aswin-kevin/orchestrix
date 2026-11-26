@@ -242,15 +242,15 @@ func TestTaskStopKillsJob(t *testing.T) {
 func TestTaskStopAllowsItself(t *testing.T) {
 	m := New(Config{})
 	for _, tl := range m.Tools() {
-		d := tl.CheckPermission(context.Background(), json.RawMessage(`{}`), permission.Context{})
-		readOnly := tl.ReadOnly(json.RawMessage(`{}`))
+		d := selfCheck(tl, context.Background(), json.RawMessage(`{}`), permission.Context{})
+		readOnly := isReadOnly(tl, json.RawMessage(`{}`))
 		switch tl.Name() {
 		case ToolTaskStop:
 			if d.Behavior != permission.Allow || readOnly {
 				t.Fatalf("task_stop: decision %v, read-only %v", d.Behavior, readOnly)
 			}
 		default:
-			if !readOnly || !tl.ConcurrencySafe(json.RawMessage(`{}`)) {
+			if !readOnly || !isConcurrent(tl, json.RawMessage(`{}`)) {
 				t.Fatalf("%s must be read-only and concurrent", tl.Name())
 			}
 		}
@@ -436,4 +436,26 @@ func TestNotificationIsMarkedInjected(t *testing.T) {
 	if msg.Meta[NotificationMetaKey] != "bg_1" || msg.Meta[agent.InjectedMetaKey] != "tasks" {
 		t.Fatalf("notification meta = %v, want the job id and the injected mark", msg.Meta)
 	}
+}
+
+// isReadOnly reports whether tool.As finds t read-only for input in.
+func isReadOnly(t tool.Tool, in json.RawMessage) bool {
+	r, ok := tool.As[tool.ReadOnlyer](t)
+	return ok && r.ReadOnly(in)
+}
+
+// isConcurrent reports whether tool.As finds t concurrency-safe for input in.
+func isConcurrent(t tool.Tool, in json.RawMessage) bool {
+	c, ok := tool.As[tool.ConcurrencySafer](t)
+	return ok && c.ConcurrencySafe(in)
+}
+
+// selfCheck is t's own permission verdict, found with tool.As; the zero
+// Decision when t has none.
+func selfCheck(t tool.Tool, ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision {
+	c, ok := tool.As[tool.PermissionChecker](t)
+	if !ok {
+		return permission.Decision{}
+	}
+	return c.CheckPermission(ctx, in, pc)
 }

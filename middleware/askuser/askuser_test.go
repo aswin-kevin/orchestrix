@@ -2,6 +2,7 @@ package askuser
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -486,7 +487,7 @@ func TestAskUserAllowedInDontAskMode(t *testing.T) {
 
 func TestToolIsNotConcurrent(t *testing.T) {
 	tl := New(Config{}).(agent.ToolProvider).Tools()[0]
-	if tl.ConcurrencySafe(nil) {
+	if isConcurrent(tl, nil) {
 		t.Fatal("ask_user must not be concurrency-safe")
 	}
 }
@@ -551,4 +552,10 @@ func TestOtherEqualToSelectedIsNotRepeated(t *testing.T) {
 	if want := "User answers:\n- Which database?: Postgres"; got != want {
 		t.Fatalf("result = %q, want %q", got, want)
 	}
+}
+
+// isConcurrent reports whether tool.As finds t concurrency-safe for input in.
+func isConcurrent(t tool.Tool, in json.RawMessage) bool {
+	c, ok := tool.As[tool.ConcurrencySafer](t)
+	return ok && c.ConcurrencySafe(in)
 }

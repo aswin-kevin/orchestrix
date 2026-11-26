@@ -529,22 +529,37 @@ func writeFileTool(t *testing.T) tool.Tool {
 func TestGateForwardsPermissionInterfaces(t *testing.T) {
 	inner := writeFileTool(t)
 	in := json.RawMessage(`{"path":"/secret/k","content":"x"}`)
+	innerPaths, _ := tool.As[tool.PathAccessor](inner)
+	innerEdit, _ := tool.As[tool.Editor](inner)
 	for _, wrapped := range []tool.Tool{Gate(inner), Defer(inner), Defer(Gate(inner))} {
-		paths, ok := wrapped.(tool.PathAccessor)
-		if !ok || !slices.Equal(paths.Paths(in), inner.(tool.PathAccessor).Paths(in)) {
+		paths, ok := tool.As[tool.PathAccessor](wrapped)
+		if !ok || !slices.Equal(paths.Paths(in), innerPaths.Paths(in)) {
 			t.Fatalf("%T does not report the inner Paths", wrapped)
 		}
-		if e, ok := wrapped.(tool.Editor); !ok || e.IsEdit(in) != inner.(tool.Editor).IsEdit(in) {
+		if e, ok := tool.As[tool.Editor](wrapped); !ok || e.IsEdit(in) != innerEdit.IsEdit(in) {
 			t.Fatalf("%T does not report the inner IsEdit", wrapped)
+		}
+		if u, ok := wrapped.(interface{ Unwrap() tool.Tool }); !ok || u.Unwrap() != inner {
+			t.Fatalf("%T does not unwrap to the inner tool", wrapped)
 		}
 	}
 
 	t.Run("fail-closed zeros for interfaces the inner tool lacks", func(t *testing.T) {
-		g := Gate(readOnlyTool("echo", "Echo."))
-		in := json.RawMessage(`{}`)
-		if g.(tool.Subjecter).Subject(in) != "" || g.(tool.ShellSubjecter).ShellSubject() ||
-			g.(tool.PathAccessor).Paths(in) != nil || g.(tool.Editor).IsEdit(in) || g.(tool.RawInputer).AcceptsRawInput() {
-			t.Fatal("the wrapper invented a permission-relevant answer")
+		g := Gate(opaqueTool{readOnlyTool("echo", "Echo.")})
+		for name, found := range map[string]bool{
+			"Subjecter":         has[tool.Subjecter](g),
+			"ShellSubjecter":    has[tool.ShellSubjecter](g),
+			"PathAccessor":      has[tool.PathAccessor](g),
+			"Editor":            has[tool.Editor](g),
+			"RawInputer":        has[tool.RawInputer](g),
+			"ReadOnlyer":        has[tool.ReadOnlyer](g),
+			"ConcurrencySafer":  has[tool.ConcurrencySafer](g),
+			"PermissionChecker": has[tool.PermissionChecker](g),
+			"Dispatcher":        has[tool.Dispatcher](g),
+		} {
+			if found {
+				t.Errorf("the wrapper invented a %s", name)
+			}
 		}
 	})
 
@@ -577,6 +592,124 @@ func TestGateForwardsPermissionInterfaces(t *testing.T) {
 		}
 		if r := res[1]; r.IsError {
 			t.Fatalf("ok result = %+v, want it written", r)
+		}
+	})
+}
+
+// opaqueTool hides every capability of the tool it holds: it has no Unwrap.
+type opaqueTool struct{ tool.Tool }
+
+// has reports whether tool.As finds a T in t.
+func has[T any](t tool.Tool) bool {
+	_, ok := tool.As[T](t)
+	return ok
+}
+
+func TestGateKeepsInnerPermission(t *testing.T) {
+	inner := tool.New("guarded", "Guarded.",
+		func(_ context.Context, in textInput, _ *tool.Call) (tool.Result, error) {
+			return tool.Text("guarded:" + in.Text), nil
+		},
+		tool.WithPermission(func(context.Context, json.RawMessage, permission.Context) permission.Decision {
+			return permission.Denied("guarded refuses")
+		}),
+		tool.WithShellSubject(func(json.RawMessage) string { return "rm -rf /" }),
+		tool.WithPaths(func(json.RawMessage) []permission.PathAccess {
+			return []permission.PathAccess{{Path: "/g", Op: permission.OpWrite}}
+		}))
+	g := Gate(inner)
+	in := json.RawMessage(`{"text":"x"}`)
+
+	pc, ok := tool.As[tool.PermissionChecker](g)
+	if !ok || pc.CheckPermission(context.Background(), in, permission.Context{}).Behavior != permission.Deny {
+		t.Fatal("Gate hid the inner Deny")
+	}
+	sub, ok := tool.As[tool.Subjecter](g)
+	sh, shOK := tool.As[tool.ShellSubjecter](g)
+	if !ok || !shOK || sub.Subject(in) != "rm -rf /" || !sh.ShellSubject() {
+		t.Fatal("Gate hid the inner shell subject")
+	}
+	if p, ok := tool.As[tool.PathAccessor](g); !ok || len(p.Paths(in)) != 1 || p.Paths(in)[0].Path != "/g" {
+		t.Fatal("Gate hid the inner paths")
+	}
+
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{call("g", "guarded", obj{"text": "x"})}},
+		llmtest.Turn{Text: "done"},
+	)
+	a := mustNew(t, agent.Config{
+		Provider: p,
+		Tools:    []tool.Tool{g},
+		Rules:    permission.Rules{Allow: []permission.Rule{{Tool: "guarded"}}},
+	})
+	s := state.New()
+	Unlock(s, "guarded")
+	final := run(t, a.Run(context.Background(), userInput(s)))
+	if r := results(final, 0)[0]; !r.IsError || resultText(r) != "Permission denied: guarded refuses" {
+		t.Fatalf("result = %+v, want the inner Deny", r)
+	}
+}
+
+// dispatchingTool is a dispatcher named "via" that runs the tool its input
+// names, like call_tool.
+func dispatchingTool() tool.Tool {
+	return tool.Build(tool.Spec{
+		Name:     "via",
+		Schema:   tool.SchemaFor[CallInput](),
+		ReadOnly: func(json.RawMessage) bool { return true },
+		Run: func(context.Context, json.RawMessage, *tool.Call) (tool.Result, error) {
+			return tool.Errorf("via must be dispatched"), nil
+		},
+		Dispatch: func(in json.RawMessage) (string, json.RawMessage, error) {
+			var ci CallInput
+			if err := json.Unmarshal(in, &ci); err != nil {
+				return "", nil, err
+			}
+			return ci.Name, ci.Input, nil
+		},
+	})
+}
+
+func TestGatedDispatcher(t *testing.T) {
+	through := func(id string) llmtest.Call {
+		return call(id, "via", obj{"name": "echo", "input": obj{"text": "x"}})
+	}
+	newAgent := func(p *llmtest.Scripted) *agent.Agent {
+		return mustNew(t, agent.Config{
+			Provider:   p,
+			Tools:      []tool.Tool{Gate(dispatchingTool()), readOnlyTool("echo", "Echo.")},
+			Middleware: []agent.Middleware{New(Config{})},
+		})
+	}
+
+	t.Run("locked is refused before dispatch", func(t *testing.T) {
+		p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{through("v")}}, llmtest.Turn{Text: "done"})
+		final := run(t, newAgent(p).Run(context.Background(), userInput(state.New())))
+		if r := results(final, 0)[0]; !r.IsError || resultText(r) != fmt.Sprintf(LockedText, "via") {
+			t.Fatalf("result = %+v, want the lock", r)
+		}
+	})
+
+	t.Run("unlocked dispatches to its target", func(t *testing.T) {
+		p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{through("v")}}, llmtest.Turn{Text: "done"})
+		s := state.New()
+		Unlock(s, "via")
+		final := run(t, newAgent(p).Run(context.Background(), userInput(s)))
+		if r := results(final, 0)[0]; r.IsError || resultText(r) != "echo:x" {
+			t.Fatalf("result = %+v, want echo to run", r)
+		}
+	})
+
+	t.Run("is not a dispatch target", func(t *testing.T) {
+		p := llmtest.New(
+			llmtest.Turn{ToolCalls: []llmtest.Call{viaCallTool("c", "via", obj{"name": "echo", "input": obj{"text": "x"}})}},
+			llmtest.Turn{Text: "done"},
+		)
+		s := state.New()
+		Unlock(s, "via")
+		final := run(t, newAgent(p).Run(context.Background(), userInput(s)))
+		if r := results(final, 0)[0]; !r.IsError || resultText(r) != "tool via cannot be called through call_tool" {
+			t.Fatalf("result = %+v, want the nested dispatch refused", r)
 		}
 	})
 }
@@ -676,7 +809,6 @@ func TestUnlockGlob(t *testing.T) {
 var (
 	_ agent.ToolProvider = (*middleware)(nil)
 	_ agent.ModelWrapper = (*middleware)(nil)
-	_ tool.Dispatcher    = dispatcher{}
 )
 
 // countingProvider is a DynamicToolProvider that counts its calls.

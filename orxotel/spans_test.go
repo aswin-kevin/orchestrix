@@ -465,6 +465,9 @@ func TestToolPanic(t *testing.T) {
 // dispatchTool names another tool and its input, like call_tool.
 type dispatchTool struct{ tool.Tool }
 
+// Unwrap exposes the inner tool's capabilities, such as read-only.
+func (d dispatchTool) Unwrap() tool.Tool { return d.Tool }
+
 func (dispatchTool) Dispatch(in json.RawMessage) (string, json.RawMessage, error) {
 	var d struct {
 		Name  string          `json:"name"`

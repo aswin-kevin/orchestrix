@@ -96,7 +96,7 @@ func TestSkillToolLoadsBody(t *testing.T) {
 		t.Fatalf("Loaded = %v, want [pdf]", got)
 	}
 	tl := toolNamed(t, m, ToolSkill)
-	if !tl.ReadOnly(nil) || !tl.ConcurrencySafe(nil) {
+	if !isReadOnly(tl, nil) || !isConcurrent(tl, nil) {
 		t.Fatal("the skill tool must be read-only and concurrent")
 	}
 }
@@ -179,7 +179,7 @@ func TestSkillUnlocksGatedToolsAndServers(t *testing.T) {
 	if res := run(); !res.IsError || resultText(res) != fmt.Sprintf(deferred.LockedText, "pdf_extract") {
 		t.Fatalf("before load: %+v", res)
 	}
-	if err := gated.(tool.Availability).Available(s); err == nil {
+	if a, ok := tool.As[tool.Availability](gated); !ok || a.Available(s) == nil {
 		t.Fatal("a locked tool must report itself unavailable")
 	}
 	callSkill(t, m, s, ToolInput{Name: "pdf"})
@@ -662,4 +662,16 @@ func TestLegacyStateRelocksNothing(t *testing.T) {
 	if !deferred.Unlocked(s, "only_a") || !deferred.Unlocked(s, "mcp__x__q") {
 		t.Fatal("a State without the pinned_unlocks key must keep its unlocks")
 	}
+}
+
+// isReadOnly reports whether tool.As finds t read-only for input in.
+func isReadOnly(t tool.Tool, in json.RawMessage) bool {
+	r, ok := tool.As[tool.ReadOnlyer](t)
+	return ok && r.ReadOnly(in)
+}
+
+// isConcurrent reports whether tool.As finds t concurrency-safe for input in.
+func isConcurrent(t tool.Tool, in json.RawMessage) bool {
+	c, ok := tool.As[tool.ConcurrencySafer](t)
+	return ok && c.ConcurrencySafe(in)
 }

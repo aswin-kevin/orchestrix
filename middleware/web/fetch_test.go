@@ -320,13 +320,13 @@ func TestCACertFile(t *testing.T) {
 func TestFetchToolTraits(t *testing.T) {
 	raw := json.RawMessage(`{"url":"https://go.dev/doc"}`)
 	tl := fetchTool(t, Config{})
-	if !tl.ConcurrencySafe(raw) || tl.ReadOnly(raw) {
-		t.Fatalf("concurrent = %v, read-only = %v", tl.ConcurrencySafe(raw), tl.ReadOnly(raw))
+	if !isConcurrent(tl, raw) || isReadOnly(tl, raw) {
+		t.Fatalf("concurrent = %v, read-only = %v", isConcurrent(tl, raw), isReadOnly(tl, raw))
 	}
 	if got := tl.(tool.Subjecter).Subject(raw); got != "https://go.dev/doc" {
 		t.Fatalf("subject = %q", got)
 	}
-	if !fetchTool(t, Config{ReadOnly: true}).ReadOnly(raw) {
+	if !isReadOnly(fetchTool(t, Config{ReadOnly: true}), raw) {
 		t.Fatal("ReadOnly config not reported")
 	}
 }
@@ -406,4 +406,16 @@ func TestFetchFinishedContentOutlivesDeadline(t *testing.T) {
 			}
 		})
 	}
+}
+
+// isReadOnly reports whether tool.As finds t read-only for input in.
+func isReadOnly(t tool.Tool, in json.RawMessage) bool {
+	r, ok := tool.As[tool.ReadOnlyer](t)
+	return ok && r.ReadOnly(in)
+}
+
+// isConcurrent reports whether tool.As finds t concurrency-safe for input in.
+func isConcurrent(t tool.Tool, in json.RawMessage) bool {
+	c, ok := tool.As[tool.ConcurrencySafer](t)
+	return ok && c.ConcurrencySafe(in)
 }

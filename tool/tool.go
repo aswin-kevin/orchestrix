@@ -17,7 +17,10 @@ import (
 	"github.com/aswin-kevin/orchestrix/state"
 )
 
-// Tool is one action the model can invoke.
+// Tool is one action the model can invoke. Everything beyond these four
+// methods is an optional capability interface (ReadOnlyer, ConcurrencySafer,
+// PermissionChecker, Subjecter, ...), found with As so that a wrapper which
+// implements Unwrap passes its inner tool's capabilities through.
 type Tool interface {
 	// Name is the identifier the model uses; see Build for the legal alphabet.
 	Name() string
@@ -25,15 +28,32 @@ type Tool interface {
 	Description() string
 	// Schema is the JSON schema of the tool input.
 	Schema() map[string]any
-	// ReadOnly reports whether this call leaves the world unchanged.
-	ReadOnly(in json.RawMessage) bool
-	// ConcurrencySafe reports whether this call may run alongside others.
-	ConcurrencySafe(in json.RawMessage) bool
-	// CheckPermission is the tool's own verdict, consulted after the rules.
-	CheckPermission(ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision
 	// Call runs the tool. Problems the model can fix belong in the Result
 	// (IsError); the Go error is for failures of the host itself.
 	Call(ctx context.Context, in json.RawMessage, c *Call) (Result, error)
+}
+
+// ReadOnlyer is implemented by tools that can report a call as leaving the
+// world unchanged. A tool without it is never read-only.
+type ReadOnlyer interface {
+	// ReadOnly reports whether this call leaves the world unchanged.
+	ReadOnly(in json.RawMessage) bool
+}
+
+// ConcurrencySafer is implemented by tools that can report a call as safe
+// to run alongside others. A tool without it always runs alone.
+type ConcurrencySafer interface {
+	// ConcurrencySafe reports whether this call may run alongside others.
+	ConcurrencySafe(in json.RawMessage) bool
+}
+
+// PermissionChecker is implemented by tools with a permission verdict of
+// their own, consulted after the rules (see permission.Evaluate). A tool
+// without it, like one returning the zero Decision, has no opinion: the
+// call is then asked about unless a rule or the mode decides it.
+type PermissionChecker interface {
+	// CheckPermission is the tool's own verdict for a call with input in.
+	CheckPermission(ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision
 }
 
 // Subjecter is implemented by tools whose permission rules match on a string
@@ -76,7 +96,9 @@ type RawInputer interface {
 // target when the model calls it directly. The dispatcher's own permission
 // is still evaluated first, on its own input. A returned error becomes the
 // call's error result. A target that is itself a Dispatcher is refused, and
-// the dispatcher's Call is not reached for a valid dispatch.
+// the dispatcher's Call is not reached for a valid dispatch. A wrapper that
+// unwraps to a Dispatcher (see As) is a Dispatcher too, so a wrapper that
+// must intercept Call of a Dispatcher has to implement Dispatcher itself.
 type Dispatcher interface {
 	Dispatch(in json.RawMessage) (name string, input json.RawMessage, err error)
 }

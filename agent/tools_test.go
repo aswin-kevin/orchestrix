@@ -45,6 +45,9 @@ type renamed struct {
 
 func (r renamed) Name() string { return r.name }
 
+// Unwrap exposes the renamed tool's capabilities (see tool.As).
+func (r renamed) Unwrap() tool.Tool { return r.Tool }
+
 func toolNames(tools []tool.Tool) []string {
 	var names []string
 	for _, t := range tools {
@@ -141,6 +144,9 @@ func TestDynamicNameClashSkipped(t *testing.T) {
 // and the input to run it with. It is read-only, so its own permission
 // allows it unless a rule says otherwise.
 type dispatchTool struct{ tool.Tool }
+
+// Unwrap exposes the inner tool's capabilities, such as read-only.
+func (d dispatchTool) Unwrap() tool.Tool { return d.Tool }
 
 type dispatchInput struct {
 	Name  string          `json:"name"`
@@ -523,6 +529,9 @@ func TestPanickingDynamicToolsFailsRun(t *testing.T) {
 // lockedTool is a write_file that a run may call only once its State says
 // so (tool.Availability), like a tool gated until a skill unlocks it.
 type lockedTool struct{ tool.Tool }
+
+// Unwrap exposes the inner write_file's capabilities, such as its paths.
+func (l lockedTool) Unwrap() tool.Tool { return l.Tool }
 
 // unlockedKey marks a State in which lockedTool is available.
 var unlockedKey = state.NewKey[bool]("agent_test.unlocked")

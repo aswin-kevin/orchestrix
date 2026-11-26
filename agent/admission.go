@@ -151,25 +151,29 @@ func (a *Agent) toolFor(ctx context.Context, call *ToolCall) (t tool.Tool, ok bo
 
 // permissionRequest describes a call of t named name with input in, made by
 // the run with State s, for permission.Evaluate, using whichever optional
-// interfaces the tool implements. ctx and the run's permission context are
-// passed to the tool's own CheckPermission.
+// interfaces tool.As finds in the tool. ctx and the run's permission context
+// are passed to the tool's own CheckPermission.
 func (a *Agent) permissionRequest(ctx context.Context, s *state.State, name string, t tool.Tool, in json.RawMessage) permission.Request {
 	req := permission.Request{
-		Tool:      name,
-		Input:     in,
-		ReadOnly:  t.ReadOnly(in),
-		SelfCheck: t.CheckPermission(ctx, in, a.permissionContext(s)),
+		Tool:  name,
+		Input: in,
 	}
-	if e, ok := t.(tool.Editor); ok {
+	if r, ok := tool.As[tool.ReadOnlyer](t); ok {
+		req.ReadOnly = r.ReadOnly(in)
+	}
+	if c, ok := tool.As[tool.PermissionChecker](t); ok {
+		req.SelfCheck = c.CheckPermission(ctx, in, a.permissionContext(s))
+	}
+	if e, ok := tool.As[tool.Editor](t); ok {
 		req.Edit = e.IsEdit(in)
 	}
-	if s, ok := t.(tool.Subjecter); ok {
-		req.Subject = s.Subject(in)
+	if sub, ok := tool.As[tool.Subjecter](t); ok {
+		req.Subject = sub.Subject(in)
 	}
-	if s, ok := t.(tool.ShellSubjecter); ok {
-		req.Shell = s.ShellSubject()
+	if sh, ok := tool.As[tool.ShellSubjecter](t); ok {
+		req.Shell = sh.ShellSubject()
 	}
-	if p, ok := t.(tool.PathAccessor); ok {
+	if p, ok := tool.As[tool.PathAccessor](t); ok {
 		req.Paths = p.Paths(in)
 	}
 	return req

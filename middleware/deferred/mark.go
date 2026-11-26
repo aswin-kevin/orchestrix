@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -40,8 +39,8 @@ type Gater interface {
 	Gated() bool
 }
 
-// Defer returns t marked as deferred (see Deferrer). The result forwards
-// every optional interface the agent's permission checks use; see Gate.
+// Defer returns t marked as deferred (see Deferrer). The result unwraps to t
+// (see tool.As); see Gate.
 func Defer(t tool.Tool) tool.Tool {
 	if t == nil {
 		return nil
@@ -56,11 +55,14 @@ func Defer(t tool.Tool) tool.Tool {
 // it implements tool.Availability, so the agent refuses a locked call before
 // asking for any approval.
 //
-// The result forwards Subjecter, ShellSubjecter, PathAccessor, Editor and
-// RawInputer to t, answering "", false or nil when t lacks one, so wrapping
-// never weakens a permission check. It does not forward tool.Dispatcher:
-// do not wrap a dispatching tool. Defer and Gate share one wrapper, so
-// combining them marks a single wrapper with both flags.
+// The result unwraps to t (see tool.As), so every capability the agent's
+// permission checks find with tool.As (ReadOnlyer, PermissionChecker,
+// Subjecter, PathAccessor, ...) is t's own, and wrapping never weakens a
+// permission check. That includes tool.Dispatcher: a gated dispatcher,
+// once unlocked, dispatches to its target (a locked one is refused before
+// dispatch, by Available), and like any dispatcher it cannot be the target
+// of another dispatch. Defer and Gate share one wrapper, so combining them
+// marks a single wrapper with both flags.
 func Gate(t tool.Tool) tool.Tool {
 	if t == nil {
 		return nil
@@ -99,7 +101,7 @@ func (m *marked) Available(s *state.State) error {
 	if gatedLocked(s, m) {
 		return errors.New(lockedMessage(m.Name()))
 	}
-	if a, ok := m.Tool.(tool.Availability); ok {
+	if a, ok := tool.As[tool.Availability](m.Tool); ok {
 		return a.Available(s)
 	}
 	return nil
@@ -117,52 +119,23 @@ func (m *marked) Call(ctx context.Context, in json.RawMessage, c *tool.Call) (to
 	return m.Tool.Call(ctx, in, c)
 }
 
-// Subject implements tool.Subjecter.
-func (m *marked) Subject(in json.RawMessage) string {
-	if s, ok := m.Tool.(tool.Subjecter); ok {
-		return s.Subject(in)
-	}
-	return ""
-}
-
-// ShellSubject implements tool.ShellSubjecter.
-func (m *marked) ShellSubject() bool {
-	s, ok := m.Tool.(tool.ShellSubjecter)
-	return ok && s.ShellSubject()
-}
-
-// Paths implements tool.PathAccessor.
-func (m *marked) Paths(in json.RawMessage) []permission.PathAccess {
-	if p, ok := m.Tool.(tool.PathAccessor); ok {
-		return p.Paths(in)
-	}
-	return nil
-}
-
-// IsEdit implements tool.Editor.
-func (m *marked) IsEdit(in json.RawMessage) bool {
-	e, ok := m.Tool.(tool.Editor)
-	return ok && e.IsEdit(in)
-}
-
-// AcceptsRawInput implements tool.RawInputer.
-func (m *marked) AcceptsRawInput() bool {
-	r, ok := m.Tool.(tool.RawInputer)
-	return ok && r.AcceptsRawInput()
-}
+// Unwrap returns the wrapped tool, whose capabilities tool.As finds.
+func (m *marked) Unwrap() tool.Tool { return m.Tool }
 
 // lockedMessage is LockedText for the tool named name.
 func lockedMessage(name string) string { return fmt.Sprintf(LockedText, name) }
 
-// isDeferred reports whether t is marked deferred by its own Deferrer.
+// isDeferred reports whether t is marked deferred by its own Deferrer, found
+// with tool.As.
 func isDeferred(t tool.Tool) bool {
-	d, ok := t.(Deferrer)
+	d, ok := tool.As[Deferrer](t)
 	return ok && d.Deferred()
 }
 
-// isGated reports whether t is marked gated by its own Gater.
+// isGated reports whether t is marked gated by its own Gater, found with
+// tool.As.
 func isGated(t tool.Tool) bool {
-	g, ok := t.(Gater)
+	g, ok := tool.As[Gater](t)
 	return ok && g.Gated()
 }
 
@@ -172,15 +145,11 @@ func gatedLocked(s *state.State, t tool.Tool) bool {
 	return isGated(t) && !Unlocked(s, t.Name())
 }
 
-// Compile-time checks: the wrapper answers every interface the agent's
-// permission checks and this package consult.
+// Compile-time checks: the wrapper answers the markers of this package and
+// tool.Availability itself, and unwraps for everything else.
 var (
-	_ Deferrer            = (*marked)(nil)
-	_ Gater               = (*marked)(nil)
-	_ tool.Availability   = (*marked)(nil)
-	_ tool.Subjecter      = (*marked)(nil)
-	_ tool.ShellSubjecter = (*marked)(nil)
-	_ tool.PathAccessor   = (*marked)(nil)
-	_ tool.Editor         = (*marked)(nil)
-	_ tool.RawInputer     = (*marked)(nil)
+	_ Deferrer                        = (*marked)(nil)
+	_ Gater                           = (*marked)(nil)
+	_ tool.Availability               = (*marked)(nil)
+	_ interface{ Unwrap() tool.Tool } = (*marked)(nil)
 )
