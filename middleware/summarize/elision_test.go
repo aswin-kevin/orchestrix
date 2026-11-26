@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
@@ -27,10 +28,10 @@ func texts(ts ...string) []llm.Message {
 	return msgs
 }
 
-func mustElide(t *testing.T, s *state.State, e agent.Elision) {
+func mustElide(t *testing.T, s *state.State, e elide.Elision) {
 	t.Helper()
-	if err := agent.AddElision(s, e); err != nil {
-		t.Fatalf("AddElision(%+v): %v", e, err)
+	if err := elide.Add(s, e); err != nil {
+		t.Fatalf("elide.Add(%+v): %v", e, err)
 	}
 }
 
@@ -39,7 +40,7 @@ func TestSummarizeViewAppliesElisionsAfterBoundary(t *testing.T) {
 	s := state.New()
 	s.SetMessages(msgs)
 	BoundaryKey.Set(s, Boundary{Index: 2, Summary: "S"})
-	mustElide(t, s, agent.Elision{ID: "c1", From: 3, To: 5, Text: "E"})
+	mustElide(t, s, elide.Elision{ID: "c1", From: 3, To: 5, Text: "E"})
 
 	got := wrapOnce(t, Config{}, s)
 
@@ -59,7 +60,7 @@ func TestSummarizeBoundaryStraddlingElision(t *testing.T) {
 	}
 	s := state.New()
 	s.SetMessages(msgs)
-	mustElide(t, s, agent.Elision{ID: "c1", From: 1, To: 6, Text: "E"})
+	mustElide(t, s, elide.Elision{ID: "c1", From: 1, To: 6, Text: "E"})
 	// A boundary inside the elision: the elision no longer fits the view
 	// and is ignored, the summary covering its first part.
 	BoundaryKey.Set(s, Boundary{Index: 3, Summary: "S"})
@@ -87,7 +88,7 @@ func TestSummarizeSettledCountsElidedView(t *testing.T) {
 		llm.UserText("more"), call("w1"), userResults("ok", "w1"), call("w2"), userResults("ok", "w2"),
 		llm.UserText("next"), call("w3"), userResults("ok", "w3"), call("w4"), userResults("ok", "w4"),
 	})
-	mustElide(t, s, agent.Elision{ID: "c1", From: 3, To: 8, Text: "E"})
+	mustElide(t, s, elide.Elision{ID: "c1", From: 3, To: 8, Text: "E"})
 
 	got := wrapOnce(t, Config{}, s)
 
@@ -112,11 +113,11 @@ func TestEstimateFallsBackWhenElisionsChange(t *testing.T) {
 	if err := m.(agent.AfterModel).AfterModel(context.Background(), s, &llm.Response{Usage: llm.Usage{Input: 50_000}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := Estimate(s, agent.ElidedView(s, 0)); got != 50_000 {
+	if got := Estimate(s, elide.View(s, 0)); got != 50_000 {
 		t.Fatalf("Estimate = %d, want the observed 50000", got)
 	}
-	mustElide(t, s, agent.Elision{ID: "c1", From: 0, To: 2, Text: "E"})
-	view := agent.ElidedView(s, 0)
+	mustElide(t, s, elide.Elision{ID: "c1", From: 0, To: 2, Text: "E"})
+	view := elide.View(s, 0)
 	if got, want := Estimate(s, view), charCount(view)/CharsPerToken; got != want {
 		t.Fatalf("Estimate after an elision = %d, want the view's estimate %d", got, want)
 	}
@@ -124,13 +125,13 @@ func TestEstimateFallsBackWhenElisionsChange(t *testing.T) {
 	if err := m.(agent.AfterModel).AfterModel(context.Background(), s, &llm.Response{Usage: llm.Usage{Input: 10}}); err != nil {
 		t.Fatal(err)
 	}
-	if got := Estimate(s, agent.ElidedView(s, 0)); got != 10 {
+	if got := Estimate(s, elide.View(s, 0)); got != 10 {
 		t.Fatalf("Estimate = %d, want the observed 10", got)
 	}
-	if !agent.RemoveElision(s, "c1") {
-		t.Fatal("RemoveElision = false")
+	if !elide.Remove(s, "c1") {
+		t.Fatal("elide.Remove = false")
 	}
-	view = agent.ElidedView(s, 0)
+	view = elide.View(s, 0)
 	if got, want := Estimate(s, view), charCount(view)/CharsPerToken; got != want || got < 1000 {
 		t.Fatalf("Estimate after removing the elision = %d, want the view's estimate %d", got, want)
 	}
@@ -138,13 +139,13 @@ func TestEstimateFallsBackWhenElisionsChange(t *testing.T) {
 
 func TestSummarizeEstimateUsesElidedView(t *testing.T) {
 	big := strings.Repeat("x", 4000)
-	for _, elide := range []bool{false, true} {
-		t.Run(fmt.Sprintf("elided=%v", elide), func(t *testing.T) {
+	for _, elided := range []bool{false, true} {
+		t.Run(fmt.Sprintf("elided=%v", elided), func(t *testing.T) {
 			s := state.New()
 			// About 2000 tokens, over the 1700-token trigger of triggerWindow.
 			s.SetMessages(texts("u0 "+big, "a1 "+big))
-			if elide {
-				mustElide(t, s, agent.Elision{ID: "c1", From: 0, To: 2, Text: "E"})
+			if elided {
+				mustElide(t, s, elide.Elision{ID: "c1", From: 0, To: 2, Text: "E"})
 			}
 			main := llmtest.New(llmtest.Turn{Text: "done"})
 			summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY"})
@@ -152,7 +153,7 @@ func TestSummarizeEstimateUsesElidedView(t *testing.T) {
 			runWindow(t, main, memory.New(), Config{Provider: summarizer}, agent.Input{ThreadID: "t1", State: s, Messages: texts("u2")}, triggerWindow)
 
 			want := 1
-			if elide {
+			if elided {
 				want = 0
 			}
 			if summarizer.Calls() != want {

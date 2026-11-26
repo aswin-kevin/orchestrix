@@ -11,10 +11,10 @@ import (
 	"github.com/aswin-kevin/orchestrix/state"
 )
 
-// WorkspaceKey holds the snapshot of a run's backend (backend.Snapshotter)
+// workspaceKey holds the snapshot of a run's backend (backend.Snapshotter)
 // when Config.SyncWorkspace is set. It is run-local (state.RunLocal): neither
 // a subagent nor a fork inherits its parent's workspace through State.
-var WorkspaceKey = state.NewKey[json.RawMessage]("agent.workspace", state.RunLocal[json.RawMessage]())
+var workspaceKey = state.NewKey[json.RawMessage]("agent.workspace", state.RunLocal[json.RawMessage]())
 
 // A persisted run saves at the five points Config.Checkpointer lists. The
 // first save follows the BeforeAgent hooks, so the input is stored only once
@@ -24,7 +24,7 @@ var WorkspaceKey = state.NewKey[json.RawMessage]("agent.workspace", state.RunLoc
 // results; OrphanResolver covers them. The workspace is captured (Snapshot)
 // only on the saves that follow tool calls (tool results, interrupt, end of
 // run), because only tools change files; this spares a full backend capture
-// on every save. Once WorkspaceKey is set, every save still writes its
+// on every save. Once the workspace is captured, every save still writes its
 // value, the latest capture, along with the rest of State.
 //
 // Saves run under a context that is not cancelled with the run, so a
@@ -59,7 +59,7 @@ func (r *run) restoreWorkspace() error {
 	if r.workspace == nil {
 		return nil
 	}
-	snapshot, ok := WorkspaceKey.Get(r.state)
+	snapshot, ok := workspaceKey.Get(r.state)
 	if !ok {
 		return nil
 	}
@@ -94,7 +94,7 @@ func (r *run) snapshotWorkspace() error {
 	if err != nil {
 		return fmt.Errorf("agent: snapshot workspace: %w", err)
 	}
-	WorkspaceKey.Set(r.state, snapshot)
+	workspaceKey.Set(r.state, snapshot)
 	return nil
 }
 

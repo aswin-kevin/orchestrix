@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/aswin-kevin/orchestrix/agent/internal/elision"
 	"strings"
 	"sync"
 	"testing"
@@ -104,12 +105,12 @@ func TestPlaceShiftsElisions(t *testing.T) {
 	// Index 2 is an assistant message, so the result needs a new message
 	// there, ahead of the elided range.
 	s.SetMessages([]llm.Message{llm.UserText("hi"), asstUses("a"), {Role: llm.RoleAssistant, Content: []llm.Block{llm.TextBlock("hm")}}, asstUses("x"), userResults("", "x")})
-	if err := AddElision(s, Elision{ID: "e", From: 3, To: 5, Text: "gone"}); err != nil {
+	if err := elision.Add(s, elision.Elision{ID: "e", From: 3, To: 5, Text: "gone"}); err != nil {
 		t.Fatal(err)
 	}
 	r := &run{state: s}
 	r.placeResults(map[int][]llm.Block{1: {llm.ToolResultText("a", "x", false)}})
-	got, _ := ElisionsKey.Get(s)
+	got := elision.All(s)
 	if len(s.Messages()) != 6 || len(got) != 1 || got[0].From != 4 || got[0].To != 6 {
 		t.Fatalf("msgs = %d, elisions = %+v", len(s.Messages()), got)
 	}
@@ -500,7 +501,7 @@ func TestResolverErrorKeepsWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := crashState("t1")
-	WorkspaceKey.Set(s, snap)
+	workspaceKey.Set(s, snap)
 
 	res := &fakeResolver{name: "ledger", err: errors.New("ledger down")}
 	a := mustNew(t, Config{
@@ -516,7 +517,7 @@ func TestResolverErrorKeepsWorkspace(t *testing.T) {
 	if final.Reason != ReasonMiddlewareError {
 		t.Fatalf("final = %+v, want middleware error", final)
 	}
-	saved, ok := WorkspaceKey.Get(final.State)
+	saved, ok := workspaceKey.Get(final.State)
 	if !ok {
 		t.Fatal("final State lost the workspace snapshot")
 	}

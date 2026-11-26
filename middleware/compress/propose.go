@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -93,7 +94,7 @@ func isUserTurn(m llm.Message) bool {
 // ranges restored this run.
 func obstacles(s *state.State, from int) []span {
 	var out []span
-	elisions, _ := agent.ElisionsKey.Get(s)
+	elisions := elide.All(s)
 	for _, e := range elisions {
 		if e.From >= from {
 			out = append(out, span{From: e.From, To: e.To})
@@ -113,12 +114,12 @@ func prefixChars(msgs []llm.Message) []int {
 	return out
 }
 
-// fits reports whether agent.AddElision would accept [start, end) of msgs:
+// fits reports whether elide.Add would accept [start, end) of msgs:
 // the range is self-contained (no call left unanswered inside it, no result
 // answering a call outside it).
 func fits(msgs []llm.Message, start, end int) bool {
 	// ID and Text are placeholders: only the range is in question here.
-	return agent.CheckElision(msgs, agent.Elision{ID: "candidate", Text: "candidate", From: start, To: end}) == nil
+	return elide.Check(msgs, elide.Elision{ID: "candidate", Text: "candidate", From: start, To: end}) == nil
 }
 
 // compressID matches the IDs this package issues.
@@ -129,7 +130,7 @@ var compressID = regexp.MustCompile(`^c([1-9][0-9]*)$`)
 // never reused, across runs either.
 func nextID(s *state.State) string {
 	n, _ := issuedKey.Get(s)
-	elisions, _ := agent.ElisionsKey.Get(s)
+	elisions := elide.All(s)
 	for _, e := range elisions {
 		n = max(n, idNumber(e.ID))
 	}

@@ -25,11 +25,24 @@ func editTool() tool.Tool {
 	}, tool.WithEdit())
 }
 
+// restoredModeKey declares the agent's permission-mode key again (same name,
+// type and privacy), so a test can store a mode SetPermissionMode would
+// refuse, as a restored checkpoint might hold.
+var restoredModeKey = state.NewKey[permission.Mode]("agent.permission_mode", state.Private[permission.Mode]())
+
+// mustSetMode sets the run's permission mode in s or fails the test.
+func mustSetMode(t *testing.T, s *state.State, m permission.Mode) {
+	t.Helper()
+	if err := agent.SetPermissionMode(s, m); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // modeRun is one task call to a "writer" subagent whose only turn calls
 // write_file.
 type modeRun struct {
 	// parentMode is the parent's Config.PermissionMode; runMode, when
-	// non-empty, is stored under agent.PermissionModeKey on the parent's
+	// non-empty, is stored as the run's permission mode on the parent's
 	// State before the run.
 	parentMode, runMode permission.Mode
 	// childMode is the writer's Subagent.PermissionMode.
@@ -69,7 +82,7 @@ func (r modeRun) run(t *testing.T) modeOutcome {
 	if r.runMode != "" {
 		// Set directly, as a restored checkpoint would, so an invalid mode
 		// can be tested.
-		agent.PermissionModeKey.Set(in.State, r.runMode)
+		restoredModeKey.Set(in.State, r.runMode)
 	}
 	_, final := collect(t, context.Background(), a, in)
 	if final.Reason != agent.ReasonCompleted {
@@ -175,7 +188,7 @@ func TestGrandchildOfPlanParentIsPlan(t *testing.T) {
 	}
 	in := userInput("go")
 	in.State = state.New()
-	agent.PermissionModeKey.Set(in.State, permission.ModePlan)
+	mustSetMode(t, in.State, permission.ModePlan)
 	_, final := collect(t, context.Background(), a, in)
 
 	if final.Reason != agent.ReasonCompleted {

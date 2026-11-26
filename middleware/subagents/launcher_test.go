@@ -72,14 +72,14 @@ func researcher() Subagent {
 func TestLauncherMatchesTaskTool(t *testing.T) {
 	sk := skillsMiddleware(t)
 	st := state.New()
-	agent.PermissionModeKey.Set(st, permission.ModePlan)
+	mustSetMode(t, st, permission.ModePlan)
 	skills.ScopeKey.Set(st, skills.Scope{Restrict: true, Allowed: []string{"pdf", "style"}})
 	res := probeRun(t, NewLauncher(), researcher(), st, sk)
 	if res.err != nil {
 		t.Fatal(res.err)
 	}
 	in := res.in
-	if mode, _ := agent.PermissionModeKey.Get(in.State); mode != permission.ModePlan {
+	if mode, _ := agent.PermissionModeOf(in.State); mode != permission.ModePlan {
 		t.Errorf("mode = %q, want plan", mode)
 	}
 	scope, _ := skills.ScopeKey.Get(in.State)
@@ -232,14 +232,14 @@ func TestLauncherInputNilCall(t *testing.T) {
 
 func TestLauncherInputStricterModeWins(t *testing.T) {
 	st := state.New()
-	agent.PermissionModeKey.Set(st, permission.ModeDontAsk)
+	mustSetMode(t, st, permission.ModeDontAsk)
 	spec := researcher()
 	spec.Skills, spec.PermissionMode = nil, permission.ModeBypass
 	res := probeRun(t, NewLauncher(), spec, st)
 	if res.err != nil {
 		t.Fatal(res.err)
 	}
-	if mode, _ := agent.PermissionModeKey.Get(res.in.State); mode != permission.ModeDontAsk {
+	if mode, _ := agent.PermissionModeOf(res.in.State); mode != permission.ModeDontAsk {
 		t.Errorf("mode = %q, want dontAsk", mode)
 	}
 }

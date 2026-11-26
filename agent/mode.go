@@ -9,29 +9,25 @@ import (
 	"github.com/aswin-kevin/orchestrix/state"
 )
 
-// PermissionModeKey holds a run's permission mode when it was changed during
+// permissionModeKey holds a run's permission mode when it was changed during
 // the run (plan mode, for example). Unset means Config.PermissionMode.
 //
 // It is part of State, so it is checkpointed and restored with the thread,
 // and State.Fork copies it, so a fork continues in the same mode. It is
 // private: State.Child does not copy it, so a subagent does not inherit it
 // implicitly (the subagents middleware derives the subagent's mode from it).
-//
-// Any code that can write the run's State, a tool or middleware included,
-// can set this key and so holds full authority over the run's mode, up to
-// bypassPermissions: give that ability only to code trusted with it.
-var PermissionModeKey = state.NewKey[permission.Mode]("agent.permission_mode", state.Private[permission.Mode]())
+var permissionModeKey = state.NewKey[permission.Mode]("agent.permission_mode", state.Private[permission.Mode]())
 
 // ErrInvalidMode is returned by SetPermissionMode for a mode
 // permission.Mode.Valid rejects.
 var ErrInvalidMode = errors.New("agent: invalid permission mode")
 
 // PermissionMode returns the permission mode a run with State s is in: the
-// mode stored under PermissionModeKey when set, else Config.PermissionMode.
-// A nil s yields Config.PermissionMode.
+// mode stored by SetPermissionMode when set, else Config.PermissionMode. A
+// nil s yields Config.PermissionMode.
 func (a *Agent) PermissionMode(s *state.State) permission.Mode {
 	if s != nil {
-		if mode, ok := PermissionModeKey.Get(s); ok {
+		if mode, ok := PermissionModeOf(s); ok {
 			return mode
 		}
 	}
@@ -46,22 +42,41 @@ func (a *Agent) PermissionMode(s *state.State) permission.Mode {
 // concurrency-safe tool, calls of the same parallel batch may already have
 // been admitted under the old mode.
 //
-// An empty m deletes the key, returning the run to Config.PermissionMode; a
-// mode Valid rejects returns an error wrapping ErrInvalidMode and leaves s
-// unchanged. A nil s is a programming error and panics.
+// The mode is part of State: it is checkpointed with the thread and
+// State.Fork copies it, but State.Child does not, so a subagent does not
+// inherit it implicitly. An empty m clears it, returning the run to
+// Config.PermissionMode; a mode Valid rejects returns an error wrapping
+// ErrInvalidMode and leaves s unchanged. A nil s is a programming error and
+// panics.
+//
+// Any code that can write the run's State, a tool or middleware included,
+// can call it and so holds full authority over the run's mode, up to
+// bypassPermissions: give that ability only to code trusted with it.
 func SetPermissionMode(s *state.State, m permission.Mode) error {
 	if s == nil {
 		panic("agent: SetPermissionMode called with a nil State")
 	}
 	switch {
 	case m == "":
-		PermissionModeKey.Delete(s)
+		permissionModeKey.Delete(s)
 	case !m.Valid():
 		return fmt.Errorf("%w %q", ErrInvalidMode, m)
 	default:
-		PermissionModeKey.Set(s, m)
+		permissionModeKey.Set(s, m)
 	}
 	return nil
+}
+
+// PermissionModeOf returns the mode stored in s by SetPermissionMode and
+// true, or "" and false when none is stored (the run then uses its
+// Config.PermissionMode). Code without the run's Agent, such as middleware
+// called outside a run, uses it; with the Agent, Agent.PermissionMode gives
+// the effective mode. A nil s yields "" and false.
+func PermissionModeOf(s *state.State) (permission.Mode, bool) {
+	if s == nil {
+		return "", false
+	}
+	return permissionModeKey.Get(s)
 }
 
 // PermissionRequest describes call for permission.Evaluate and Approvers

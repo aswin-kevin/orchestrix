@@ -134,7 +134,9 @@ func (l *Launcher) Input(ctx context.Context, child *agent.Agent, spec Subagent,
 		return agent.Input{}, errors.New("subagents: Input needs the run's current tool call")
 	}
 	s := c.State.Child()
-	agent.PermissionModeKey.Set(s, childMode(info.Agent, child, c.State))
+	if err := agent.SetPermissionMode(s, childMode(info.Agent, child, c.State)); err != nil {
+		return agent.Input{}, err
+	}
 	// skills.ScopeKey is private, so Child dropped it: without this a
 	// subagent (or its own subagents) would see skills its parent may not.
 	if parent, ok := skills.ScopeKey.Get(c.State); ok || spec.Skills != nil || spec.PinnedSkills != nil {

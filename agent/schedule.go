@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aswin-kevin/orchestrix/agent/internal/elision"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -136,7 +137,7 @@ func (c *toolCall) pending() bool { return c.interrupt != nil }
 // package cannot reach it). An index past the end (a tool or wrapper shrank
 // the history during the turn) appends.
 //
-// SetMessages and shiftElisions are two steps, not one atomic update: this
+// SetMessages and elision.Shift are two steps, not one atomic update: this
 // is safe because insertAfter runs on the run's own goroutine before any
 // tool of the turn starts, and elisions only change in BeforeModel, in a
 // tool (compress_context) or here, never concurrently with this call.
@@ -148,7 +149,7 @@ func (r *run) insertAfter(index int, msgs []llm.Message) {
 		return
 	}
 	r.state.SetMessages(slices.Insert(history, at, msgs...))
-	shiftElisions(r.state, at, len(msgs))
+	elision.Shift(r.state, at, len(msgs))
 }
 
 // prepareAll prepares the calls of an assistant reply.

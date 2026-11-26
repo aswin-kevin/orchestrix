@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -51,7 +52,7 @@ func TestCompressWithoutArchive(t *testing.T) {
 			if err != nil || res.IsError {
 				t.Fatalf("compress = %+v, %v; archiving must never fail it", res, err)
 			}
-			e, _ := agent.ElisionsKey.Get(s)
+			e := elide.All(s)
 			if len(e) != 1 || !strings.Contains(e[0].Text, "S1") {
 				t.Fatalf("elisions = %+v, want the compressed range", e)
 			}
@@ -91,7 +92,7 @@ func TestSameTurnCompactionClosesOpenProposal(t *testing.T) {
 	if res := lastResult(t, main.Requests[2]); !res.IsError {
 		t.Fatalf("compress_context c1 = %+v, want an error", res)
 	}
-	for _, e := range func() []agent.Elision { e, _ := agent.ElisionsKey.Get(s); return e }() {
+	for _, e := range elide.All(s) {
 		if e.ID == "c1" {
 			t.Fatalf("c1 was recorded: %+v", e)
 		}

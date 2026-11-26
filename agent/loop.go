@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aswin-kevin/orchestrix/agent/internal/elision"
 	"log/slog"
 	"runtime/debug"
 	"slices"
@@ -396,7 +397,7 @@ func (r *run) callModel() (*llm.Response, error) {
 }
 
 // modelRequest builds the request for the next turn. Its messages are the
-// ElidedView of State, so wrappers may rewrite them freely.
+// elided view of State (elide.View), so wrappers may rewrite them freely.
 func (r *run) modelRequest() *ModelRequest {
 	cfg := r.agent.cfg
 	system, boundary := slices.Clone(cfg.System), cfg.CacheBoundary
@@ -415,7 +416,7 @@ func (r *run) modelRequest() *ModelRequest {
 			Model:         cfg.Model,
 			System:        system,
 			CacheBoundary: boundary,
-			Messages:      ElidedView(r.state, 0),
+			Messages:      View(elision.View(r.state, 0)),
 			Tools:         r.toolSchemas(),
 			MaxTokens:     r.maxTokens(),
 			Temperature:   clonePtr(cfg.Temperature),

@@ -16,6 +16,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/kv"
 	membackend "github.com/aswin-kevin/orchestrix/backend/memory"
@@ -731,7 +732,7 @@ func TestLiveCompressContext(t *testing.T) {
 	if rangeID == "" {
 		t.Fatal("no compress_context tool use with a range_id was observed")
 	}
-	elisions, _ := agent.ElisionsKey.Get(final.State)
+	elisions := elide.All(final.State)
 	found := false
 	for _, e := range elisions {
 		found = found || e.ID == rangeID

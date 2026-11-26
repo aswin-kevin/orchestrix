@@ -150,7 +150,7 @@ func Active(ctx context.Context, s *state.State) bool {
 	if info, ok := agent.Info(ctx); ok {
 		return info.Agent.PermissionMode(s) == permission.ModePlan
 	}
-	mode, _ := agent.PermissionModeKey.Get(s)
+	mode, _ := agent.PermissionModeOf(s)
 	return mode == permission.ModePlan
 }
 
@@ -161,7 +161,7 @@ func modeOf(ctx context.Context, s *state.State) permission.Mode {
 	if info, ok := agent.Info(ctx); ok {
 		mode = info.Agent.PermissionMode(s)
 	} else {
-		mode, _ = agent.PermissionModeKey.Get(s)
+		mode, _ = agent.PermissionModeOf(s)
 	}
 	if mode == "" {
 		return permission.ModeDefault

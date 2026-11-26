@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/internal/pathsafe"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -69,9 +69,9 @@ func (m *middleware) compress(ctx context.Context, in CompressInput, c *tool.Cal
 	dropPassed(s)
 	n := p.To - p.From
 	archive := m.archive(ctx, c, p.ID, summarize.Transcript(msgs[p.From:p.To]))
-	e := agent.Elision{ID: p.ID, From: p.From, To: p.To, Text: compressedText(p.ID, n, archive, summary)}
+	e := elide.Elision{ID: p.ID, From: p.From, To: p.To, Text: compressedText(p.ID, n, archive, summary)}
 	ProposalKey.Delete(s)
-	if err := agent.AddElision(s, e); err != nil {
+	if err := elide.Add(s, e); err != nil {
 		return tool.Errorf("could not compress %s: %v", p.ID, err), nil
 	}
 	return tool.Text(fmt.Sprintf("Compressed %d messages into %s.", n, p.ID)), nil
@@ -97,12 +97,12 @@ func (m *middleware) archive(ctx context.Context, c *tool.Call, id, transcript s
 // elision another middleware recorded, is refused.
 func (m *middleware) restore(_ context.Context, in RestoreInput, c *tool.Call) (tool.Result, error) {
 	s := c.State
-	elisions, _ := agent.ElisionsKey.Get(s)
+	elisions := elide.All(s)
 	for _, e := range elisions {
 		if e.ID != in.RangeID || !compressID.MatchString(e.ID) || !strings.HasPrefix(e.Text, fmt.Sprintf("<compressed id=%q", e.ID)) {
 			continue
 		}
-		if !agent.RemoveElision(s, e.ID) {
+		if !elide.Remove(s, e.ID) {
 			break // removed concurrently
 		}
 		noteIssued(s, e.ID)

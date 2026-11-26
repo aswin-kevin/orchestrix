@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -114,7 +115,7 @@ func wrapOnce(t *testing.T, cfg Config, s *state.State) []llm.Message {
 	t.Helper()
 	req := &agent.ModelRequest{
 		State:   s,
-		Request: llm.Request{Messages: agent.ElidedView(s, 0)},
+		Request: llm.Request{Messages: elide.View(s, 0)},
 		Profile: llm.Profile{ContextWindow: 100_000},
 	}
 	var got []llm.Message

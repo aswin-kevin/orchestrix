@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 )
@@ -25,10 +26,10 @@ func (m *middleware) view(s *state.State, current []llm.Message) []llm.Message {
 	// rather than trusted.
 	if b, ok := Current(s); ok && b.Index <= len(history) {
 		from = b.Index
-		msgs = append([]llm.Message{llm.UserText(summaryMessage(b))}, agent.ElidedView(s, from)...)
+		msgs = append([]llm.Message{llm.UserText(summaryMessage(b))}, elide.View(s, from)...)
 	}
 	m.clearOldResults(msgs)
-	m.shortenOldInputs(msgs, settledAssistants(history, from, agent.AppliedElisions(s, from)))
+	m.shortenOldInputs(msgs, settledAssistants(history, from, elide.Applied(s, from)))
 	return msgs
 }
 
@@ -38,11 +39,11 @@ func (m *middleware) view(s *state.State, current []llm.Message) []llm.Message {
 // in the view: the view has lost the Meta that marks injected messages.
 // Assistant messages inside an elision are not in the view, so they are not
 // counted; the view holds the others in the same order.
-func settledAssistants(history []llm.Message, from int, applied []agent.Elision) int {
+func settledAssistants(history []llm.Message, from int, applied []elide.Elision) int {
 	end := lastIndex(history[from:], isUserTurn) + from
 	n := 0
 	for i := from; i < end; i++ {
-		if isAssistant(history[i]) && !slices.ContainsFunc(applied, func(e agent.Elision) bool { return e.From <= i && i < e.To }) {
+		if isAssistant(history[i]) && !slices.ContainsFunc(applied, func(e elide.Elision) bool { return e.From <= i && i < e.To }) {
 			n++
 		}
 	}

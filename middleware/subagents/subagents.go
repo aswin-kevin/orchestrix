@@ -36,13 +36,14 @@
 // checked on its own. It is therefore allowed in plan and dontAsk modes too;
 // a deny rule on "task" still refuses it. An isolated subagent starts in
 // the stricter (permission.Stricter) of the parent's current mode (the one
-// its run set under agent.PermissionModeKey, else its Config.PermissionMode)
+// its run set with agent.SetPermissionMode, else its Config.PermissionMode)
 // and its own configured mode (Subagent.PermissionMode, else the parent's
 // Config.PermissionMode), so delegating never widens what may run without
 // approval: a planning parent starts its subagents (and theirs) in plan
 // mode, and a dontAsk parent cannot hand work to a bypassPermissions
 // subagent. A fork continues the parent's State (State.Fork copies
-// agent.PermissionModeKey), so it runs in the parent's current mode.
+// the mode agent.SetPermissionMode stored), so it runs in the parent's
+// current mode.
 //
 // Skills: an isolated subagent is offered the skills its parent's run is
 // offered (skills.ScopeKey), narrowed to Subagent.Skills when set, with

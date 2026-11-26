@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
@@ -23,7 +24,7 @@ func wrap(t *testing.T, m agent.Middleware, s *state.State) llm.Request {
 	}
 	req := &agent.ModelRequest{
 		State:   s,
-		Request: llm.Request{Messages: agent.ElidedView(s, 0)},
+		Request: llm.Request{Messages: elide.View(s, 0)},
 		Profile: llm.Profile{ContextWindow: testWindow},
 	}
 	var sent llm.Request
@@ -72,7 +73,7 @@ func TestRangeAvoidsDanglingCalls(t *testing.T) {
 	if !ok || (p.From <= 3 && 3 < p.To) {
 		t.Fatalf("proposal = %+v (set %v), want a range around the dangling call", p, ok)
 	}
-	if err := agent.AddElision(s, agent.Elision{ID: p.ID, From: p.From, To: p.To, Text: "x"}); err != nil {
+	if err := elide.Add(s, elide.Elision{ID: p.ID, From: p.From, To: p.To, Text: "x"}); err != nil {
 		t.Fatalf("the proposed range is refused: %v", err)
 	}
 }
@@ -80,8 +81,8 @@ func TestRangeAvoidsDanglingCalls(t *testing.T) {
 func TestPassedElisionsDropped(t *testing.T) {
 	s := state.New()
 	s.SetMessages(append(history(5), llm.UserText(turnText("U", 5))))
-	for _, e := range []agent.Elision{{ID: "c1", From: 0, To: 2, Text: "E1"}, {ID: "c2", From: 2, To: 6, Text: "E2"}} {
-		if err := agent.AddElision(s, e); err != nil {
+	for _, e := range []elide.Elision{{ID: "c1", From: 0, To: 2, Text: "E1"}, {ID: "c2", From: 2, To: 6, Text: "E2"}} {
+		if err := elide.Add(s, e); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -89,7 +90,7 @@ func TestPassedElisionsDropped(t *testing.T) {
 	summarize.BoundaryKey.Set(s, summarize.Boundary{Index: 4, Summary: "S"})
 	wrap(t, New(testCfg), s)
 
-	if e, ok := agent.ElisionsKey.Get(s); ok {
+	if e := elide.All(s); len(e) > 0 {
 		t.Fatalf("elisions = %+v, want the passed ones dropped", e)
 	}
 	if p, _ := ProposalKey.Get(s); p.ID != "c3" || p.From != 4 || p.To != 6 {
@@ -100,7 +101,7 @@ func TestPassedElisionsDropped(t *testing.T) {
 func TestIDsSkipExistingElisions(t *testing.T) {
 	s := state.New()
 	s.SetMessages(append(history(5), llm.UserText(turnText("U", 5))))
-	if err := agent.AddElision(s, agent.Elision{ID: "c1", From: 0, To: 2, Text: "E1"}); err != nil {
+	if err := elide.Add(s, elide.Elision{ID: "c1", From: 0, To: 2, Text: "E1"}); err != nil {
 		t.Fatal(err)
 	}
 	sent := wrap(t, New(testCfg), s)
@@ -170,7 +171,7 @@ func TestUpToQuotesWhatTheModelSees(t *testing.T) {
 	s.SetMessages(append(history(6), llm.UserText(turnText("U", 6))))
 	// Turns 2 and 3 are already elided: the proposal [0, 4) ends where
 	// that elision starts, so the model sees its text there, not U2.
-	if err := agent.AddElision(s, agent.Elision{ID: "x1", From: 4, To: 8, Text: "EARLIER NOTE about turns two and three"}); err != nil {
+	if err := elide.Add(s, elide.Elision{ID: "x1", From: 4, To: 8, Text: "EARLIER NOTE about turns two and three"}); err != nil {
 		t.Fatal(err)
 	}
 	sent := wrap(t, New(testCfg), s)

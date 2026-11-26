@@ -5,7 +5,7 @@
 // TriggerFraction of the context window, it proposes the oldest settled range
 // of whole user turns (a Proposal) in a <compress_request> system segment.
 // The model answers by calling compress_context with a summary of that
-// range. The range then becomes an elision (agent.AddElision): the request
+// range. The range then becomes an elision (elide.Add): the request
 // view shows the summary in its place, while State keeps every original
 // message. restore_context removes the elision, so the range shows verbatim
 // again; it needs no archive. With a backend and a thread, the originals are
@@ -41,6 +41,7 @@ import (
 	"slices"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
@@ -272,18 +273,18 @@ func boundary(s *state.State, n int) int {
 // dropPassed removes every elision that starts before summarize's boundary:
 // one wholly before it is covered by the summary, and one straddling it is
 // no longer applied; both would only block new ranges. It removes such
-// elisions whoever recorded them, which is harmless: ElidedView skips them
+// elisions whoever recorded them, which is harmless: elide.View skips them
 // past the boundary anyway.
 func dropPassed(s *state.State) {
 	b := boundary(s, len(s.Messages()))
 	if b == 0 {
 		return
 	}
-	elisions, _ := agent.ElisionsKey.Get(s)
+	elisions := elide.All(s)
 	for _, e := range elisions {
 		if e.From < b {
 			noteIssued(s, e.ID)
-			agent.RemoveElision(s, e.ID)
+			elide.Remove(s, e.ID)
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/internal/pathsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -30,7 +31,7 @@ type observed struct {
 	Input int `json:"input"`
 	// Messages is how many State messages the request was built from.
 	Messages int `json:"messages"`
-	// Elisions identifies the elisions in agent.ElisionsKey then (see
+	// Elisions identifies the elisions recorded then (elide.All; see
 	// elisionsMark); empty when there were none. Input no longer describes
 	// the view once they change.
 	Elisions string `json:"elisions,omitempty"`
@@ -47,7 +48,7 @@ var failuresKey = state.NewKey[int]("summarize.failures", state.Private[int]())
 // Estimate returns the estimated size, in tokens, of the next request: the
 // input tokens the last response reported plus the messages added since; a
 // pure character estimate of view when nothing was observed, or when the
-// elisions (agent.ElisionsKey) changed since the observation. view should be
+// elisions (elide.All) changed since the observation. view should be
 // the messages as they would be sent, after any compaction. The fallback
 // leaves out the system prompt and tool definitions, so it underestimates;
 // the reactive path catches what it misses.
@@ -60,10 +61,10 @@ func Estimate(s *state.State, view []llm.Message) int {
 }
 
 // elisionsMark returns the IDs of the elisions recorded in s, quoted and
-// comma-separated in key order, so that any change to them changes the mark;
+// comma-separated in stored order, so that any change to them changes the mark;
 // empty when there are none.
 func elisionsMark(s *state.State) string {
-	elisions, _ := agent.ElisionsKey.Get(s)
+	elisions := elide.All(s)
 	ids := make([]string, len(elisions))
 	for i, e := range elisions {
 		ids[i] = strconv.Quote(e.ID)

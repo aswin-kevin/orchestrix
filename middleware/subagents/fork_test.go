@@ -2,7 +2,6 @@ package subagents
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 	"slices"
 	"strings"
@@ -144,7 +143,6 @@ func TestForkStateDropsRunLocalValues(t *testing.T) {
 	s.AppendMessages(llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{{Type: llm.BlockToolUse, ID: "t1", Name: ToolTask}}})
 	runLocalKey.Set(s, "parent's")
 	privateKey.Set(s, "kept")
-	agent.WorkspaceKey.Set(s, json.RawMessage(`{}`))
 	suspendedKey.Set(s, map[string]Suspended{"t0": {}})
 
 	fork, err := forkState(&tool.Call{ToolUseID: "t1", State: s}, "do it")
@@ -156,9 +154,6 @@ func TestForkStateDropsRunLocalValues(t *testing.T) {
 	}
 	if v, _ := privateKey.Get(fork); v != "kept" {
 		t.Fatalf("fork private value = %q, want the parent's conversation state kept", v)
-	}
-	if _, ok := agent.WorkspaceKey.Get(fork); ok {
-		t.Fatal("fork state holds the parent's workspace snapshot")
 	}
 	if _, ok := suspendedKey.Get(fork); ok {
 		t.Fatal("fork state holds the parent's suspended subagents")

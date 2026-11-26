@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
@@ -35,7 +35,7 @@ var neutralize = promptsafe.NewTagNeutralizer("compress_request", "compressed")
 // hides is not in the view.
 func requestSegment(s *state.State, msgs []llm.Message, p Proposal) string {
 	upTo := msgs[p.To]
-	for _, e := range agent.AppliedElisions(s, 0) {
+	for _, e := range elide.Applied(s, 0) {
 		if e.From == p.To {
 			upTo = llm.UserText(e.Text)
 		}

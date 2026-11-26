@@ -9,8 +9,8 @@
 // compaction under HistoryDir/<thread>, so the model can read them back; runs
 // without a ThreadID skip this.
 //
-// Elisions (agent.ElisionsKey) apply to the messages after the boundary as
-// they do in the loop's view (agent.ElidedView), and the size estimate that
+// Elisions (package agent/elide) apply to the messages after the boundary as
+// they do in the loop's view (elide.View), and the size estimate that
 // triggers compaction measures that elided view. Cuts and summaries stay in
 // State space: a summary always covers the original messages, elided or not.
 //

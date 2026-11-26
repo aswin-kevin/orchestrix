@@ -191,3 +191,22 @@ func TestPermissionModeSurvivesCheckpoint(t *testing.T) {
 		t.Fatalf("write_file after restore = %q (error %v), want %q", text, isErr, planDenied)
 	}
 }
+
+func TestPermissionModeOf(t *testing.T) {
+	s := state.New()
+	if mode, ok := PermissionModeOf(s); mode != "" || ok {
+		t.Fatalf("PermissionModeOf(unset) = (%q, %v), want (\"\", false)", mode, ok)
+	}
+	if err := SetPermissionMode(s, permission.ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	if mode, ok := PermissionModeOf(s); mode != permission.ModePlan || !ok {
+		t.Fatalf("PermissionModeOf after SetPermissionMode(plan) = (%q, %v), want (plan, true)", mode, ok)
+	}
+	if err := SetPermissionMode(s, ""); err != nil {
+		t.Fatal(err)
+	}
+	if mode, ok := PermissionModeOf(s); mode != "" || ok {
+		t.Fatalf("PermissionModeOf after SetPermissionMode(\"\") = (%q, %v), want (\"\", false)", mode, ok)
+	}
+}

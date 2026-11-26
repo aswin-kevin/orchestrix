@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -198,7 +199,7 @@ func TestCompressValidation(t *testing.T) {
 			if res := lastResult(t, main.Requests[1]); !res.IsError {
 				t.Fatalf("result = %+v, want an error", res)
 			}
-			if e, ok := agent.ElisionsKey.Get(s); ok {
+			if e := elide.All(s); len(e) > 0 {
 				t.Fatalf("elisions = %+v, want none", e)
 			}
 		})
@@ -227,7 +228,7 @@ func TestRestoreBringsBackOriginals(t *testing.T) {
 			t.Fatalf("request %d proposes %s again after the restore", i, id)
 		}
 	}
-	if _, ok := agent.ElisionsKey.Get(s); ok {
+	if len(elide.All(s)) > 0 {
 		t.Fatal("the elision survived the restore")
 	}
 }
@@ -235,7 +236,7 @@ func TestRestoreBringsBackOriginals(t *testing.T) {
 func TestRestoreRejectsUnknownIDs(t *testing.T) {
 	s := seeded()
 	// An elision another middleware owns is not compress's to restore.
-	if err := agent.AddElision(s, agent.Elision{ID: "x1", From: 0, To: 2, Text: "other"}); err != nil {
+	if err := elide.Add(s, elide.Elision{ID: "x1", From: 0, To: 2, Text: "other"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"c7", "x1"} {
@@ -245,7 +246,7 @@ func TestRestoreRejectsUnknownIDs(t *testing.T) {
 			t.Fatalf("restore %s = %+v, want an error", id, res)
 		}
 	}
-	if e, _ := agent.ElisionsKey.Get(s); len(e) != 1 {
+	if e := elide.All(s); len(e) != 1 {
 		t.Fatalf("elisions = %+v, want x1 kept", e)
 	}
 }
@@ -341,7 +342,7 @@ func TestWorksUnderSummarize(t *testing.T) {
 	stack := []agent.Middleware{summarize.New(summarize.Config{TriggerFraction: 100}), New(testCfg)}
 	s = run(t, main, memory.New(), testCfg, s, stack...)
 
-	if e, _ := agent.ElisionsKey.Get(s); len(e) != 1 || e[0].From != 2 || e[0].To != 6 {
+	if e := elide.All(s); len(e) != 1 || e[0].From != 2 || e[0].To != 6 {
 		t.Fatalf("elisions = %+v, want c1 over [2, 6)", e)
 	}
 	req := main.Requests[1]

@@ -263,7 +263,7 @@ func TestWorkspaceNotRestoredIntoNonEmptyBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := state.New()
-	WorkspaceKey.Set(s, snap)
+	workspaceKey.Set(s, snap)
 
 	ws := newBackends()
 	if err := ws.factory("t1").Write(ctx, "/live.txt", []byte("live")); err != nil {
@@ -288,7 +288,7 @@ func TestWorkspaceNotRestoredIntoNonEmptyBackend(t *testing.T) {
 	}
 	// The end-of-run snapshot reflects the live backend.
 	restored := memory.New()
-	saved, _ := WorkspaceKey.Get(final.State)
+	saved, _ := workspaceKey.Get(final.State)
 	if err := restored.Restore(context.Background(), saved); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -303,18 +303,18 @@ func TestWorkspaceNotSyncedForInputBackend(t *testing.T) {
 	in := threadInput("go")
 	in.Backend = ws
 	_, final := collect(t, a.Run(context.Background(), in))
-	if _, ok := WorkspaceKey.Get(final.State); ok {
+	if _, ok := workspaceKey.Get(final.State); ok {
 		t.Fatal("workspace snapshot stored for a backend the run did not resolve itself")
 	}
 }
 
 func TestWorkspaceKeyIsPrivate(t *testing.T) {
 	s := state.New()
-	WorkspaceKey.Set(s, json.RawMessage(`{}`))
-	if _, ok := WorkspaceKey.Get(s.Child()); ok {
+	workspaceKey.Set(s, json.RawMessage(`{}`))
+	if _, ok := workspaceKey.Get(s.Child()); ok {
 		t.Fatal("a subagent inherited the workspace snapshot")
 	}
-	if got := WorkspaceKey.Name(); got != "agent.workspace" {
+	if got := workspaceKey.Name(); got != "agent.workspace" {
 		t.Fatalf("key name = %q", got)
 	}
 }
@@ -352,7 +352,7 @@ func TestWorkspaceCapturedOnlyAfterTools(t *testing.T) {
 	if n := be.snapshots.Load(); n != 2 {
 		t.Fatalf("%d workspace snapshots, want 2", n)
 	}
-	if _, ok := WorkspaceKey.Get(final.State); !ok {
+	if _, ok := workspaceKey.Get(final.State); !ok {
 		t.Fatal("final State lacks the workspace snapshot")
 	}
 }
