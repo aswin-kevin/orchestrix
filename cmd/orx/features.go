@@ -161,15 +161,15 @@ func searchBackend(search string) (web.SearchBackend, error) {
 		if err != nil {
 			return nil, err
 		}
-		return web.Brave(web.BraveConfig{APIKey: key})
+		return web.NewBrave(web.BraveConfig{APIKey: key})
 	case searchTavily:
 		key, err := apiKey(tavilyKeyEnv, search)
 		if err != nil {
 			return nil, err
 		}
-		return web.Tavily(web.TavilyConfig{APIKey: key})
+		return web.NewTavily(web.TavilyConfig{APIKey: key})
 	}
-	return web.DuckDuckGo(web.DuckDuckGoConfig{})
+	return web.NewDuckDuckGo(web.DuckDuckGoConfig{})
 }
 
 // apiKey returns the value of the environment variable env, or an error

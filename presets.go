@@ -378,8 +378,10 @@ func WithDeferredTools(cfg deferred.Config) Option {
 // WithWeb adds web_fetch and, with cfg.Search, web_search. web_fetch refuses
 // private and loopback addresses unless cfg.AllowPrivateNetworks is set, and
 // uses cfg's proxy and CA settings; a search backend uses the Client of its
-// own config instead (see web.Config). A bad proxy URL, an unreadable CA file
-// or a search backend that fails validation makes New fail.
+// own config instead (see web.Config). A custom cfg.Fetcher owns its network
+// policy instead. An invalid cfg (see web.New), such as a bad proxy URL, an
+// unreadable CA file or a search backend that fails validation, makes New
+// fail.
 func WithWeb(cfg web.Config) Option {
 	return func(s *settings) { s.web = &cfg }
 }

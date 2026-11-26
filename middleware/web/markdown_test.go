@@ -108,7 +108,7 @@ func TestHTMLToMarkdown(t *testing.T) {
 	base, _ := url.Parse("https://site.test/dir/page")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, got, err := HTMLToMarkdown(strings.NewReader(tt.html), base)
+			_, got, _, err := HTMLToMarkdown(t.Context(), strings.NewReader(tt.html), base, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -120,8 +120,8 @@ func TestHTMLToMarkdown(t *testing.T) {
 }
 
 func TestHTMLToMarkdownTitle(t *testing.T) {
-	title, md, err := HTMLToMarkdown(strings.NewReader(`<html><head><title> My
-	Page </title></head><body><svg><title>icon</title></svg><p>body</p></body></html>`), nil)
+	title, md, _, err := HTMLToMarkdown(t.Context(), strings.NewReader(`<html><head><title> My
+	Page </title></head><body><svg><title>icon</title></svg><p>body</p></body></html>`), nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestHTMLToMarkdownTitle(t *testing.T) {
 }
 
 func TestHTMLToMarkdownNilBase(t *testing.T) {
-	_, md, err := HTMLToMarkdown(strings.NewReader(`<a href="/rel">r</a>`), nil)
+	_, md, _, err := HTMLToMarkdown(t.Context(), strings.NewReader(`<a href="/rel">r</a>`), nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestHTMLToMarkdownNilBase(t *testing.T) {
 }
 
 func TestHTMLToMarkdownRawURLWithSpace(t *testing.T) {
-	_, md, err := HTMLToMarkdown(strings.NewReader(`<a href="my page.html">x</a>`), nil)
+	_, md, _, err := HTMLToMarkdown(t.Context(), strings.NewReader(`<a href="my page.html">x</a>`), nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestHTMLToMarkdownRawURLWithSpace(t *testing.T) {
 	}
 }
 
-// convertWithin converts doc with HTMLToMarkdownContext, failing the test
+// convertWithin converts doc with HTMLToMarkdown, failing the test
 // when it has not finished within d; a converter that ignores its bounds is
 // then reported instead of hanging the test binary.
 func convertWithin(t *testing.T, d time.Duration, ctx context.Context, doc string) (md string, truncated bool, err error) {
@@ -163,7 +163,7 @@ func convertWithin(t *testing.T, d time.Duration, ctx context.Context, doc strin
 	done := make(chan result, 1)
 	start := time.Now()
 	go func() {
-		_, md, truncated, err := HTMLToMarkdownContext(ctx, strings.NewReader(doc), nil, DefaultMaxMarkdownBytes)
+		_, md, truncated, err := HTMLToMarkdown(ctx, strings.NewReader(doc), nil, DefaultMaxMarkdownBytes)
 		done <- result{md, truncated, err}
 	}()
 	select {
@@ -227,14 +227,14 @@ func TestMarkdownNestedTablesBounded(t *testing.T) {
 
 func TestMarkdownTruncatedAtLimit(t *testing.T) {
 	doc := "<p>" + strings.Repeat("é", 1000) + "</p>"
-	_, md, truncated, err := HTMLToMarkdownContext(context.Background(), strings.NewReader(doc), nil, 101)
+	_, md, truncated, err := HTMLToMarkdown(t.Context(), strings.NewReader(doc), nil, 101)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !truncated || len(md) > 101 || !utf8.ValidString(md) {
 		t.Fatalf("markdown = %q (%d bytes), truncated = %v; want valid UTF-8 within 101 bytes, truncated", md, len(md), truncated)
 	}
-	_, md, truncated, err = HTMLToMarkdownContext(context.Background(), strings.NewReader("<p>short</p>"), nil, 101)
+	_, md, truncated, err = HTMLToMarkdown(t.Context(), strings.NewReader("<p>short</p>"), nil, 101)
 	if err != nil || truncated || md != "short" {
 		t.Fatalf("markdown = %q, truncated = %v, err = %v", md, truncated, err)
 	}
@@ -259,7 +259,7 @@ func TestFenceForLinear(t *testing.T) {
 func TestMarkdownHonoursContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, _, _, err := HTMLToMarkdownContext(ctx, strings.NewReader("<p>text</p>"), nil, DefaultMaxMarkdownBytes)
+	_, _, _, err := HTMLToMarkdown(ctx, strings.NewReader("<p>text</p>"), nil, DefaultMaxMarkdownBytes)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
@@ -283,7 +283,7 @@ func (c *cancelAfter) Err() error {
 func TestMarkdownCancelledMidway(t *testing.T) {
 	ctx := &cancelAfter{Context: context.Background(), n: 2}
 	doc := strings.Repeat("<p>a</p>", 10*checkEvery)
-	_, md, _, err := HTMLToMarkdownContext(ctx, strings.NewReader(doc), nil, DefaultMaxMarkdownBytes)
+	_, md, _, err := HTMLToMarkdown(ctx, strings.NewReader(doc), nil, DefaultMaxMarkdownBytes)
 	if !errors.Is(err, context.Canceled) || md != "" {
 		t.Fatalf("markdown = %.40q, err = %v; want no markdown and context.Canceled", md, err)
 	}
@@ -316,7 +316,7 @@ func TestMarkdownWideTableRowBounded(t *testing.T) {
 	// only what conversion allocates beyond it is bounded here.
 	parse := totalAlloc(func() { _, _ = html.Parse(strings.NewReader(doc)) })
 	all := totalAlloc(func() {
-		_, md, truncated, err = HTMLToMarkdownContext(context.Background(), strings.NewReader(doc), nil, limit)
+		_, md, truncated, err = HTMLToMarkdown(t.Context(), strings.NewReader(doc), nil, limit)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -337,7 +337,7 @@ func TestMarkdownWideTableRowBounded(t *testing.T) {
 
 func TestMarkdownNestedTableKeepsLinks(t *testing.T) {
 	doc := `<table><tr><td>outer</td><td><table><tr><td><a href="https://example.com/in">inner link</a></td><td>x|y</td></tr></table></td></tr></table>`
-	_, md, truncated, err := HTMLToMarkdownContext(context.Background(), strings.NewReader(doc), nil, DefaultMaxMarkdownBytes)
+	_, md, truncated, err := HTMLToMarkdown(t.Context(), strings.NewReader(doc), nil, DefaultMaxMarkdownBytes)
 	if err != nil || truncated {
 		t.Fatalf("err = %v, truncated = %v", err, truncated)
 	}
@@ -355,7 +355,7 @@ func TestMarkdownOverflowingRowKeepsCells(t *testing.T) {
 		"one cell":    "<table><tr><td>" + strings.Repeat("word ", 1000) + "</td></tr></table>",
 		"second cell": "<table><tr><td>first</td><td>" + strings.Repeat("word ", 1000) + "</td></tr></table>",
 	} {
-		_, md, truncated, err := HTMLToMarkdownContext(context.Background(), strings.NewReader(doc), nil, limit)
+		_, md, truncated, err := HTMLToMarkdown(t.Context(), strings.NewReader(doc), nil, limit)
 		if err != nil {
 			t.Fatal(err)
 		}

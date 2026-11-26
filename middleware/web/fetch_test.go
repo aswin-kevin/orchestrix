@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -27,7 +26,7 @@ func fetchTool(t *testing.T, cfg Config) tool.Tool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tl := range mw.(agent.ToolProvider).Tools() {
+	for _, tl := range mw.Tools() {
 		if tl.Name() == ToolFetch {
 			return tl
 		}

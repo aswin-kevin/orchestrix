@@ -39,17 +39,18 @@ type FetchInput struct {
 	MaxChars int `json:"max_chars,omitempty" desc:"Maximum characters to return."`
 }
 
-// fetcher runs web_fetch with a guarded client.
+// fetcher runs web_fetch over a Fetcher.
 type fetcher struct {
-	client   *http.Client
+	src      Fetcher
 	maxBytes int64
 	maxChars int
 	timeout  time.Duration
 }
 
-func newFetcher(client *http.Client, cfg Config) *fetcher {
+// newFetchTool returns the web_fetch runner of cfg reading through src.
+func newFetchTool(src Fetcher, cfg Config) *fetcher {
 	return &fetcher{
-		client:   client,
+		src:      src,
 		maxBytes: positive(cfg.MaxBytes, DefaultMaxBytes),
 		maxChars: positive(cfg.MaxChars, DefaultMaxChars),
 		timeout:  positive(cfg.Timeout, DefaultTimeout),
@@ -88,15 +89,6 @@ func fetchSubject(raw json.RawMessage) string {
 	return u.String()
 }
 
-// response is what a fetch read.
-type response struct {
-	url         *url.URL // after redirects
-	status      int
-	contentType string
-	body        []byte
-	truncated   bool // body was cut at maxBytes
-}
-
 func (f *fetcher) fetch(ctx context.Context, in FetchInput, _ *tool.Call) (tool.Result, error) {
 	u, err := canonicalURL(in.URL)
 	if err != nil {
@@ -107,43 +99,95 @@ func (f *fetcher) fetch(ctx context.Context, in FetchInput, _ *tool.Call) (tool.
 	}
 	ctx, cancel := context.WithTimeout(ctx, f.timeout)
 	defer cancel()
-	resp, err := f.get(ctx, u)
+	page, err := f.src.Fetch(ctx, u, f.maxBytes)
+	if err == nil && page == nil {
+		err = errors.New("web: Fetcher returned no page")
+	}
 	if err != nil {
 		return tool.Errorf("fetching %s failed: %s", u, describe(err)), nil
 	}
-
-	title, text, truncated, convErr := f.convert(ctx, resp)
-	if resp.status >= http.StatusBadRequest {
-		// The status is the error the model needs. The converted body, cut
-		// to errorBodyChars characters, is only context: an error page in
-		// an unsupported type, which convert refused, quotes nothing.
-		msg := fmt.Sprintf("HTTP %d for %s", resp.status, resp.url)
-		if quote := []rune(strings.TrimSpace(text)); len(quote) > 0 {
+	finalURL := page.URL
+	if finalURL == "" {
+		finalURL = u.String()
+	}
+	if page.Status >= http.StatusBadRequest {
+		// The status is the error the model needs. The text, cut to
+		// errorBodyChars characters, is only context: an error page in an
+		// unsupported type quotes nothing.
+		msg := fmt.Sprintf("HTTP %d for %s", page.Status, finalURL)
+		if quote := []rune(strings.TrimSpace(page.Text)); len(quote) > 0 {
 			msg += "\n\n" + string(quote[:min(len(quote), errorBodyChars)])
 		}
 		return tool.Errorf("%s", msg), nil
 	}
-	if errors.Is(convErr, context.DeadlineExceeded) || errors.Is(convErr, context.Canceled) {
-		// Only a conversion the deadline cut short is a timeout: content
-		// that was ready in time is returned even if the deadline has
-		// passed since.
-		return tool.Errorf("fetching %s failed: %s", u, describe(convErr)), nil
-	}
-	if convErr != nil {
-		return tool.Errorf("%v", convErr), nil
-	}
-	if truncated {
-		text += "\n\n[content truncated]"
-	}
-	if resp.truncated {
+	text := page.Text
+	if page.Truncated {
 		text += fmt.Sprintf("\n\n[response truncated at %d bytes]", f.maxBytes)
 	}
-	return f.page(in, resp.url.String(), title, text), nil
+	return f.page(in, finalURL, page.Title, text), nil
+}
+
+// HTTPFetcher is the default Fetcher: it reads pages over HTTP with a client
+// from NewHTTPClient, so it enforces that client's network policy, the
+// private-address guard included. HTML is converted to markdown; text, JSON
+// and XML are returned as they are; other content types are an error. It
+// is safe for concurrent use.
+type HTTPFetcher struct {
+	client *http.Client
+}
+
+// NewHTTPFetcher returns an HTTPFetcher whose client NewHTTPClient builds
+// from cc. It fails when NewHTTPClient does.
+func NewHTTPFetcher(cc ClientConfig) (*HTTPFetcher, error) {
+	client, err := NewHTTPClient(cc)
+	if err != nil {
+		return nil, err
+	}
+	return &HTTPFetcher{client: client}, nil
+}
+
+// Fetch implements Fetcher. It reads at most maxBytes of the body (≤ 0
+// means DefaultMaxBytes; Page.Truncated reports the cut) and converts HTML
+// to at most maxBytes of markdown, within ctx; markdown cut there ends with
+// a "[content truncated]" note. The page of a status of 400 or more carries
+// whatever text its body converted to; a conversion that fails or that ctx
+// cuts short is otherwise an error.
+func (f *HTTPFetcher) Fetch(ctx context.Context, u *url.URL, maxBytes int64) (*Page, error) {
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxBytes
+	}
+	resp, err := f.get(ctx, u, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	title, text, truncated, convErr := convert(ctx, resp, maxBytes)
+	page := &Page{URL: resp.url.String(), Status: resp.status, Title: title, Text: text, Truncated: resp.truncated}
+	if resp.status >= http.StatusBadRequest {
+		return page, nil
+	}
+	if convErr != nil {
+		// Only a conversion that fails is an error: content that was ready
+		// in time is returned even if ctx's deadline has passed since.
+		return nil, convErr
+	}
+	if truncated {
+		page.Text += "\n\n[content truncated]"
+	}
+	return page, nil
+}
+
+// response is what a request read.
+type response struct {
+	url         *url.URL // after redirects
+	status      int
+	contentType string
+	body        []byte
+	truncated   bool // body was cut at maxBytes
 }
 
 // get performs the request and reads at most maxBytes of the body. Closing
 // the body unread stops the transfer.
-func (f *fetcher) get(ctx context.Context, u *url.URL) (*response, error) {
+func (f *HTTPFetcher) get(ctx context.Context, u *url.URL, maxBytes int64) (*response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
@@ -154,13 +198,13 @@ func (f *fetcher) get(ctx context.Context, u *url.URL) (*response, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, f.maxBytes+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	r := &response{url: resp.Request.URL, status: resp.StatusCode, contentType: resp.Header.Get("Content-Type"), body: body}
-	if int64(len(body)) > f.maxBytes {
-		r.body, r.truncated = body[:f.maxBytes], true
+	if int64(len(body)) > maxBytes {
+		r.body, r.truncated = body[:maxBytes], true
 	}
 	return r, nil
 }
@@ -182,22 +226,22 @@ func describe(err error) string {
 // convert turns the body into text according to its content type, sniffed
 // when the server sent none. HTML is converted to at most maxBytes of
 // markdown, within ctx; truncated reports that the markdown was cut.
-func (f *fetcher) convert(ctx context.Context, r *response) (title, text string, truncated bool, err error) {
+func convert(ctx context.Context, r *response, maxBytes int64) (title, text string, truncated bool, err error) {
 	ct := r.contentType
 	if ct == "" {
 		ct = http.DetectContentType(r.body)
 	}
 	mediaType, _, err := mime.ParseMediaType(ct)
 	if err != nil {
-		return "", "", false, fmt.Errorf("unsupported content type %q", ct)
+		return "", "", false, fmt.Errorf("web: unsupported content type %q", ct)
 	}
 	switch {
 	case mediaType == "text/html" || mediaType == "application/xhtml+xml":
-		return HTMLToMarkdownContext(ctx, bytes.NewReader(r.body), r.url, int(min(f.maxBytes, math.MaxInt32)))
+		return HTMLToMarkdown(ctx, bytes.NewReader(r.body), r.url, int(min(maxBytes, math.MaxInt32)))
 	case textual(mediaType):
 		return "", strings.ToValidUTF8(string(r.body), "�"), false, nil
 	}
-	return "", "", false, fmt.Errorf("unsupported content type %s", mediaType)
+	return "", "", false, fmt.Errorf("web: unsupported content type %s", mediaType)
 }
 
 // textual reports whether mediaType is returned as it is: text, JSON or XML.

@@ -26,11 +26,11 @@ const (
 
 // ClientConfig configures NewHTTPClient.
 type ClientConfig struct {
-	// Timeout bounds each request, body included; ≤ 0 means
-	// DefaultTimeout.
+	// Timeout bounds each request, body included; 0 means DefaultTimeout.
+	// Negative is an error.
 	Timeout time.Duration
-	// MaxRedirects is how many redirects a request follows; ≤ 0 means
-	// DefaultMaxRedirects.
+	// MaxRedirects is how many redirects a request follows; 0 means
+	// DefaultMaxRedirects. Negative is an error.
 	MaxRedirects int
 	// ProxyURL is the http or https proxy every request goes through.
 	// Empty means no proxy; the proxy environment variables are always
@@ -54,7 +54,9 @@ type ClientConfig struct {
 // refused before resolving. With a proxy the transport connects only to the
 // proxy, and each target host is resolved and checked before the request is
 // sent; the proxy makes the final resolution itself. Redirects beyond
-// MaxRedirects or to a scheme other than http and https fail.
+// MaxRedirects or to a scheme other than http and https fail. It fails when
+// Timeout or MaxRedirects is negative, when ProxyURL is not an http or https
+// URL, and when a CA file cannot be read or holds no PEM certificate.
 func NewHTTPClient(cc ClientConfig) (*http.Client, error) {
 	var policy dialPolicy
 	if !cc.AllowPrivateNetworks {
@@ -66,6 +68,9 @@ func NewHTTPClient(cc ClientConfig) (*http.Client, error) {
 // newClient builds the client of NewHTTPClient with policy (nil allows every
 // address) in place of the one cc selects.
 func newClient(cc ClientConfig, policy dialPolicy) (*http.Client, error) {
+	if err := checkClientLimits(cc.Timeout, cc.MaxRedirects); err != nil {
+		return nil, err
+	}
 	proxy, err := parseProxy(cc.ProxyURL)
 	if err != nil {
 		return nil, err
@@ -99,6 +104,17 @@ func newClient(cc ClientConfig, policy dialPolicy) (*http.Client, error) {
 		Timeout:       positive(cc.Timeout, DefaultTimeout),
 		CheckRedirect: checkRedirect(positive(cc.MaxRedirects, DefaultMaxRedirects)),
 	}, nil
+}
+
+// checkClientLimits rejects a negative timeout or redirect limit.
+func checkClientLimits(timeout time.Duration, maxRedirects int) error {
+	switch {
+	case timeout < 0:
+		return errors.New("web: Timeout must not be negative")
+	case maxRedirects < 0:
+		return errors.New("web: MaxRedirects must not be negative")
+	}
+	return nil
 }
 
 // dialer returns the transport's DialContext. Connections to the proxy's

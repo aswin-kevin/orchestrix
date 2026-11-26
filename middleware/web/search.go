@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -145,10 +144,6 @@ func (s *searchClient) do(req *http.Request) (body []byte, status int, err error
 	}
 	return body, resp.StatusCode, nil
 }
-
-// ErrNoAPIKey reports a search backend config without its API key: Brave and
-// Tavily return an error wrapping it when APIKey is empty.
-var ErrNoAPIKey = errors.New("APIKey is empty")
 
 // clean trims the fields of results and drops those whose URL is not an
 // absolute http or https URL, keeping at most n of them.

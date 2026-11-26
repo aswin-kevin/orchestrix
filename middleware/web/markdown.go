@@ -38,7 +38,8 @@ const (
 )
 
 const (
-	// DefaultMaxMarkdownBytes is how much markdown HTMLToMarkdown writes.
+	// DefaultMaxMarkdownBytes is how much markdown HTMLToMarkdown writes
+	// when its maxBytes is ≤ 0.
 	DefaultMaxMarkdownBytes = 1 << 20
 	// maxNesting is how many quote markers and list indents a line takes
 	// at most; deeper blockquotes and lists add no further prefix.
@@ -52,16 +53,7 @@ const (
 )
 
 // HTMLToMarkdown converts an HTML document to markdown and returns its
-// title (whitespace collapsed; empty when it has none). It is
-// HTMLToMarkdownContext without a deadline, writing at most
-// DefaultMaxMarkdownBytes of markdown.
-func HTMLToMarkdown(r io.Reader, base *url.URL) (title, markdown string, err error) {
-	title, markdown, _, err = HTMLToMarkdownContext(context.Background(), r, base, DefaultMaxMarkdownBytes)
-	return title, markdown, err
-}
-
-// HTMLToMarkdownContext converts an HTML document to markdown and returns
-// its title (whitespace collapsed; empty when it has none). Relative links
+// title (whitespace collapsed; empty when it has none). Relative links
 // and image sources are resolved against the document's <base href>, itself
 // resolved against base; a nil base leaves them as they are written.
 // Scripts, styles and other non-content elements are dropped, and links to
@@ -73,7 +65,7 @@ func HTMLToMarkdown(r io.Reader, base *url.URL) (title, markdown string, err err
 // documents the parser rejects, such as ones nested more than 512 elements
 // deep; the parser's bound on nesting also bounds the conversion's
 // recursion.
-func HTMLToMarkdownContext(ctx context.Context, r io.Reader, base *url.URL, maxBytes int) (title, markdown string, truncated bool, err error) {
+func HTMLToMarkdown(ctx context.Context, r io.Reader, base *url.URL, maxBytes int) (title, markdown string, truncated bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", "", false, err
 	}

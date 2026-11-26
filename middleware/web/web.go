@@ -1,17 +1,19 @@
 // Package web gives the agent the web: the web_fetch tool reads a page and
 // returns it as markdown, and a SearchBackend can add web search.
 //
-// Every request goes through a client that guards against server-side
-// request forgery: unless Config.AllowPrivateNetworks is set, connections to
-// loopback, private, link-local and other non-public addresses are refused
-// at connect time, for every redirect hop and every DNS answer. Pages are
-// model input from an untrusted source; the default prompt says so.
+// web_fetch reads pages through a Fetcher. The default, HTTPFetcher, guards
+// against server-side request forgery: unless Config.AllowPrivateNetworks is
+// set, connections to loopback, private, link-local and other non-public
+// addresses are refused at connect time, for every redirect hop and every
+// DNS answer. A custom Config.Fetcher owns its network policy instead. Pages
+// are model input from an untrusted source; the default prompt says so.
 package web
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"time"
 
@@ -20,6 +22,9 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
+
+// Name is the name of the web middleware.
+const Name = "web"
 
 // ToolFetch is the name of the fetch tool.
 const ToolFetch = "web_fetch"
@@ -41,6 +46,46 @@ const (
 // ErrBlockedAddress is wrapped by the errors of requests the network guard
 // refuses.
 var ErrBlockedAddress = errors.New("web: blocked address")
+
+// ErrNoAPIKey reports a search backend config without its API key: NewBrave
+// and NewTavily return an error wrapping it when APIKey is empty.
+var ErrNoAPIKey = errors.New("web: API key is empty")
+
+// errFetcherExcludesClient reports a Config that sets Fetcher together with
+// settings only the default HTTPFetcher uses.
+var errFetcherExcludesClient = errors.New("web: Fetcher excludes the HTTP client settings")
+
+// Page is what a Fetcher read.
+type Page struct {
+	// URL is the final URL, after redirects; empty means the URL
+	// requested.
+	URL string
+	// Status is the HTTP status; 0 when the source has none. A status of
+	// 400 or more makes web_fetch return an error quoting Text.
+	Status int
+	// Title is the page title; empty when it has none.
+	Title string
+	// Text is the content: markdown for HTML, the body for textual types.
+	Text string
+	// Truncated reports that the source was cut at maxBytes; web_fetch
+	// then notes it after Text.
+	Truncated bool
+}
+
+// Fetcher reads the page at a URL for web_fetch. Implementations must be
+// safe for concurrent use.
+//
+// A custom Fetcher owns its network policy, server-side request forgery
+// included: the private-address guard lives in HTTPFetcher only, so a
+// Fetcher that reaches the network must refuse internal addresses itself
+// when the model must not reach them.
+type Fetcher interface {
+	// Fetch reads u, reading at most maxBytes of its content (maxBytes is
+	// at least 1). ctx carries web_fetch's timeout. A status of 400 or
+	// more is a Page with that Status, not an error; an error means no
+	// page was read.
+	Fetch(ctx context.Context, u *url.URL, maxBytes int64) (*Page, error)
+}
 
 // SearchBackend runs web searches for the search tool. Implementations must
 // be safe for concurrent use. A backend that also implements Validator is
@@ -76,22 +121,31 @@ type Config struct {
 	DisableFetch bool
 	// Search is the web search backend. Nil offers no search tool.
 	Search SearchBackend
+	// Fetcher reads the pages of web_fetch. Nil means an HTTPFetcher built
+	// from the HTTP settings below. A custom Fetcher owns its network
+	// policy (the private-address guard is HTTPFetcher's) and excludes
+	// MaxRedirects, AllowPrivateNetworks, ProxyURL, CACertFiles and
+	// UserAgent; Timeout, MaxBytes and MaxChars still apply.
+	Fetcher Fetcher
 
-	// MaxBytes is how much of a response body web_fetch reads; ≤ 0 means
-	// DefaultMaxBytes.
+	// MaxBytes is how much of a response body web_fetch reads; 0 means
+	// DefaultMaxBytes. Negative is an error.
 	MaxBytes int64
 	// MaxChars is how many characters of text one web_fetch call returns
-	// at most, whatever the model asks for; ≤ 0 means DefaultMaxChars.
+	// at most, whatever the model asks for; 0 means DefaultMaxChars.
+	// Negative is an error.
 	MaxChars int
-	// The HTTP settings below apply to web_fetch only. A search backend
-	// sends its requests with the Client of its own config; to give it the
-	// same policy, build that client with NewHTTPClient(cfg.ClientConfig()).
+	// The HTTP settings below apply to web_fetch only, and all but Timeout
+	// only to the default HTTPFetcher. A search backend sends its requests
+	// with the Client of its own config; to give it the same policy, build
+	// that client with NewHTTPClient(cfg.ClientConfig()).
 
-	// Timeout bounds each web_fetch request, body included; ≤ 0 means
-	// DefaultTimeout.
+	// Timeout bounds each web_fetch request, body and conversion
+	// included, with a custom Fetcher too; 0 means DefaultTimeout.
+	// Negative is an error.
 	Timeout time.Duration
-	// MaxRedirects is how many redirects a web_fetch request follows; ≤ 0
-	// means DefaultMaxRedirects.
+	// MaxRedirects is how many redirects a web_fetch request follows; 0
+	// means DefaultMaxRedirects. Negative is an error.
 	MaxRedirects int
 
 	// AllowPrivateNetworks lets web_fetch reach loopback, private,
@@ -133,31 +187,50 @@ func (c Config) ClientConfig() ClientConfig {
 	}
 }
 
-// middleware is the web middleware. It is immutable after New, so it is
+// Middleware is the web middleware. It is immutable after New, so it is
 // safe to share between concurrent runs.
-type middleware struct {
+type Middleware struct {
 	tools  []tool.Tool
 	prompt string
 }
 
-// New returns the web middleware. It fails when ProxyURL is not an http or
-// https URL, when a CA file cannot be read or holds no PEM certificate, when
-// the Search backend fails validation, and when nothing is enabled (fetch
-// disabled and no Search).
-func New(cfg Config) (agent.Middleware, error) {
+// New returns the web middleware. It fails when MaxBytes, MaxChars, Timeout
+// or MaxRedirects is negative, when Fetcher is set together with an HTTP
+// client setting, when ProxyURL is not an http or https URL, when a CA file
+// cannot be read or holds no PEM certificate, when the Search backend fails
+// validation, and when nothing is enabled (fetch disabled and no Search).
+func New(cfg Config) (*Middleware, error) {
+	switch {
+	case cfg.MaxBytes < 0:
+		return nil, errors.New("web: MaxBytes must not be negative")
+	case cfg.MaxChars < 0:
+		return nil, errors.New("web: MaxChars must not be negative")
+	}
+	if err := checkClientLimits(cfg.Timeout, cfg.MaxRedirects); err != nil {
+		return nil, err
+	}
 	if cfg.DisableFetch && cfg.Search == nil {
 		return nil, errors.New("web: nothing enabled: fetch is disabled and no Search backend is set")
+	}
+	src := cfg.Fetcher
+	if src != nil {
+		if cfg.MaxRedirects != 0 || cfg.AllowPrivateNetworks || cfg.ProxyURL != "" || cfg.CACertFiles != nil || cfg.UserAgent != "" {
+			return nil, errFetcherExcludesClient
+		}
 	}
 	if v, ok := cfg.Search.(Validator); ok {
 		if err := v.Validate(); err != nil {
 			return nil, fmt.Errorf("web: search backend: %w", err)
 		}
 	}
-	client, err := NewHTTPClient(cfg.ClientConfig())
-	if err != nil {
-		return nil, err
+	if src == nil {
+		hf, err := NewHTTPFetcher(cfg.ClientConfig())
+		if err != nil {
+			return nil, err
+		}
+		src = hf
 	}
-	m := &middleware{prompt: DefaultPrompt}
+	m := &Middleware{prompt: DefaultPrompt}
 	if cfg.DisableFetch {
 		m.prompt = searchOnlyPrompt
 	}
@@ -168,7 +241,7 @@ func New(cfg Config) (agent.Middleware, error) {
 		m.prompt = *cfg.Prompt
 	}
 	if !cfg.DisableFetch {
-		m.tools = append(m.tools, newFetcher(client, cfg).tool(cfg.ReadOnly))
+		m.tools = append(m.tools, newFetchTool(src, cfg).tool(cfg.ReadOnly))
 	}
 	if cfg.Search != nil {
 		m.tools = append(m.tools, searchTool(cfg.Search, cfg.ReadOnly))
@@ -177,14 +250,14 @@ func New(cfg Config) (agent.Middleware, error) {
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "web" }
+func (m *Middleware) Name() string { return Name }
 
 // Tools implements agent.ToolProvider.
-func (m *middleware) Tools() []tool.Tool { return slices.Clone(m.tools) }
+func (m *Middleware) Tools() []tool.Tool { return slices.Clone(m.tools) }
 
 // WrapModel implements agent.ModelWrapper. It appends the prompt after the
 // host's system segments, outside the cached prefix.
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if m.prompt != "" && len(m.tools) > 0 {
 		req.Request.System = append(slices.Clone(req.Request.System), m.prompt)
 	}

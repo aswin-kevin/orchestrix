@@ -92,7 +92,7 @@ func TestPromptSegment(t *testing.T) {
 				t.Fatal(err)
 			}
 			req := &agent.ModelRequest{Request: llm.Request{System: []string{"host"}}}
-			_, err = mw.(agent.ModelWrapper).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+			_, err = mw.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 				want := []string{"host"}
 				if tt.want != "" {
 					want = append(want, tt.want)
@@ -124,7 +124,7 @@ func TestNewWithSearchOnly(t *testing.T) {
 	if mw.Name() != "web" {
 		t.Fatalf("name = %q", mw.Name())
 	}
-	tools := mw.(agent.ToolProvider).Tools()
+	tools := mw.Tools()
 	if len(tools) != 1 || tools[0].Name() != ToolSearch {
 		t.Fatalf("tools = %v, want only %s", tools, ToolSearch)
 	}
@@ -160,11 +160,11 @@ func TestNewErrors(t *testing.T) {
 }
 
 // systemOf returns the system segments mw adds to a request.
-func systemOf(t *testing.T, mw agent.Middleware) string {
+func systemOf(t *testing.T, mw *Middleware) string {
 	t.Helper()
 	var system []string
 	req := &agent.ModelRequest{}
-	_, err := mw.(agent.ModelWrapper).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := mw.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		system = r.Request.System
 		return &llm.Response{}, nil
 	})

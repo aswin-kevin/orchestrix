@@ -242,7 +242,7 @@ func ExampleWithDeferredTools() {
 }
 
 func ExampleWithWeb() {
-	search, err := web.DuckDuckGo(web.DuckDuckGoConfig{})
+	search, err := web.NewDuckDuckGo(web.DuckDuckGoConfig{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func ExampleWithWeb_searchProxy() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	cfg.Search, err = web.DuckDuckGo(web.DuckDuckGoConfig{Client: client})
+	cfg.Search, err = web.NewDuckDuckGo(web.DuckDuckGoConfig{Client: client})
 	if err != nil {
 		log.Fatal(err)
 	}

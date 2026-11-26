@@ -26,30 +26,32 @@ type BraveConfig struct {
 	UserAgent string
 }
 
-type brave struct {
-	*searchClient
+// Brave is a SearchBackend that uses the Brave Search API. It is safe for
+// concurrent use.
+type Brave struct {
+	sc     *searchClient
 	apiKey string
 }
 
-// Brave returns a backend that uses the Brave Search API. It fails
-// with an error wrapping ErrNoAPIKey when APIKey is empty.
-func Brave(cfg BraveConfig) (SearchBackend, error) {
+// NewBrave returns a Brave backend. It fails with an error wrapping
+// ErrNoAPIKey when APIKey is empty.
+func NewBrave(cfg BraveConfig) (*Brave, error) {
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("web: brave: %w", ErrNoAPIKey)
+		return nil, fmt.Errorf("%w: BraveConfig.APIKey", ErrNoAPIKey)
 	}
 	sc, err := newSearchClient("brave", cfg.Client, cfg.UserAgent, cfg.BaseURL, defaultBraveURL)
 	if err != nil {
 		return nil, err
 	}
-	return brave{sc, cfg.APIKey}, nil
+	return &Brave{sc: sc, apiKey: cfg.APIKey}, nil
 }
 
 // Search implements SearchBackend.
-func (b brave) Search(ctx context.Context, query string, n int) ([]SearchResult, error) {
+func (b *Brave) Search(ctx context.Context, query string, n int) ([]SearchResult, error) {
 	if n <= 0 {
 		return nil, nil
 	}
-	u, err := url.Parse(b.baseURL)
+	u, err := url.Parse(b.sc.baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("brave: BaseURL: %w", err)
 	}
@@ -63,7 +65,7 @@ func (b brave) Search(ctx context.Context, query string, n int) ([]SearchResult,
 	}
 	req.Header.Set("X-Subscription-Token", b.apiKey)
 	req.Header.Set("Accept", "application/json")
-	body, _, err := b.do(req)
+	body, _, err := b.sc.do(req)
 	if err != nil {
 		return nil, err
 	}

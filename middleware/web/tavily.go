@@ -25,26 +25,28 @@ type TavilyConfig struct {
 	UserAgent string
 }
 
-type tavily struct {
-	*searchClient
+// Tavily is a SearchBackend that uses the Tavily search API. It is safe
+// for concurrent use.
+type Tavily struct {
+	sc     *searchClient
 	apiKey string
 }
 
-// Tavily returns a backend that uses the Tavily search API. It fails
-// with an error wrapping ErrNoAPIKey when APIKey is empty.
-func Tavily(cfg TavilyConfig) (SearchBackend, error) {
+// NewTavily returns a Tavily backend. It fails with an error wrapping
+// ErrNoAPIKey when APIKey is empty.
+func NewTavily(cfg TavilyConfig) (*Tavily, error) {
 	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("web: tavily: %w", ErrNoAPIKey)
+		return nil, fmt.Errorf("%w: TavilyConfig.APIKey", ErrNoAPIKey)
 	}
 	sc, err := newSearchClient("tavily", cfg.Client, cfg.UserAgent, cfg.BaseURL, defaultTavilyURL)
 	if err != nil {
 		return nil, err
 	}
-	return tavily{sc, cfg.APIKey}, nil
+	return &Tavily{sc: sc, apiKey: cfg.APIKey}, nil
 }
 
 // Search implements SearchBackend.
-func (t tavily) Search(ctx context.Context, query string, n int) ([]SearchResult, error) {
+func (t *Tavily) Search(ctx context.Context, query string, n int) ([]SearchResult, error) {
 	if n <= 0 {
 		return nil, nil
 	}
@@ -52,14 +54,14 @@ func (t tavily) Search(ctx context.Context, query string, n int) ([]SearchResult
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.baseURL, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.sc.baseURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+t.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	body, _, err := t.do(req)
+	body, _, err := t.sc.do(req)
 	if err != nil {
 		return nil, err
 	}

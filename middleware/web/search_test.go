@@ -71,7 +71,7 @@ func must[T any](v T, err error) T {
 
 func TestDuckDuckGoParses(t *testing.T) {
 	srv, got := backendServer(t, 200, "text/html", ddgFixture)
-	b := must(DuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL, UserAgent: "test-agent"}))
+	b := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL, UserAgent: "test-agent"}))
 	res, err := b.Search(context.Background(), "golang & more", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestDuckDuckGoParses(t *testing.T) {
 
 func TestDuckDuckGoLimitsResults(t *testing.T) {
 	srv, _ := backendServer(t, 200, "text/html", ddgFixture)
-	res, err := must(DuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 2)
+	res, err := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 2)
 	if err != nil || len(res) != 2 {
 		t.Fatalf("results = %v, err = %v", res, err)
 	}
@@ -108,7 +108,7 @@ func TestBraveRequestAndParse(t *testing.T) {
 		{"title":" One ","url":"https://one.example/","description":" first "},
 		{"title":"Bad","url":"ftp://bad.example/","description":"dropped"},
 		{"title":"Two","url":"https://two.example/","description":"second"}]}}`)
-	b := must(Brave(BraveConfig{APIKey: "k", BaseURL: srv.URL}))
+	b := must(NewBrave(BraveConfig{APIKey: "k", BaseURL: srv.URL}))
 	res, err := b.Search(context.Background(), "go lang", 3)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestTavilyRequestAndParse(t *testing.T) {
 	srv, got := backendServer(t, 200, "application/json", `{"results":[
 		{"title":"A","url":"https://a.example/","content":" about a "},
 		{"title":"B","url":"/relative","content":"dropped"}]}`)
-	b := must(Tavily(TavilyConfig{APIKey: "secret", BaseURL: srv.URL}))
+	b := must(NewTavily(TavilyConfig{APIKey: "secret", BaseURL: srv.URL}))
 	res, err := b.Search(context.Background(), "query", 4)
 	if err != nil {
 		t.Fatal(err)
@@ -154,9 +154,9 @@ func TestTavilyRequestAndParse(t *testing.T) {
 
 // backends builds each backend against a test endpoint.
 var backends = map[string]func(url string) (SearchBackend, error){
-	"duckduckgo": func(u string) (SearchBackend, error) { return DuckDuckGo(DuckDuckGoConfig{BaseURL: u}) },
-	"brave":      func(u string) (SearchBackend, error) { return Brave(BraveConfig{APIKey: "k", BaseURL: u}) },
-	"tavily":     func(u string) (SearchBackend, error) { return Tavily(TavilyConfig{APIKey: "k", BaseURL: u}) },
+	"duckduckgo": func(u string) (SearchBackend, error) { return NewDuckDuckGo(DuckDuckGoConfig{BaseURL: u}) },
+	"brave":      func(u string) (SearchBackend, error) { return NewBrave(BraveConfig{APIKey: "k", BaseURL: u}) },
+	"tavily":     func(u string) (SearchBackend, error) { return NewTavily(TavilyConfig{APIKey: "k", BaseURL: u}) },
 }
 
 func TestSearchHTTPErrorStatus(t *testing.T) {
@@ -207,7 +207,7 @@ func TestSearchDoesNotFollowRedirects(t *testing.T) {
 		http.Redirect(w, r, second.URL, http.StatusFound)
 	}))
 	defer first.Close()
-	_, err := must(Brave(BraveConfig{APIKey: "k", BaseURL: first.URL})).Search(context.Background(), "q", 3)
+	_, err := must(NewBrave(BraveConfig{APIKey: "k", BaseURL: first.URL})).Search(context.Background(), "q", 3)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 302") {
 		t.Fatalf("err = %v", err)
 	}
@@ -222,7 +222,7 @@ func TestDuckDuckGoDropsEmptyLinks(t *testing.T) {
 <div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=">Empty uddg</a></div>
 <div class="result"><a class="result__a" href="//duckduckgo.com/l/">Bare</a></div>
 <div class="result"><a class="result__a">No href</a></div>`)
-	res, err := must(DuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 5)
+	res, err := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 5)
 	if err != nil || len(res) != 0 {
 		t.Fatalf("results = %v, err = %v", res, err)
 	}
@@ -230,7 +230,7 @@ func TestDuckDuckGoDropsEmptyLinks(t *testing.T) {
 
 func TestDuckDuckGoChallengeIsAnError(t *testing.T) {
 	srv, _ := backendServer(t, 202, "text/html", "<html>verify you are human</html>")
-	_, err := must(DuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 5)
+	_, err := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 5)
 	if err == nil || err.Error() != "duckduckgo: HTTP 202 (challenge)" {
 		t.Fatalf("err = %v", err)
 	}
@@ -239,7 +239,7 @@ func TestDuckDuckGoChallengeIsAnError(t *testing.T) {
 func TestSearchNonPositiveN(t *testing.T) {
 	srv, _ := backendServer(t, 200, "application/json", `{"results":[{"title":"A","url":"https://a.example/"}]}`)
 	for _, n := range []int{0, -1} {
-		res, err := must(Tavily(TavilyConfig{APIKey: "k", BaseURL: srv.URL})).Search(context.Background(), "q", n)
+		res, err := must(NewTavily(TavilyConfig{APIKey: "k", BaseURL: srv.URL})).Search(context.Background(), "q", n)
 		if err != nil || res != nil {
 			t.Fatalf("n = %d: results = %v, err = %v", n, res, err)
 		}
@@ -251,7 +251,7 @@ func TestSearchNonPositiveN(t *testing.T) {
 
 func TestBraveBaseURLWithQuery(t *testing.T) {
 	srv, got := backendServer(t, 200, "application/json", `{"web":{"results":[]}}`)
-	b := must(Brave(BraveConfig{APIKey: "k", BaseURL: srv.URL + "/search?country=us"}))
+	b := must(NewBrave(BraveConfig{APIKey: "k", BaseURL: srv.URL + "/search?country=us"}))
 	if _, err := b.Search(context.Background(), "go", 2); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestBraveBaseURLWithQuery(t *testing.T) {
 
 func TestBraveInvalidJSON(t *testing.T) {
 	srv, _ := backendServer(t, 200, "text/html", "<html>not json</html>")
-	_, err := must(Brave(BraveConfig{APIKey: "k", BaseURL: srv.URL})).Search(context.Background(), "q", 3)
+	_, err := must(NewBrave(BraveConfig{APIKey: "k", BaseURL: srv.URL})).Search(context.Background(), "q", 3)
 	if err == nil || !strings.Contains(err.Error(), "invalid response") {
 		t.Fatalf("err = %v", err)
 	}
@@ -270,13 +270,13 @@ func TestBraveInvalidJSON(t *testing.T) {
 
 func TestSearchCancelledContext(t *testing.T) {
 	srv, _ := backendServer(t, 200, "application/json", `{}`)
-	mw, err := New(Config{DisableFetch: true, Search: must(Brave(BraveConfig{APIKey: "k", BaseURL: srv.URL}))})
+	mw, err := New(Config{DisableFetch: true, Search: must(NewBrave(BraveConfig{APIKey: "k", BaseURL: srv.URL}))})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	res, err := mw.(agent.ToolProvider).Tools()[0].Call(ctx, json.RawMessage(`{"query":"q"}`), &tool.Call{})
+	res, err := mw.Tools()[0].Call(ctx, json.RawMessage(`{"query":"q"}`), &tool.Call{})
 	if err != nil || !res.IsError {
 		t.Fatalf("result = %q (error %v), err = %v", res.Flatten(), res.IsError, err)
 	}
@@ -287,7 +287,7 @@ func TestSearchToolAbsentWithoutBackend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tl := range mw.(agent.ToolProvider).Tools() {
+	for _, tl := range mw.Tools() {
 		if tl.Name() == ToolSearch {
 			t.Fatal("web_search offered without a backend")
 		}
@@ -355,7 +355,7 @@ func TestSearchUsesProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The endpoint is never reachable directly; only the proxy answers.
-	b := must(Tavily(TavilyConfig{APIKey: "k", BaseURL: "http://search.invalid/search", Client: client}))
+	b := must(NewTavily(TavilyConfig{APIKey: "k", BaseURL: "http://search.invalid/search", Client: client}))
 	res, err := b.Search(context.Background(), "q", 3)
 	if err != nil || len(res) != 1 {
 		t.Fatalf("results = %v, err = %v", res, err)
@@ -367,12 +367,16 @@ func TestSearchUsesProxy(t *testing.T) {
 	}
 }
 
-func TestMissingAPIKeyFailsNew(t *testing.T) {
-	if _, err := Brave(BraveConfig{}); !errors.Is(err, ErrNoAPIKey) {
-		t.Fatalf("Brave err = %v", err)
+func TestErrNoAPIKeyPrefix(t *testing.T) {
+	if !strings.HasPrefix(ErrNoAPIKey.Error(), "web: ") {
+		t.Fatalf("ErrNoAPIKey = %q, want the web: prefix", ErrNoAPIKey)
 	}
-	if _, err := Tavily(TavilyConfig{}); !errors.Is(err, ErrNoAPIKey) {
-		t.Fatalf("Tavily err = %v", err)
+	_, braveErr := NewBrave(BraveConfig{})
+	_, tavilyErr := NewTavily(TavilyConfig{})
+	for name, err := range map[string]error{"brave": braveErr, "tavily": tavilyErr} {
+		if !errors.Is(err, ErrNoAPIKey) || !strings.HasPrefix(err.Error(), "web: ") {
+			t.Fatalf("%s err = %v, want ErrNoAPIKey with the web: prefix", name, err)
+		}
 	}
 }
 
@@ -396,7 +400,7 @@ func TestSearchToolFormatsAndClamps(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		res, err := mw.(agent.ToolProvider).Tools()[0].Call(context.Background(), json.RawMessage(input), &tool.Call{})
+		res, err := mw.Tools()[0].Call(context.Background(), json.RawMessage(input), &tool.Call{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -455,7 +459,7 @@ func TestSearchPromptOnlyWhenEnabled(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out string
-		_, err = mw.(agent.ModelWrapper).WrapModel(context.Background(), &agent.ModelRequest{}, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+		_, err = mw.WrapModel(context.Background(), &agent.ModelRequest{}, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 			out = strings.Join(r.Request.System, "|")
 			return &llm.Response{}, nil
 		})

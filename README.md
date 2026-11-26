@@ -1027,7 +1027,7 @@ The web tools are opt-in. `WithWeb` adds `web_fetch`, which reads a page and ret
 
 ```go
 // Imports omitted; model comes from surrounding code.
-search, err := web.DuckDuckGo(web.DuckDuckGoConfig{})
+search, err := web.NewDuckDuckGo(web.DuckDuckGoConfig{})
 if err != nil {
 	log.Fatal(err)
 }
@@ -1042,7 +1042,8 @@ _, _ = a, err
 - **Network guard.** By default every `web_fetch` connection to a loopback, private, link-local or otherwise non-public address is refused when it is made, for each redirect hop and each DNS answer, so a page cannot lead the agent into your internal network. `AllowPrivateNetworks` turns this off.
 - **Proxy and certificates.** `ProxyURL` sends `web_fetch` requests through an http or https proxy (the proxy environment variables are ignored), and `CACertFiles` adds root certificates for them. A bad proxy URL or an unreadable CA file makes `New` fail. These settings, like the network guard, cover `web_fetch` only (see below for search). Through a proxy, the agent connects only to the proxy, so the guard resolves each target host itself and refuses a blocked answer before sending the request; the proxy then resolves the host again for its own connection,, so a DNS answer that changes in between is not caught.
 - **Permissions.** The tools need an allow rule or an approval, unless `ReadOnly` is set, which allows them without one. `web_fetch(pattern)` rules match the URL in a canonical form: lowercase scheme and host, no default port, `.` and `..` segments resolved, escaped unreserved characters decoded, no fragment. URLs with a user name or password are refused. Rules see only the URL the model asked for: redirects are followed without checking the rules again, though the network guard checks every hop.
-- **Search backends.** `web.DuckDuckGo` (no key), `web.Brave` and `web.Tavily` (API key required; an empty key fails with an error wrapping `web.ErrNoAPIKey`). Each constructor returns `(SearchBackend, error)` and takes an optional `Client`; pass one from `web.NewHTTPClient` to search through a proxy or with extra certificates. Search requests never follow redirects. Implement `web.SearchBackend` for any other service.
+- **Search backends.** `web.NewDuckDuckGo` (no key), `web.NewBrave` and `web.NewTavily` (API key required; an empty key fails with an error wrapping `web.ErrNoAPIKey`). Each constructor returns its concrete backend type and takes an optional `Client`; pass one from `web.NewHTTPClient` to search through a proxy or with extra certificates. Search requests never follow redirects. Implement `web.SearchBackend` for any other service.
+- **Custom fetcher.** `Fetcher` replaces how `web_fetch` reads pages (a cache, a headless browser, a test double); the default is `web.HTTPFetcher`. A custom fetcher owns its network policy: the private-address guard lives in `HTTPFetcher` only, so a fetcher that reaches the network must refuse internal addresses itself. Setting `Fetcher` together with an HTTP client setting (`MaxRedirects`, `AllowPrivateNetworks`, `ProxyURL`, `CACertFiles`, `UserAgent`) makes `New` fail; `Timeout`, `MaxBytes` and `MaxChars` still apply.
 
 A search backend sends its requests with its own `Client`. Without one it uses a plain client: no proxy, no extra certificates, and private addresses allowed, since the endpoint is fixed by you and not chosen by the model. To send search through the same proxy as `web_fetch`, build its client from the same settings:
 
@@ -1053,7 +1054,7 @@ client, err := web.NewHTTPClient(cfg.ClientConfig()) // web_fetch's proxy and ne
 if err != nil {
 	log.Fatal(err)
 }
-cfg.Search, err = web.DuckDuckGo(web.DuckDuckGoConfig{Client: client})
+cfg.Search, err = web.NewDuckDuckGo(web.DuckDuckGoConfig{Client: client})
 if err != nil {
 	log.Fatal(err)
 }

@@ -26,40 +26,44 @@ type DuckDuckGoConfig struct {
 	//
 	//	c, err := web.NewHTTPClient(web.ClientConfig{ProxyURL: "http://proxy:3128", AllowPrivateNetworks: true})
 	//	...
-	//	web.DuckDuckGo(web.DuckDuckGoConfig{Client: c})
+	//	web.NewDuckDuckGo(web.DuckDuckGoConfig{Client: c})
 	Client *http.Client
 	// UserAgent is sent with every request; "" means DefaultUserAgent.
 	UserAgent string
 }
 
-type duckDuckGo struct{ *searchClient }
-
-// DuckDuckGo returns a backend that searches the HTML endpoint of
-// DuckDuckGo. It fails when the default client cannot be built.
+// DuckDuckGo is a SearchBackend that searches the HTML endpoint of
+// DuckDuckGo. It is safe for concurrent use.
 //
 // DuckDuckGo answers automated clients it distrusts with a bot-challenge
 // page. A challenge answered with status 202 is an error; one answered with
 // 200 has no results, so it comes back as no results.
-func DuckDuckGo(cfg DuckDuckGoConfig) (SearchBackend, error) {
+type DuckDuckGo struct {
+	sc *searchClient
+}
+
+// NewDuckDuckGo returns a DuckDuckGo backend. It fails when the default
+// client cannot be built.
+func NewDuckDuckGo(cfg DuckDuckGoConfig) (*DuckDuckGo, error) {
 	sc, err := newSearchClient("duckduckgo", cfg.Client, cfg.UserAgent, cfg.BaseURL, defaultDuckDuckGoURL)
 	if err != nil {
 		return nil, err
 	}
-	return duckDuckGo{sc}, nil
+	return &DuckDuckGo{sc: sc}, nil
 }
 
 // Search implements SearchBackend.
-func (d duckDuckGo) Search(ctx context.Context, query string, n int) ([]SearchResult, error) {
+func (d *DuckDuckGo) Search(ctx context.Context, query string, n int) ([]SearchResult, error) {
 	if n <= 0 {
 		return nil, nil
 	}
 	form := url.Values{"q": {query}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.baseURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.sc.baseURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	body, status, err := d.do(req)
+	body, status, err := d.sc.do(req)
 	if err != nil {
 		return nil, err
 	}
