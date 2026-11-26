@@ -84,3 +84,16 @@ func TestScriptedDeciderConcurrent(t *testing.T) {
 		t.Errorf("Calls = %d, want 20", d.Calls())
 	}
 }
+
+func TestScriptedDeciderAnswersAreCopies(t *testing.T) {
+	script := map[string]llm.Answer{"q": {Type: llm.QuestionYesNo, Yes: 0.9}}
+	d := llmtest.NewDecider(llmtest.DecisionTurn{Answers: script})
+	resp, err := d.Decide(context.Background(), llm.DecisionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Answers["q"] = llm.Answer{Type: llm.QuestionYesNo, Yes: 0.1}
+	if script["q"].Yes != 0.9 {
+		t.Error("mutating the response changed the script")
+	}
+}

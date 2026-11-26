@@ -2,6 +2,7 @@ package llmtest
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"sync"
 
@@ -63,7 +64,7 @@ func (d *ScriptedDecider) Decide(ctx context.Context, req llm.DecisionRequest) (
 	if turn.Err != nil {
 		return nil, turn.Err
 	}
-	return &llm.DecisionResponse{Model: turn.Model, Answers: turn.Answers, Usage: turn.Usage}, nil
+	return &llm.DecisionResponse{Model: turn.Model, Answers: maps.Clone(turn.Answers), Usage: turn.Usage}, nil
 }
 
 // cloneDecisionRequest copies the slices of req that callers commonly mutate.

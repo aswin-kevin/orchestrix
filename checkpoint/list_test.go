@@ -111,3 +111,12 @@ func TestPaginateNegativeLimit(t *testing.T) {
 		t.Fatal("negative limit accepted")
 	}
 }
+
+func TestPaginateEmptyIsNonNil(t *testing.T) {
+	for name, threads := range map[string][]checkpoint.ThreadInfo{"nil": nil, "empty": {}} {
+		p, err := checkpoint.Paginate(threads, checkpoint.ListOptions{})
+		if err != nil || p.Threads == nil || len(p.Threads) != 0 || p.Next != "" {
+			t.Errorf("%s: Paginate = %#v, %v, want non-nil empty Threads", name, p, err)
+		}
+	}
+}

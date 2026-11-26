@@ -188,3 +188,38 @@ func TestSchemaForRawMessageUnchanged(t *testing.T) {
 		t.Fatalf("RawMessage schema = %v, want %v", got, want)
 	}
 }
+
+type nilHook string
+
+func (nilHook) JSONSchema() map[string]any { return nil }
+
+func TestSchemaForNilHookIsEmptySchema(t *testing.T) {
+	type args struct {
+		N nilHook `json:"n"`
+		D nilHook `json:"d" desc:"described"`
+	}
+	props := SchemaFor[args]()["properties"].(map[string]any)
+	if got, ok := props["n"].(map[string]any); !ok || got == nil || len(got) != 0 {
+		t.Fatalf("nil hook schema = %#v, want a non-nil empty map", props["n"])
+	}
+	if want := map[string]any{"description": "described"}; !reflect.DeepEqual(props["d"], want) {
+		t.Fatalf("described nil hook schema = %#v, want %v", props["d"], want)
+	}
+}
+
+func TestSchemaForTopLevelHookMustBeObject(t *testing.T) {
+	for name, f := range map[string]func(){
+		"string": func() { SchemaFor[valueHook]() },
+		"nil":    func() { SchemaFor[nilHook]() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				msg, _ := recover().(string)
+				if !strings.Contains(msg, "tool.SchemaFor:") {
+					t.Errorf("panic = %q, want a tool.SchemaFor panic", msg)
+				}
+			}()
+			f()
+		})
+	}
+}

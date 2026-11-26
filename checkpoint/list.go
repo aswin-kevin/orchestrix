@@ -95,9 +95,9 @@ func compareListOrder(a, b ThreadInfo) int {
 // Paginate returns the page of threads that opts selects, for stores that
 // hold the whole listing in memory. It sorts a clone of threads in list
 // order, skips every thread at or before the cursor position, returns up to
-// the limit and sets Next when more remain. A thread saved while a listing
-// is in progress may appear twice or be skipped, because each page is
-// computed from the store's contents at that moment.
+// the limit (Threads is never nil) and sets Next when more remain. A thread
+// saved while a listing is in progress may appear twice or be skipped,
+// because each page is computed from the store's contents at that moment.
 func Paginate(threads []ThreadInfo, opts ListOptions) (ListPage, error) {
 	limit := opts.Limit
 	switch {
@@ -126,12 +126,12 @@ func Paginate(threads []ThreadInfo, opts ListOptions) (ListPage, error) {
 		})
 		sorted = sorted[i:]
 	}
-	page := ListPage{Threads: []ThreadInfo{}}
 	if len(sorted) > limit {
-		page.Threads = sorted[:limit]
-		page.Next = ListCursor(sorted[limit-1])
-	} else {
-		page.Threads = sorted
+		return ListPage{Threads: sorted[:limit], Next: ListCursor(sorted[limit-1])}, nil
 	}
-	return page, nil
+	if sorted == nil {
+		// slices.Clone(nil) is nil; an empty page still has a non-nil slice.
+		sorted = []ThreadInfo{}
+	}
+	return ListPage{Threads: sorted}, nil
 }

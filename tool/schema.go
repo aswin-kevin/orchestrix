@@ -19,18 +19,23 @@ var (
 )
 
 // schemaHook returns the schema a type declares through a JSONSchema method
-// on the type or its pointer, called on the zero value, and a copy of it so
-// callers may add keys.
+// on the type or its pointer, called on the zero value, as a shallow copy so
+// callers may add top-level keys. A method returning nil yields {}.
 func schemaHook(t reflect.Type) (map[string]any, bool) {
-	if t.Kind() != reflect.Pointer && t.Implements(schemaHookType) {
-		h := reflect.Zero(t).Interface().(interface{ JSONSchema() map[string]any })
-		return maps.Clone(h.JSONSchema()), true
+	var h interface{ JSONSchema() map[string]any }
+	switch {
+	case t.Kind() != reflect.Pointer && t.Implements(schemaHookType):
+		h = reflect.Zero(t).Interface().(interface{ JSONSchema() map[string]any })
+	case reflect.PointerTo(t).Implements(schemaHookType):
+		h = reflect.New(t).Interface().(interface{ JSONSchema() map[string]any })
+	default:
+		return nil, false
 	}
-	if reflect.PointerTo(t).Implements(schemaHookType) {
-		h := reflect.New(t).Interface().(interface{ JSONSchema() map[string]any })
-		return maps.Clone(h.JSONSchema()), true
+	s := maps.Clone(h.JSONSchema())
+	if s == nil {
+		s = map[string]any{}
 	}
-	return nil, false
+	return s, true
 }
 
 // SchemaFor generates the JSON schema of the struct type T from its fields:
@@ -42,16 +47,21 @@ func schemaHook(t reflect.Type) (map[string]any, bool) {
 //
 // A type may declare its own schema: when the type or its pointer has a
 // JSONSchema() map[string]any method, its result for the zero value is used
-// as is (a copy is taken). Otherwise time.Time is a date-time string, []byte
-// is a base64 string, and any encoding.TextMarshaler is a string; the enum
-// tag may narrow the latter. The desc and enum tags apply on top.
+// as is (a shallow copy is taken; nil means {}). Otherwise time.Time is a
+// date-time string, []byte is a base64 string, and any
+// encoding.TextMarshaler is a string; the enum tag may narrow the latter. The
+// desc and enum tags apply on top.
 //
-// It panics when T is not a struct or contains a kind JSON cannot express
-// (chan, func, complex), naming the offending field path, because that is a
-// programming error.
+// It panics when T declares a schema whose "type" is not "object" (tool input
+// is always an object), when T declares none and is not a struct, or when T
+// contains a kind JSON cannot express (chan, func, complex), naming the offending
+// field path, because that is a programming error.
 func SchemaFor[T any]() map[string]any {
 	t := reflect.TypeFor[T]()
 	if s, ok := schemaHook(t); ok {
+		if s["type"] != "object" {
+			panic(fmt.Sprintf("tool.SchemaFor: %s's JSONSchema is not an object schema", t))
+		}
 		return s
 	}
 	if t.Kind() != reflect.Struct {
