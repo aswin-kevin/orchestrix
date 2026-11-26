@@ -9,8 +9,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/checkpoint"
+	cpmemory "github.com/aswin-kevin/orchestrix/checkpoint/memory"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
+	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -18,8 +23,9 @@ import (
 // and of the task in TaskRecord.Status.
 type Status string
 
-// The statuses of a task. StatusRunning, StatusWaiting and StatusLost never
-// end a task for good; the others are terminal.
+// The statuses of a task. StatusRunning and StatusWaiting do not end a
+// task; the others, StatusLost included, are terminal: nothing resumes the
+// task on its own, though an ended task may be continued (see Continuer).
 const (
 	// StatusRunning marks a task whose current episode has not stopped.
 	StatusRunning Status = "running"
@@ -42,8 +48,8 @@ const (
 	StatusLost Status = "lost"
 )
 
-// terminal reports whether s ends a task for good: every status but running
-// and waiting (nothing in this process can resume a lost task).
+// terminal reports whether s ends a task: every status but running and
+// waiting.
 func (s Status) terminal() bool { return s != StatusRunning && s != StatusWaiting }
 
 // Errors of the async contract. A Runner's Handle reports ErrFinished (or an
@@ -74,7 +80,9 @@ type Request struct {
 	// TaskThreadID is the thread the task should run on, ThreadID+"/"+TaskID;
 	// never empty. A runner that keeps the task's history (to continue it,
 	// resume it after a decision or reattach it after a restart) keys it by
-	// this id.
+	// this id. The local runner saves it with the parent agent's
+	// Checkpointer, so a host thread of that name would collide with it:
+	// never name a thread <thread>/async_N.
 	TaskThreadID string
 	// SubagentType is one of the subagent types the middleware offers.
 	SubagentType string
@@ -134,10 +142,14 @@ type Handle interface {
 	// out), not the task's reading of the message.
 	Send(ctx context.Context, message string) error
 	// Stop asks the episode to end; the task should then end promptly with
-	// StatusCancelled. It is a no-op returning nil once Done is closed, and
-	// calling it again is safe. ctx bounds the request itself (a remote
-	// runner that calls out), not the wait for Done; an error means the
-	// request failed, and the middleware still waits for Done.
+	// StatusCancelled. Once Done is closed, Stop returns nil and leaves Done
+	// and Outcome unchanged; on a waiting episode the runner may then
+	// release what it holds for the task (the middleware calls it when a
+	// waiting task is cancelled: by cancel_task, by the end of the nested
+	// run that started it, or by Close). Calling it again is safe. ctx
+	// bounds the request itself (a remote runner that calls out), not the
+	// wait for Done; an error means the request failed, and the middleware
+	// still waits for Done.
 	Stop(ctx context.Context) error
 }
 
@@ -147,8 +159,12 @@ type Continuer interface {
 	// Continue starts the next episode of the ended task with message, on
 	// the same history, and returns its Handle; the receiver's Done stays
 	// closed. It fails with ErrWaiting for a waiting episode and with
-	// another error while the episode runs. ctx carries the caller's values
-	// but the new episode must not end with it (as for Runner.Start).
+	// another error while the episode runs. At most one call per Handle
+	// succeeds: a later or concurrent one fails with an error wrapping
+	// ErrFinished and never starts a second episode (the next follow-up goes
+	// to the new Handle). A failed call starts nothing, so it may be
+	// retried. ctx carries the caller's values but the new episode must not
+	// end with it (as for Runner.Start).
 	Continue(ctx context.Context, message string) (Handle, error)
 }
 
@@ -158,7 +174,9 @@ type Resolver interface {
 	// Resolve answers the waiting episode's Pending with decisions, one per
 	// request, and returns the Handle of the next episode; the receiver's
 	// Done stays closed. It fails with ErrNotWaiting when the episode did
-	// not stop waiting. ctx is handled as by Continue.
+	// not stop waiting. At most one call per Handle succeeds: a later or
+	// concurrent one fails with an error wrapping ErrNotWaiting and never
+	// starts a second episode. ctx is handled as by Continue.
 	Resolve(ctx context.Context, decisions []agent.Decision) (Handle, error)
 }
 
@@ -166,9 +184,14 @@ type Resolver interface {
 // process does not hold.
 type Reattacher interface {
 	// Attach returns a Handle for the task of rec, which this process does
-	// not hold (after a restart, or after the middleware released it). It
+	// not hold (after a restart, or after the middleware released it). For
+	// a waiting or ended record it returns a Handle whose episode stopped:
+	// Done is closed and Outcome mirrors the record (Status, Result as
+	// Text, Error and Pending), so it can be continued or resolved. It
 	// fails with an error wrapping ErrCannotReattach when the task's
-	// history is gone. ctx is handled as by Runner.Start.
+	// history is gone or the record cannot be taken over. The middleware
+	// serializes Attach calls, so a runner need not handle two concurrent
+	// calls for one record. ctx is handled as by Runner.Start.
 	Attach(ctx context.Context, rec TaskRecord) (Handle, error)
 }
 
@@ -193,18 +216,79 @@ var errStopped = errors.New("async: task stopped")
 // noTextResult is the result of a task that completed without text.
 const noTextResult = "(the background task returned no text)"
 
-// localRunner runs tasks as subagents of the run that starts them.
+// localRunner runs tasks as subagents of the run that starts them. Each task
+// runs on its own thread (Request.TaskThreadID) and is saved there, with the
+// parent agent's Checkpointer or, when it has none, with fallback, a store of
+// this process: a task can then be continued in this process even after the
+// middleware released it. fallback's entry of a task is deleted once the
+// task's record is pruned (see pruned); the parent's Checkpointer is never
+// pruned.
 type localRunner struct {
 	specs    map[string]subagents.Subagent
 	launcher *subagents.Launcher // built with inboxes as its extra
 	inboxes  *inboxes
 	timeout  time.Duration
+	fallback *cpmemory.Checkpointer
+}
+
+var _ Reattacher = (*localRunner)(nil)
+
+// newLocalRunner returns the local runner of specs; New builds it when
+// Config.Runner is nil.
+func newLocalRunner(specs map[string]subagents.Subagent, timeout time.Duration) *localRunner {
+	// The inbox middleware is one pointer: every child, and their children,
+	// share it, and the Launcher dedupes it by identity.
+	boxes := newInboxes()
+	l := &localRunner{specs: specs, inboxes: boxes, timeout: timeout, fallback: cpmemory.New()}
+	l.launcher = subagents.NewLauncher(subagents.LauncherConfig{Extra: []agent.Middleware{boxes}, Checkpointer: l.checkpointer})
+	return l
+}
+
+// checkpointer is the store the tasks started by parent's runs save with.
+func (l *localRunner) checkpointer(parent *agent.Agent) checkpoint.Checkpointer {
+	if cp := parent.Config().Checkpointer; cp != nil {
+		return cp
+	}
+	return l.fallback
+}
+
+// pruned forgets the fallback entry of a task whose record was pruned; no
+// one can continue it any more. The parent's Checkpointer is left alone.
+func (l *localRunner) pruned(r TaskRecord) {
+	if r.TaskThreadID != "" {
+		_ = l.fallback.Delete(context.Background(), r.TaskThreadID) // absent when the parent saved it
+	}
+}
+
+// followUpKey keys the followUp the middleware adds to the context of a
+// Continue or Attach call.
+type followUpKey struct{}
+
+// followUp is what the middleware tells the local runner about the parent
+// call that continues (or reattaches) a task.
+type followUp struct {
+	// mode is the parent run's current permission mode: the next episode
+	// runs in the stricter of it and the task's own mode.
+	mode permission.Mode
+	// backend is the call's backend, for a reattached task.
+	backend backend.Backend
+}
+
+// withFollowUp returns ctx carrying f.
+func withFollowUp(ctx context.Context, f followUp) context.Context {
+	return context.WithValue(ctx, followUpKey{}, f)
+}
+
+// followUpOf returns the followUp of ctx, if any.
+func followUpOf(ctx context.Context) (followUp, bool) {
+	f, ok := ctx.Value(followUpKey{}).(followUp)
+	return f, ok
 }
 
 // Start implements Runner: it prepares the subagent like the task tool does
-// and runs it on req.TaskThreadID, on a context detached from the call, so
-// the run keeps the call's values (its Depth is the parent's plus one) but
-// not its cancellation.
+// and runs it on req.TaskThreadID, saved (not ephemeral), on a context
+// detached from the call, so the run keeps the call's values (its Depth is
+// the parent's plus one) but not its cancellation.
 func (l *localRunner) Start(ctx context.Context, req Request) (Handle, error) {
 	info, ok := agent.Info(ctx)
 	if !ok {
@@ -223,22 +307,86 @@ func (l *localRunner) Start(ctx context.Context, req Request) (Handle, error) {
 		return nil, err
 	}
 	in.ThreadID = req.TaskThreadID
-	box, err := l.inboxes.open(in.ThreadID)
+	in.Ephemeral = false
+	sess := &localSession{l: l, child: child, threadID: in.ThreadID, backend: in.Backend, agentName: in.AgentName}
+	return sess.start(ctx, in)
+}
+
+// Attach implements Reattacher for a task that is not running: it loads the
+// task's thread from the checkpointer its episodes saved to and returns a
+// Handle whose episode stopped, with the record's outcome, which can be
+// continued. A running record cannot be reattached yet. ctx must belong to
+// the parent's run; the middleware passes the call's backend with it.
+func (l *localRunner) Attach(ctx context.Context, rec TaskRecord) (Handle, error) {
+	if rec.Status == StatusRunning {
+		return nil, fmt.Errorf("%w: a running task is not reattached", ErrCannotReattach)
+	}
+	if rec.TaskThreadID == "" {
+		return nil, fmt.Errorf("%w: the record names no task thread", ErrCannotReattach)
+	}
+	info, ok := agent.Info(ctx)
+	if !ok {
+		return nil, errors.New("a background task can only be reattached inside an agent run")
+	}
+	spec, ok := l.specs[rec.SubagentType]
+	if !ok {
+		return nil, fmt.Errorf("%w: unknown subagent type %q", ErrCannotReattach, rec.SubagentType)
+	}
+	f, _ := followUpOf(ctx)
+	if f.backend == nil {
+		return nil, fmt.Errorf("%w: no backend to run it on", ErrCannotReattach)
+	}
+	child, err := l.launcher.Agent(info.Agent, spec)
+	if err != nil {
+		return nil, err
+	}
+	s, v, err := l.checkpointer(info.Agent).Load(ctx, rec.TaskThreadID)
+	if errors.Is(err, checkpoint.ErrNotFound) {
+		return nil, fmt.Errorf("%w: its thread %s is gone", ErrCannotReattach, rec.TaskThreadID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	sess := &localSession{l: l, child: child, threadID: rec.TaskThreadID, backend: f.backend, agentName: spec.Name}
+	done := make(chan struct{})
+	close(done)
+	return &localTask{
+		sess: sess, stop: func(error) {}, done: done, inbox: &inbox{closed: true},
+		out:  Outcome{Status: rec.Status, Text: rec.Result, Error: rec.Error, Pending: rec.Pending},
+		last: s, version: v,
+	}, nil
+}
+
+// localSession is what every episode of one local task shares.
+type localSession struct {
+	l         *localRunner
+	child     *agent.Agent
+	threadID  string
+	backend   backend.Backend
+	agentName string
+}
+
+// start runs one episode of the task with in, on a context detached from
+// ctx: it keeps ctx's values but not its cancellation.
+func (sess *localSession) start(ctx context.Context, in agent.Input) (*localTask, error) {
+	box, err := sess.l.inboxes.open(sess.threadID)
 	if err != nil {
 		return nil, err
 	}
 	stopCtx, stop := context.WithCancelCause(context.WithoutCancel(ctx))
-	runCtx, cancelTimeout := context.WithTimeout(stopCtx, l.timeout)
-	t := &localTask{stop: stop, done: make(chan struct{}), inbox: box}
+	runCtx, cancelTimeout := context.WithTimeout(stopCtx, sess.l.timeout)
+	t := &localTask{sess: sess, stop: stop, done: make(chan struct{}), inbox: box}
 	go func() {
 		defer cancelTimeout()
-		t.run(runCtx, child, in, func() int { return l.inboxes.remove(in.ThreadID) })
+		t.run(runCtx, in, func() int { return sess.l.inboxes.remove(sess.threadID) })
 	}()
 	return t, nil
 }
 
-// localTask is the Handle of a subagent running in this process.
+// localTask is the Handle of one episode of a subagent running in this
+// process.
 type localTask struct {
+	sess  *localSession
 	stop  func(cause error)
 	done  chan struct{}
 	inbox *inbox
@@ -246,14 +394,23 @@ type localTask struct {
 	mu       sync.Mutex
 	progress string
 	out      Outcome
+	// last and version are the State the episode ended with and its
+	// checkpoint version, which the next episode starts from.
+	last    *state.State
+	version checkpoint.Version
+	// continued is set once a Continue of this episode succeeded or is
+	// under way.
+	continued bool
 }
+
+var _ Continuer = (*localTask)(nil)
 
 // run consumes the subagent's stream to its end, keeping its recent text as
 // progress, then closes the inbox (closeInbox returns how many messages were
 // never read), publishes the outcome and closes done, in that order.
-func (t *localTask) run(ctx context.Context, child *agent.Agent, in agent.Input, closeInbox func() int) {
+func (t *localTask) run(ctx context.Context, in agent.Input, closeInbox func() int) {
 	var final *agent.Final
-	for ev := range child.Run(ctx, in) {
+	for ev := range t.sess.child.Run(ctx, in) {
 		switch {
 		case ev.Kind == agent.KindFinal:
 			final = ev.Final
@@ -265,9 +422,81 @@ func (t *localTask) run(ctx context.Context, child *agent.Agent, in agent.Input,
 	out = withLateUpdates(out, closeInbox())
 	t.mu.Lock()
 	t.out = out
+	if final != nil {
+		t.last, t.version = final.State, final.Version
+	}
 	t.mu.Unlock()
 	t.stop(nil) // releases the context
 	close(t.done)
+}
+
+// Continue implements Continuer: the next episode runs the subagent on the
+// task's thread again, from the State this one ended with, with message
+// framed as an update. It runs in the stricter of the task's mode and the
+// parent's current one, when the middleware passed it. Only the first call
+// succeeds; later ones fail with ErrFinished.
+func (t *localTask) Continue(ctx context.Context, message string) (Handle, error) {
+	if !isClosed(t.done) {
+		return nil, errStillRunning
+	}
+	t.mu.Lock()
+	switch {
+	case t.continued:
+		t.mu.Unlock()
+		return nil, fmt.Errorf("%w: this episode was already continued", ErrFinished)
+	case t.out.Status == StatusWaiting:
+		t.mu.Unlock()
+		return nil, ErrWaiting
+	}
+	t.continued = true
+	last, version := t.last, t.version
+	t.mu.Unlock()
+	h, err := t.next(ctx, last, version, message)
+	if err != nil {
+		t.mu.Lock()
+		t.continued = false
+		t.mu.Unlock()
+		return nil, err
+	}
+	return h, nil
+}
+
+// next starts the episode that follows this one.
+func (t *localTask) next(ctx context.Context, last *state.State, version checkpoint.Version, message string) (Handle, error) {
+	sess := t.sess
+	if last == nil {
+		// The run ended without a Final: start from its last save.
+		info, ok := agent.Info(ctx)
+		parent := sess.child
+		if ok && info.Agent != nil {
+			parent = info.Agent
+		}
+		var err error
+		if last, version, err = sess.l.checkpointer(parent).Load(ctx, sess.threadID); err != nil {
+			return nil, fmt.Errorf("async: the task has no history to continue: %w", err)
+		}
+	}
+	s := last.Clone()
+	mode := sess.child.PermissionMode(s)
+	f, ok := followUpOf(ctx)
+	if ok && f.mode != "" {
+		mode = permission.Stricter(f.mode, mode)
+	}
+	if err := agent.SetPermissionMode(s, mode); err != nil {
+		return nil, err
+	}
+	be := sess.backend
+	if be == nil {
+		be = f.backend
+	}
+	return sess.start(ctx, agent.Input{
+		ThreadID:  sess.threadID,
+		State:     s,
+		Version:   version,
+		Messages:  []llm.Message{llm.UserText(updateText(message))},
+		Backend:   be,
+		AgentName: sess.agentName,
+	})
 }
 
 // localOutcome maps a subagent's Final to the task's outcome. A run that

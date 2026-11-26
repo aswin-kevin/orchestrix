@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
@@ -92,6 +93,9 @@ type harness struct {
 	st *state.State
 	// thread is the run's thread id; "t" unless a test clears it.
 	thread string
+	// version is the parent thread's checkpoint version after the last
+	// run; it matters only with a Checkpointer.
+	version checkpoint.Version
 }
 
 func newHarness(t *testing.T, cfg Config, turns ...llmtest.Turn) *harness {
@@ -103,6 +107,13 @@ func newHarness(t *testing.T, cfg Config, turns ...llmtest.Turn) *harness {
 // the parent's (and so every child's) middleware.
 func newHarnessWith(t *testing.T, cfg Config, before []agent.Middleware, turns ...llmtest.Turn) *harness {
 	t.Helper()
+	return newHarnessSaved(t, cfg, nil, before, turns...)
+}
+
+// newHarnessSaved is newHarnessWith with cp as the parent's Checkpointer;
+// nil keeps the parent unsaved.
+func newHarnessSaved(t *testing.T, cfg Config, cp checkpoint.Checkpointer, before []agent.Middleware, turns ...llmtest.Turn) *harness {
+	t.Helper()
 	m, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +121,7 @@ func newHarnessWith(t *testing.T, cfg Config, before []agent.Middleware, turns .
 	t.Cleanup(func() { _ = m.Close(context.Background()) })
 	p := llmtest.New(turns...)
 	mws := append(slices.Clone(before), m)
-	a, err := agent.New(agent.Config{Provider: p, Middleware: mws, PermissionMode: permission.ModeDefault})
+	a, err := agent.New(agent.Config{Provider: p, Middleware: mws, PermissionMode: permission.ModeDefault, Checkpointer: cp})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +134,7 @@ func (h *harness) run(t *testing.T, ctx context.Context, text string, onEvent fu
 	t.Helper()
 	var evs []agent.Event
 	var final *agent.Final
-	in := agent.Input{ThreadID: h.thread, State: h.st, Backend: testutil.Memory(t), Messages: []llm.Message{llm.UserText(text)}}
+	in := agent.Input{ThreadID: h.thread, State: h.st, Version: h.version, Backend: testutil.Memory(t), Messages: []llm.Message{llm.UserText(text)}}
 	for ev := range h.a.Run(ctx, in) {
 		evs = append(evs, ev)
 		if onEvent != nil {
@@ -136,7 +147,7 @@ func (h *harness) run(t *testing.T, ctx context.Context, text string, onEvent fu
 	if final == nil || final.Reason != agent.ReasonCompleted {
 		t.Fatalf("parent run: %+v", final)
 	}
-	h.st = final.State
+	h.st, h.version = final.State, final.Version
 	return evs, final
 }
 

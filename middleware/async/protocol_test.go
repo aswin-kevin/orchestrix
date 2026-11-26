@@ -165,7 +165,7 @@ func TestAttachReplaysStopWithCallerContext(t *testing.T) {
 	// A stop that came before the Runner's Handle is replayed on it with the
 	// caller's values, not a bare background context.
 	type ctxKey struct{}
-	tk := newTask()
+	tk := newTask(context.Background())
 	caller, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "caller"))
 	if err := tk.Stop(caller); err != nil {
 		t.Fatal(err)

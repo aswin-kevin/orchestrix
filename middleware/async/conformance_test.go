@@ -57,7 +57,8 @@ func startLocal(t *testing.T, sc asynctest.Scenario) async.Handle {
 	spec := subagents.Subagent{Name: "worker", Description: "Works.", SystemPrompt: "you work"}
 	switch sc {
 	case asynctest.ScenarioComplete:
-		spec.Provider = llmtest.New(llmtest.Turn{Text: "the answer"})
+		// The second answer is the continued episode's.
+		spec.Provider = llmtest.New(llmtest.Turn{Text: "the answer"}, llmtest.Turn{Text: "the follow-up answer"})
 	case asynctest.ScenarioRunUntilStopped:
 		spec.Provider = blocking{}
 	case asynctest.ScenarioWait:

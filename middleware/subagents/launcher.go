@@ -54,10 +54,17 @@ type LauncherConfig struct {
 	// Agent fail, when agent.New rejects the duplicate.
 	Extra []agent.Middleware
 	// Checkpointer, when set, returns the checkpointer the children of
-	// parent save with; nil (or a nil result) keeps children unsaved. The
-	// parent's own Config.Checkpointer is never inherited. It is called
-	// whenever the Launcher builds a child agent, which is normally once
-	// per (parent, subagent), so it must be safe for concurrent use.
+	// parent are configured with; nil (or a nil result, a typed nil
+	// pointer included) keeps children unsaved. The parent's own
+	// Config.Checkpointer is never inherited. Configuring one does not by
+	// itself save anything: the runs Input prepares are Ephemeral, so they
+	// never save; only a caller that starts the child with a non-ephemeral
+	// Input of its own (as the async middleware does, on the task's
+	// thread) saves with it. The result is cached with the child agent, per
+	// (parent, subagent), for the Launcher's lifetime: the function is
+	// called when the Launcher first builds that child (or when two
+	// concurrent first calls both build), so it must be safe for
+	// concurrent use.
 	Checkpointer func(parent *agent.Agent) checkpoint.Checkpointer
 }
 
@@ -92,7 +99,9 @@ func (l *Launcher) Agent(parent *agent.Agent, spec Subagent) (*agent.Agent, erro
 		return nil, err
 	}
 	if l.checkpointer != nil {
-		cfg.Checkpointer = l.checkpointer(parent)
+		if cp := l.checkpointer(parent); !isNil(cp) {
+			cfg.Checkpointer = cp
+		}
 	}
 	if cfg.Middleware, err = l.withExtra(cfg.Middleware); err != nil {
 		return nil, fmt.Errorf("subagents: subagent %q: %w", spec.Name, err)
@@ -124,6 +133,19 @@ func (l *Launcher) withExtra(mws []agent.Middleware) ([]agent.Middleware, error)
 		out = append(out, x)
 	}
 	return out, nil
+}
+
+// isNil reports whether v is nil or an interface holding a nil pointer (or
+// another nil-able kind).
+func isNil(v any) bool {
+	if v == nil {
+		return true
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return rv.IsNil()
+	}
+	return false
 }
 
 // sameMiddleware reports whether a and b are the same value; values that are

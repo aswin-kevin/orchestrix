@@ -1,6 +1,7 @@
 package async
 
 import (
+	"encoding/json"
 	"slices"
 	"time"
 
@@ -18,8 +19,7 @@ type TaskRecord struct {
 	ID string `json:"id"`
 	// ThreadID is the thread of the run that started the task.
 	ThreadID string `json:"thread_id"`
-	// TaskThreadID is the thread the task runs on (Request.TaskThreadID);
-	// empty in a record that predates it.
+	// TaskThreadID is the thread the task runs on (Request.TaskThreadID).
 	TaskThreadID string `json:"task_thread_id,omitempty"`
 	// SubagentType is the name of the subagent the task runs.
 	SubagentType string `json:"subagent_type"`
@@ -39,7 +39,10 @@ type TaskRecord struct {
 	// MaxRecordedResult bytes.
 	Error string `json:"error,omitempty"`
 	// Pending is what a waiting task needs a decision on; nil unless Status
-	// is StatusWaiting.
+	// is StatusWaiting. It is a copy for display: each request's Input and
+	// Reason are cut to MaxRecordedResult bytes (an Input cut short is
+	// recorded as a JSON string of its first bytes), since records live in
+	// State; the task's own thread keeps the pending calls in full.
 	Pending *agent.Interrupt `json:"pending,omitempty"`
 	// Notified reports that the model was told the task ended, by a
 	// notification, by check_task or because it cancelled the task itself;
@@ -93,7 +96,7 @@ func addRecord(s *state.State, r TaskRecord) {
 // takes its outcome; one whose task the middleware does not know is lost.
 // Records of other threads are kept untouched. edit may be nil.
 func (m *Middleware) updateRecords(s *state.State, threadID string, edit func(*TaskRecord)) []TaskRecord {
-	return jobs.UpdateRecords(s, tasksKey, threadID, m.jobs.MaxFinished(), recordAccessors, func(r *TaskRecord) {
+	return jobs.UpdateRecords(s, tasksKey, threadID, m.jobs.MaxFinished(), m.acc, func(r *TaskRecord) {
 		m.refresh(r)
 		if edit != nil {
 			edit(r)
@@ -119,17 +122,42 @@ func (m *Middleware) refresh(r *TaskRecord) {
 	if !ok {
 		return
 	}
-	if j.Stopped() && out.Status == StatusFailed {
+	switch {
+	case j.Stopped() && out.Status == StatusFailed:
 		// A runner that fails a stopped task means it was cancelled.
 		out.Status = StatusCancelled
+	case j.Stopped() && out.Status == StatusWaiting && j.Handle.cancelWaiting():
+		// The stop raced an interrupt: the task was cancelled, not left
+		// waiting. Its Handle was already asked to stop.
+		out, ended, _ = j.Handle.outcome()
 	}
-	r.Status, r.Pending = out.Status, out.Pending
+	r.Status, r.Pending = out.Status, recordedPending(out.Pending)
 	r.Ended = time.Time{}
 	if out.Status.terminal() {
 		r.Ended = ended
 	}
 	r.Result, _ = promptsafe.CapBytes(out.Text, MaxRecordedResult)
 	r.Error, _ = promptsafe.CapBytes(out.Error, MaxRecordedResult)
+}
+
+// recordedPending returns the copy of p a record keeps (see
+// TaskRecord.Pending); nil for nil.
+func recordedPending(p *agent.Interrupt) *agent.Interrupt {
+	if p == nil {
+		return nil
+	}
+	out := *p
+	out.Requests = make([]agent.ActionRequest, len(p.Requests))
+	for i, req := range p.Requests {
+		req.Reason, _ = promptsafe.CapBytes(req.Reason, MaxRecordedResult)
+		if len(req.Input) > MaxRecordedResult {
+			text, _ := promptsafe.CapBytes(string(req.Input), MaxRecordedResult)
+			req.Input, _ = json.Marshal(text) // a string always encodes
+		}
+		req.Allowed = slices.Clone(req.Allowed)
+		out.Requests[i] = req
+	}
+	return &out
 }
 
 // lookup finds a task of the call's thread: its refreshed record and, while

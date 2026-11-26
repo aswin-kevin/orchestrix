@@ -606,3 +606,183 @@ func TestStopAllSendsConcurrently(t *testing.T) {
 		t.Fatalf("stop requests were sent one after the other (overlapped %v, %v)", overlapped1.Load(), overlapped2.Load())
 	}
 }
+
+// episodic is a Handle whose Done channel is replaced for each episode, as
+// a handle that Restart runs again.
+type episodic struct {
+	mu   sync.Mutex
+	done chan struct{}
+}
+
+func newEpisodic() *episodic { return &episodic{done: make(chan struct{})} }
+
+func (e *episodic) Done() <-chan struct{} {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.done
+}
+
+// end closes the current episode's channel.
+func (e *episodic) end() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	select {
+	case <-e.done:
+	default:
+		close(e.done)
+	}
+}
+
+// rearm starts a new episode.
+func (e *episodic) rearm() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.done = make(chan struct{})
+	return nil
+}
+
+func (e *episodic) Stop(context.Context) error { e.end(); return nil }
+
+func startEpisodic(t *testing.T, m *Manager[*episodic], thread string) (*Job[*episodic], *episodic) {
+	t.Helper()
+	e := newEpisodic()
+	j, err := m.Start(thread, nil, func() (*episodic, error) { return e, nil })
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	return j, e
+}
+
+func TestRestartReopensJob(t *testing.T) {
+	m := NewManager[*episodic]("x_", Limits{MaxRunning: 2, MaxFinished: 5})
+	j, e := startEpisodic(t, m, "t")
+	ch, last := m.Changed("t")
+	old := e.Done()
+	e.end()
+	waitFor(t, ch)
+	m.MarkNotified("t", j.ID)
+	j.stopped.Store(true) // as if it had been stopped
+	j2, err := m.Restart("t", j.ID, e.rearm)
+	if err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	if j2 != j || m.Get("t", j.ID) != j {
+		t.Fatalf("Restart returned %p, Get %p; want the same job %p", j2, m.Get("t", j.ID), j)
+	}
+	select {
+	case <-old:
+	default:
+		t.Fatal("the first episode's Done reopened")
+	}
+	if j.Ended() || j.Notified() || j.Stopped() {
+		t.Fatalf("restarted job: ended %v notified %v stopped %v; want all false", j.Ended(), j.Notified(), j.Stopped())
+	}
+	ch, _ = m.Changed("t")
+	e.end()
+	waitFor(t, ch)
+	if last() != j.ID {
+		t.Fatalf("last ended = %q, want %q", last(), j.ID)
+	}
+}
+
+func TestRestartLimit(t *testing.T) {
+	m := NewManager[*episodic]("x_", Limits{MaxRunning: 1, MaxFinished: 5})
+	j, e := startEpisodic(t, m, "t")
+	e.end()
+	eventually(t, j.Ended)
+	// The ended job does not count against the limit: MaxRunning 1 can run
+	// its only job again.
+	if _, err := m.Restart("t", j.ID, e.rearm); err != nil {
+		t.Fatalf("Restart of the only job: %v", err)
+	}
+	e.end()
+	eventually(t, j.Ended)
+	_, other := startEpisodic(t, m, "t")
+	called := false
+	_, err := m.Restart("t", j.ID, func() error { called = true; return e.rearm() })
+	var limit *LimitError
+	if !errors.As(err, &limit) || limit.Limit != 1 {
+		t.Fatalf("Restart with the thread full = %v, want LimitError{1}", err)
+	}
+	if called {
+		t.Fatal("start was called although no slot was free")
+	}
+	other.end()
+	// A failed start rolls the reservation back and leaves the job ended.
+	boom := errors.New("boom")
+	if _, err := m.Restart("t", j.ID, func() error { return boom }); !errors.Is(err, boom) {
+		t.Fatalf("Restart = %v, want boom", err)
+	}
+	if !j.Ended() || m.Get("t", j.ID) != j {
+		t.Fatal("a failed restart changed the job")
+	}
+	if _, err := m.Restart("t", j.ID, e.rearm); err != nil {
+		t.Fatalf("Restart after a rolled-back one: %v", err)
+	}
+}
+
+func TestRestartRunningIsError(t *testing.T) {
+	m := NewManager[*episodic]("x_", Limits{MaxRunning: 2, MaxFinished: 5})
+	j, e := startEpisodic(t, m, "t")
+	if _, err := m.Restart("t", j.ID, e.rearm); !errors.Is(err, ErrUnknownJob) {
+		t.Fatalf("Restart of a running job = %v, want ErrUnknownJob", err)
+	}
+	if _, err := m.Restart("t", "x_9", e.rearm); !errors.Is(err, ErrUnknownJob) {
+		t.Fatalf("Restart of an unknown job = %v, want ErrUnknownJob", err)
+	}
+	e.end()
+	eventually(t, j.Ended)
+	// A restart in flight holds the job: a second one is refused.
+	entered, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_, _ = m.Restart("t", j.ID, func() error { close(entered); <-release; return e.rearm() })
+	}()
+	<-entered
+	if _, err := m.Restart("t", j.ID, e.rearm); !errors.Is(err, ErrUnknownJob) {
+		t.Fatalf("second Restart while one is in flight = %v, want ErrUnknownJob", err)
+	}
+	close(release)
+	if err := m.Close(context.Background(), time.Second); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := m.Restart("t", j.ID, e.rearm); !errors.Is(err, ErrShutdown) {
+		t.Fatalf("Restart after Close = %v, want ErrShutdown", err)
+	}
+}
+
+func TestAdoptContinuesNumbering(t *testing.T) {
+	m := NewManager[*episodic]("bg_", Limits{MaxRunning: 2, MaxFinished: 5})
+	e := newEpisodic()
+	e.end()
+	started := time.Now().Add(-time.Hour)
+	j, err := m.Adopt("t", "bg_7", started, e)
+	if err != nil {
+		t.Fatalf("Adopt: %v", err)
+	}
+	if j.ID != "bg_7" || !j.Started.Equal(started) || m.Get("t", "bg_7") != j {
+		t.Fatalf("adopted job = %+v", j)
+	}
+	if _, err := m.Adopt("t", "bg_7", started, newEpisodic()); err == nil {
+		t.Fatal("Adopt of a held id succeeded")
+	}
+	j2, _ := startEpisodic(t, m, "t")
+	if j2.ID != "bg_8" {
+		t.Fatalf("next id = %q, want bg_8", j2.ID)
+	}
+	// A running adopted job takes a slot and is watched.
+	running := newEpisodic()
+	ja, err := m.Adopt("t", "bg_3", started, running)
+	if err != nil {
+		t.Fatalf("Adopt running: %v", err)
+	}
+	var limit *LimitError
+	if _, err := m.Adopt("t", "bg_4", started, newEpisodic()); !errors.As(err, &limit) {
+		t.Fatalf("Adopt over the limit = %v, want LimitError", err)
+	}
+	ch, last := m.Changed("t")
+	running.end()
+	waitFor(t, ch)
+	if last() != ja.ID {
+		t.Fatalf("last ended = %q, want %q", last(), ja.ID)
+	}
+}

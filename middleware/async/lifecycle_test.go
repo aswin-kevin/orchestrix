@@ -48,7 +48,7 @@ func waitChild(t *testing.T, g *gate, id string) func(agent.Event) {
 const wantUpdate = "<task-update>\nuse metric\n</task-update>"
 
 func TestUpdateTaskDelivered(t *testing.T) {
-	g := newGate(call("n1", "noop", obj{}), llmtest.Turn{Text: "used metric"})
+	g := newGate(call("n1", "noop", obj{}), llmtest.Turn{Text: "used metric"}, llmtest.Turn{Text: "too late noted"})
 	spec := researcher(g)
 	spec.Tools = []tool.Tool{noop}
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{spec}, DisableStopReminder: true},
@@ -68,10 +68,12 @@ func TestUpdateTaskDelivered(t *testing.T) {
 	if len(reqs) != 2 || strings.Contains(requestText(reqs[0]), "<task-update>") || !strings.Contains(requestText(reqs[1]), wantUpdate) {
 		t.Fatalf("child requests = %+v", reqs)
 	}
+	// Once the task ended, an update continues it (see episode_test.go).
 	evs, _ = h.run(t, context.Background(), "next", nil)
-	if res := result(t, evs, ToolUpdate); !res.IsError || !strings.Contains(res.Flatten(), "already finished") {
+	if res := result(t, evs, ToolUpdate); res.IsError || !strings.Contains(res.Flatten(), "continues with your message") {
 		t.Fatalf("late update = %+v", res)
 	}
+	waitEnded(t, h.m, "async_1")
 }
 
 func TestUpdateContinuesStoppingTask(t *testing.T) {

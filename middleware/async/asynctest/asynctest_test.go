@@ -2,10 +2,13 @@ package asynctest
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,8 +21,9 @@ type fake struct {
 	done chan struct{}
 	once sync.Once
 
-	mu  sync.Mutex
-	out async.Outcome
+	mu   sync.Mutex
+	out  async.Outcome
+	next bool // a Continue or Resolve succeeded
 }
 
 func newFake() *fake { return &fake{done: make(chan struct{})} }
@@ -63,6 +67,47 @@ func (f *fake) Stop(context.Context) error {
 	return nil
 }
 
+// Continue starts a new episode that completes shortly after; only once.
+func (f *fake) Continue(context.Context, string) (async.Handle, error) {
+	if !isClosed(f.done) {
+		return nil, errors.New("still running")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	switch {
+	case f.out.Status == async.StatusWaiting:
+		return nil, async.ErrWaiting
+	case f.next:
+		return nil, fmt.Errorf("%w: already continued", async.ErrFinished)
+	}
+	f.next = true
+	return nextEpisode(), nil
+}
+
+// Resolve starts a new episode of a waiting fake; only once.
+func (f *fake) Resolve(context.Context, []agent.Decision) (async.Handle, error) {
+	if !isClosed(f.done) {
+		return nil, async.ErrNotWaiting
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.out.Status != async.StatusWaiting || f.next {
+		return nil, async.ErrNotWaiting
+	}
+	f.next = true
+	return nextEpisode(), nil
+}
+
+// nextEpisode is a fake that completes shortly after it starts.
+func nextEpisode() *fake {
+	n := newFake()
+	go func() {
+		time.Sleep(time.Millisecond)
+		n.end(async.Outcome{Status: async.StatusCompleted, Text: "more"})
+	}()
+	return n
+}
+
 // pending is the interrupt of a waiting fake.
 var pending = &agent.Interrupt{Requests: []agent.ActionRequest{{ToolUseID: "w1", Tool: "write_file"}}}
 
@@ -102,6 +147,22 @@ type override struct {
 	send    func(context.Context, string) error
 	stop    func(context.Context) error
 	doneCh  func() <-chan struct{}
+	cont    func(context.Context, string) (async.Handle, error)
+	resolve func(context.Context, []agent.Decision) (async.Handle, error)
+}
+
+func (o *override) Continue(ctx context.Context, msg string) (async.Handle, error) {
+	if o.cont != nil {
+		return o.cont(ctx, msg)
+	}
+	return o.fake.Continue(ctx, msg)
+}
+
+func (o *override) Resolve(ctx context.Context, d []agent.Decision) (async.Handle, error) {
+	if o.resolve != nil {
+		return o.resolve(ctx, d)
+	}
+	return o.fake.Resolve(ctx, d)
 }
 
 func (o *override) Done() <-chan struct{} {
@@ -200,6 +261,44 @@ var mutants = map[string]func(t *testing.T){
 	// Send accepts messages after Done.
 	"SendAfterDone": mutant(func(o *override, _ Scenario) {
 		o.send = func(context.Context, string) error { return nil }
+	}),
+	// Done returns a new channel on every call (closed once the episode
+	// stopped, so no wait hangs).
+	"DoneSameChannel": mutant(func(o *override, _ Scenario) {
+		o.doneCh = func() <-chan struct{} {
+			ch := make(chan struct{})
+			if isClosed(o.fake.Done()) {
+				close(ch)
+			}
+			return ch
+		}
+	}),
+	// A Stop on a waiting episode turns its Outcome into cancelled.
+	"WaitStaysClosed": mutant(func(o *override, sc Scenario) {
+		if sc != ScenarioWait {
+			return
+		}
+		var stopped atomic.Bool
+		o.stop = func(context.Context) error { stopped.Store(true); return nil }
+		o.outcome = func() (async.Outcome, bool) {
+			out, ok := o.fake.Outcome()
+			if stopped.Load() {
+				out = async.Outcome{Status: async.StatusCancelled}
+			}
+			return out, ok
+		}
+	}),
+	// Continue returns the receiver instead of a new Handle.
+	"ContinueReturnsNewHandle": mutant(func(o *override, _ Scenario) {
+		o.cont = func(context.Context, string) (async.Handle, error) { return o, nil }
+	}),
+	// Every Continue starts an episode.
+	"ContinueOnce": mutant(func(o *override, _ Scenario) {
+		o.cont = func(context.Context, string) (async.Handle, error) { return nextEpisode(), nil }
+	}),
+	// Every Resolve starts an episode.
+	"ResolveOnce": mutant(func(o *override, _ Scenario) {
+		o.resolve = func(context.Context, []agent.Decision) (async.Handle, error) { return nextEpisode(), nil }
 	}),
 	// A waiting task reports no pending interrupt.
 	"WaitOutcome": mutant(func(o *override, sc Scenario) {

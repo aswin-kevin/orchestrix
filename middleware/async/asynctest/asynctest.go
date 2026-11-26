@@ -3,19 +3,25 @@
 // so that other packages' tests can import it; nothing outside tests should.
 //
 // The suite checks the frozen Handle contract: a Handle covers one episode of
-// a task, from its start until it ends or starts waiting; Done closes when
-// the episode stops and stays closed; Outcome reports ok only once Done is
-// closed, with Pending set exactly when the task is waiting; Stop cancels a
-// running episode and is a no-op once Done; Send fails with
-// async.ErrFinished once Done.
+// a task, from its start until it ends or starts waiting; Done returns the
+// same channel on every call, which closes when the episode stops and stays
+// closed; Outcome reports ok only once Done is closed, with Pending set
+// exactly when the task is waiting, and never changes afterwards; Stop
+// cancels a running episode and is a no-op once Done, also on a waiting
+// one; Send fails with async.ErrFinished once Done. Where a Handle
+// implements async.Continuer or async.Resolver, it also checks that the
+// next episode is a new Handle and that only one call per Handle succeeds.
 package asynctest
 
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/middleware/async"
 )
 
@@ -67,11 +73,16 @@ func Run(t *testing.T, start StartFunc) {
 		fn   func(t *testing.T, h async.Handle)
 	}{
 		{"OutcomeBeforeDone", ScenarioRunUntilStopped, testOutcomeBeforeDone},
+		{"DoneSameChannel", ScenarioRunUntilStopped, testDoneSameChannel},
 		{"DoneStaysClosed", ScenarioComplete, testDoneStaysClosed},
+		{"WaitStaysClosed", ScenarioWait, testDoneStaysClosed},
 		{"CompleteOutcome", ScenarioComplete, testCompleteOutcome},
 		{"StopCancels", ScenarioRunUntilStopped, testStopCancels},
 		{"SendAfterDone", ScenarioComplete, testSendAfterDone},
 		{"WaitOutcome", ScenarioWait, testWaitOutcome},
+		{"ContinueReturnsNewHandle", ScenarioComplete, testContinueReturnsNewHandle},
+		{"ContinueOnce", ScenarioComplete, testContinueOnce},
+		{"ResolveOnce", ScenarioWait, testResolveOnce},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -94,6 +105,22 @@ func Run(t *testing.T, start StartFunc) {
 			c.fn(t, h)
 		})
 	}
+}
+
+// stopLater stops h, when it still runs, as t ends.
+func stopLater(t *testing.T, h async.Handle) {
+	t.Cleanup(func() {
+		if isClosed(h.Done()) {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), StopTimeout)
+		defer cancel()
+		_ = h.Stop(ctx)
+		select {
+		case <-h.Done():
+		case <-ctx.Done():
+		}
+	})
 }
 
 // waitDone waits up to d for h's Done, failing t when it stays open.
@@ -135,6 +162,18 @@ func testOutcomeBeforeDone(t *testing.T, h async.Handle) {
 	}
 }
 
+func testDoneSameChannel(t *testing.T, h async.Handle) {
+	if a, b := h.Done(), h.Done(); a != b {
+		t.Fatal("Done returned a different channel on a second call")
+	}
+}
+
+// sameOutcome reports whether a and b are the same Outcome, Pending
+// compared by value.
+func sameOutcome(a, b async.Outcome) bool {
+	return a.Status == b.Status && a.Text == b.Text && a.Error == b.Error && a.Usage == b.Usage && reflect.DeepEqual(a.Pending, b.Pending)
+}
+
 func testDoneStaysClosed(t *testing.T, h async.Handle) {
 	waitDone(t, h, EpisodeTimeout, "the start")
 	first := outcome(t, h)
@@ -149,7 +188,7 @@ func testDoneStaysClosed(t *testing.T, h async.Handle) {
 			t.Fatalf("Done reopened (read %d after it closed)", i+1)
 		}
 	}
-	if again := outcome(t, h); again.Status != first.Status || again.Text != first.Text || again.Error != first.Error {
+	if again := outcome(t, h); !sameOutcome(first, again) {
 		t.Fatalf("Outcome changed after Done: %+v, then %+v", first, again)
 	}
 }
@@ -174,10 +213,22 @@ func testStopCancels(t *testing.T, h async.Handle) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), StopTimeout)
 	defer cancel()
+	// Readers and stoppers race the Stop, so -race catches a Handle that
+	// is not safe for concurrent use.
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			<-h.Done()
+			_, _ = h.Outcome()
+			_ = h.Progress()
+		})
+		wg.Go(func() { _ = h.Stop(ctx) })
+	}
 	if err := h.Stop(ctx); err != nil {
 		t.Fatalf("Stop = %v, want nil", err)
 	}
 	waitDone(t, h, StopTimeout, "Stop")
+	wg.Wait()
 	if err := h.Stop(ctx); err != nil {
 		t.Fatalf("second Stop = %v, want nil (a no-op once Done)", err)
 	}
@@ -212,5 +263,111 @@ func testWaitOutcome(t *testing.T, h async.Handle) {
 	defer cancel()
 	if err := h.Send(ctx, "go on"); !errors.Is(err, async.ErrFinished) {
 		t.Errorf("Send to a waiting episode = %v, want an error wrapping async.ErrFinished", err)
+	}
+}
+
+func testContinueReturnsNewHandle(t *testing.T, h async.Handle) {
+	c, ok := h.(async.Continuer)
+	if !ok {
+		t.Skip("the Handle does not implement async.Continuer")
+	}
+	waitDone(t, h, EpisodeTimeout, "the start")
+	first := outcome(t, h)
+	ctx, cancel := context.WithTimeout(context.Background(), EpisodeTimeout)
+	defer cancel()
+	next, err := c.Continue(ctx, "one more thing")
+	if err != nil {
+		t.Fatalf("Continue = %v", err)
+	}
+	if next == nil {
+		t.Fatal("Continue returned a nil Handle and no error")
+	}
+	stopLater(t, next)
+	if next == h {
+		t.Fatal("Continue returned the receiver; want a new Handle")
+	}
+	if !isClosed(h.Done()) {
+		t.Fatal("the first episode's Done reopened")
+	}
+	if again := outcome(t, h); !sameOutcome(first, again) {
+		t.Fatalf("the first episode's Outcome changed: %+v, then %+v", first, again)
+	}
+	if !isClosed(next.Done()) {
+		if out, ok := next.Outcome(); ok {
+			t.Fatalf("new Outcome = %+v, true before its Done closed", out)
+		}
+	}
+	waitDone(t, next, EpisodeTimeout, "Continue")
+	if out := outcome(t, next); out.Status != async.StatusCompleted {
+		t.Fatalf("the next episode's Status = %q, want %q (outcome %+v)", out.Status, async.StatusCompleted, out)
+	}
+}
+
+func testContinueOnce(t *testing.T, h async.Handle) {
+	c, ok := h.(async.Continuer)
+	if !ok {
+		t.Skip("the Handle does not implement async.Continuer")
+	}
+	waitDone(t, h, EpisodeTimeout, "the start")
+	ctx, cancel := context.WithTimeout(context.Background(), EpisodeTimeout)
+	defer cancel()
+	once(t, func() (async.Handle, error) { return c.Continue(ctx, "one more thing") }, async.ErrFinished, "Continue")
+}
+
+func testResolveOnce(t *testing.T, h async.Handle) {
+	r, ok := h.(async.Resolver)
+	if !ok {
+		t.Skip("the Handle does not implement async.Resolver")
+	}
+	waitDone(t, h, EpisodeTimeout, "the start")
+	out := outcome(t, h)
+	if out.Pending == nil {
+		t.Fatalf("waiting Outcome without Pending: %+v", out)
+	}
+	decisions := make([]agent.Decision, len(out.Pending.Requests))
+	for i, req := range out.Pending.Requests {
+		decisions[i] = agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Reject, Message: "not now"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), EpisodeTimeout)
+	defer cancel()
+	once(t, func() (async.Handle, error) { return r.Resolve(ctx, decisions) }, async.ErrNotWaiting, "Resolve")
+}
+
+// once calls next twice at once, then a third time, and checks that exactly
+// one call returned a new Handle and the others failed with an error
+// wrapping loserErr.
+func once(t *testing.T, next func() (async.Handle, error), loserErr error, what string) {
+	t.Helper()
+	type res struct {
+		h   async.Handle
+		err error
+	}
+	results := make([]res, 2)
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Go(func() {
+			h, err := next()
+			results[i] = res{h, err}
+		})
+	}
+	wg.Wait()
+	h, err := next()
+	results = append(results, res{h, err})
+	wins := 0
+	for _, r := range results {
+		if r.err == nil && r.h != nil {
+			wins++
+			stopLater(t, r.h)
+			continue
+		}
+		if r.h != nil {
+			stopLater(t, r.h)
+		}
+		if !errors.Is(r.err, loserErr) {
+			t.Errorf("a repeated %s = %v, want an error wrapping %v", what, r.err, loserErr)
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("%d of 3 %s calls on one Handle succeeded, want 1", wins, what)
 	}
 }

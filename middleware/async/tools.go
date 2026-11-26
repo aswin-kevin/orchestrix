@@ -124,7 +124,7 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 	if info.Depth >= m.maxDepth {
 		return tool.Errorf("cannot start background task %s: the maximum nesting depth of %d is reached; do the task yourself", in.SubagentType, m.maxDepth), nil
 	}
-	t := newTask()
+	t := newTask(ctx)
 	j, err := m.jobs.Start(c.ThreadID, recordedIDs(c.State), func() (*task, error) { return t, nil })
 	var limit *jobs.LimitError
 	switch {
@@ -219,18 +219,20 @@ func (m *Middleware) checkTask(ctx context.Context, in CheckInput, c *tool.Call)
 }
 
 // cancelTask stops a running task, or ends a waiting one: nothing runs
-// there, so its record is cancelled at once.
+// there, so its record is cancelled at once and its Handle is told to stop.
 func (m *Middleware) cancelTask(ctx context.Context, in CancelInput, c *tool.Call) (tool.Result, error) {
 	j, r, ok := m.lookup(c, in.TaskID)
 	switch {
 	case !ok:
 		return tool.Errorf("unknown task %q", in.TaskID), nil
 	case r.Status == StatusWaiting:
+		var cancelled []*jobs.Job[*task]
 		m.updateRecords(c.State, c.ThreadID, func(r *TaskRecord) {
 			if r.ID == in.TaskID && r.Status == StatusWaiting {
-				m.cancelWaiting(r)
+				cancelled = append(cancelled, m.cancelWaiting(r)...)
 			}
 		})
+		stopWaiting(ctx, cancelled)
 		return tool.Text(fmt.Sprintf("Cancelled task %s.", in.TaskID)), nil
 	case r.terminal():
 		return tool.Text(fmt.Sprintf("Task %s already ended: %s.", r.ID, r.Status)), nil
@@ -247,7 +249,8 @@ func (m *Middleware) cancelTask(ctx context.Context, in CancelInput, c *tool.Cal
 	return tool.Text(fmt.Sprintf("Cancelled task %s.", in.TaskID)), nil
 }
 
-// updateTask sends a message to a running task.
+// updateTask sends a message to a running task, or continues an ended one
+// with it (see continueTask).
 func (m *Middleware) updateTask(ctx context.Context, in UpdateInput, c *tool.Call) (tool.Result, error) {
 	switch {
 	case strings.TrimSpace(in.Message) == "":
@@ -265,6 +268,8 @@ func (m *Middleware) updateTask(ctx context.Context, in UpdateInput, c *tool.Cal
 		err = ErrWaiting
 	case r.Status == StatusRunning && j != nil:
 		err = j.Handle.send(ctx, in.Message)
+	case r.terminal():
+		return m.continueTask(ctx, c, r, j, in.Message), nil
 	default:
 		err = ErrFinished
 	}
@@ -272,6 +277,86 @@ func (m *Middleware) updateTask(ctx context.Context, in UpdateInput, c *tool.Cal
 		return tool.Errorf("cannot update task %s: %v", in.TaskID, err), nil
 	}
 	return tool.Text(fmt.Sprintf("Sent the message to task %s; it reads it before its next step.", in.TaskID)), nil
+}
+
+// continueTask starts the next episode of the ended task r with message, on
+// the task's own history, when its Handle is a Continuer. A task this
+// process no longer holds is first reattached when the Runner is a
+// Reattacher. The episode runs from the context the task started under (so
+// it stays nested in the parent), in the stricter of the task's permission
+// mode and the parent run's current one: a parent now in plan mode cannot
+// resume a task that writes. It takes a running slot (jobs.Manager.Restart),
+// and the record is running again, unannounced.
+func (m *Middleware) continueTask(ctx context.Context, c *tool.Call, r TaskRecord, j *jobs.Job[*task], message string) tool.Result {
+	f := followUp{backend: c.Backend}
+	if info, ok := agent.Info(ctx); ok && info.Agent != nil {
+		f.mode = info.Agent.PermissionMode(c.State)
+	}
+	if j == nil {
+		var err error
+		if j, err = m.reattach(withFollowUp(ctx, f), r); err != nil {
+			return tool.Errorf("cannot update task %s: %v", r.ID, err)
+		}
+	}
+	if _, ok := j.Handle.handle().(Continuer); !ok {
+		return tool.Errorf("cannot update task %s: %v", r.ID, ErrFinished)
+	}
+	_, err := m.jobs.Restart(r.ThreadID, r.ID, func() error {
+		return j.Handle.continueWith(withFollowUp(j.Handle.base, f), message)
+	})
+	var limit *jobs.LimitError
+	switch {
+	case errors.Is(err, jobs.ErrShutdown):
+		return tool.Errorf("background tasks are shut down")
+	case errors.As(err, &limit):
+		return tool.Errorf("too many background tasks running (limit %d); wait for one to finish or cancel one with %s", limit.Limit, ToolCancel)
+	case errors.Is(err, jobs.ErrUnknownJob):
+		return tool.Errorf("cannot update task %s: %v", r.ID, errStillRunning)
+	case err != nil:
+		return tool.Errorf("cannot update task %s: %v", r.ID, err)
+	}
+	m.updateRecords(c.State, c.ThreadID, func(rec *TaskRecord) {
+		if rec.ID == r.ID {
+			rec.Status, rec.Ended = StatusRunning, time.Time{}
+			rec.Result, rec.Error, rec.Pending, rec.Notified = "", "", nil, false
+		}
+	})
+	return tool.Text(fmt.Sprintf("Task %s continues with your message; you will be notified when it finishes.", r.ID))
+}
+
+// reattach takes over the stopped task r, which this process does not hold,
+// through the Runner's Reattacher, and registers it under its id. Attach
+// calls are serialized, so one task is never attached twice.
+func (m *Middleware) reattach(ctx context.Context, r TaskRecord) (*jobs.Job[*task], error) {
+	ra, ok := m.runner.(Reattacher)
+	if !ok {
+		return nil, ErrFinished
+	}
+	m.attachMu.Lock()
+	defer m.attachMu.Unlock()
+	if j := m.jobs.Get(r.ThreadID, r.ID); j != nil {
+		return j, nil // attached by another run meanwhile
+	}
+	h, err := ra.Attach(ctx, r)
+	if err == nil && h == nil {
+		err = errNoHandle
+	}
+	if err != nil {
+		return nil, err
+	}
+	t := newTask(ctx)
+	t.attach(h)
+	j, err := m.jobs.Adopt(r.ThreadID, r.ID, r.Started, t)
+	if err != nil {
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DefaultStopWait)
+		_ = h.Stop(stopCtx) // nobody holds it
+		cancel()
+		return nil, err
+	}
+	if r.Notified {
+		m.jobs.MarkNotified(r.ThreadID, r.ID)
+	}
+	return j, nil
 }
 
 func (m *Middleware) listTasks(_ context.Context, _ ListInput, c *tool.Call) (tool.Result, error) {

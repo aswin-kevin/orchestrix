@@ -15,8 +15,9 @@ import (
 type UpdateInput struct {
 	// TaskID is the task to send the message to.
 	TaskID string `json:"task_id" desc:"The task to send the message to."`
-	// Message is the new instructions or information for the running task.
-	Message string `json:"message" desc:"New instructions or information for the running task."`
+	// Message is the new instructions or information for the task, or the
+	// follow-up for a task that ended.
+	Message string `json:"message" desc:"New instructions or information for the task, or a follow-up for a task that ended."`
 }
 
 // MaxUpdateBytes caps, in bytes, a message update_task sends.

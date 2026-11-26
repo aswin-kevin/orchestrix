@@ -1,8 +1,8 @@
 // Package async runs subagents in the background. With it, the model starts a
 // subagent with start_task and keeps working while it runs; it can look at a
-// task's progress or wait for it (check_task), send it new instructions
-// (update_task), cancel it (cancel_task) and list the tasks of the
-// conversation (list_tasks). When a task ends, the next
+// task's progress or wait for it (check_task), send it new instructions or,
+// once it ended, a follow-up (update_task), cancel it (cancel_task) and list
+// the tasks of the conversation (list_tasks). When a task ends, the next
 // turn of the thread starts with a user message announcing it with an
 // excerpt of its result, so the model learns of it without polling.
 //
@@ -11,6 +11,18 @@
 // narrowed skills scope and the call's backend. By default it runs in this
 // process; Config.Runner runs tasks elsewhere instead.
 //
+// A task runs in episodes, each a Handle: its start is the first, and a
+// follow-up sent with update_task to an ended task starts the next, on the
+// same history, when the Handle is a Continuer. The task keeps its id and
+// is announced again when the episode ends. The local runner runs each task
+// on a thread of its own, <parent thread>/<task id>, and saves it with the
+// parent agent's Checkpointer: those threads are never deleted by the
+// middleware, and they show up among the store's threads (checkpoint.Lister),
+// so never give a thread of your own such a name. Without a Checkpointer it
+// keeps them in memory, for this process only, until the task's record is
+// pruned (Config.MaxFinished). A task the middleware released is taken over
+// again through the Runner's Reattacher when a follow-up names it.
+//
 // A background run has nobody to ask for approval in-band: with an Approver
 // on the parent agent the subagent inherits it and keeps asking it.
 // Otherwise a subagent that needs a decision stops as StatusWaiting, with the
@@ -18,12 +30,14 @@
 // model is told the task waits and on what, but it cannot answer: no tool
 // approves another run's actions. The host cannot answer it yet either (an
 // API for that is planned); until then cancel_task ends a waiting task. Its
-// permission mode is fixed when it starts (the stricter of the
-// parent's mode at that moment and the spec's): a parent that later enters
-// plan mode or a stricter mode does not change the mode of a task already
-// running. A background subagent's State is not merged into the parent's (the
-// parent may have moved on by the time it ends); files are shared through
-// the backend.
+// permission mode is fixed when an episode starts: the stricter of the
+// parent's mode at that moment and the spec's, and for a follow-up the
+// stricter of the parent's current mode and the task's own. A parent that
+// enters plan mode or a stricter mode does not change the mode of an
+// episode already running, but a follow-up it sends runs in that mode. A
+// background subagent's State is not merged into the parent's (the parent
+// may have moved on by the time it ends); files are shared through the
+// backend.
 //
 // Tasks belong to a thread, not to a run: start_task needs the run's
 // agent.Input.ThreadID and fails in a run without one. A top-level run may
@@ -41,9 +55,9 @@
 // Task records live in the run's State (see Tasks); a run only reads,
 // announces and cancels the tasks of its own thread. While tasks run, the
 // system prompt lists them from those records, so the model still knows of
-// them after a compaction. Tasks are not re-attached in a new process: a
-// record of a running task this process does not know is reported to the
-// model as lost.
+// them after a compaction. Running tasks are not re-attached in a new
+// process: a record of a running task this process does not know is
+// reported to the model as lost.
 package async
 
 import (
@@ -52,6 +66,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -121,7 +136,9 @@ type Config struct {
 	// GeneralPurposePrompt is the general-purpose subagent's system prompt;
 	// "" means subagents.DefaultGeneralPurposePrompt.
 	GeneralPurposePrompt string
-	// Runner starts the tasks; nil runs them as subagents in this process.
+	// Runner starts the tasks; nil runs them as subagents in this process,
+	// each on its own thread saved with the agent's Checkpointer (see the
+	// package doc): the middleware never deletes those threads.
 	Runner Runner
 	// MaxRunning is how many tasks may run at once per thread; 0 means
 	// DefaultMaxRunning. Negative values are rejected.
@@ -161,6 +178,11 @@ type Middleware struct {
 	remind   bool
 	jobs     *jobs.Manager[*task]
 	tools    []tool.Tool
+	// acc reads the records; its Pruned hook lets the runner forget
+	// what it keeps for a pruned task.
+	acc jobs.Accessors[TaskRecord]
+	// attachMu serializes Reattacher.Attach calls.
+	attachMu sync.Mutex
 }
 
 var (
@@ -206,13 +228,14 @@ func New(cfg Config) (*Middleware, error) {
 		m.specs[s.Name], m.order[i] = s, s.Name
 	}
 	if m.runner == nil {
-		// The inbox middleware is one pointer: every child, and their
-		// children, share it, and the Launcher dedupes it by identity.
-		boxes := newInboxes()
-		m.runner = &localRunner{specs: m.specs, launcher: subagents.NewLauncher(subagents.LauncherConfig{Extra: []agent.Middleware{boxes}}), inboxes: boxes, timeout: positiveOr(cfg.TaskTimeout, DefaultTaskTimeout)}
+		m.runner = newLocalRunner(m.specs, positiveOr(cfg.TaskTimeout, DefaultTaskTimeout))
 	}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
+	}
+	m.acc = recordAccessors
+	if p, ok := m.runner.(interface{ pruned(TaskRecord) }); ok {
+		m.acc.Pruned = p.pruned
 	}
 	m.tools = m.buildTools()
 	return m, nil
@@ -236,6 +259,13 @@ func (m *Middleware) Name() string { return Name }
 // had not ended by then (ctx's error when ctx ended). Calling it more than
 // once is safe.
 func (m *Middleware) Close(ctx context.Context) error {
+	var waiting []*jobs.Job[*task]
+	for _, j := range m.jobs.All() {
+		if j.Handle.cancelWaiting() {
+			waiting = append(waiting, j)
+		}
+	}
+	stopWaiting(ctx, waiting)
 	return m.jobs.Close(ctx, DefaultStopWait)
 }
 
@@ -358,21 +388,43 @@ func (m *Middleware) endNested(ctx context.Context, s *state.State, threadID str
 			})
 		})
 	}
+	var waiting []*jobs.Job[*task]
 	m.updateRecords(s, threadID, func(r *TaskRecord) {
 		if r.Status == StatusWaiting {
-			m.cancelWaiting(r)
+			waiting = append(waiting, m.cancelWaiting(r)...)
 		}
 		if r.terminal() && !r.Notified {
 			m.markNotified(r)
 		}
 	})
+	stopWaiting(ctx, waiting)
 }
 
 // cancelWaiting ends the record of a waiting task as cancelled and seen, and
-// marks its job notified. Nothing runs, so there is nothing to stop.
-func (m *Middleware) cancelWaiting(r *TaskRecord) {
+// marks its job notified. It claims the task entry, so no follow-up starts
+// an episode of it, and returns the job whose Handle the caller must stop
+// (see stopWaiting) once the State is no longer being updated; none when
+// this process does not hold it.
+func (m *Middleware) cancelWaiting(r *TaskRecord) []*jobs.Job[*task] {
 	r.Status, r.Pending, r.Ended = StatusCancelled, nil, time.Now()
 	m.markNotified(r)
+	if j := m.jobs.Get(r.ThreadID, r.ID); j != nil && j.Handle.cancelWaiting() {
+		return []*jobs.Job[*task]{j}
+	}
+	return nil
+}
+
+// stopWaiting calls Stop on the Handles of cancelled waiting tasks, each
+// bounded by DefaultStopWait: nothing runs, but the runner may release what
+// it holds for the task.
+func stopWaiting(ctx context.Context, list []*jobs.Job[*task]) {
+	for _, j := range list {
+		if h := j.Handle.handle(); h != nil {
+			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DefaultStopWait)
+			_ = h.Stop(stopCtx) // the record is cancelled either way
+			cancel()
+		}
+	}
 }
 
 // runningIDs returns the ids of the running records.

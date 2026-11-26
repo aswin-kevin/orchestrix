@@ -123,6 +123,10 @@ func TestLauncherCheckpointer(t *testing.T) {
 	for name, l := range map[string]*Launcher{
 		"nil func":   NewLauncher(LauncherConfig{}),
 		"nil result": NewLauncher(LauncherConfig{Checkpointer: func(*agent.Agent) checkpoint.Checkpointer { return nil }}),
+		"typed nil result": NewLauncher(LauncherConfig{Checkpointer: func(*agent.Agent) checkpoint.Checkpointer {
+			var none *memory.Checkpointer
+			return none
+		}}),
 	} {
 		child, err := l.Agent(parent, spec)
 		if err != nil {

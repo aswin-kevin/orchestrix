@@ -52,8 +52,13 @@ type Limits struct {
 	MaxFinished int
 }
 
-// ErrShutdown is returned by Start once the Manager was closed.
+// ErrShutdown is returned by Start, Restart and Adopt once the Manager was
+// closed.
 var ErrShutdown = errors.New("jobs: shut down")
+
+// ErrUnknownJob is returned by Restart for a job the Manager does not hold,
+// or one that is still running or already being restarted.
+var ErrUnknownJob = errors.New("jobs: unknown job")
 
 // LimitError reports a thread at its running limit.
 type LimitError struct {
@@ -83,6 +88,10 @@ type Job[H Handle] struct {
 	// notified is set once the model was told the job ended; the thread's
 	// entry may be dropped when every job it holds is.
 	notified atomic.Bool
+	// restarting is set, under the Manager's lock, while Restart runs the
+	// job again: the job then holds a reservation instead of counting as
+	// running, and no other Restart may take it.
+	restarting bool
 }
 
 // Ended reports whether the job's Done channel is closed.
@@ -132,10 +141,12 @@ func (t *thread[H]) settled() bool {
 	return true
 }
 
+// running counts the jobs that run; a job being restarted is counted by
+// starting instead. The Manager's lock must be held.
 func (t *thread[H]) running() int {
 	n := 0
 	for _, j := range t.jobs {
-		if !j.Ended() {
+		if !j.restarting && !j.Ended() {
 			n++
 		}
 	}
@@ -265,6 +276,132 @@ func (m *Manager[H]) Start(threadID string, recordedIDs []string, start func() (
 	return j, nil
 }
 
+// Restart runs the ended job id of threadID again, as Start runs a new one:
+// it reserves a slot of the thread's running limit (the job itself, having
+// ended, does not count) and takes the job out of the finished list, then
+// calls start without the lock. start makes the job's Handle run again: its
+// Done must be open once start returns nil (the Handle stays the same value;
+// a handle with episodes swaps its channel). start may block but must not
+// call the Manager. On success the job is committed: stopped and notified
+// are cleared and it is watched again, so Changed fires when it ends anew.
+// When start fails (or panics) the reservation is rolled back and the job
+// stays as it was, ended.
+//
+// Restart returns ErrShutdown after Close, ErrUnknownJob when the job is not
+// held, is still running or is being restarted, and a *LimitError when the
+// thread runs or is starting MaxRunning jobs, all without calling start; an
+// error from start is returned as is. A job committed after Close began is
+// stopped at once, as in Start.
+func (m *Manager[H]) Restart(threadID, id string, start func() error) (*Job[H], error) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, ErrShutdown
+	}
+	t, ok := m.threads[threadID]
+	var j *Job[H]
+	if ok {
+		j = t.jobs[id]
+	}
+	if j == nil || j.restarting || !j.Ended() {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: %s", ErrUnknownJob, id)
+	}
+	if t.running()+t.starting >= m.limits.MaxRunning {
+		m.mu.Unlock()
+		return nil, &LimitError{Limit: m.limits.MaxRunning}
+	}
+	// Out of the finished list, the job cannot be evicted while it restarts.
+	at := slices.Index(t.finished, id)
+	if at >= 0 {
+		t.finished = slices.Delete(t.finished, at, at+1)
+	}
+	j.restarting = true
+	t.starting++
+	m.starting.Add(1)
+	m.mu.Unlock()
+	committed := false
+	defer func() {
+		if !committed { // start failed or panicked: the job stays ended
+			m.mu.Lock()
+			t.starting--
+			j.restarting = false
+			if at >= 0 {
+				t.finished = slices.Insert(t.finished, min(at, len(t.finished)), id)
+				for len(t.finished) > m.limits.MaxFinished {
+					t.evictOne()
+				}
+			}
+			m.mu.Unlock()
+		}
+		m.starting.Done()
+	}()
+
+	if err := start(); err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	t.starting--
+	committed = true
+	j.restarting = false
+	j.stopped.Store(false)
+	j.notified.Store(false)
+	t.jobs[id] = j // in case StopAndForget dropped it meanwhile
+	m.watchers.Add(1)
+	go m.watch(t, j)
+	closed := m.closed
+	m.mu.Unlock()
+	if closed {
+		ctx, cancel := detachedStop(context.Background())
+		_, _ = requestStop(ctx, j) // a failed signal still ends in Done via the handle's own escalation
+		cancel()
+	}
+	return j, nil
+}
+
+// Adopt registers h as the job id of threadID, an id handed out before (by
+// this Manager before the thread was released, or by another process): the
+// thread's numbering continues after it. A running h takes a slot of the
+// running limit and is watched as a started job is; an ended h joins the
+// finished list. started is the job's original start time.
+//
+// Adopt returns ErrShutdown after Close, a *LimitError when h runs and the
+// thread is at its running limit, and an error when the thread already holds
+// a job id.
+func (m *Manager[H]) Adopt(threadID, id string, started time.Time, h H) (*Job[H], error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil, ErrShutdown
+	}
+	t := m.thread(threadID)
+	if _, ok := t.jobs[id]; ok {
+		return nil, fmt.Errorf("jobs: thread %s already holds job %s", threadID, id)
+	}
+	j := &Job[H]{ID: id, ThreadID: threadID, Started: started, Handle: h}
+	if j.Ended() {
+		t.next = max(t.next, m.highestNumber([]string{id}))
+		t.jobs[id] = j
+		t.finished = append(t.finished, id)
+		for len(t.finished) > m.limits.MaxFinished {
+			t.evictOne()
+		}
+		return j, nil
+	}
+	if t.running()+t.starting >= m.limits.MaxRunning {
+		if len(t.jobs) == 0 && t.starting == 0 {
+			delete(m.threads, threadID)
+		}
+		return nil, &LimitError{Limit: m.limits.MaxRunning}
+	}
+	t.next = max(t.next, m.highestNumber([]string{id}))
+	t.jobs[id] = j
+	m.watchers.Add(1)
+	go m.watch(t, j)
+	return j, nil
+}
+
 // highestNumber returns the largest job number among ids; 0 when none parses.
 func (m *Manager[H]) highestNumber(ids []string) int {
 	highest := 0
@@ -304,6 +441,20 @@ func (m *Manager[H]) Get(threadID, id string) *Job[H] {
 		return t.jobs[id]
 	}
 	return nil
+}
+
+// All returns every job the Manager holds, of every thread, in no
+// particular order.
+func (m *Manager[H]) All() []*Job[H] {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var list []*Job[H]
+	for _, t := range m.threads {
+		for _, j := range t.jobs {
+			list = append(list, j)
+		}
+	}
+	return list
 }
 
 // Changed returns a channel closed when the next job of threadID ends, and a
