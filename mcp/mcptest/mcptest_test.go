@@ -44,7 +44,9 @@ func TestInProcess(t *testing.T) {
 
 func TestHTTP(t *testing.T) {
 	mcptest.Run(t, func(t *testing.T) mcp.Transport {
-		srv := httptest.NewServer(mcptest.NewServer().Handler(mcp.HandlerOptions{}))
+		// Streamed responses carry each request's notifications before its
+		// response on the same stream; see Run.
+		srv := httptest.NewServer(mcptest.NewServer().Handler(mcp.HandlerOptions{StreamResponses: true}))
 		t.Cleanup(srv.Close)
 		tr, err := mcp.DialHTTP(mcp.HTTPConfig{URL: srv.URL})
 		if err != nil {
@@ -110,7 +112,7 @@ type mutant struct {
 const notifyLag = 200 * time.Millisecond
 
 // slowCloseFor is how long an ignoreCtx mutant's Close blocks.
-const slowCloseFor = 3 * time.Second
+const slowCloseFor = 5 * time.Second
 
 // newMutant starts a mutant over a fresh in-process session; configure
 // adjusts it before its forwarder starts.
@@ -322,7 +324,7 @@ func TestBrokenTransportsAreFlagged(t *testing.T) {
 		mcptest.Run(t, func(t *testing.T) mcp.Transport {
 			m := newMutant(mutants[name])
 			t.Cleanup(func() {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
 				_ = m.Close(ctx)
 			})

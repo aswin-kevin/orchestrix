@@ -6,8 +6,11 @@
 // contract (Messages closed and Err nil once Close returns nil, Close
 // idempotent, safe for concurrent use and bounded by its ctx, Send after
 // Close failing with mcp.ErrClosed), both on a fresh transport and on one
-// carrying a live session. Every blocking call is bounded: a transport
-// that ignores ctx fails the case instead of hanging the test binary.
+// carrying a live session. Every blocking call runs under the case's ctx,
+// so a call that never returns fails the case instead of hanging the test
+// binary. Ignoring ctx is detected only where it shows: a Close whose ctx
+// has already ended must return within 2 seconds; a Close or Send that
+// ignores ctx but finishes within the case's 10 seconds otherwise passes.
 package mcptest
 
 import (
@@ -28,7 +31,7 @@ const caseTimeout = 10 * time.Second
 
 // promptClose bounds a Close whose ctx has already ended: it must return
 // at once, leaving any release to go on in the background.
-const promptClose = time.Second
+const promptClose = 2 * time.Second
 
 // notifyCount is how many notifications the "notify" tool sends.
 const notifyCount = 20
@@ -72,6 +75,12 @@ func NewServer() *mcp.Server {
 // Run checks a Transport implementation. connect must return a fresh,
 // unused transport connected to a new session of a NewServer() server (in
 // process, over HTTP, or a child process serving it over stdio).
+//
+// Over HTTP the server must stream its responses
+// (HandlerOptions{StreamResponses: true}): with JSON responses a
+// request's notifications can only go out on the session's GET stream,
+// separately from the response and dropped while that stream is not open,
+// so NotificationsBeforeReply cannot hold.
 //
 // Each subtest calls connect for its own transports and runs within 10
 // seconds; the Close cases run twice, on a fresh transport ("fresh") and

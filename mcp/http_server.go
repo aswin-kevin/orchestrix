@@ -41,7 +41,9 @@ type HandlerOptions struct {
 	// StreamResponses answers each POSTed request with an SSE stream: the
 	// notifications its handler sends (see Notify), then its response.
 	// false answers with a JSON body, and handler notifications go to the
-	// session's GET stream if one is open.
+	// session's GET stream if one is open (dropped otherwise), with no
+	// ordering relative to the response, so a client may see them after
+	// the response or not at all.
 	StreamResponses bool
 	// DisableGET replies 405 to GET, so sessions get no server-initiated
 	// stream and notifications such as tools/list_changed are dropped.
