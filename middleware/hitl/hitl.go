@@ -211,7 +211,7 @@ func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 	// A call approved in the permission step whose config does not allow a
 	// plain Approve still needs a decision hitl allows (an Edit or a
 	// Respond), so it is asked again below; an Approver is asked only when
-	// Edit is allowed, the one such decision it can give.
+	// Approve or Edit is allowed, the decisions it can give.
 	if a, approver := approverOf(ctx); approver != nil {
 		if allowed := allowedOf(cfg); !slices.Contains(allowed, agent.Approve) && !slices.Contains(allowed, agent.Edit) {
 			// An Approver can only allow or deny; neither can run the call.
