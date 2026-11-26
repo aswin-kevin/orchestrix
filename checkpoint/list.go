@@ -47,6 +47,19 @@ type ListOptions struct {
 	Cursor string
 }
 
+// PageLimit returns the page size o selects: DefaultListLimit when Limit
+// is zero, Limit otherwise. A negative Limit is an error. Stores that page
+// themselves call it so they reject and default a Limit the same way.
+func (o ListOptions) PageLimit() (int, error) {
+	switch {
+	case o.Limit < 0:
+		return 0, fmt.Errorf("checkpoint: negative list limit %d", o.Limit)
+	case o.Limit == 0:
+		return DefaultListLimit, nil
+	}
+	return o.Limit, nil
+}
+
 // ListPage is one page of a listing.
 type ListPage struct {
 	// Threads holds the page, newest Updated first, then ID ascending.
@@ -99,12 +112,9 @@ func compareListOrder(a, b ThreadInfo) int {
 // saved while a listing is in progress may appear twice or be skipped,
 // because each page is computed from the store's contents at that moment.
 func Paginate(threads []ThreadInfo, opts ListOptions) (ListPage, error) {
-	limit := opts.Limit
-	switch {
-	case limit < 0:
-		return ListPage{}, fmt.Errorf("checkpoint: negative list limit %d", limit)
-	case limit == 0:
-		limit = DefaultListLimit
+	limit, err := opts.PageLimit()
+	if err != nil {
+		return ListPage{}, err
 	}
 	var after ThreadInfo
 	if opts.Cursor != "" {

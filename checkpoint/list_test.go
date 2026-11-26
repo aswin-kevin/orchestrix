@@ -2,7 +2,9 @@ package checkpoint_test
 
 import (
 	"errors"
+	"math"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,6 +119,27 @@ func TestPaginateEmptyIsNonNil(t *testing.T) {
 		p, err := checkpoint.Paginate(threads, checkpoint.ListOptions{})
 		if err != nil || p.Threads == nil || len(p.Threads) != 0 || p.Next != "" {
 			t.Errorf("%s: Paginate = %#v, %v, want non-nil empty Threads", name, p, err)
+		}
+	}
+}
+
+func TestListOptionsPageLimit(t *testing.T) {
+	for _, tc := range []struct {
+		limit, want int
+	}{
+		{0, checkpoint.DefaultListLimit},
+		{1, 1},
+		{7, 7},
+		{math.MaxInt, math.MaxInt},
+	} {
+		got, err := checkpoint.ListOptions{Limit: tc.limit}.PageLimit()
+		if err != nil || got != tc.want {
+			t.Errorf("PageLimit(%d) = %d, %v, want %d", tc.limit, got, err, tc.want)
+		}
+	}
+	for _, limit := range []int{-1, math.MinInt} {
+		if _, err := (checkpoint.ListOptions{Limit: limit}).PageLimit(); err == nil || !strings.Contains(err.Error(), "checkpoint: negative list limit") {
+			t.Errorf("PageLimit(%d) error = %v, want a negative-limit error", limit, err)
 		}
 	}
 }

@@ -7,6 +7,7 @@ Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `or
 ### Added
 
 - `backend.OutputCapture` and `backend.NewOutputCapture`: the bounded head-and-tail output capture that `backend/shell` and `orxdocker` each carried a private copy of is now one exported type, with `Truncated` and `Omitted`. A `maxBytes` of zero or less keeps nothing.
+- `checkpoint.ListOptions.PageLimit`: the page size a `ListOptions` selects (`DefaultListLimit` for zero, an error for a negative limit), shared by `checkpoint.Paginate` and stores that page themselves, such as `orxpg`.
 
 ### Behaviour changes
 
