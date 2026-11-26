@@ -7,11 +7,12 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-// UnlockedKey holds the tool name patterns unlocked in this run, in the
+// unlockedKey holds the tool name patterns unlocked in this run, in the
 // order they were unlocked. A pattern is a name pattern as in tool.MatchName:
-// "*" matches any run of characters and "?" exactly one. It is private to the run and
-// checkpointed with it; a forked State inherits it.
-var UnlockedKey = state.NewKey[[]string]("deferred.unlocked", state.Private[[]string]())
+// "*" matches any run of characters and "?" exactly one. It is private to
+// the run and checkpointed with it; a forked State inherits it. Read it with
+// Unlocked; change it with Unlock and Lock.
+var unlockedKey = state.NewKey[[]string]("deferred.unlocked", state.Private[[]string]())
 
 // searchedKey holds the tool names search_tools unlocked in this run, in the
 // order found. It lets a middleware that takes back its own unlocks (see
@@ -45,7 +46,7 @@ func recordSearched(s *state.State, names []string) {
 // it. Unlocking a name shows a deferred tool's schema to the model and makes
 // a gated tool callable (see Deferrer and Gater). s must not be nil.
 func Unlock(s *state.State, patterns ...string) {
-	UnlockedKey.Update(s, func(current []string) []string {
+	unlockedKey.Update(s, func(current []string) []string {
 		// current is the stored slice itself: never append to it in place.
 		unlocked := slices.Clone(current)
 		for _, p := range patterns {
@@ -57,13 +58,13 @@ func Unlock(s *state.State, patterns ...string) {
 	})
 }
 
-// Lock removes each exact pattern from UnlockedKey (no glob matching between
+// Lock removes each exact pattern from the unlock set (no glob matching between
 // patterns); patterns not present are ignored. It is how a middleware takes
 // back an unlock it granted. It removes the pattern whoever granted it: a
 // pattern the host or another middleware also unlocked is removed too. s must
 // not be nil.
 func Lock(s *state.State, patterns ...string) {
-	UnlockedKey.Update(s, func(current []string) []string {
+	unlockedKey.Update(s, func(current []string) []string {
 		// current is the stored slice itself: never modify it in place.
 		return slices.DeleteFunc(slices.Clone(current), func(p string) bool {
 			return slices.Contains(patterns, p)
@@ -77,7 +78,7 @@ func Unlocked(s *state.State, name string) bool {
 	if s == nil {
 		return false
 	}
-	patterns, _ := UnlockedKey.Get(s)
+	patterns, _ := unlockedKey.Get(s)
 	return matchesAny(patterns, name)
 }
 

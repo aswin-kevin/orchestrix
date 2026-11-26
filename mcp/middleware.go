@@ -331,7 +331,8 @@ func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 // start nor end with '_'.
 var serverNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]([A-Za-z0-9_-]*[A-Za-z0-9-])?$`)
 
-// validateServers checks every server's name and transport choice.
+// validateServers checks every server's name, transport choice and tool
+// patterns.
 func validateServers(servers []ServerConfig) error {
 	seen := make(map[string]bool, len(servers))
 	for _, cfg := range servers {
@@ -350,6 +351,11 @@ func validateServers(servers []ServerConfig) error {
 		}
 		if set != 1 {
 			return fmt.Errorf("mcp: server %q: set exactly one of Command, URL and Transport", cfg.Name)
+		}
+		for _, p := range cfg.Tools {
+			if err := tool.ValidPattern(p); err != nil {
+				return fmt.Errorf("mcp: server %q: Tools: %w", cfg.Name, err)
+			}
 		}
 	}
 	return nil

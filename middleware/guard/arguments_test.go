@@ -35,7 +35,7 @@ func TestGuardInvalidToolArgumentsFailClosed(t *testing.T) {
 	for _, failOpen := range []bool{false, true} {
 		d := &fakeDecider{}
 		m := mustNew(t, Config{Decider: d, FailOpen: failOpen,
-			Checks: []Check{{Name: "danger", Question: "q", On: ToolCall}}}).(agent.ToolWrapper)
+			Checks: []Check{{Name: "danger", Question: "q", On: ToolCall}}})
 		s := state.New()
 		ran := false
 		res, err := m.WrapTool(context.Background(),

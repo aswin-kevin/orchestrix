@@ -29,7 +29,7 @@ func (r span) covers(i int) bool { return r.From <= i && i < r.To }
 // to an earlier turn start, or moved to a later one, until it is
 // self-contained (no call left unanswered inside it); it must reach
 // MinRangeTokens. false when no range qualifies.
-func (m *middleware) selectRange(s *state.State) (span, bool) {
+func (m *Middleware) selectRange(s *state.State) (span, bool) {
 	msgs := s.Messages()
 	from := boundary(s, len(msgs))
 	starts := turnStarts(msgs, from)

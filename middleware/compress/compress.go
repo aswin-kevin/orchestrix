@@ -38,6 +38,7 @@ package compress
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -80,24 +81,25 @@ const (
 )
 
 // Config configures the compress middleware. Zero values select the
-// defaults above. Out-of-range values are not errors: a negative number
-// selects the default as zero does, and a TriggerFraction of 1 or more never
-// proposes a range (the request would have to exceed the whole window).
+// defaults above; a negative number, or a TriggerFraction above 1, is an
+// error from New.
 type Config struct {
 	// TriggerFraction is the share of the context window above which a
-	// range is proposed; 0 means DefaultTriggerFraction.
+	// range is proposed, in [0, 1]; 0 means DefaultTriggerFraction. A value
+	// of 1 is legal and never proposes a range (the request would have to
+	// exceed the whole window).
 	TriggerFraction float64
 	// KeepTurns is how many of the newest user turns are never proposed; 0
-	// means DefaultKeepTurns.
+	// means DefaultKeepTurns. Negative is an error.
 	KeepTurns int
 	// MinRangeTokens is the smallest estimated size, in tokens, of a
-	// proposed range; 0 means DefaultMinRangeTokens.
+	// proposed range; 0 means DefaultMinRangeTokens. Negative is an error.
 	MinRangeTokens int
 	// MaxSummaryChars caps the summary's length in characters; 0 means
-	// DefaultMaxSummaryChars.
+	// DefaultMaxSummaryChars. Negative is an error.
 	MaxSummaryChars int
 	// MaxIgnored is how many proposals may close unanswered in a run before
-	// it stops proposing; 0 means DefaultMaxIgnored.
+	// it stops proposing; 0 means DefaultMaxIgnored. Negative is an error.
 	MaxIgnored int
 	// DisableArchive stops saving the originals to the backend; false saves
 	// them whenever the run has a backend and a ThreadID (threadless runs
@@ -122,9 +124,15 @@ type Proposal struct {
 	Turns int `json:"turns"`
 }
 
-// ProposalKey holds the open Proposal; unset when none is open. Private to
-// the run, which clears it when it starts.
-var ProposalKey = state.NewKey[Proposal]("compress.proposal", state.Private[Proposal]())
+// proposalKey holds the open Proposal; unset when none is open. Private to
+// the run, which clears it when it starts. Read it with CurrentProposal.
+var proposalKey = state.NewKey[Proposal]("compress.proposal", state.Private[Proposal]())
+
+// CurrentProposal returns the open Proposal of the run with State s, and
+// false when none is open. s must not be nil.
+func CurrentProposal(s *state.State) (Proposal, bool) {
+	return proposalKey.Get(s)
+}
 
 // Run bookkeeping. issuedKey survives runs (elision IDs must stay unique in
 // the thread); the others are cleared by BeforeAgent.
@@ -140,25 +148,41 @@ var (
 	agedKey = state.NewKey[int]("compress.aged", state.Private[int]())
 )
 
-// middleware is immutable after New, so concurrent runs may share it.
-type middleware struct {
+// Name is the name of the compress middleware.
+const Name = "compress"
+
+// Middleware is immutable after New, so concurrent runs may share it.
+type Middleware struct {
 	cfg    Config
 	prompt string
 }
 
 // New returns the compress middleware. Put it after summarize in the stack
-// (see the package documentation).
-func New(cfg Config) agent.Middleware {
+// (see the package documentation). It returns an error when TriggerFraction
+// is outside [0, 1] or KeepTurns, MinRangeTokens, MaxSummaryChars or
+// MaxIgnored is negative.
+func New(cfg Config) (*Middleware, error) {
+	if !(cfg.TriggerFraction >= 0 && cfg.TriggerFraction <= 1) {
+		return nil, fmt.Errorf("compress: TriggerFraction %v must be between 0 and 1", cfg.TriggerFraction)
+	}
+	for _, f := range []struct {
+		name string
+		v    int
+	}{{"KeepTurns", cfg.KeepTurns}, {"MinRangeTokens", cfg.MinRangeTokens}, {"MaxSummaryChars", cfg.MaxSummaryChars}, {"MaxIgnored", cfg.MaxIgnored}} {
+		if f.v < 0 {
+			return nil, fmt.Errorf("compress: %s must not be negative", f.name)
+		}
+	}
 	cfg.TriggerFraction = orDefault(cfg.TriggerFraction, DefaultTriggerFraction)
 	cfg.KeepTurns = orDefault(cfg.KeepTurns, DefaultKeepTurns)
 	cfg.MinRangeTokens = orDefault(cfg.MinRangeTokens, DefaultMinRangeTokens)
 	cfg.MaxSummaryChars = orDefault(cfg.MaxSummaryChars, DefaultMaxSummaryChars)
 	cfg.MaxIgnored = orDefault(cfg.MaxIgnored, DefaultMaxIgnored)
-	m := &middleware{cfg: cfg, prompt: DefaultPrompt}
+	m := &Middleware{cfg: cfg, prompt: DefaultPrompt}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
 	}
-	return m
+	return m, nil
 }
 
 // orDefault returns v, or def when v is not positive.
@@ -170,17 +194,17 @@ func orDefault[T int | float64](v, def T) T {
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "compress" }
+func (m *Middleware) Name() string { return Name }
 
 // Tools implements agent.ToolProvider.
-func (m *middleware) Tools() []tool.Tool {
+func (m *Middleware) Tools() []tool.Tool {
 	return []tool.Tool{m.compressTool(), m.restoreTool()}
 }
 
 // BeforeAgent implements agent.BeforeAgent: a run starts with no open
 // proposal, no ignored count and nothing restored. It records no elision.
-func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
-	ProposalKey.Delete(s)
+func (m *Middleware) BeforeAgent(_ context.Context, s *state.State) error {
+	proposalKey.Delete(s)
 	ignoredKey.Delete(s)
 	restoredKey.Delete(s)
 	agedKey.Delete(s)
@@ -190,7 +214,7 @@ func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
 // BeforeModel implements agent.BeforeModel: it drops the elisions that
 // summarize's boundary has passed, before the loop builds the request from
 // State, so every view of this turn sees the same elisions.
-func (m *middleware) BeforeModel(_ context.Context, s *state.State) error {
+func (m *Middleware) BeforeModel(_ context.Context, s *state.State) error {
 	dropPassed(s)
 	return nil
 }
@@ -199,20 +223,20 @@ func (m *middleware) BeforeModel(_ context.Context, s *state.State) error {
 // a new one when the request has grown past the trigger, and appends the
 // prompt and the open request to the system segments. It never touches the
 // request messages or the elisions.
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	s := req.State
 	m.age(s, req.Turn)
 	msgs := s.Messages()
-	p, open := ProposalKey.Get(s)
+	p, open := proposalKey.Get(s)
 	if open && (p.From < boundary(s, len(msgs)) || p.To >= len(msgs)) {
 		// Summarized or replaced underneath: no longer the model's to answer.
-		ProposalKey.Delete(s)
+		proposalKey.Delete(s)
 		open = false
 	}
 	if !open && m.shouldPropose(req) {
 		if r, ok := m.selectRange(s); ok {
 			p = Proposal{ID: nextID(s), From: r.From, To: r.To}
-			ProposalKey.Set(s, p)
+			proposalKey.Set(s, p)
 			open = true
 		}
 	}
@@ -230,27 +254,27 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 // age counts one more model turn for the open proposal, closing it as
 // ignored once it has been open DefaultProposalTurns turns. A second call
 // in the same turn changes nothing.
-func (m *middleware) age(s *state.State, turn int) {
+func (m *Middleware) age(s *state.State, turn int) {
 	if last, ok := agedKey.Get(s); ok && last == turn {
 		return
 	}
 	agedKey.Set(s, turn)
-	p, open := ProposalKey.Get(s)
+	p, open := proposalKey.Get(s)
 	if !open {
 		return
 	}
 	p.Turns++
 	if p.Turns >= DefaultProposalTurns {
-		ProposalKey.Delete(s)
+		proposalKey.Delete(s)
 		ignoredKey.Update(s, func(n int) int { return n + 1 })
 		return
 	}
-	ProposalKey.Set(s, p)
+	proposalKey.Set(s, p)
 }
 
 // shouldPropose reports whether the request is large enough for a proposal
 // and the run has not ignored too many.
-func (m *middleware) shouldPropose(req *agent.ModelRequest) bool {
+func (m *Middleware) shouldPropose(req *agent.ModelRequest) bool {
 	if ignored, _ := ignoredKey.Get(req.State); ignored >= m.cfg.MaxIgnored {
 		return false
 	}

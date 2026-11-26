@@ -14,7 +14,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-func mustNew(t *testing.T, cfg Config) agent.Middleware {
+func mustNew(t *testing.T, cfg Config) *Middleware {
 	t.Helper()
 	mw, err := New(cfg)
 	if err != nil {
@@ -306,5 +306,39 @@ func TestTaskFallbackSkipsStopContinuations(t *testing.T) {
 	s.SetMessages(msgs)
 	if got := taskOf(s); got == "original task" {
 		t.Fatal("an unmarked user message after the task was skipped; the fallback must only skip injected ones")
+	}
+}
+
+func TestName(t *testing.T) {
+	m := mustNew(t, Config{Criteria: []string{"c"}})
+	if Name != "rubric" || m.Name() != Name {
+		t.Fatalf("Name = %q, middleware name = %q", Name, m.Name())
+	}
+}
+
+func TestGradeRequestCarriesMessages(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{Text: "first"}, llmtest.Turn{Text: "second"})
+	g, seen := verdicts(Grade{Pass: false, Feedback: "again"}, Grade{Pass: true})
+	a := newAgent(t, p, nil, mustNew(t, Config{Criteria: []string{"c"}, Grader: g}))
+	finalOf(a, input("question"))
+	if len(*seen) != 2 {
+		t.Fatalf("graded %d times, want 2", len(*seen))
+	}
+	req := (*seen)[0]
+	if len(req.Messages) < 2 || req.Messages[0].Role != llm.RoleUser || req.Messages[0].Text() != "question" {
+		t.Fatalf("Messages = %+v, want the user prompt first", req.Messages)
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if last.Role != llm.RoleAssistant || last.Text() != req.Answer || req.Answer != "first" {
+		t.Fatalf("last message = %+v, want the assistant answer %q", last, req.Answer)
+	}
+	second := (*seen)[1]
+	if len(second.Messages) <= len(req.Messages) || second.Messages[len(second.Messages)-1].Text() != "second" {
+		t.Fatalf("second request has %d messages, want the longer history ending in the revision", len(second.Messages))
+	}
+	// The slice is a copy: writing to it leaves the run's history alone.
+	req.Messages[0] = llm.UserText("tampered")
+	if got := (*seen)[1].Messages[0].Text(); got != "question" {
+		t.Fatalf("a request's Messages aliases the history: %q", got)
 	}
 }

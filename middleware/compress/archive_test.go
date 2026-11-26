@@ -38,16 +38,16 @@ func TestCompressWithoutArchive(t *testing.T) {
 		{"failed write", testCfg, failingWrites{testutil.Memory(t)}, "t", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			m := New(tc.cfg)
+			m := mustNew(t, tc.cfg)
 			s := state.New()
 			s.SetMessages(append(history(5), llm.UserText(turnText("U", 5))))
 			wrap(t, m, s)
-			p, ok := ProposalKey.Get(s)
+			p, ok := proposalKey.Get(s)
 			if !ok {
 				t.Fatal("no proposal")
 			}
 
-			res, err := m.(*middleware).compress(context.Background(), CompressInput{RangeID: p.ID, Summary: "S1"},
+			res, err := m.compress(context.Background(), Input{RangeID: p.ID, Summary: "S1"},
 				&tool.Call{State: s, Backend: tc.b, ThreadID: tc.thread})
 
 			if err != nil || res.IsError {
@@ -76,7 +76,7 @@ func TestSameTurnCompactionClosesOpenProposal(t *testing.T) {
 		llmtest.Turn{Text: "done"},
 	)
 	summarizer := llmtest.New(llmtest.Turn{Text: "EARLIER"})
-	stack := []agent.Middleware{summarize.New(summarize.Config{Provider: summarizer, TriggerFraction: 100, DisableOffload: true}), New(testCfg)}
+	stack := []agent.Middleware{summarize.New(summarize.Config{Provider: summarizer, TriggerFraction: 100, DisableOffload: true}), mustNew(t, testCfg)}
 	s := run(t, main, testutil.Memory(t), testCfg, seeded(), stack...)
 
 	if id := proposed(main.Requests[0]); id != "c1" {

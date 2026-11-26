@@ -23,19 +23,20 @@ type Verdict struct {
 	Error string `json:"error,omitempty"`
 }
 
-// VerdictsKey holds the verdicts of the current run, oldest first.
-var VerdictsKey = state.NewKey[[]Verdict]("guard.verdicts", state.Private[[]Verdict]())
+// verdictsKey holds the verdicts of the current run, oldest first. Read it
+// with Verdicts.
+var verdictsKey = state.NewKey[[]Verdict]("guard.verdicts", state.Private[[]Verdict]())
 
 // Verdicts returns the verdicts recorded in s by the current run.
 func Verdicts(s *state.State) []Verdict {
-	v, _ := VerdictsKey.Get(s)
+	v, _ := verdictsKey.Get(s)
 	return v
 }
 
 // record appends vs to the verdicts in s. Tool calls may run in parallel, so
 // the append is atomic, and it never writes into a slice a reader holds.
 func record(s *state.State, vs []Verdict) {
-	VerdictsKey.Update(s, func(cur []Verdict) []Verdict {
+	verdictsKey.Update(s, func(cur []Verdict) []Verdict {
 		return append(slices.Clip(cur), vs...)
 	})
 }

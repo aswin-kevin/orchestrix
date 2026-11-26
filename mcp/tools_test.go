@@ -310,7 +310,7 @@ func TestGatedServerLockedUntilUnlocked(t *testing.T) {
 
 	// With the deferred middleware the locked schemas are hidden too.
 	p = llmtest.New(llmtest.Turn{Text: "done"})
-	runAgent(t, m, agent.Config{Provider: p, Middleware: []agent.Middleware{deferred.New(deferred.Config{})}}, nil)
+	runAgent(t, m, agent.Config{Provider: p, Middleware: []agent.Middleware{mustDeferred(t, deferred.Config{})}}, nil)
 	for _, schema := range p.Requests[0].Tools {
 		if strings.HasPrefix(schema.Name, "mcp__srv__") {
 			t.Fatalf("locked tool %s shown to the model", schema.Name)
@@ -532,6 +532,7 @@ func TestAllowlistPatterns(t *testing.T) {
 		{"literal with dot", []string{"a.b"}, "axb", false},
 		{"star crosses slash", []string{"a*"}, "a/b", true},
 		{"slash is literal", []string{"a/b"}, "a/b", true},
+		{"question mark crosses slash", []string{"a?b"}, "a/b", true},
 		{"case sensitive", []string{"read"}, "READ", false},
 		{"any of several", []string{"x", "read_*"}, "read_z", true},
 	}

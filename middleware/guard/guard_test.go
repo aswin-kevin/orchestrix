@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -64,7 +65,7 @@ func echoTool(calls *atomic.Int32) tool.Tool {
 		tool.WithReadOnly(), tool.WithConcurrent())
 }
 
-func mustNew(t *testing.T, cfg Config) agent.Middleware {
+func mustNew(t *testing.T, cfg Config) *Middleware {
 	t.Helper()
 	mw, err := New(cfg)
 	if err != nil {
@@ -128,18 +129,19 @@ func TestNewValidates(t *testing.T) {
 		cfg  Config
 		want string
 	}{
-		"no decider":      {Config{Checks: []Check{ok}}, "Decider"},
-		"no checks":       {Config{Decider: d}, "check"},
-		"empty name":      {Config{Decider: d, Checks: []Check{{Question: "q", On: Input}}}, "name"},
-		"bad name":        {Config{Decider: d, Checks: []Check{{Name: "a b", Question: "q", On: Input}}}, "name"},
-		"long name":       {Config{Decider: d, Checks: []Check{{Name: strings.Repeat("a", 65), Question: "q", On: Input}}}, "name"},
-		"duplicate":       {Config{Decider: d, Checks: []Check{ok, ok}}, "duplicate"},
-		"empty question":  {Config{Decider: d, Checks: []Check{{Name: "c", Question: " ", On: Input}}}, "Question"},
-		"no target":       {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q"}}}, "On"},
-		"unknown target":  {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q", On: 4}}}, "On"},
-		"threshold above": {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q", On: Input, Threshold: 1.5}}}, "Threshold"},
-		"threshold below": {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q", On: Input, Threshold: -0.1}}}, "Threshold"},
-		"negative limit":  {Config{Decider: d, Checks: []Check{ok}, MaxInputBytes: -1}, "MaxInputBytes"},
+		"no decider":       {Config{Checks: []Check{ok}}, "Decider"},
+		"no checks":        {Config{Decider: d}, "check"},
+		"empty name":       {Config{Decider: d, Checks: []Check{{Question: "q", On: Input}}}, "name"},
+		"bad name":         {Config{Decider: d, Checks: []Check{{Name: "a b", Question: "q", On: Input}}}, "name"},
+		"long name":        {Config{Decider: d, Checks: []Check{{Name: strings.Repeat("a", 65), Question: "q", On: Input}}}, "name"},
+		"duplicate":        {Config{Decider: d, Checks: []Check{ok, ok}}, "duplicate"},
+		"empty question":   {Config{Decider: d, Checks: []Check{{Name: "c", Question: " ", On: Input}}}, "Question"},
+		"no target":        {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q"}}}, "On"},
+		"unknown target":   {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q", On: 4}}}, "On"},
+		"threshold above":  {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q", On: Input, Threshold: 1.5}}}, "Threshold"},
+		"threshold below":  {Config{Decider: d, Checks: []Check{{Name: "c", Question: "q", On: Input, Threshold: -0.1}}}, "Threshold"},
+		"negative limit":   {Config{Decider: d, Checks: []Check{ok}, MaxInputBytes: -1}, "MaxInputBytes"},
+		"negative timeout": {Config{Decider: d, Checks: []Check{ok}, Timeout: -time.Second}, "Timeout"},
 	}
 	for name, tc := range tests {
 		_, err := New(tc.cfg)
@@ -577,5 +579,12 @@ func TestVerdictJSON(t *testing.T) {
 	b, err := json.Marshal(Verdict{Target: "tool:x", Check: "c", Yes: 0.25, Blocked: true})
 	if err != nil || string(b) != `{"target":"tool:x","check":"c","yes":0.25,"blocked":true}` {
 		t.Fatalf("json = %s, %v", b, err)
+	}
+}
+
+func TestName(t *testing.T) {
+	m := mustNew(t, Config{Decider: &fakeDecider{}, Checks: []Check{{Name: "c", Question: "q", On: Input}}})
+	if Name != "guard" || m.Name() != Name {
+		t.Fatalf("Name = %q, middleware name = %q", Name, m.Name())
 	}
 }

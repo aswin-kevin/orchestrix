@@ -8,7 +8,7 @@
 // (Gater, Gate) is hidden, unsearchable and refused until Unlock names it,
 // for example when a skill that provides it is loaded.
 //
-// Both kinds share one per-run unlock set, UnlockedKey; search_tools also
+// Both kinds share one per-run unlock set (see Unlock and Unlocked); search_tools also
 // records the names it unlocked in a second private key, read with Searched,
 // so a middleware that relocks its own grants can leave those alone. Nothing
 // here weakens a permission check: call_tool is a tool.Dispatcher, so the agent loop runs
@@ -19,6 +19,7 @@ package deferred
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -52,19 +53,24 @@ const (
 type Config struct {
 	// Tools are name patterns (as in tool.MatchName) of tools to defer in
 	// addition to the tools implementing Deferrer; nil defers only those.
-	// search_tools and call_tool are never deferred.
+	// search_tools and call_tool are never deferred. A pattern that
+	// tool.ValidPattern rejects (empty, blank) is an error.
 	Tools []string
 	// MaxResults is how many tools a search returns when the model does not
 	// say; 0 means DefaultMaxResults, and it is capped at MaxResults.
+	// Negative is an error.
 	MaxResults int
 	// Prompt introduces the list of deferred tools in the system prompt.
 	// nil uses DefaultPrompt; a pointer to "" disables the segment.
 	Prompt *string
 }
 
-// middleware is the deferred middleware. It is immutable after New, so it is
-// safe to share between concurrent runs; per-run data lives in UnlockedKey.
-type middleware struct {
+// Name is the name of the deferred middleware.
+const Name = "deferred"
+
+// Middleware is the deferred middleware. It is immutable after New, so it is
+// safe to share between concurrent runs; per-run data lives in State.
+type Middleware struct {
 	patterns   []string
 	maxResults int
 	prompt     string
@@ -72,8 +78,18 @@ type middleware struct {
 
 // New returns the deferred middleware. It provides search_tools and
 // call_tool and hides the schemas of locked tools from each model request.
-func New(cfg Config) agent.Middleware {
-	m := &middleware{
+// It returns an error when a Config.Tools pattern is invalid or MaxResults
+// is negative.
+func New(cfg Config) (*Middleware, error) {
+	for _, p := range cfg.Tools {
+		if err := tool.ValidPattern(p); err != nil {
+			return nil, fmt.Errorf("deferred: Tools: %w", err)
+		}
+	}
+	if cfg.MaxResults < 0 {
+		return nil, errors.New("deferred: MaxResults must not be negative")
+	}
+	m := &Middleware{
 		patterns:   slices.Clone(cfg.Tools),
 		maxResults: DefaultMaxResults,
 		prompt:     DefaultPrompt,
@@ -84,14 +100,14 @@ func New(cfg Config) agent.Middleware {
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
 	}
-	return m
+	return m, nil
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "deferred" }
+func (m *Middleware) Name() string { return Name }
 
 // Tools implements agent.ToolProvider.
-func (m *middleware) Tools() []tool.Tool {
+func (m *Middleware) Tools() []tool.Tool {
 	return []tool.Tool{m.searchTool(), callTool()}
 }
 
@@ -99,7 +115,7 @@ func (m *middleware) Tools() []tool.Tool {
 // tools (gated and not unlocked, or deferred and not unlocked) from the
 // request and, when deferred tools remain hidden, appends the prompt that
 // lists them after the host's system segments.
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	info, ok := agent.Info(ctx)
 	if !ok {
 		return next(ctx, req)
@@ -150,7 +166,7 @@ func listing(names []string) string {
 
 // isDeferred reports whether t is deferred: marked so itself, or named by a
 // Config.Tools pattern. The middleware's own tools never are.
-func (m *middleware) isDeferred(t tool.Tool) bool {
+func (m *Middleware) isDeferred(t tool.Tool) bool {
 	if t.Name() == ToolSearch || t.Name() == ToolCall {
 		return false
 	}
@@ -159,6 +175,6 @@ func (m *middleware) isDeferred(t tool.Tool) bool {
 
 // deferredLocked reports whether t is deferred and not unlocked in the run
 // with State s.
-func (m *middleware) deferredLocked(s *state.State, t tool.Tool) bool {
+func (m *Middleware) deferredLocked(s *state.State, t tool.Tool) bool {
 	return m.isDeferred(t) && !Unlocked(s, t.Name())
 }

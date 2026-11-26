@@ -3,6 +3,7 @@ package compress
 import (
 	"context"
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"testing"
@@ -69,7 +70,7 @@ func noopTool() tool.Tool {
 func run(t *testing.T, p llm.Provider, b backend.Backend, cfg Config, s *state.State, stack ...agent.Middleware) *state.State {
 	t.Helper()
 	if len(stack) == 0 {
-		stack = []agent.Middleware{New(cfg)}
+		stack = []agent.Middleware{mustNew(t, cfg)}
 	}
 	a, err := agent.New(agent.Config{
 		Provider:       p,
@@ -149,7 +150,7 @@ func TestProposesOldestRange(t *testing.T) {
 			t.Errorf("system missing %q", want)
 		}
 	}
-	p, ok := ProposalKey.Get(s)
+	p, ok := proposalKey.Get(s)
 	if !ok || p.ID != "c1" || p.From != 0 || p.To != 6 {
 		t.Fatalf("proposal = %+v (set %v), want c1 over [0, 6)", p, ok)
 	}
@@ -177,7 +178,7 @@ func TestCompressReplacesRangeInView(t *testing.T) {
 	if got := len(s.Messages()); got != 14 {
 		t.Fatalf("State has %d messages, want 14", got)
 	}
-	if _, open := ProposalKey.Get(s); open {
+	if _, open := proposalKey.Get(s); open {
 		t.Fatal("the proposal stayed open after compress_context")
 	}
 	res, err := b.Read(context.Background(), ArchiveDir+"/t/c1.md", 0, 1000)
@@ -241,7 +242,7 @@ func TestRestoreRejectsUnknownIDs(t *testing.T) {
 	}
 	for _, id := range []string{"c7", "x1"} {
 		main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{restoreCall("k1", id)}}, llmtest.Turn{Text: "done"})
-		s = run(t, main, testutil.Memory(t), Config{MinRangeTokens: 100, TriggerFraction: 100}, s)
+		s = run(t, main, testutil.Memory(t), Config{MinRangeTokens: 100, TriggerFraction: 1}, s)
 		if res := lastResult(t, main.Requests[1]); !res.IsError {
 			t.Fatalf("restore %s = %+v, want an error", id, res)
 		}
@@ -297,7 +298,7 @@ func TestNoProposalBelowTrigger(t *testing.T) {
 			if id := proposed(main.Requests[0]); id != "" {
 				t.Fatalf("proposed %s", id)
 			}
-			if _, ok := ProposalKey.Get(s); ok {
+			if _, ok := proposalKey.Get(s); ok {
 				t.Fatal("a proposal was recorded")
 			}
 		})
@@ -310,7 +311,7 @@ func TestRangeStartsAfterSummaryBoundary(t *testing.T) {
 	main := llmtest.New(llmtest.Turn{Text: "done"})
 	s = run(t, main, testutil.Memory(t), testCfg, s)
 
-	p, ok := ProposalKey.Get(s)
+	p, ok := proposalKey.Get(s)
 	if !ok || p.From < 4 || p.To != 6 {
 		t.Fatalf("proposal = %+v (set %v), want [4, 6)", p, ok)
 	}
@@ -339,7 +340,7 @@ func TestWorksUnderSummarize(t *testing.T) {
 		llmtest.Turn{ToolCalls: []llmtest.Call{compressCall("k1", "c1", "S1")}},
 		llmtest.Turn{Text: "done"},
 	)
-	stack := []agent.Middleware{summarize.New(summarize.Config{TriggerFraction: 100}), New(testCfg)}
+	stack := []agent.Middleware{summarize.New(summarize.Config{TriggerFraction: 100}), mustNew(t, testCfg)}
 	s = run(t, main, testutil.Memory(t), testCfg, s, stack...)
 
 	if e := elide.All(s); len(e) != 1 || e[0].From != 2 || e[0].To != 6 {
@@ -357,5 +358,52 @@ func TestWorksUnderSummarize(t *testing.T) {
 	}
 	if !strings.Contains(text, "U3 xxx") {
 		t.Fatal("the kept turns are missing")
+	}
+}
+
+func TestNewValidates(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		ok   bool
+	}{
+		{"zero", Config{}, true},
+		{"one never proposes but is legal", Config{TriggerFraction: 1}, true},
+		{"above one", Config{TriggerFraction: 1.5}, false},
+		{"below zero", Config{TriggerFraction: -0.1}, false},
+		{"NaN", Config{TriggerFraction: math.NaN()}, false},
+		{"negative KeepTurns", Config{KeepTurns: -1}, false},
+		{"negative MinRangeTokens", Config{MinRangeTokens: -1}, false},
+		{"negative MaxSummaryChars", Config{MaxSummaryChars: -1}, false},
+		{"negative MaxIgnored", Config{MaxIgnored: -1}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(tc.cfg)
+			if (err == nil) != tc.ok {
+				t.Fatalf("New(%+v) error = %v, want ok = %v", tc.cfg, err, tc.ok)
+			}
+			if err != nil && !strings.HasPrefix(err.Error(), "compress: ") {
+				t.Errorf("error %q lacks the package prefix", err)
+			}
+		})
+	}
+}
+
+func TestCurrentProposal(t *testing.T) {
+	main := llmtest.New(llmtest.Turn{Text: "done"})
+	s := run(t, main, testutil.Memory(t), testCfg, seeded())
+	p, ok := CurrentProposal(s)
+	if !ok || p.ID != "c1" || p.From != 0 || p.To != 6 {
+		t.Fatalf("CurrentProposal = %+v, %v; want c1 over [0, 6)", p, ok)
+	}
+	if _, ok := CurrentProposal(state.New()); ok {
+		t.Fatal("a fresh State has a proposal")
+	}
+}
+
+func TestName(t *testing.T) {
+	if Name != "compress" || mustNew(t, Config{}).Name() != Name {
+		t.Fatalf("Name = %q, middleware name = %q", Name, mustNew(t, Config{}).Name())
 	}
 }

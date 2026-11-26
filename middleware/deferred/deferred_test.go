@@ -128,7 +128,7 @@ func TestDeferredSchemasHiddenUntilSearched(t *testing.T) {
 	a := mustNew(t, agent.Config{
 		Provider:   p,
 		Tools:      []tool.Tool{readOnlyTool("weather", "Current weather for a city."), readOnlyTool("echo", "Echo.")},
-		Middleware: []agent.Middleware{New(Config{Tools: []string{"weather"}})},
+		Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"weather"}})},
 	})
 
 	final := run(t, a.Run(context.Background(), userInput(nil)))
@@ -195,7 +195,7 @@ func TestPromptListsAtMostDefaultMaxListed(t *testing.T) {
 				Provider:   p,
 				System:     []string{"host"},
 				Tools:      tools,
-				Middleware: []agent.Middleware{New(Config{Tools: []string{"t*"}, Prompt: tc.prompt})},
+				Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"t*"}, Prompt: tc.prompt})},
 			})
 			run(t, a.Run(context.Background(), userInput(nil)))
 			if got := schemaNames(p.Requests[0]); !slices.Equal(got, []string{ToolSearch, ToolCall}) {
@@ -207,7 +207,7 @@ func TestPromptListsAtMostDefaultMaxListed(t *testing.T) {
 }
 
 func TestSearchModes(t *testing.T) {
-	m := New(Config{}).(*middleware)
+	m := mustDeferred(t, Config{})
 	candidates := []tool.Tool{
 		readOnlyTool("calendar", "Read the user's appointments."),
 		readOnlyTool("mail_send", "Send an email, for example a calendar invite."),
@@ -264,7 +264,7 @@ func TestSearchModes(t *testing.T) {
 		if len(found) != DefaultMaxResults {
 			t.Fatalf("found %d, want the default %d", len(found), DefaultMaxResults)
 		}
-		capped := New(Config{MaxResults: 100}).(*middleware)
+		capped := mustDeferred(t, Config{MaxResults: 100})
 		if found, _ = capped.search(many, SearchInput{Query: "tool"}); len(found) != MaxResults {
 			t.Fatalf("Config.MaxResults 100 found %d, want the cap %d", len(found), MaxResults)
 		}
@@ -282,7 +282,7 @@ func TestSearchResultsThroughRun(t *testing.T) {
 	a := mustNew(t, agent.Config{
 		Provider:   p,
 		Tools:      []tool.Tool{readOnlyTool("weather", "Weather.")},
-		Middleware: []agent.Middleware{New(Config{Tools: []string{"weather"}})},
+		Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"weather"}})},
 	})
 
 	final := run(t, a.Run(context.Background(), userInput(nil)))
@@ -294,7 +294,7 @@ func TestSearchResultsThroughRun(t *testing.T) {
 	if r := res[1]; !r.IsError || !strings.HasPrefix(resultText(r), "invalid regular expression: ") {
 		t.Fatalf("invalid regex result = %+v", r)
 	}
-	if _, ok := UnlockedKey.Get(final.State); ok {
+	if _, ok := unlockedKey.Get(final.State); ok {
 		t.Fatal("a search without matches unlocked something")
 	}
 }
@@ -306,7 +306,7 @@ func newFilesystemAgent(t *testing.T, p llm.Provider, cfg agent.Config) (*agent.
 	be := testutil.Memory(t)
 	cfg.Provider = p
 	cfg.Backend = be
-	cfg.Middleware = []agent.Middleware{mustFS(t, filesystem.Config{}), New(Config{Tools: []string{filesystem.ToolWriteFile}})}
+	cfg.Middleware = []agent.Middleware{mustFS(t, filesystem.Config{}), mustDeferred(t, Config{Tools: []string{filesystem.ToolWriteFile}})}
 	return mustNew(t, cfg), be
 }
 
@@ -406,7 +406,7 @@ func TestCallToolInputOptional(t *testing.T) {
 		llmtest.Turn{ToolCalls: []llmtest.Call{call("p", ToolCall, obj{"name": "ping"}), call("n", ToolCall, obj{"name": "ping", "input": nil})}},
 		llmtest.Turn{Text: "done"},
 	)
-	a := mustNew(t, agent.Config{Provider: p, Tools: []tool.Tool{ping}, Middleware: []agent.Middleware{New(Config{})}})
+	a := mustNew(t, agent.Config{Provider: p, Tools: []tool.Tool{ping}, Middleware: []agent.Middleware{mustDeferred(t, Config{})}})
 
 	final := run(t, a.Run(context.Background(), userInput(nil)))
 
@@ -434,7 +434,7 @@ func TestGatedToolHiddenAndRefused(t *testing.T) {
 		Provider: p,
 		Tools:    []tool.Tool{Gate(readOnlyTool("echo", "Echo the text.")), unlockTool()},
 		// Deferred as well, so the search would find it if it were not locked.
-		Middleware: []agent.Middleware{New(Config{Tools: []string{"echo"}})},
+		Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"echo"}})},
 	})
 
 	final := run(t, a.Run(context.Background(), userInput(nil)))
@@ -479,7 +479,7 @@ func TestGatedToolLockedBeforeApproval(t *testing.T) {
 	a := mustNew(t, agent.Config{
 		Provider:   p,
 		Tools:      []tool.Tool{Gate(readOnlyTool("echo", "Echo."))},
-		Middleware: []agent.Middleware{New(Config{})},
+		Middleware: []agent.Middleware{mustDeferred(t, Config{})},
 		Rules:      permission.Rules{Ask: []permission.Rule{{Tool: "echo"}}},
 		Approver: func(context.Context, permission.Request, string) permission.Decision {
 			asked++
@@ -704,7 +704,7 @@ func TestGatedDispatcher(t *testing.T) {
 		return mustNew(t, agent.Config{
 			Provider:   p,
 			Tools:      []tool.Tool{Gate(dispatchingTool()), readOnlyTool("echo", "Echo.")},
-			Middleware: []agent.Middleware{New(Config{})},
+			Middleware: []agent.Middleware{mustDeferred(t, Config{})},
 		})
 	}
 
@@ -779,7 +779,7 @@ func TestDeferAndGateShareOneWrapper(t *testing.T) {
 		a := mustNew(t, agent.Config{
 			Provider:   p,
 			Tools:      []tool.Tool{Defer(Gate(inner)), unlockTool()},
-			Middleware: []agent.Middleware{New(Config{})},
+			Middleware: []agent.Middleware{mustDeferred(t, Config{})},
 		})
 		final := run(t, a.Run(context.Background(), userInput(nil)))
 		if got := schemaNames(p.Requests[0]); slices.Contains(got, "echo") {
@@ -804,8 +804,8 @@ func TestUnlockGlob(t *testing.T) {
 	Unlock(s, "mcp__srv__*", "echo")
 	Unlock(s, "echo")
 
-	if got, _ := UnlockedKey.Get(s); !slices.Equal(got, []string{"mcp__srv__*", "echo"}) {
-		t.Fatalf("UnlockedKey = %v, want deduplicated patterns", got)
+	if got, _ := unlockedKey.Get(s); !slices.Equal(got, []string{"mcp__srv__*", "echo"}) {
+		t.Fatalf("unlockedKey = %v, want deduplicated patterns", got)
 	}
 	check := func(s *state.State) {
 		t.Helper()
@@ -838,13 +838,13 @@ func TestUnlockGlob(t *testing.T) {
 		t.Fatal("Unlocked(nil) must be false")
 	}
 	if !Unlocked(s.Fork(), "echo") {
-		t.Fatal("a fork lost the unlock set; UnlockedKey must be Private, not RunLocal")
+		t.Fatal("a fork lost the unlock set; unlockedKey must be Private, not RunLocal")
 	}
 }
 
 var (
-	_ agent.ToolProvider = (*middleware)(nil)
-	_ agent.ModelWrapper = (*middleware)(nil)
+	_ agent.ToolProvider = (*Middleware)(nil)
+	_ agent.ModelWrapper = (*Middleware)(nil)
 )
 
 // countingProvider is a DynamicToolProvider that counts its calls.
@@ -867,7 +867,7 @@ func TestDynamicToolsTakenOncePerTurn(t *testing.T) {
 		llmtest.Turn{ToolCalls: []llmtest.Call{call("r", "remote", obj{"text": "x"})}},
 		llmtest.Turn{Text: "done"},
 	)
-	a := mustNew(t, agent.Config{Provider: p, Middleware: []agent.Middleware{New(Config{}), dyn}})
+	a := mustNew(t, agent.Config{Provider: p, Middleware: []agent.Middleware{mustDeferred(t, Config{}), dyn}})
 	final := run(t, a.Run(context.Background(), userInput(state.New())))
 	if got := resultText(results(final, 1)[0]); got != "remote:x" {
 		t.Fatalf("remote result = %q, want the call to have run", got)
@@ -921,7 +921,7 @@ func TestCallToolDenyIsCheckedBeforeTheTarget(t *testing.T) {
 	a := mustNew(t, agent.Config{
 		Provider:   p,
 		Tools:      []tool.Tool{panickyTool{readOnlyTool("fragile", "Fragile.")}},
-		Middleware: []agent.Middleware{New(Config{})},
+		Middleware: []agent.Middleware{mustDeferred(t, Config{})},
 		Rules:      permission.Rules{Deny: []permission.Rule{{Tool: ToolCall}}},
 	})
 	final := run(t, a.Run(context.Background(), userInput(state.New())))
@@ -938,8 +938,8 @@ func TestLockRemovesExactPattern(t *testing.T) {
 		t.Fatal("Lock must remove exactly the named pattern")
 	}
 	Lock(s, "missing")
-	if got, _ := UnlockedKey.Get(s); !slices.Equal(got, []string{"a"}) {
-		t.Fatalf("UnlockedKey = %v, want [a]", got)
+	if got, _ := unlockedKey.Get(s); !slices.Equal(got, []string{"a"}) {
+		t.Fatalf("unlockedKey = %v, want [a]", got)
 	}
 }
 
@@ -952,7 +952,7 @@ func TestSearchedRecordsSearchUnlocksOnly(t *testing.T) {
 	a := mustNew(t, agent.Config{
 		Provider:   p,
 		Tools:      []tool.Tool{readOnlyTool("echo", "Echo."), unlockTool()},
-		Middleware: []agent.Middleware{New(Config{Tools: []string{"echo"}})},
+		Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"echo"}})},
 	})
 	final := run(t, a.Run(context.Background(), userInput(nil)))
 	if got := Searched(final.State); !slices.Equal(got, []string{"echo"}) {
@@ -960,5 +960,30 @@ func TestSearchedRecordsSearchUnlocksOnly(t *testing.T) {
 	}
 	if !Unlocked(final.State, "other") {
 		t.Fatal("the direct unlock is missing")
+	}
+}
+
+func TestNewRejectsInvalidConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		ok   bool
+	}{
+		{"valid patterns", Config{Tools: []string{"weather", "mcp__*", "a?b"}}, true},
+		{"blank pattern", Config{Tools: []string{" "}}, false},
+		{"empty pattern", Config{Tools: []string{"ok", ""}}, false},
+		{"NUL pattern", Config{Tools: []string{"a\x00b"}}, false},
+		{"negative MaxResults", Config{MaxResults: -1}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(tc.cfg)
+			if (err == nil) != tc.ok {
+				t.Fatalf("New(%+v) error = %v, want ok = %v", tc.cfg, err, tc.ok)
+			}
+			if err != nil && !strings.HasPrefix(err.Error(), "deferred: ") {
+				t.Errorf("error %q lacks the package prefix", err)
+			}
+		})
 	}
 }

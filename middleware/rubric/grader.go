@@ -43,6 +43,11 @@ type GradeRequest struct {
 	// Iteration counts the earlier gradings of this run: 0 for the first
 	// answer.
 	Iteration int
+	// Messages is the run's history when the answer was given, oldest
+	// first, the answer's assistant message last. It is a copy. ModelGrader
+	// and DecisionGrader ignore it; a custom Grader may use it to judge the
+	// answer against the whole conversation.
+	Messages []llm.Message
 }
 
 // Grade is a grader's verdict.

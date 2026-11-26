@@ -495,7 +495,7 @@ func pinRun(t *testing.T, ckptDir string, pinned []string, turns ...llmtest.Turn
 	a, err := agent.New(agent.Config{
 		Provider:     p,
 		Tools:        []tool.Tool{deferred.Gate(echo("pdf_tool")), echo("weather")},
-		Middleware:   []agent.Middleware{deferred.New(deferred.Config{Tools: []string{"weather"}}), m},
+		Middleware:   []agent.Middleware{mustDeferred(t, deferred.Config{Tools: []string{"weather"}}), m},
 		Checkpointer: store,
 	})
 	if err != nil {

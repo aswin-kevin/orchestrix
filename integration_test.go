@@ -723,7 +723,7 @@ func TestLiveCompressContext(t *testing.T) {
 	var rangeID string
 	for _, ev := range events {
 		if ev.Kind == agent.KindToolUse && ev.ToolName == compress.ToolCompress {
-			var input compress.CompressInput
+			var input compress.Input
 			if err := json.Unmarshal(ev.Input, &input); err == nil {
 				rangeID = input.RangeID
 			}

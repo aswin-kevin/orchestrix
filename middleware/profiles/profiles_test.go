@@ -141,7 +141,7 @@ func TestExcludedToolRefusedViaCallTool(t *testing.T) {
 	)
 	final := runAgent(t, agent.Config{
 		Provider: p, Model: "small-1", Tools: []tool.Tool{stub("execute", "Runs.")},
-		Middleware: []agent.Middleware{deferred.New(deferred.Config{Tools: []string{"execute"}}), m},
+		Middleware: []agent.Middleware{mustDeferred(t, deferred.Config{Tools: []string{"execute"}}), m},
 	})
 	res := firstResult(t, final)
 	if !res.IsError || res.Content[0].Text != "tool execute is not available for model small-1" {
@@ -305,8 +305,8 @@ func TestSlashedModelFailsClosedForExclusion(t *testing.T) {
 }
 
 // deferredAndProfiles returns the stack in the order asked for.
-func deferredAndProfiles(m *Middleware, profilesFirst bool) []agent.Middleware {
-	d := deferred.New(deferred.Config{Tools: []string{"execute", "weather"}})
+func deferredAndProfiles(t *testing.T, m *Middleware, profilesFirst bool) []agent.Middleware {
+	d := mustDeferred(t, deferred.Config{Tools: []string{"execute", "weather"}})
 	if profilesFirst {
 		return []agent.Middleware{m, d}
 	}
@@ -326,7 +326,7 @@ func TestExcludedToolAbsentFromSearchAndListing(t *testing.T) {
 		final := runAgent(t, agent.Config{
 			Provider: p, Model: "small-1",
 			Tools:      []tool.Tool{stub("execute", "Runs a command."), stub("weather", "Weather.")},
-			Middleware: deferredAndProfiles(m, profilesFirst),
+			Middleware: deferredAndProfiles(t, m, profilesFirst),
 		})
 		blocks := final.State.Messages()[2].Content
 		if txt := blocks[0].Content[0].Text; strings.Contains(txt, "execute") || !strings.Contains(txt, "weather") {

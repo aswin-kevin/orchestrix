@@ -408,6 +408,8 @@ func TestServerConfigValidation(t *testing.T) {
 		{"no transport", []ServerConfig{{Name: "a"}}},
 		{"command and url", []ServerConfig{{Name: "a", Command: "x", URL: "http://h"}}},
 		{"url and transport", []ServerConfig{{Name: "a", URL: "http://h", Transport: tr()}}},
+		{"blank tool pattern", []ServerConfig{{Name: "a", Command: "x", Tools: []string{"ok_*", " "}}}},
+		{"empty tool pattern", []ServerConfig{{Name: "a", Command: "x", Tools: []string{""}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if m, err := Connect(context.Background(), tc.servers, ConnectConfig{}); err == nil {

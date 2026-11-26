@@ -53,9 +53,9 @@ func TestNeverProposesCurrentTurn(t *testing.T) {
 	// Turn 5 (index 10) is the run's input, answered by a tool loop still
 	// in progress.
 	s.SetMessages(append(history(5), llm.UserText(turnText("U", 5)), call("n1"), result("n1"), call("n2"), result("n2")))
-	wrap(t, New(Config{MinRangeTokens: 100, KeepTurns: 1}), s)
+	wrap(t, mustNew(t, Config{MinRangeTokens: 100, KeepTurns: 1}), s)
 
-	p, ok := ProposalKey.Get(s)
+	p, ok := proposalKey.Get(s)
 	if !ok || p.From != 0 || p.To != 10 {
 		t.Fatalf("proposal = %+v (set %v), want [0, 10): everything before the current turn", p, ok)
 	}
@@ -67,9 +67,9 @@ func TestRangeAvoidsDanglingCalls(t *testing.T) {
 	msgs[3] = call("dangling")
 	s := state.New()
 	s.SetMessages(msgs)
-	wrap(t, New(testCfg), s)
+	wrap(t, mustNew(t, testCfg), s)
 
-	p, ok := ProposalKey.Get(s)
+	p, ok := proposalKey.Get(s)
 	if !ok || (p.From <= 3 && 3 < p.To) {
 		t.Fatalf("proposal = %+v (set %v), want a range around the dangling call", p, ok)
 	}
@@ -88,12 +88,12 @@ func TestPassedElisionsDropped(t *testing.T) {
 	}
 	// The boundary passed c1 and straddles c2.
 	summarize.BoundaryKey.Set(s, summarize.Boundary{Index: 4, Summary: "S"})
-	wrap(t, New(testCfg), s)
+	wrap(t, mustNew(t, testCfg), s)
 
 	if e := elide.All(s); len(e) > 0 {
 		t.Fatalf("elisions = %+v, want the passed ones dropped", e)
 	}
-	if p, _ := ProposalKey.Get(s); p.ID != "c3" || p.From != 4 || p.To != 6 {
+	if p, _ := proposalKey.Get(s); p.ID != "c3" || p.From != 4 || p.To != 6 {
 		t.Fatalf("proposal = %+v, want c3 over [4, 6)", p)
 	}
 }
@@ -104,9 +104,9 @@ func TestIDsSkipExistingElisions(t *testing.T) {
 	if err := elide.Add(s, elide.Elision{ID: "c1", From: 0, To: 2, Text: "E1"}); err != nil {
 		t.Fatal(err)
 	}
-	sent := wrap(t, New(testCfg), s)
+	sent := wrap(t, mustNew(t, testCfg), s)
 
-	if p, _ := ProposalKey.Get(s); p.ID != "c2" || p.From != 2 || p.To != 6 {
+	if p, _ := proposalKey.Get(s); p.ID != "c2" || p.From != 2 || p.To != 6 {
 		t.Fatalf("proposal = %+v, want c2 over [2, 6)", p)
 	}
 	if id := proposed(sent); id != "c2" {
@@ -131,7 +131,7 @@ func TestEmptyPromptKeepsRequest(t *testing.T) {
 	empty := ""
 	s := state.New()
 	s.SetMessages(append(history(5), llm.UserText(turnText("U", 5))))
-	sent := wrap(t, New(Config{MinRangeTokens: 100, Prompt: &empty}), s)
+	sent := wrap(t, mustNew(t, Config{MinRangeTokens: 100, Prompt: &empty}), s)
 
 	sys := strings.Join(sent.System, "\n")
 	if strings.Contains(sys, DefaultPrompt) || proposed(sent) != "c1" {
@@ -158,9 +158,9 @@ func TestStopContinuationsAreNotTurns(t *testing.T) {
 		t.Fatalf("state has %d messages, want 18 (input, 4 answers, 3 continuations)", n)
 	}
 
-	wrap(t, New(testCfg), s)
+	wrap(t, mustNew(t, testCfg), s)
 
-	pr, ok := ProposalKey.Get(s)
+	pr, ok := proposalKey.Get(s)
 	if !ok || pr.To > 10 {
 		t.Fatalf("proposal = %+v (set %v), want one that ends before the run's input at 10", pr, ok)
 	}
@@ -174,9 +174,9 @@ func TestUpToQuotesWhatTheModelSees(t *testing.T) {
 	if err := elide.Add(s, elide.Elision{ID: "x1", From: 4, To: 8, Text: "EARLIER NOTE about turns two and three"}); err != nil {
 		t.Fatal(err)
 	}
-	sent := wrap(t, New(testCfg), s)
+	sent := wrap(t, mustNew(t, testCfg), s)
 
-	if p, _ := ProposalKey.Get(s); p.From != 0 || p.To != 4 {
+	if p, _ := proposalKey.Get(s); p.From != 0 || p.To != 4 {
 		t.Fatalf("proposal = %+v, want [0, 4)", p)
 	}
 	sys := strings.Join(sent.System, "\n")

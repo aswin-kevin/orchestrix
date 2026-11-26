@@ -39,6 +39,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -64,8 +65,9 @@ type Record struct {
 }
 
 var (
-	// GradesKey holds the gradings of the current run, oldest first.
-	GradesKey = state.NewKey[[]Record]("rubric.grades", state.Private[[]Record]())
+	// gradesKey holds the gradings of the current run, oldest first. Read it
+	// with Grades.
+	gradesKey = state.NewKey[[]Record]("rubric.grades", state.Private[[]Record]())
 	// taskKey holds the run's task text, so a run without input (a resumed
 	// one) is still graded against it, not against a stop continuation. It
 	// persists with the thread until a run with user input replaces it.
@@ -74,7 +76,7 @@ var (
 
 // Grades returns the gradings recorded in s by the current run.
 func Grades(s *state.State) []Record {
-	g, _ := GradesKey.Get(s)
+	g, _ := gradesKey.Get(s)
 	return g
 }
 
@@ -91,15 +93,20 @@ type Config struct {
 	MaxIterations int
 }
 
-type middleware struct {
+// Middleware is the rubric middleware. It is immutable after New, so it is
+// safe to share between concurrent runs.
+type Middleware struct {
 	criteria []string
 	grader   Grader
 	maxIter  int
 }
 
+// Name is the name of the rubric middleware.
+const Name = "rubric"
+
 // New returns the rubric middleware. It fails on missing or empty criteria
 // and on MaxIterations outside 0..agent.MaxStopContinuations.
-func New(cfg Config) (agent.Middleware, error) {
+func New(cfg Config) (*Middleware, error) {
 	if len(cfg.Criteria) == 0 {
 		return nil, errors.New("rubric: Criteria is required")
 	}
@@ -111,7 +118,7 @@ func New(cfg Config) (agent.Middleware, error) {
 	if cfg.MaxIterations < 0 || cfg.MaxIterations > agent.MaxStopContinuations {
 		return nil, fmt.Errorf("rubric: MaxIterations must be between 0 and %d", agent.MaxStopContinuations)
 	}
-	m := &middleware{criteria: append([]string(nil), cfg.Criteria...), grader: cfg.Grader, maxIter: cfg.MaxIterations}
+	m := &Middleware{criteria: append([]string(nil), cfg.Criteria...), grader: cfg.Grader, maxIter: cfg.MaxIterations}
 	if m.grader == nil {
 		m.grader = ModelGrader{}
 	}
@@ -122,15 +129,15 @@ func New(cfg Config) (agent.Middleware, error) {
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "rubric" }
+func (m *Middleware) Name() string { return Name }
 
 // BeforeAgent clears the previous gradings and remembers the run's task.
-func (m *middleware) BeforeAgent(ctx context.Context, s *state.State) error {
+func (m *Middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 	info, ok := agent.Info(ctx)
 	if !ok || info.Depth != 0 {
 		return nil
 	}
-	GradesKey.Set(s, nil)
+	gradesKey.Set(s, nil)
 	if task := userText(info.Input); task != "" {
 		taskKey.Set(s, task)
 	}
@@ -139,7 +146,7 @@ func (m *middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 
 // BeforeStop grades the answer and, when it falls short and revisions are
 // left, returns the feedback prompt that continues the run.
-func (m *middleware) BeforeStop(ctx context.Context, s *state.State, resp *llm.Response) (string, error) {
+func (m *Middleware) BeforeStop(ctx context.Context, s *state.State, resp *llm.Response) (string, error) {
 	if info, ok := agent.Info(ctx); !ok || info.Depth != 0 {
 		return "", nil
 	}
@@ -150,12 +157,13 @@ func (m *middleware) BeforeStop(ctx context.Context, s *state.State, resp *llm.R
 		Answer:    resp.Message.Text(),
 		Criteria:  m.criteria,
 		Iteration: iter,
+		Messages:  slices.Clone(s.Messages()),
 	})
 	rec := Record{Iteration: iter, Pass: grade.Pass, Feedback: grade.Feedback}
 	if err != nil {
 		rec = Record{Iteration: iter, Error: err.Error()}
 	}
-	GradesKey.Set(s, append(records[:iter:iter], rec))
+	gradesKey.Set(s, append(records[:iter:iter], rec))
 	if err != nil || grade.Pass || iter >= m.maxIter {
 		return "", nil
 	}

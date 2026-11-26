@@ -42,7 +42,7 @@ type CallInput struct {
 
 // searchTool returns search_tools. It only reads the tool set and records
 // what it found in the run's own unlock set, so it is read-only.
-func (m *middleware) searchTool() tool.Tool {
+func (m *Middleware) searchTool() tool.Tool {
 	return tool.New(ToolSearch,
 		"Search the tools whose schemas are not loaded yet. Matching tools are listed with their input schemas and can be called directly from your next turn on.",
 		m.runSearch,
@@ -51,7 +51,7 @@ func (m *middleware) searchTool() tool.Tool {
 
 // runSearch implements search_tools: it lists the matching deferred tools
 // and unlocks them, so the next request carries their schemas.
-func (m *middleware) runSearch(ctx context.Context, in SearchInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) runSearch(ctx context.Context, in SearchInput, c *tool.Call) (tool.Result, error) {
 	info, ok := agent.Info(ctx)
 	if !ok {
 		return tool.Errorf("%s can only run inside an agent run", ToolSearch), nil
@@ -91,7 +91,7 @@ func describe(t tool.Tool) string {
 
 // search returns the candidates in matches, best first, at most the
 // maximum in.MaxResults asks for (see limit).
-func (m *middleware) search(candidates []tool.Tool, in SearchInput) ([]tool.Tool, error) {
+func (m *Middleware) search(candidates []tool.Tool, in SearchInput) ([]tool.Tool, error) {
 	var found []tool.Tool
 	switch {
 	case strings.HasPrefix(in.Query, selectPrefix):
@@ -111,7 +111,7 @@ func (m *middleware) search(candidates []tool.Tool, in SearchInput) ([]tool.Tool
 // limit is how many matches a search returns when the model asks for
 // requested: the configured default when requested is not positive, never
 // above MaxResults.
-func (m *middleware) limit(requested int) int {
+func (m *Middleware) limit(requested int) int {
 	if requested <= 0 {
 		return m.maxResults
 	}

@@ -96,7 +96,8 @@ type Config struct {
 	// FailOpen lets the input or call through when a check cannot be
 	// completed; by default it is blocked.
 	FailOpen bool
-	// Timeout bounds each Decide call; 0 means DefaultTimeout.
+	// Timeout bounds each Decide call; 0 means DefaultTimeout. Negative is
+	// an error.
 	Timeout time.Duration
 	// MaxInputBytes is the per-check input limit in bytes: the run's input
 	// text, or a tool call's "Tool: <name>\nArguments:\n<json>" text. Text
@@ -107,7 +108,9 @@ type Config struct {
 
 var checkName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-type middleware struct {
+// Middleware is the guard middleware. It is immutable after New, so it is
+// safe to share between concurrent runs.
+type Middleware struct {
 	decider  llm.Decider
 	model    string
 	input    []Check
@@ -117,22 +120,28 @@ type middleware struct {
 	maxInput int
 }
 
+// Name is the name of the guard middleware.
+const Name = "guard"
+
 // New returns the guard middleware. It fails on a missing Decider, on no
 // checks, and on a check with an invalid or duplicate name, an empty
 // question, no or an unknown target, or a threshold outside [0, 1], and on a
-// negative MaxInputBytes.
-func New(cfg Config) (agent.Middleware, error) {
+// negative Timeout or MaxInputBytes.
+func New(cfg Config) (*Middleware, error) {
 	if cfg.Decider == nil {
 		return nil, errors.New("guard: Decider is required")
 	}
 	if len(cfg.Checks) == 0 {
 		return nil, errors.New("guard: at least one check is required")
 	}
+	if cfg.Timeout < 0 {
+		return nil, errors.New("guard: Timeout must not be negative")
+	}
 	if cfg.MaxInputBytes < 0 {
 		return nil, errors.New("guard: MaxInputBytes must not be negative")
 	}
-	m := &middleware{decider: cfg.Decider, model: cfg.Model, failOpen: cfg.FailOpen, timeout: cfg.Timeout, maxInput: cfg.MaxInputBytes}
-	if m.timeout <= 0 {
+	m := &Middleware{decider: cfg.Decider, model: cfg.Model, failOpen: cfg.FailOpen, timeout: cfg.Timeout, maxInput: cfg.MaxInputBytes}
+	if m.timeout == 0 {
 		m.timeout = DefaultTimeout
 	}
 	if m.maxInput == 0 {
@@ -167,11 +176,11 @@ func New(cfg Config) (agent.Middleware, error) {
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "guard" }
+func (m *Middleware) Name() string { return Name }
 
 // BeforeAgent clears the verdicts of the run and checks its input.
-func (m *middleware) BeforeAgent(ctx context.Context, s *state.State) error {
-	VerdictsKey.Set(s, nil)
+func (m *Middleware) BeforeAgent(ctx context.Context, s *state.State) error {
+	verdictsKey.Set(s, nil)
 	if len(m.input) == 0 {
 		return nil
 	}
@@ -195,7 +204,7 @@ func (m *middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 }
 
 // WrapTool checks the call and runs it only when no check blocks it.
-func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
+func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	if len(m.tool) == 0 {
 		return next(ctx, call)
 	}
@@ -215,7 +224,7 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 // per check in s. It returns the first check whose answer blocks, and
 // whether some check could not be completed while the guard fails closed.
 // A non-nil textErr means text could not be prepared: every check fails.
-func (m *middleware) evaluate(ctx context.Context, s *state.State, target, text string, textErr error, checks []Check) (blockedBy string, failed bool) {
+func (m *Middleware) evaluate(ctx context.Context, s *state.State, target, text string, textErr error, checks []Check) (blockedBy string, failed bool) {
 	var resp *llm.DecisionResponse
 	err := textErr
 	switch {
@@ -261,7 +270,7 @@ func (m *middleware) evaluate(ctx context.Context, s *state.State, target, text 
 }
 
 // decide makes the Decide call for checks, bounded by the timeout.
-func (m *middleware) decide(ctx context.Context, text string, checks []Check) (*llm.DecisionResponse, error) {
+func (m *Middleware) decide(ctx context.Context, text string, checks []Check) (*llm.DecisionResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
 	questions := make([]llm.Question, len(checks))

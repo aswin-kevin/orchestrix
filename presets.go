@@ -177,7 +177,7 @@ func (s *settings) closeBuilt() {
 func (s *settings) baseStack() []agent.Middleware {
 	stack := []agent.Middleware{summarize.New(s.summarize)}
 	if s.compress != nil {
-		stack = append(stack, compress.New(*s.compress))
+		stack = s.appendBuilt(stack, "WithCompress", func() (agent.Middleware, error) { return compress.New(*s.compress) })
 	}
 	stack = s.appendBuilt(stack, "cache", func() (agent.Middleware, error) { return cache.New(cache.Config{}) })
 	if s.hooks != nil {
@@ -221,7 +221,7 @@ func (s *settings) baseStack() []agent.Middleware {
 		stack = append(stack, s.async)
 	}
 	if cfg, ok := s.deferredConfig(); ok {
-		stack = append(stack, deferred.New(cfg))
+		stack = s.appendBuilt(stack, "WithDeferredTools", func() (agent.Middleware, error) { return deferred.New(cfg) })
 	}
 	if s.mcp != nil {
 		stack = append(stack, s.mcp)
