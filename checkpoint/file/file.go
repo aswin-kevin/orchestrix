@@ -69,7 +69,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -140,6 +139,8 @@ type Checkpointer struct {
 
 var (
 	_ checkpoint.Checkpointer = (*Checkpointer)(nil)
+	_ checkpoint.Lister       = (*Checkpointer)(nil)
+	_ checkpoint.Deleter      = (*Checkpointer)(nil)
 	_ checkpoint.Leaser       = (*Checkpointer)(nil)
 )
 
@@ -443,17 +444,18 @@ func (c *Checkpointer) Load(ctx context.Context, threadID string) (*state.State,
 	return s, revision.Version(r.gen, r.seq), nil
 }
 
-// List reads the last record of every thread file, newest first. Files in the
-// directory that are not thread files are ignored.
-func (c *Checkpointer) List(ctx context.Context) ([]checkpoint.ThreadInfo, error) {
+// List reads the last record of every thread file and returns one page,
+// newest first. Files in the directory that are not thread files are
+// ignored.
+func (c *Checkpointer) List(ctx context.Context, opts checkpoint.ListOptions) (checkpoint.ListPage, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return checkpoint.ListPage{}, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entries, err := os.ReadDir(c.dir)
 	if err != nil {
-		return nil, fmt.Errorf("checkpoint/file: list: %w", err)
+		return checkpoint.ListPage{}, fmt.Errorf("checkpoint/file: list: %w", err)
 	}
 	infos := make([]checkpoint.ThreadInfo, 0, len(entries))
 	for _, e := range entries {
@@ -465,17 +467,11 @@ func (c *Checkpointer) List(ctx context.Context) ([]checkpoint.ThreadInfo, error
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("checkpoint/file: list %s: %w", e.Name(), err)
+			return checkpoint.ListPage{}, fmt.Errorf("checkpoint/file: list %s: %w", e.Name(), err)
 		}
 		infos = append(infos, checkpoint.ThreadInfo{ID: rec.Thread, Updated: rec.Time, Saves: rec.Seq, Version: revision.Version(rec.Gen, rec.Seq)})
 	}
-	sort.Slice(infos, func(i, j int) bool {
-		if !infos[i].Updated.Equal(infos[j].Updated) {
-			return infos[i].Updated.After(infos[j].Updated)
-		}
-		return infos[i].ID < infos[j].ID
-	})
-	return infos, nil
+	return checkpoint.Paginate(infos, opts)
 }
 
 // Delete removes the thread's file.

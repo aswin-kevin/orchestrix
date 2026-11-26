@@ -356,9 +356,9 @@ func TestFileIgnoresForeignFilesInList(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("hi"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	infos, err := c.List(ctx)
-	if err != nil || len(infos) != 1 {
-		t.Fatalf("List = %v, %v", infos, err)
+	page, err := c.List(ctx, checkpoint.ListOptions{})
+	if err != nil || len(page.Threads) != 1 {
+		t.Fatalf("List = %v, %v", page, err)
 	}
 }
 
@@ -490,9 +490,9 @@ func TestThreadFileCompacts(t *testing.T) {
 			}
 		}
 	}
-	infos, err := c.List(ctx)
-	if err != nil || len(infos) != 1 || infos[0].Saves != 100 || infos[0].Version != v {
-		t.Fatalf("List = %+v, %v; want one thread with 100 saves at %q", infos, err, v)
+	page, err := c.List(ctx, checkpoint.ListOptions{})
+	if err != nil || len(page.Threads) != 1 || page.Threads[0].Saves != 100 || page.Threads[0].Version != v {
+		t.Fatalf("List = %+v, %v; want one thread with 100 saves at %q", page, err, v)
 	}
 
 	// Saving continues the sequence, and a torn tail after compaction is

@@ -21,8 +21,8 @@ const saveGap = 3 * time.Millisecond
 
 // Run executes the conformance suite. newCheckpointer must return an empty
 // Checkpointer isolated from other calls (for example backed by t.TempDir()).
-// When the Checkpointer implements checkpoint.Leaser, the lease cases run
-// too.
+// The cases for the optional interfaces run only when the Checkpointer
+// implements checkpoint.Lister, checkpoint.Deleter or checkpoint.Leaser.
 func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointer) {
 	t.Helper()
 	cases := []struct {
@@ -31,8 +31,6 @@ func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointe
 	}{
 		{"RoundTrip", roundTrip},
 		{"LoadMissing", loadMissing},
-		{"ListNewestFirst", listNewestFirst},
-		{"Delete", deleteThread},
 		{"InvalidIDs", invalidIDs},
 		{"AwkwardIDsRoundTrip", awkwardIDs},
 		{"CaseSensitiveIDs", caseSensitiveIDs},
@@ -43,10 +41,28 @@ func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointe
 		{"StaleVersionConflicts", staleVersionConflicts},
 		{"ZeroVersionOnExistingConflicts", zeroVersionOnExisting},
 		{"VersionOnMissingConflicts", versionOnMissing},
-		{"VersionAfterDeleteConflicts", versionAfterDelete},
 		{"ConcurrentSavesOneWins", concurrentSavesOneWins},
 		{"SequentialSavesFromManyWriters", sequentialSaves},
 		{"CancelledContext", cancelledContext},
+	}
+	listCases := []struct {
+		name string
+		fn   func(*testing.T, checkpoint.Checkpointer, checkpoint.Lister)
+	}{
+		{"ListEmpty", listEmpty},
+		{"ListNewestFirst", listNewestFirst},
+		{"ListPaging", listPaging},
+		{"ListPagingComplete", listPagingComplete},
+		{"ListInvalidCursor", listInvalidCursor},
+		{"ListNegativeLimit", listNegativeLimit},
+	}
+	deleteCases := []struct {
+		name string
+		fn   func(*testing.T, checkpoint.Checkpointer, checkpoint.Deleter)
+	}{
+		{"Delete", deleteThread},
+		{"DeleteInvalidIDs", deleteInvalidIDs},
+		{"VersionAfterDeleteConflicts", versionAfterDelete},
 	}
 	leaseCases := []struct {
 		name string
@@ -58,6 +74,26 @@ func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointe
 		{"LeaseRenewAfterTakeover", leaseRenewAfterTakeover},
 		{"LeaseRenewAfterExpiryFails", leaseRenewAfterExpiry},
 		{"LeasePerThread", leasePerThread},
+	}
+	for _, tc := range listCases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCheckpointer(t)
+			l, ok := c.(checkpoint.Lister)
+			if !ok {
+				t.Skip("checkpointer does not implement checkpoint.Lister")
+			}
+			tc.fn(t, c, l)
+		})
+	}
+	for _, tc := range deleteCases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCheckpointer(t)
+			d, ok := c.(checkpoint.Deleter)
+			if !ok {
+				t.Skip("checkpointer does not implement checkpoint.Deleter")
+			}
+			tc.fn(t, c, d)
+		})
 	}
 	for _, tc := range leaseCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -130,6 +166,31 @@ func mustLoad(t *testing.T, c checkpoint.Checkpointer, id string) *state.State {
 	return s
 }
 
+// listAll walks every page of c's listing. It returns false when c does not
+// implement checkpoint.Lister.
+func listAll(t *testing.T, c checkpoint.Checkpointer) ([]checkpoint.ThreadInfo, bool) {
+	t.Helper()
+	l, ok := c.(checkpoint.Lister)
+	if !ok {
+		return nil, false
+	}
+	var all []checkpoint.ThreadInfo
+	cursor := ""
+	for range 1000 {
+		page, err := l.List(ctx, checkpoint.ListOptions{Cursor: cursor})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		all = append(all, page.Threads...)
+		if page.Next == "" {
+			return all, true
+		}
+		cursor = page.Next
+	}
+	t.Fatal("List did not terminate")
+	return nil, false
+}
+
 func roundTrip(t *testing.T, c checkpoint.Checkpointer) {
 	s := state.New()
 	if err := s.UnmarshalJSON([]byte(`{"version":1,"messages":[],"values":{"other.unknown":{"n":[1,2,3]}}}`)); err != nil {
@@ -151,13 +212,16 @@ func loadMissing(t *testing.T, c checkpoint.Checkpointer) {
 	if _, _, err := c.Load(ctx, "nope"); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("Load missing: got %v, want ErrNotFound", err)
 	}
-	infos, err := c.List(ctx)
-	if err != nil || len(infos) != 0 {
-		t.Fatalf("List on empty store = %v, %v", infos, err)
+}
+
+func listEmpty(t *testing.T, c checkpoint.Checkpointer, l checkpoint.Lister) {
+	page, err := l.List(ctx, checkpoint.ListOptions{})
+	if err != nil || len(page.Threads) != 0 || page.Next != "" {
+		t.Fatalf("List on empty store = %+v, %v", page, err)
 	}
 }
 
-func listNewestFirst(t *testing.T, c checkpoint.Checkpointer) {
+func listNewestFirst(t *testing.T, c checkpoint.Checkpointer, _ checkpoint.Lister) {
 	mustSave(t, c, "a", stateWith(t, "1"))
 	time.Sleep(saveGap)
 	mustSave(t, c, "b", stateWith(t, "1"))
@@ -166,10 +230,7 @@ func listNewestFirst(t *testing.T, c checkpoint.Checkpointer) {
 	time.Sleep(saveGap)
 	mustSave(t, c, "a", stateWith(t, "1", "2", "3"))
 
-	infos, err := c.List(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	infos, _ := listAll(t, c)
 	if len(infos) != 2 || infos[0].ID != "a" || infos[1].ID != "b" {
 		t.Fatalf("List order = %+v, want a then b", infos)
 	}
@@ -181,20 +242,78 @@ func listNewestFirst(t *testing.T, c checkpoint.Checkpointer) {
 	}
 }
 
-func deleteThread(t *testing.T, c checkpoint.Checkpointer) {
+func listPaging(t *testing.T, c checkpoint.Checkpointer, l checkpoint.Lister) {
+	for _, id := range []string{"a", "b", "c"} {
+		mustSave(t, c, id, stateWith(t, id))
+		time.Sleep(saveGap)
+	}
+	p1, err := l.List(ctx, checkpoint.ListOptions{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p1.Threads) != 2 || p1.Threads[0].ID != "c" || p1.Threads[1].ID != "b" || p1.Next == "" {
+		t.Fatalf("first page = %+v, want c, b and a cursor", p1)
+	}
+	p2, err := l.List(ctx, checkpoint.ListOptions{Limit: 2, Cursor: p1.Next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p2.Threads) != 1 || p2.Threads[0].ID != "a" || p2.Next != "" {
+		t.Fatalf("second page = %+v, want a and no cursor", p2)
+	}
+}
+
+func listPagingComplete(t *testing.T, c checkpoint.Checkpointer, l checkpoint.Lister) {
+	want := []string{"e", "d", "c", "b", "a"}
+	for i := len(want) - 1; i >= 0; i-- {
+		mustSave(t, c, want[i], stateWith(t, want[i]))
+		time.Sleep(saveGap)
+	}
+	var got []string
+	cursor := ""
+	for range 10 {
+		page, err := l.List(ctx, checkpoint.ListOptions{Limit: 1, Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, in := range page.Threads {
+			got = append(got, in.ID)
+		}
+		if page.Next == "" {
+			break
+		}
+		cursor = page.Next
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("paged ids = %v, want %v", got, want)
+	}
+}
+
+func listInvalidCursor(t *testing.T, _ checkpoint.Checkpointer, l checkpoint.Lister) {
+	if _, err := l.List(ctx, checkpoint.ListOptions{Cursor: "!!"}); !errors.Is(err, checkpoint.ErrInvalidCursor) {
+		t.Fatalf("List with a bad cursor: got %v, want ErrInvalidCursor", err)
+	}
+}
+
+func listNegativeLimit(t *testing.T, _ checkpoint.Checkpointer, l checkpoint.Lister) {
+	if _, err := l.List(ctx, checkpoint.ListOptions{Limit: -1}); err == nil {
+		t.Fatal("List accepted a negative limit")
+	}
+}
+
+func deleteThread(t *testing.T, c checkpoint.Checkpointer, d checkpoint.Deleter) {
 	mustSave(t, c, "x", stateWith(t, "1"))
-	if err := c.Delete(ctx, "x"); err != nil {
+	if err := d.Delete(ctx, "x"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if _, _, err := c.Load(ctx, "x"); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("Load after Delete: got %v, want ErrNotFound", err)
 	}
-	if err := c.Delete(ctx, "x"); !errors.Is(err, checkpoint.ErrNotFound) {
+	if err := d.Delete(ctx, "x"); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("second Delete: got %v, want ErrNotFound", err)
 	}
 	mustSave(t, c, "x", stateWith(t, "fresh"))
-	infos, _ := c.List(ctx)
-	if len(infos) != 1 || infos[0].Saves != 1 {
+	if infos, ok := listAll(t, c); ok && (len(infos) != 1 || infos[0].Saves != 1) {
 		t.Fatalf("Save after Delete should start over, List = %+v", infos)
 	}
 }
@@ -208,7 +327,12 @@ func invalidIDs(t *testing.T, c checkpoint.Checkpointer) {
 		if _, _, err := c.Load(ctx, id); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
 			t.Errorf("Load(%.12q): got %v, want ErrInvalidThreadID", id, err)
 		}
-		if err := c.Delete(ctx, id); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
+	}
+}
+
+func deleteInvalidIDs(t *testing.T, _ checkpoint.Checkpointer, d checkpoint.Deleter) {
+	for _, id := range []string{"", strings.Repeat("x", checkpoint.MaxThreadIDBytes+1), "a\x00b", "bad\xffutf8"} {
+		if err := d.Delete(ctx, id); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
 			t.Errorf("Delete(%.12q): got %v, want ErrInvalidThreadID", id, err)
 		}
 	}
@@ -219,23 +343,20 @@ func awkwardIDs(t *testing.T, c checkpoint.Checkpointer) {
 	for _, id := range ids {
 		mustSave(t, c, id, stateWith(t, id))
 	}
-	infos, err := c.List(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	infos, canList := listAll(t, c)
 	listed := map[string]bool{}
 	for _, in := range infos {
 		listed[in.ID] = true
 	}
 	for _, id := range ids {
-		if !listed[id] {
+		if canList && !listed[id] {
 			t.Errorf("List is missing %q", id)
 		}
 		if got := mustLoad(t, c, id); got.Messages()[0].Text() != id {
 			t.Errorf("Load(%q) returned another thread's state", id)
 		}
 	}
-	if len(infos) != len(ids) {
+	if canList && len(infos) != len(ids) {
 		t.Errorf("List returned %d threads, want %d", len(infos), len(ids))
 	}
 }
@@ -249,7 +370,7 @@ func caseSensitiveIDs(t *testing.T, c checkpoint.Checkpointer) {
 	if got := mustLoad(t, c, "t1").Messages()[0].Text(); got != "lower" {
 		t.Fatalf("t1 = %q", got)
 	}
-	if infos, _ := c.List(ctx); len(infos) != 2 {
+	if infos, ok := listAll(t, c); ok && len(infos) != 2 {
 		t.Fatalf("List = %+v, want 2 separate threads", infos)
 	}
 }
@@ -264,8 +385,7 @@ func longIDWithSlashes(t *testing.T, c checkpoint.Checkpointer) {
 	if got := mustLoad(t, c, id).Messages()[0].Text(); got != "long" {
 		t.Fatalf("long id round trip = %q", got)
 	}
-	infos, _ := c.List(ctx)
-	if len(infos) != 1 || infos[0].ID != id {
+	if infos, ok := listAll(t, c); ok && (len(infos) != 1 || infos[0].ID != id) {
 		t.Fatalf("List did not return the full id: %+v", infos)
 	}
 }
@@ -313,9 +433,8 @@ func loadReturnsSavedVersion(t *testing.T, c checkpoint.Checkpointer) {
 		if _, got, err := c.Load(ctx, "t"); err != nil || got != v {
 			t.Fatalf("Load version = %q, %v, want %q", got, err, v)
 		}
-		infos, err := c.List(ctx)
-		if err != nil || len(infos) != 1 || infos[0].Version != v {
-			t.Fatalf("List = %+v, %v, want version %q", infos, err, v)
+		if infos, ok := listAll(t, c); ok && (len(infos) != 1 || infos[0].Version != v) {
+			t.Fatalf("List = %+v, want version %q", infos, v)
 		}
 	}
 }
@@ -344,8 +463,7 @@ func staleVersionConflicts(t *testing.T, c checkpoint.Checkpointer) {
 		t.Fatalf("Save over stale version = %q, %v, want ErrConflict", v, err)
 	}
 	assertUnchanged(t, c, "t", second, v2)
-	infos, _ := c.List(ctx)
-	if len(infos) != 1 || infos[0].Saves != 2 {
+	if infos, ok := listAll(t, c); ok && (len(infos) != 1 || infos[0].Saves != 2) {
 		t.Fatalf("a conflicting Save counted as a save: %+v", infos)
 	}
 }
@@ -372,12 +490,12 @@ func versionOnMissing(t *testing.T, c checkpoint.Checkpointer) {
 // versionAfterDelete guards against ABA: a writer holding a version from
 // before a Delete must not overwrite the thread created after it, even
 // when the new thread has had as many saves.
-func versionAfterDelete(t *testing.T, c checkpoint.Checkpointer) {
+func versionAfterDelete(t *testing.T, c checkpoint.Checkpointer, d checkpoint.Deleter) {
 	var old checkpoint.Version
 	for i := range 2 {
 		old = mustSave(t, c, "t", stateWith(t, strings.Repeat("o", i+1)))
 	}
-	if err := c.Delete(ctx, "t"); err != nil {
+	if err := d.Delete(ctx, "t"); err != nil {
 		t.Fatal(err)
 	}
 	var fresh *state.State
@@ -462,8 +580,7 @@ func sequentialSaves(t *testing.T, c checkpoint.Checkpointer) {
 	if len(got.Messages()) != 2 {
 		t.Fatalf("final state is not one of the saved states: %s", stateJSON(t, got))
 	}
-	infos, _ := c.List(ctx)
-	if len(infos) != 1 || infos[0].Saves != writers*each {
+	if infos, ok := listAll(t, c); ok && (len(infos) != 1 || infos[0].Saves != writers*each) {
 		t.Fatalf("List = %+v, want one thread with %d saves", infos, writers*each)
 	}
 }

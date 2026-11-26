@@ -179,8 +179,8 @@ func TestTenantIsolation(t *testing.T) {
 	if _, _, err := b.Load(ctx, "t"); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("B loaded A's thread: %v", err)
 	}
-	if infos, err := b.List(ctx); err != nil || len(infos) != 0 {
-		t.Fatalf("B listed %+v, %v; want nothing", infos, err)
+	if page, err := b.List(ctx, checkpoint.ListOptions{}); err != nil || len(page.Threads) != 0 {
+		t.Fatalf("B listed %+v, %v; want nothing", page, err)
 	}
 	if err := b.Delete(ctx, "t"); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("B deleted A's thread: %v", err)
@@ -195,8 +195,8 @@ func TestTenantIsolation(t *testing.T) {
 	if err != nil || v != va || got.Messages()[0].Text() != "a's" {
 		t.Fatalf("A's thread changed: %q at %q, %v", got.Messages()[0].Text(), v, err)
 	}
-	if infos, err := a.List(ctx); err != nil || len(infos) != 1 {
-		t.Fatalf("A listed %+v, %v; want its one thread", infos, err)
+	if page, err := a.List(ctx, checkpoint.ListOptions{}); err != nil || len(page.Threads) != 1 {
+		t.Fatalf("A listed %+v, %v; want its one thread", page, err)
 	}
 	_, rel, err := a.Acquire(ctx, "t", "owner", time.Minute)
 	if err != nil {

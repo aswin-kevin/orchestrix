@@ -1,5 +1,7 @@
 // Package checkpoint defines the Checkpointer interface that persists agent
 // State per conversation thread, so a run can be resumed after a restart.
+// Checkpointer is Save and Load; listing and deleting are optional (Lister,
+// Deleter), and so is leasing (Leaser).
 //
 // Implementations live in subpackages: memory (process-local) and file
 // (append-only JSONL on disk). checkpointtest holds a conformance suite every
@@ -36,7 +38,7 @@ var (
 // Version identifies one saved revision of a thread. It is opaque: compare
 // it only for equality and pass it back to Save. The zero Version means "no
 // checkpoint". An implementation never hands out the same Version twice for
-// one thread id, not even after Delete, so a writer holding a version from
+// one thread id, not even after a Delete, so a writer holding a version from
 // before a Delete cannot overwrite the thread created after it.
 type Version string
 
@@ -73,11 +75,6 @@ type Checkpointer interface {
 	// version, or ErrNotFound when the thread was never saved or was
 	// deleted.
 	Load(ctx context.Context, threadID string) (*state.State, Version, error)
-	// List returns every stored thread, newest Updated first. An empty store
-	// yields an empty slice and a nil error.
-	List(ctx context.Context) ([]ThreadInfo, error)
-	// Delete removes the thread, or returns ErrNotFound when it is absent.
-	Delete(ctx context.Context, threadID string) error
 }
 
 // Leaser is optionally implemented by a Checkpointer that can keep two runs

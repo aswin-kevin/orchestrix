@@ -30,6 +30,8 @@ type Checkpointer struct {
 
 var (
 	_ checkpoint.Checkpointer = (*Checkpointer)(nil)
+	_ checkpoint.Lister       = (*Checkpointer)(nil)
+	_ checkpoint.Deleter      = (*Checkpointer)(nil)
 	_ checkpoint.Leaser       = (*Checkpointer)(nil)
 )
 
@@ -62,7 +64,9 @@ RETURNING saves`,
 		sqlLoad: `SELECT generation, saves, state FROM ` + t.threads + `
 WHERE tenant_id = $1 AND thread_id = $2`,
 		sqlList: `SELECT thread_id, generation, saves, updated_at FROM ` + t.threads + `
-WHERE tenant_id = $1 ORDER BY updated_at DESC, thread_id`,
+WHERE tenant_id = $1
+AND ($2::timestamptz IS NULL OR updated_at < $2 OR (updated_at = $2 AND thread_id > $3))
+ORDER BY updated_at DESC, thread_id LIMIT $4`,
 		sqlDelete: `DELETE FROM ` + t.threads + ` WHERE tenant_id = $1 AND thread_id = $2`,
 		sqlLease: `INSERT INTO ` + t.leases + ` AS l (tenant_id, thread_id, owner, expires_at)
 VALUES ($1, $2, $3, clock_timestamp() + $4::bigint * interval '1 microsecond')
@@ -176,16 +180,37 @@ func (c *Checkpointer) Load(ctx context.Context, threadID string) (*state.State,
 	return s, formatVersion(gen, saves), nil
 }
 
-// List returns the tenant's threads, newest first.
-func (c *Checkpointer) List(ctx context.Context) ([]checkpoint.ThreadInfo, error) {
+// List returns one page of the tenant's threads, newest first. It is a
+// keyset query: each page starts strictly after the (updated_at, thread_id)
+// position its cursor names, so paging cost does not grow with the offset.
+func (c *Checkpointer) List(ctx context.Context, opts checkpoint.ListOptions) (checkpoint.ListPage, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return checkpoint.ListPage{}, err
 	}
-	rows, err := c.pool.Query(ctx, c.sqlList, c.tenant)
+	limit := opts.Limit
+	switch {
+	case limit < 0:
+		return checkpoint.ListPage{}, fmt.Errorf("checkpoint: negative list limit %d", limit)
+	case limit == 0:
+		limit = checkpoint.DefaultListLimit
+	}
+	var (
+		after   *time.Time
+		afterID string
+	)
+	if opts.Cursor != "" {
+		updated, id, err := checkpoint.ParseListCursor(opts.Cursor)
+		if err != nil {
+			return checkpoint.ListPage{}, err
+		}
+		after, afterID = &updated, id
+	}
+	rows, err := c.pool.Query(ctx, c.sqlList, c.tenant, after, afterID, limit+1)
 	if err != nil {
-		return nil, fmt.Errorf("orxpg: list: %w", err)
+		return checkpoint.ListPage{}, fmt.Errorf("orxpg: list: %w", err)
 	}
-	infos := []checkpoint.ThreadInfo{}
+	defer rows.Close()
+	page := checkpoint.ListPage{Threads: []checkpoint.ThreadInfo{}}
 	for rows.Next() {
 		var (
 			id, gen string
@@ -193,15 +218,18 @@ func (c *Checkpointer) List(ctx context.Context) ([]checkpoint.ThreadInfo, error
 			updated time.Time
 		)
 		if err := rows.Scan(&id, &gen, &saves, &updated); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("orxpg: list: %w", err)
+			return checkpoint.ListPage{}, fmt.Errorf("orxpg: list: %w", err)
 		}
-		infos = append(infos, checkpoint.ThreadInfo{ID: id, Updated: updated, Saves: int(saves), Version: formatVersion(gen, saves)})
+		page.Threads = append(page.Threads, checkpoint.ThreadInfo{ID: id, Updated: updated, Saves: int(saves), Version: formatVersion(gen, saves)})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("orxpg: list: %w", err)
+		return checkpoint.ListPage{}, fmt.Errorf("orxpg: list: %w", err)
 	}
-	return infos, nil
+	if len(page.Threads) > limit {
+		page.Threads = page.Threads[:limit]
+		page.Next = checkpoint.ListCursor(page.Threads[limit-1])
+	}
+	return page, nil
 }
 
 // Delete removes the thread. Its lease, if any, is left to its owner.

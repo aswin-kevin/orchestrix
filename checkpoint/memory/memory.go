@@ -5,7 +5,6 @@ package memory
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -37,6 +36,8 @@ type Checkpointer struct {
 
 var (
 	_ checkpoint.Checkpointer = (*Checkpointer)(nil)
+	_ checkpoint.Lister       = (*Checkpointer)(nil)
+	_ checkpoint.Deleter      = (*Checkpointer)(nil)
 	_ checkpoint.Leaser       = (*Checkpointer)(nil)
 )
 
@@ -103,10 +104,10 @@ func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl 
 	return c.leases.Acquire(ctx, threadID, owner, ttl)
 }
 
-// List returns every thread, newest first.
-func (c *Checkpointer) List(ctx context.Context) ([]checkpoint.ThreadInfo, error) {
+// List returns one page of threads, newest first.
+func (c *Checkpointer) List(ctx context.Context, opts checkpoint.ListOptions) (checkpoint.ListPage, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return checkpoint.ListPage{}, err
 	}
 	c.mu.Lock()
 	infos := make([]checkpoint.ThreadInfo, 0, len(c.threads))
@@ -114,13 +115,7 @@ func (c *Checkpointer) List(ctx context.Context) ([]checkpoint.ThreadInfo, error
 		infos = append(infos, checkpoint.ThreadInfo{ID: id, Updated: e.updated, Saves: e.saves, Version: e.version()})
 	}
 	c.mu.Unlock()
-	sort.Slice(infos, func(i, j int) bool {
-		if !infos[i].Updated.Equal(infos[j].Updated) {
-			return infos[i].Updated.After(infos[j].Updated)
-		}
-		return infos[i].ID < infos[j].ID
-	})
-	return infos, nil
+	return checkpoint.Paginate(infos, opts)
 }
 
 // Delete removes the thread.
