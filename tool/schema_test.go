@@ -2,6 +2,7 @@ package tool
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -127,6 +128,22 @@ func TestSchemaForTime(t *testing.T) {
 	}
 }
 
+func TestSchemaForTimePointer(t *testing.T) {
+	type args struct {
+		At    *time.Time `json:"at" desc:"when"`
+		Count int        `json:"count"`
+	}
+	schema := SchemaFor[args]()
+	got := schema["properties"].(map[string]any)["at"]
+	want := map[string]any{"type": "string", "format": "date-time", "description": "when"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("*time.Time schema = %v, want %v", got, want)
+	}
+	if req := schema["required"].([]string); !reflect.DeepEqual(req, []string{"count"}) {
+		t.Fatalf("required = %v, want only count (a pointer is optional)", req)
+	}
+}
+
 func TestSchemaForBytes(t *testing.T) {
 	type args struct {
 		Data []byte `json:"data"`
@@ -160,6 +177,50 @@ func TestSchemaForJSONSchemaHook(t *testing.T) {
 	if want := map[string]any{"type": "string", "pattern": "^p"}; !reflect.DeepEqual(props["p"], want) {
 		t.Fatalf("pointer hook = %v, want %v", props["p"], want)
 	}
+}
+
+type sharedHook string
+
+var sharedHookSchema = map[string]any{"type": "string", "description": "from hook", "enum": []any{"z"}}
+
+func (sharedHook) JSONSchema() map[string]any { return sharedHookSchema }
+
+type numberHook int
+
+func (numberHook) JSONSchema() map[string]any { return map[string]any{"type": "integer", "minimum": 1} }
+
+// Tags are applied on top of a hook's schema: desc and enum replace the
+// hook's own description and enum, its other keywords stay, and the hook's
+// map is not written to.
+func TestSchemaForHookWithTags(t *testing.T) {
+	type args struct {
+		V valueHook  `json:"v" desc:"a value" enum:"xa,xb"`
+		S sharedHook `json:"s" desc:"from tag" enum:"a,b"`
+		N numberHook `json:"n" desc:"count"`
+	}
+	props := SchemaFor[args]()["properties"].(map[string]any)
+	for name, want := range map[string]map[string]any{
+		"v": {"type": "string", "pattern": "^x", "description": "a value", "enum": []any{"xa", "xb"}},
+		"s": {"type": "string", "description": "from tag", "enum": []any{"a", "b"}},
+		"n": {"type": "integer", "minimum": 1, "description": "count"},
+	} {
+		if !reflect.DeepEqual(props[name], want) {
+			t.Errorf("%s = %v, want %v", name, props[name], want)
+		}
+	}
+	if want := (map[string]any{"type": "string", "description": "from hook", "enum": []any{"z"}}); !reflect.DeepEqual(sharedHookSchema, want) {
+		t.Errorf("hook's map changed to %v", sharedHookSchema)
+	}
+
+	type badEnum struct {
+		N numberHook `json:"n" enum:"1,2"`
+	}
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), `field "n": enum is only supported on strings`) {
+			t.Fatalf("enum on a non-string hook: recover = %v, want the enum panic", r)
+		}
+	}()
+	SchemaFor[badEnum]()
 }
 
 func TestSchemaForHookOnTopLevelIsCopied(t *testing.T) {
