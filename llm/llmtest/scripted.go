@@ -18,8 +18,8 @@ import (
 // emptyInput is the tool input streamed for a call that has none.
 const emptyInput = "{}"
 
-// errExhausted is returned when a request arrives after every turn was used.
-var errExhausted = errors.New("llmtest: script exhausted")
+// ErrExhausted is returned when a request arrives after every turn was used.
+var ErrExhausted = errors.New("llmtest: script exhausted")
 
 // Call is one scripted tool call.
 type Call struct {
@@ -48,6 +48,22 @@ type Turn struct {
 	Err error
 	// RawToolInput makes every Call.Input a string used without marshaling.
 	RawToolInput bool
+	// Model is the model name the turn reports on its message start, so
+	// Response.Model is set.
+	Model string
+	// ID is the response id the turn reports on its message start, so
+	// Response.ID is set.
+	ID string
+
+	// fn, when set, computes the turn from the request; see Func.
+	fn func(llm.Request) Turn
+}
+
+// Func returns a Turn computed when it is taken: Scripted calls f with a copy
+// of the request and replies with the Turn f returns. f must not return
+// another Func turn; that is reported as an error.
+func Func(f func(llm.Request) Turn) Turn {
+	return Turn{fn: f}
 }
 
 // Scripted is a Provider that replays its turns in order, one per request.
@@ -73,9 +89,14 @@ func (s *Scripted) Calls() int {
 	return len(s.Requests)
 }
 
-// Stream records req and streams the next scripted turn.
-func (s *Scripted) Stream(_ context.Context, req llm.Request) iter.Seq2[llm.StreamEvent, error] {
+// Stream records req and streams the next scripted turn. When ctx is already
+// done it yields ctx.Err() without recording req or consuming a turn.
+func (s *Scripted) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.StreamEvent, error] {
 	return func(yield func(llm.StreamEvent, error) bool) {
+		if err := ctx.Err(); err != nil {
+			yield(llm.StreamEvent{}, err)
+			return
+		}
 		turn, err := s.take(req)
 		if err != nil {
 			yield(llm.StreamEvent{}, err)
@@ -102,13 +123,22 @@ func (s *Scripted) Complete(ctx context.Context, req llm.Request) (*llm.Response
 // take records req and returns the turn that answers it.
 func (s *Scripted) take(req llm.Request) (Turn, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.Requests = append(s.Requests, cloneRequest(req))
 	if s.next >= len(s.turns) {
-		return Turn{}, errExhausted
+		s.mu.Unlock()
+		return Turn{}, ErrExhausted
 	}
 	turn := s.turns[s.next]
 	s.next++
+	s.mu.Unlock()
+
+	if turn.fn != nil {
+		// Run f outside the lock so it may use the provider itself.
+		turn = turn.fn(cloneRequest(req))
+		if turn.fn != nil {
+			return Turn{}, errors.New("llmtest: Func returned a Func turn")
+		}
+	}
 	return turn, turn.Err
 }
 
@@ -116,7 +146,9 @@ func (s *Scripted) take(req llm.Request) (Turn, error) {
 // thinking, then text, then each tool call, every block at its own index.
 func (t Turn) events() ([]llm.StreamEvent, error) {
 	evs := []llm.StreamEvent{{
-		Type: llm.EventMessageStart,
+		Type:       llm.EventMessageStart,
+		Model:      t.Model,
+		ResponseID: t.ID,
 		Usage: llm.Usage{
 			Input:      t.Usage.Input,
 			CacheRead:  t.Usage.CacheRead,

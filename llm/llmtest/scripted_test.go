@@ -127,3 +127,67 @@ func TestScriptedRawToolInputIsVerbatim(t *testing.T) {
 		t.Errorf("input = %q", got)
 	}
 }
+
+func TestErrExhaustedExported(t *testing.T) {
+	_, err := llmtest.New().Complete(context.Background(), llm.Request{})
+	if !errors.Is(err, llmtest.ErrExhausted) {
+		t.Errorf("err = %v, want ErrExhausted", err)
+	}
+}
+
+func TestFuncTurnSeesRequest(t *testing.T) {
+	s := llmtest.New(llmtest.Func(func(r llm.Request) llmtest.Turn {
+		return llmtest.Turn{Text: r.Messages[0].Text()}
+	}))
+	resp, err := s.Complete(context.Background(), llm.Request{Messages: []llm.Message{llm.UserText("echo")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Message.Text(); got != "echo" {
+		t.Errorf("text = %q, want echo", got)
+	}
+}
+
+func TestFuncTurnNestedFuncIsError(t *testing.T) {
+	inner := llmtest.Func(func(llm.Request) llmtest.Turn { return llmtest.Turn{Text: "x"} })
+	s := llmtest.New(llmtest.Func(func(llm.Request) llmtest.Turn { return inner }))
+	_, err := s.Complete(context.Background(), llm.Request{})
+	if err == nil || err.Error() != "llmtest: Func returned a Func turn" {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestFuncTurnErrIsReturned(t *testing.T) {
+	boom := errors.New("boom")
+	s := llmtest.New(llmtest.Func(func(llm.Request) llmtest.Turn { return llmtest.Turn{Err: boom} }))
+	if _, err := s.Complete(context.Background(), llm.Request{}); !errors.Is(err, boom) {
+		t.Errorf("err = %v, want boom", err)
+	}
+}
+
+func TestTurnModelAndID(t *testing.T) {
+	s := llmtest.New(llmtest.Turn{Text: "x", Model: "m1", ID: "r1"})
+	resp, err := s.Complete(context.Background(), llm.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Model != "m1" || resp.ID != "r1" {
+		t.Errorf("Model = %q, ID = %q", resp.Model, resp.ID)
+	}
+}
+
+func TestScriptedCancelledCtxDoesNotConsumeTurn(t *testing.T) {
+	s := llmtest.New(llmtest.Turn{Text: "ok"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := s.Complete(ctx, llm.Request{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if s.Calls() != 0 {
+		t.Errorf("Calls = %d, want 0", s.Calls())
+	}
+	if _, err := s.Complete(context.Background(), llm.Request{}); err != nil {
+		t.Errorf("turn was consumed by the cancelled call: %v", err)
+	}
+}
