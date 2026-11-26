@@ -8,11 +8,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// DefaultTablePrefix starts the name of every table this package uses,
-// unless WithTablePrefix sets another prefix.
+// DefaultTablePrefix starts the name of every table and index this
+// package uses, unless Config.TablePrefix sets another prefix.
 const DefaultTablePrefix = "orx_"
 
 // MaxTenantIDBytes is the longest accepted tenant id, in bytes.
@@ -26,35 +25,9 @@ const migrateLockKey = 0x6f72787067 // "orxpg"
 // MaxTenantIDBytes, or one that is not valid UTF-8 or contains NUL.
 var ErrInvalidTenantID = errors.New("orxpg: invalid tenant id")
 
-type options struct {
-	prefix string
-}
-
-// Option configures Migrate, Schema, NewCheckpointer and NewStore.
-type Option func(*options)
-
-// WithTablePrefix sets the prefix of the table names (DefaultTablePrefix
-// when unset). It must be made of lowercase ASCII letters, digits and
-// underscores, start with a letter or underscore, and be at most 40 bytes.
-// Pass the same prefix to Migrate and to the constructors.
-func WithTablePrefix(prefix string) Option {
-	return func(o *options) { o.prefix = prefix }
-}
-
-func newOptions(opts []Option) (options, error) {
-	o := options{prefix: DefaultTablePrefix}
-	for _, opt := range opts {
-		opt(&o)
-	}
-	if err := checkPrefix(o.prefix); err != nil {
-		return options{}, err
-	}
-	return o, nil
-}
-
 func checkPrefix(p string) error {
-	if p == "" || len(p) > 40 {
-		return fmt.Errorf("orxpg: table prefix %q must be 1 to 40 bytes", p)
+	if len(p) > 40 {
+		return fmt.Errorf("orxpg: table prefix %q is longer than 40 bytes", p)
 	}
 	for i := 0; i < len(p); i++ {
 		c := p[i]
@@ -79,9 +52,10 @@ func tablesFor(prefix string) tables {
 	return tables{threads: q("threads"), leases: q("thread_leases"), kv: q("kv"), prefix: prefix}
 }
 
-// ddl returns the statements that create the tables.
+// ddl returns the statements that create the tables and indexes. The
+// prefix is validated, so it is safe inside a string literal.
 func (t tables) ddl() []string {
-	idx := pgx.Identifier{t.prefix + "threads_updated"}.Sanitize()
+	idx := pgx.Identifier{t.prefix + "threads_list"}.Sanitize()
 	return []string{
 		`CREATE TABLE IF NOT EXISTS ` + t.threads + ` (
     tenant_id  text COLLATE "C" NOT NULL,
@@ -92,7 +66,17 @@ func (t tables) ddl() []string {
     updated_at timestamptz NOT NULL,
     PRIMARY KEY (tenant_id, thread_id)
 )`,
-		`CREATE INDEX IF NOT EXISTS ` + idx + ` ON ` + t.threads + ` (tenant_id, updated_at DESC)`,
+		// The list index covers List's whole keyset order, tie-break
+		// included. It replaces <prefix>threads_updated, which releases up
+		// to v0.9 created without thread_id; the old index is dropped from
+		// current_schema() only, the schema the tables are created in, so
+		// another install later in the search_path keeps its own.
+		`CREATE INDEX IF NOT EXISTS ` + idx + ` ON ` + t.threads + ` (tenant_id, updated_at DESC, thread_id)`,
+		`DO $$
+BEGIN
+    EXECUTE format('DROP INDEX IF EXISTS %I.%I', current_schema(), '` + t.prefix + `threads_updated');
+END
+$$`,
 		`CREATE TABLE IF NOT EXISTS ` + t.leases + ` (
     tenant_id  text COLLATE "C" NOT NULL,
     thread_id  text COLLATE "C" NOT NULL,
@@ -112,28 +96,32 @@ func (t tables) ddl() []string {
 	}
 }
 
-// Schema returns the SQL that Migrate runs, for use with a migration tool.
-// Every statement is idempotent. It panics on an invalid WithTablePrefix.
-func Schema(opts ...Option) string {
-	o, err := newOptions(opts)
+// Schema returns the SQL that Migrate runs for cfg, for use with a
+// migration tool. Every statement is idempotent. It fails for an invalid
+// Config.TablePrefix.
+func Schema(cfg Config) (string, error) {
+	prefix, err := cfg.prefix()
 	if err != nil {
-		panic(err)
+		return "", err
 	}
-	return strings.Join(tablesFor(o.prefix).ddl(), ";\n\n") + ";\n"
+	return strings.Join(tablesFor(prefix).ddl(), ";\n\n") + ";\n", nil
 }
 
-// Migrate creates the tables when they do not exist, in the first schema of
-// the connection's search_path. It is safe to call on every start and from
-// several processes at once.
-func Migrate(ctx context.Context, pool *pgxpool.Pool, opts ...Option) error {
-	if pool == nil {
-		return errors.New("orxpg: nil pool")
+// Migrate creates the tables and indexes when they do not exist, in the
+// first schema of the connection's search_path, and replaces the list
+// index of older releases (see the package documentation). It runs in one
+// transaction begun on db, so it is safe to call on every start and from
+// several processes at once. It fails for a nil db or an invalid
+// Config.TablePrefix.
+func Migrate(ctx context.Context, db Beginner, cfg Config) error {
+	if db == nil {
+		return errNilDB
 	}
-	o, err := newOptions(opts)
+	prefix, err := cfg.prefix()
 	if err != nil {
 		return err
 	}
-	tx, err := pool.Begin(ctx)
+	tx, err := db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("orxpg: migrate: %w", err)
 	}
@@ -141,7 +129,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, opts ...Option) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(migrateLockKey)); err != nil {
 		return fmt.Errorf("orxpg: migrate: %w", err)
 	}
-	for _, stmt := range tablesFor(o.prefix).ddl() {
+	for _, stmt := range tablesFor(prefix).ddl() {
 		if _, err := tx.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("orxpg: migrate: %w", err)
 		}

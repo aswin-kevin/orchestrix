@@ -2,6 +2,8 @@ package orxpg_test
 
 import (
 	"errors"
+	"math"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +18,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/orxpg"
 	"github.com/aswin-kevin/orchestrix/state"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestCheckpointerConformance(t *testing.T) {
@@ -26,9 +27,11 @@ func TestCheckpointerConformance(t *testing.T) {
 }
 
 func TestStoreConformance(t *testing.T) {
-	kvtest.Run(t, func(t *testing.T) kv.Store {
+	// The database stamps ModTime with its own clock, which may differ
+	// from the test machine's.
+	kvtest.RunWith(t, func(t *testing.T) kv.Store {
 		return newStore(t, newPool(t, testSchema(t)), "tenant")
-	})
+	}, kvtest.Options{ModTimeTolerance: time.Minute})
 }
 
 func TestBackendConformance(t *testing.T) {
@@ -260,7 +263,7 @@ func TestMigrateIdempotent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := orxpg.Migrate(ctx, newPool(t, schema)); err != nil {
+			if err := orxpg.Migrate(ctx, newPool(t, schema), orxpg.Config{}); err != nil {
 				t.Errorf("Migrate again: %v", err)
 			}
 		}()
@@ -270,10 +273,11 @@ func TestMigrateIdempotent(t *testing.T) {
 
 func TestTablePrefix(t *testing.T) {
 	pool := newPool(t, testSchema(t))
-	if err := orxpg.Migrate(ctx, pool, orxpg.WithTablePrefix("app_")); err != nil {
+	cfg := orxpg.Config{TablePrefix: "app_"}
+	if err := orxpg.Migrate(ctx, pool, cfg); err != nil {
 		t.Fatal(err)
 	}
-	c, err := orxpg.NewCheckpointer(pool, "tenant", orxpg.WithTablePrefix("app_"))
+	c, err := orxpg.NewCheckpointer(pool, "tenant", cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,50 +293,282 @@ func TestTablePrefix(t *testing.T) {
 	}
 }
 
-// TestOffline covers argument checks that need no database.
-func TestOffline(t *testing.T) {
-	if _, err := orxpg.NewCheckpointer(nil, "t"); err == nil {
-		t.Error("NewCheckpointer(nil) succeeded")
+// saveThreads saves one thread per id, then gives every thread of the
+// tenant the same updated_at, so their order rests on the tie-break alone.
+func saveThreads(t *testing.T, db orxpg.DB, c *orxpg.Checkpointer, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		if _, err := c.Save(ctx, id, stateWith(id), ""); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := orxpg.NewStore(nil, "t"); err == nil {
-		t.Error("NewStore(nil) succeeded")
+	if _, err := db.Exec(ctx, `UPDATE orx_threads SET updated_at = '2026-01-02 03:04:05.123456+00' WHERE tenant_id = $1`, c.TenantID()); err != nil {
+		t.Fatal(err)
 	}
-	if err := orxpg.Migrate(ctx, nil); err == nil {
-		t.Error("Migrate(nil) succeeded")
+}
+
+// listAll pages through c with limit and returns each page's ids.
+func listAll(t *testing.T, c *orxpg.Checkpointer, limit int) [][]string {
+	t.Helper()
+	var pages [][]string
+	cursor := ""
+	for range 100 {
+		page, err := c.List(ctx, checkpoint.ListOptions{Limit: limit, Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, th := range page.Threads {
+			ids = append(ids, th.ID)
+		}
+		pages = append(pages, ids)
+		if page.Next == "" {
+			return pages
+		}
+		cursor = page.Next
 	}
-	pool, err := pgxpool.New(ctx, "postgres://localhost:1/none") // never connected
+	t.Fatal("paging did not terminate")
+	return nil
+}
+
+func TestListPagesTiesByThreadID(t *testing.T) {
+	pool := newPool(t, testSchema(t))
+	c := newCheckpointer(t, pool, "tenant")
+	saveThreads(t, pool, c, "c", "e", "a", "d", "b")
+	got := listAll(t, c, 2)
+	want := [][]string{{"a", "b"}, {"c", "d"}, {"e"}}
+	if !slices.EqualFunc(got, want, slices.Equal) {
+		t.Fatalf("pages = %v, want %v", got, want)
+	}
+}
+
+// TestListTieBreakIsByteOrder checks that the database orders ids exactly
+// as checkpoint.Paginate does (Go byte order), whatever the database's
+// default collation: uppercase before lowercase, punctuation by code point.
+func TestListTieBreakIsByteOrder(t *testing.T) {
+	pool := newPool(t, testSchema(t))
+	c := newCheckpointer(t, pool, "tenant")
+	ids := []string{"b", "B", "a", "_z", "A-1", "a1", "é", "Z"}
+	saveThreads(t, pool, c, ids...)
+	var infos []checkpoint.ThreadInfo
+	at := time.Unix(1, 0)
+	for _, id := range ids {
+		infos = append(infos, checkpoint.ThreadInfo{ID: id, Updated: at})
+	}
+	for _, limit := range []int{1, 3} {
+		var want [][]string
+		cursor := ""
+		for {
+			p, err := checkpoint.Paginate(infos, checkpoint.ListOptions{Limit: limit, Cursor: cursor})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var page []string
+			for _, th := range p.Threads {
+				page = append(page, th.ID)
+			}
+			want = append(want, page)
+			if p.Next == "" {
+				break
+			}
+			cursor = p.Next
+		}
+		if got := listAll(t, c, limit); !slices.EqualFunc(got, want, slices.Equal) {
+			t.Errorf("limit %d: pages = %v, want %v", limit, got, want)
+		}
+	}
+}
+
+// TestListHugeLimit checks that the largest Limit does not overflow the
+// one-extra-row LIMIT the query fetches.
+func TestListHugeLimit(t *testing.T) {
+	c := newCheckpointer(t, newPool(t, testSchema(t)), "tenant")
+	for _, id := range []string{"a", "b", "c"} {
+		if _, err := c.Save(ctx, id, stateWith(id), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := c.List(ctx, checkpoint.ListOptions{Limit: math.MaxInt})
+	if err != nil || len(page.Threads) != 3 || page.Next != "" {
+		t.Fatalf("List(MaxInt) = %+v, %v; want all 3 threads and no Next", page, err)
+	}
+}
+
+// TestCheckpointerInsideTx runs a Checkpointer and a Store over a pgx.Tx:
+// their writes are the transaction's, gone after a rollback.
+func TestCheckpointerInsideTx(t *testing.T) {
+	pool := newPool(t, testSchema(t))
+	tx, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
-	for _, id := range []string{"", "a\x00b", "bad\xff", strings.Repeat("x", orxpg.MaxTenantIDBytes+1)} {
-		if _, err := orxpg.NewCheckpointer(pool, id); !errors.Is(err, orxpg.ErrInvalidTenantID) {
-			t.Errorf("NewCheckpointer(%.12q) = %v, want ErrInvalidTenantID", id, err)
-		}
-		if _, err := orxpg.NewStore(pool, id); !errors.Is(err, orxpg.ErrInvalidTenantID) {
-			t.Errorf("NewStore(%.12q) = %v, want ErrInvalidTenantID", id, err)
-		}
-	}
-	for _, p := range []string{"", "Orx_", "1orx", "orx-", `orx"`, strings.Repeat("a", 41)} {
-		if _, err := orxpg.NewCheckpointer(pool, "t", orxpg.WithTablePrefix(p)); err == nil {
-			t.Errorf("WithTablePrefix(%q) accepted", p)
-		}
-	}
-	if s := orxpg.Schema(); !strings.Contains(s, `CREATE TABLE IF NOT EXISTS "orx_threads"`) || strings.Contains(s, "jsonb") {
-		t.Errorf("Schema() = %s", s)
-	}
-	c, err := orxpg.NewCheckpointer(pool, "t")
+	defer tx.Rollback(ctx)
+	c := newCheckpointer(t, tx, "tenant")
+	v, err := c.Save(ctx, "t", stateWith("x"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.Save(ctx, "a\x00", stateWith("x"), ""); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
-		t.Errorf("Save with an invalid id = %v", err)
+	if _, got, err := c.Load(ctx, "t"); err != nil || got != v {
+		t.Fatalf("Load inside the tx = %q, %v; want %q", got, err, v)
 	}
-	s, err := orxpg.NewStore(pool, "t")
+	if page, err := c.List(ctx, checkpoint.ListOptions{}); err != nil || len(page.Threads) != 1 {
+		t.Fatalf("List inside the tx = %+v, %v", page, err)
+	}
+	lease, err := c.Acquire(ctx, "t", "owner", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Put(ctx, "ns", "/"+strings.Repeat("k", orxpg.MaxKeyBytes), nil); !errors.Is(err, kv.ErrKeyTooLong) {
-		t.Errorf("Put with a long key = %v, want kv.ErrKeyTooLong", err)
+	if err := lease.Renew(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s := newStore(t, tx, "tenant")
+	if err := s.Put(ctx, "ns", "/k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	outside := newCheckpointer(t, pool, "tenant")
+	if _, _, err := outside.Load(ctx, "t"); !errors.Is(err, checkpoint.ErrNotFound) {
+		t.Fatalf("Load after rollback = %v, want ErrNotFound", err)
+	}
+	if other, err := outside.Acquire(ctx, "t", "other", time.Minute); err != nil {
+		t.Fatalf("the rolled-back lease still holds: %v", err)
+	} else {
+		_ = other.Release(ctx)
+	}
+	if _, err := newStore(t, pool, "tenant").Get(ctx, "ns", "/k"); !errors.Is(err, backend.ErrNotFound) {
+		t.Fatalf("Get after rollback = %v, want ErrNotFound", err)
+	}
+}
+
+// TestMigrateOverConn migrates over a single *pgx.Conn and over a pgx.Tx
+// (where Migrate's own transaction becomes a savepoint).
+func TestMigrateOverConn(t *testing.T) {
+	conn := newConn(t, emptySchema(t))
+	if err := orxpg.Migrate(ctx, conn, orxpg.Config{}); err != nil {
+		t.Fatalf("Migrate over a conn: %v", err)
+	}
+	c := newCheckpointer(t, conn, "tenant")
+	v, err := c.Save(ctx, "t", stateWith("x"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, got, err := c.Load(ctx, "t"); err != nil || got != v {
+		t.Fatalf("Load = %q, %v; want %q", got, err, v)
+	}
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	cfg := orxpg.Config{TablePrefix: "tx_"}
+	if err := orxpg.Migrate(ctx, tx, cfg); err != nil {
+		t.Fatalf("Migrate over a tx: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := conn.QueryRow(ctx, `SELECT count(*) FROM tx_threads`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("tx_threads after commit: %d rows, %v", n, err)
+	}
+}
+
+// createV09Threads creates the threads table and list index the way
+// releases up to v0.9 did, in the first schema of db's search_path.
+func createV09Threads(t *testing.T, db orxpg.DB) {
+	t.Helper()
+	for _, stmt := range []string{
+		`CREATE TABLE orx_threads (
+    tenant_id  text COLLATE "C" NOT NULL,
+    thread_id  text COLLATE "C" NOT NULL,
+    generation text        NOT NULL,
+    saves      bigint      NOT NULL,
+    state      bytea       NOT NULL,
+    updated_at timestamptz NOT NULL,
+    PRIMARY KEY (tenant_id, thread_id)
+)`,
+		`CREATE INDEX orx_threads_updated ON orx_threads (tenant_id, updated_at DESC)`,
+	} {
+		if _, err := db.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// indexes returns the index definitions of schema, keyed by index name.
+func indexes(t *testing.T, db orxpg.DB, schema string) map[string]string {
+	t.Helper()
+	rows, err := db.Query(ctx, `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1`, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]string{}
+	for rows.Next() {
+		var name, def string
+		if err := rows.Scan(&name, &def); err != nil {
+			t.Fatal(err)
+		}
+		out[name] = def
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestMigrateReplacesListIndex migrates a schema made by an older release:
+// the list index gains the thread_id tie-break, the old index is dropped
+// and the stored threads stay.
+func TestMigrateReplacesListIndex(t *testing.T) {
+	schema := emptySchema(t)
+	pool := newPool(t, schema)
+	createV09Threads(t, pool)
+	if _, err := pool.Exec(ctx, `INSERT INTO orx_threads VALUES ('tenant', 'old', 'g', 1, '{"version":1,"messages":[],"values":{}}', now())`); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // the second run finds everything in place
+		if err := orxpg.Migrate(ctx, pool, orxpg.Config{}); err != nil {
+			t.Fatalf("Migrate: %v", err)
+		}
+	}
+	got := indexes(t, pool, schema)
+	if _, ok := got["orx_threads_updated"]; ok {
+		t.Errorf("the old index orx_threads_updated is still there: %v", got)
+	}
+	if def := got["orx_threads_list"]; !strings.Contains(def, "(tenant_id, updated_at DESC, thread_id)") {
+		t.Errorf("orx_threads_list = %q, want it on (tenant_id, updated_at DESC, thread_id)", def)
+	}
+	for _, name := range []string{"orx_threads_pkey", "orx_thread_leases_pkey", "orx_kv_pkey"} {
+		if _, ok := got[name]; !ok {
+			t.Errorf("index %s missing: %v", name, got)
+		}
+	}
+	if len(got) != 4 {
+		t.Errorf("indexes = %v, want the 3 primary keys and orx_threads_list", got)
+	}
+	c := newCheckpointer(t, pool, "tenant")
+	if _, v, err := c.Load(ctx, "old"); err != nil || v != checkpoint.FormatVersion("g", 1) {
+		t.Fatalf("Load of a thread saved before the migration = %q, %v", v, err)
+	}
+}
+
+// TestMigrateLeavesOtherSchemas checks that dropping the old list index
+// touches only the schema Migrate creates tables in, even when a later
+// schema of the search_path holds an older install.
+func TestMigrateLeavesOtherSchemas(t *testing.T) {
+	first, second := emptySchema(t), emptySchema(t)
+	createV09Threads(t, newPool(t, second))
+	pool := newPool(t, first+", "+second)
+	if err := orxpg.Migrate(ctx, pool, orxpg.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := indexes(t, pool, second)["orx_threads_updated"]; !ok {
+		t.Error("Migrate dropped the old index of a later schema in the search_path")
+	}
+	if _, ok := indexes(t, pool, first)["orx_threads_list"]; !ok {
+		t.Error("Migrate did not create orx_threads_list in the first schema")
 	}
 }

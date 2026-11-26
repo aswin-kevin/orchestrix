@@ -8,7 +8,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/kv"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // MaxKeyBytes is the longest key a Store accepts, in bytes. Longer keys
@@ -16,11 +15,12 @@ import (
 const MaxKeyBytes = 1024
 
 // Store is a kv.Store and kv.Stater backed by PostgreSQL, bound to one
-// tenant. It is safe for concurrent use and may be shared by many
-// processes; concurrent Puts of one key leave the last one written. Create
-// one with NewStore and pass it to kv.New.
+// tenant. Over a pool it is safe for concurrent use (over a *pgx.Conn or
+// pgx.Tx it is not; see DB), and many processes may share its table;
+// concurrent Puts of one key leave the last one written. Create one with
+// NewStore and pass it to kv.New.
 type Store struct {
-	pool   *pgxpool.Pool
+	db     DB
 	tenant string
 
 	sqlGet, sqlStat, sqlPut, sqlDelete, sqlList string
@@ -31,24 +31,25 @@ var (
 	_ kv.Stater = (*Store)(nil)
 )
 
-// NewStore returns a Store for tenantID over pool. The tables must exist
-// (see Migrate). It fails for a nil pool or an invalid tenant id (wrapping
-// ErrInvalidTenantID).
-func NewStore(pool *pgxpool.Pool, tenantID string, opts ...Option) (*Store, error) {
-	if pool == nil {
-		return nil, errors.New("orxpg: nil pool")
+// NewStore returns a Store for tenantID over db, usually a *pgxpool.Pool;
+// over a pgx.Tx its reads and writes are the transaction's. The tables
+// must exist (see Migrate). It fails for a nil db, an invalid tenant id
+// (wrapping ErrInvalidTenantID) or an invalid Config.TablePrefix.
+func NewStore(db DB, tenantID string, cfg Config) (*Store, error) {
+	if db == nil {
+		return nil, errNilDB
 	}
 	if err := checkTenant(tenantID); err != nil {
 		return nil, err
 	}
-	o, err := newOptions(opts)
+	prefix, err := cfg.prefix()
 	if err != nil {
 		return nil, err
 	}
-	t := tablesFor(o.prefix).kv
+	t := tablesFor(prefix).kv
 	where := ` WHERE tenant_id = $1 AND namespace = $2 AND key = $3`
 	return &Store{
-		pool:    pool,
+		db:      db,
 		tenant:  tenantID,
 		sqlGet:  `SELECT value, mod_time FROM ` + t + where,
 		sqlStat: `SELECT size, mod_time FROM ` + t + where,
@@ -107,7 +108,7 @@ func (s *Store) Get(ctx context.Context, namespace, key string) (kv.Item, error)
 		return kv.Item{}, err
 	}
 	var item kv.Item
-	err := s.pool.QueryRow(ctx, s.sqlGet, s.tenant, namespace, key).Scan(&item.Value, &item.ModTime)
+	err := s.db.QueryRow(ctx, s.sqlGet, s.tenant, namespace, key).Scan(&item.Value, &item.ModTime)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return kv.Item{}, backend.ErrNotFound
 	}
@@ -126,7 +127,7 @@ func (s *Store) Stat(ctx context.Context, namespace, key string) (kv.ItemInfo, e
 		return kv.ItemInfo{}, err
 	}
 	info := kv.ItemInfo{Key: key}
-	err := s.pool.QueryRow(ctx, s.sqlStat, s.tenant, namespace, key).Scan(&info.Size, &info.ModTime)
+	err := s.db.QueryRow(ctx, s.sqlStat, s.tenant, namespace, key).Scan(&info.Size, &info.ModTime)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return kv.ItemInfo{}, backend.ErrNotFound
 	}
@@ -145,7 +146,7 @@ func (s *Store) Put(ctx context.Context, namespace, key string, value []byte) er
 	if value == nil {
 		value = []byte{} // NULL would violate NOT NULL
 	}
-	if _, err := s.pool.Exec(ctx, s.sqlPut, s.tenant, namespace, key, value, int64(len(value))); err != nil {
+	if _, err := s.db.Exec(ctx, s.sqlPut, s.tenant, namespace, key, value, int64(len(value))); err != nil {
 		return fmt.Errorf("orxpg: put %q: %w", key, err)
 	}
 	return nil
@@ -156,7 +157,7 @@ func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 	if err := check(ctx, namespace, key); err != nil {
 		return err
 	}
-	if _, err := s.pool.Exec(ctx, s.sqlDelete, s.tenant, namespace, key); err != nil {
+	if _, err := s.db.Exec(ctx, s.sqlDelete, s.tenant, namespace, key); err != nil {
 		return fmt.Errorf("orxpg: delete %q: %w", key, err)
 	}
 	return nil
@@ -168,7 +169,7 @@ func (s *Store) List(ctx context.Context, namespace, prefix string) ([]kv.ItemIn
 	if err := check(ctx, namespace, prefix); err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx, s.sqlList, s.tenant, namespace, prefix)
+	rows, err := s.db.Query(ctx, s.sqlList, s.tenant, namespace, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("orxpg: list %q: %w", prefix, err)
 	}

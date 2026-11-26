@@ -8,17 +8,22 @@
 //	if err != nil {
 //		log.Fatal(err)
 //	}
-//	if err := orxpg.Migrate(ctx, pool); err != nil {
+//	if err := orxpg.Migrate(ctx, pool, orxpg.Config{}); err != nil {
 //		log.Fatal(err)
 //	}
-//	cp, err := orxpg.NewCheckpointer(pool, "acme")
+//	cp, err := orxpg.NewCheckpointer(pool, "acme", orxpg.Config{})
 //	if err != nil {
 //		log.Fatal(err)
 //	}
 //	a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithCheckpointer(cp))
 //
-// Checkpointer implements checkpoint.Checkpointer and checkpoint.Leaser;
-// Store implements kv.Store and kv.Stater, for use with kv.New.
+// Checkpointer implements checkpoint.Checkpointer, Lister, Deleter and
+// Leaser; Store implements kv.Store and kv.Stater, for use with kv.New.
+//
+// Both run their statements on a DB, which a *pgxpool.Pool, a *pgx.Conn
+// and a pgx.Tx all satisfy. Over a pgx.Tx the reads and writes are part of
+// the host's transaction and vanish if it rolls back; a Checkpointer or
+// Store over a *pgx.Conn or a pgx.Tx is not safe for concurrent use.
 //
 // # Tenancy
 //
@@ -31,7 +36,7 @@
 // # Schema
 //
 // Migrate (or the DDL that Schema returns) creates three tables, named with
-// the prefix "orx_" unless WithTablePrefix sets another, in the first
+// the prefix "orx_" unless Config.TablePrefix sets another, in the first
 // schema of the connection's search_path:
 //
 //   - orx_threads holds one row per thread: its state as bytea, the exact
@@ -44,6 +49,16 @@
 //     because Delete must not drop a running owner's lease.
 //   - orx_kv holds kv values with their size and modification time, so
 //     Stat and List do not read values. Keys use COLLATE "C" (byte order).
+//
+// Thread ids also use COLLATE "C", so List pages in the byte order of Go
+// strings, the order of checkpoint.Paginate. The index orx_threads_list on
+// (tenant_id, updated_at DESC, thread_id) serves that keyset order.
+// Releases up to v0.9 created orx_threads_updated without thread_id; the
+// next Migrate builds orx_threads_list and drops the old index (only from
+// the schema the tables are in). Building it blocks writes to orx_threads
+// until it finishes; for a large table, run CREATE INDEX CONCURRENTLY with
+// the same name and columns before upgrading, and Migrate finds it in
+// place.
 //
 // # Versions
 //

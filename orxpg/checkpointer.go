@@ -4,20 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Checkpointer is a checkpoint.Checkpointer and checkpoint.Leaser backed by
-// PostgreSQL, bound to one tenant. It is safe for concurrent use, and any
+// Checkpointer is a checkpoint.Checkpointer, Lister, Deleter and Leaser
+// backed by PostgreSQL, bound to one tenant. Over a pool it is safe for
+// concurrent use (over a *pgx.Conn or pgx.Tx it is not; see DB), and any
 // number of processes may share its tables: saves are conditional and
 // leases exclude runs across all of them. Create one with NewCheckpointer.
 type Checkpointer struct {
-	pool   *pgxpool.Pool
+	db     DB
 	tenant string
 
 	sqlCreate, sqlUpdate, sqlLoad, sqlList, sqlDelete string
@@ -31,23 +32,25 @@ var (
 	_ checkpoint.Leaser       = (*Checkpointer)(nil)
 )
 
-// NewCheckpointer returns a Checkpointer for tenantID over pool. The tables
-// must exist (see Migrate). It fails for a nil pool or an invalid tenant id
-// (wrapping ErrInvalidTenantID).
-func NewCheckpointer(pool *pgxpool.Pool, tenantID string, opts ...Option) (*Checkpointer, error) {
-	if pool == nil {
-		return nil, errors.New("orxpg: nil pool")
+// NewCheckpointer returns a Checkpointer for tenantID over db, usually a
+// *pgxpool.Pool; over a pgx.Tx its reads and writes are the
+// transaction's. The tables must exist (see Migrate). It fails for a nil
+// db, an invalid tenant id (wrapping ErrInvalidTenantID) or an invalid
+// Config.TablePrefix.
+func NewCheckpointer(db DB, tenantID string, cfg Config) (*Checkpointer, error) {
+	if db == nil {
+		return nil, errNilDB
 	}
 	if err := checkTenant(tenantID); err != nil {
 		return nil, err
 	}
-	o, err := newOptions(opts)
+	prefix, err := cfg.prefix()
 	if err != nil {
 		return nil, err
 	}
-	t := tablesFor(o.prefix)
+	t := tablesFor(prefix)
 	return &Checkpointer{
-		pool:   pool,
+		db:     db,
 		tenant: tenantID,
 		sqlCreate: `INSERT INTO ` + t.threads + ` (tenant_id, thread_id, generation, saves, state, updated_at)
 VALUES ($1, $2, $3, 1, $4, clock_timestamp())
@@ -103,7 +106,7 @@ func (c *Checkpointer) Save(ctx context.Context, threadID string, s *state.State
 	)
 	if expected == "" {
 		gen = checkpoint.NewGeneration()
-		err = c.pool.QueryRow(ctx, c.sqlCreate, c.tenant, threadID, gen, data).Scan(&saves)
+		err = c.db.QueryRow(ctx, c.sqlCreate, c.tenant, threadID, gen, data).Scan(&saves)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", fmt.Errorf("orxpg: save: %w: thread %q already exists", checkpoint.ErrConflict, threadID)
 		}
@@ -113,7 +116,7 @@ func (c *Checkpointer) Save(ctx context.Context, threadID string, s *state.State
 		if gen, want, ok = checkpoint.ParseVersion(expected); !ok {
 			return "", fmt.Errorf("orxpg: save: %w: thread %q cannot be at version %q", checkpoint.ErrConflict, threadID, expected)
 		}
-		err = c.pool.QueryRow(ctx, c.sqlUpdate, c.tenant, threadID, gen, want, data).Scan(&saves)
+		err = c.db.QueryRow(ctx, c.sqlUpdate, c.tenant, threadID, gen, want, data).Scan(&saves)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", fmt.Errorf("orxpg: save: %w: thread %q is not at version %q", checkpoint.ErrConflict, threadID, expected)
 		}
@@ -137,7 +140,7 @@ func (c *Checkpointer) Load(ctx context.Context, threadID string) (*state.State,
 		saves int64
 		data  []byte
 	)
-	err := c.pool.QueryRow(ctx, c.sqlLoad, c.tenant, threadID).Scan(&gen, &saves, &data)
+	err := c.db.QueryRow(ctx, c.sqlLoad, c.tenant, threadID).Scan(&gen, &saves, &data)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, "", checkpoint.ErrNotFound
 	}
@@ -158,12 +161,9 @@ func (c *Checkpointer) List(ctx context.Context, opts checkpoint.ListOptions) (c
 	if err := ctx.Err(); err != nil {
 		return checkpoint.ListPage{}, err
 	}
-	limit := opts.Limit
-	switch {
-	case limit < 0:
-		return checkpoint.ListPage{}, fmt.Errorf("checkpoint: negative list limit %d", limit)
-	case limit == 0:
-		limit = checkpoint.DefaultListLimit
+	limit, err := opts.PageLimit()
+	if err != nil {
+		return checkpoint.ListPage{}, err
 	}
 	var (
 		after   *time.Time
@@ -176,7 +176,7 @@ func (c *Checkpointer) List(ctx context.Context, opts checkpoint.ListOptions) (c
 		}
 		after, afterID = &updated, id
 	}
-	rows, err := c.pool.Query(ctx, c.sqlList, c.tenant, after, afterID, limit+1)
+	rows, err := c.db.Query(ctx, c.sqlList, c.tenant, after, afterID, fetchLimit(limit))
 	if err != nil {
 		return checkpoint.ListPage{}, fmt.Errorf("orxpg: list: %w", err)
 	}
@@ -203,6 +203,14 @@ func (c *Checkpointer) List(ctx context.Context, opts checkpoint.ListOptions) (c
 	return page, nil
 }
 
+// fetchLimit returns the LIMIT of a List query for a page of limit
+// threads: one row more, to learn whether another page follows. limit is
+// capped first so the extra row cannot overflow; no page holds more than
+// math.MaxInt32 threads in practice.
+func fetchLimit(limit int) int64 {
+	return int64(min(limit, math.MaxInt32)) + 1
+}
+
 // Delete removes the thread. Its lease, if any, is left to its owner.
 func (c *Checkpointer) Delete(ctx context.Context, threadID string) error {
 	if err := ctx.Err(); err != nil {
@@ -211,7 +219,7 @@ func (c *Checkpointer) Delete(ctx context.Context, threadID string) error {
 	if err := checkpoint.ValidThreadID(threadID); err != nil {
 		return err
 	}
-	tag, err := c.pool.Exec(ctx, c.sqlDelete, c.tenant, threadID)
+	tag, err := c.db.Exec(ctx, c.sqlDelete, c.tenant, threadID)
 	if err != nil {
 		return fmt.Errorf("orxpg: delete %q: %w", threadID, err)
 	}
@@ -248,7 +256,7 @@ func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl 
 			return err
 		}
 		var got string
-		err := c.pool.QueryRow(ctx, sql, c.tenant, threadID, owner, micros).Scan(&got)
+		err := c.db.QueryRow(ctx, sql, c.tenant, threadID, owner, micros).Scan(&got)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("orxpg: %w: thread %q", checkpoint.ErrLeaseHeld, threadID)
 		}
@@ -265,7 +273,7 @@ func (c *Checkpointer) Acquire(ctx context.Context, threadID, owner string, ttl 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if _, err := c.pool.Exec(ctx, c.sqlRelease, c.tenant, threadID, owner); err != nil {
+		if _, err := c.db.Exec(ctx, c.sqlRelease, c.tenant, threadID, owner); err != nil {
 			return fmt.Errorf("orxpg: release lease %q: %w", threadID, err)
 		}
 		return nil

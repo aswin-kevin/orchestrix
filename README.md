@@ -751,14 +751,14 @@ pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
 if err != nil {
 	log.Fatal(err)
 }
-if err := orxpg.Migrate(ctx, pool); err != nil { // CREATE TABLE IF NOT EXISTS
+if err := orxpg.Migrate(ctx, pool, orxpg.Config{}); err != nil { // CREATE TABLE IF NOT EXISTS
 	log.Fatal(err)
 }
-cp, err := orxpg.NewCheckpointer(pool, "acme") // bound to tenant "acme"
+cp, err := orxpg.NewCheckpointer(pool, "acme", orxpg.Config{}) // bound to tenant "acme"
 if err != nil {
 	log.Fatal(err)
 }
-store, err := orxpg.NewStore(pool, "acme") // a kv.Store for kv.New
+store, err := orxpg.NewStore(pool, "acme", orxpg.Config{}) // a kv.Store for kv.New
 if err != nil {
 	log.Fatal(err)
 }
@@ -766,7 +766,7 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithCheckpoin
 _, _, _ = a, store, err
 ```
 
-`orxpg.Checkpointer` implements `checkpoint.Leaser` across every process that shares the database, so two workers never run one thread at once. Each save is one conditional statement, and state is stored as the exact bytes of `State.MarshalJSON`. The tenant id is part of every key and query; when tenants reach a shared database with their own credentials, add row-level security too. `orxpg.Schema` returns the DDL for migration tools. For another database, implement `checkpoint.Checkpointer` (and `kv.Store`) and run `checkpointtest.Run` (and `kvtest.Run`) against it.
+`orxpg.Checkpointer` implements `checkpoint.Leaser` across every process that shares the database, so two workers never run one thread at once. Each save is one conditional statement, and state is stored as the exact bytes of `State.MarshalJSON`. The tenant id is part of every key and query; when tenants reach a shared database with their own credentials, add row-level security too. `orxpg.Schema` returns the DDL for migration tools. The constructors take an `orxpg.DB`, which a `*pgxpool.Pool`, a `*pgx.Conn` and a `pgx.Tx` all satisfy, so a checkpointer can also write inside the host's own transaction. For another database, implement `checkpoint.Checkpointer` (and `kv.Store`) and run `checkpointtest.Run` (and `kvtest.Run`) against it.
 
 A checkpointed workspace is stored whole in the thread's state, so for large workspaces prefer a disk or shell backend (which `WithCheckpointer` leaves alone).
 

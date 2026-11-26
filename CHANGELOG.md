@@ -12,6 +12,7 @@ Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `or
 ### Behaviour changes
 
 - `backend/composite`: the backend `composite.New` returns now implements `backend.Closer`. Its `Close(ctx)` closes the default backend, then each route's backend in the order given, each once, and joins their errors. So `Agent.Close` now also closes the backends mounted with `WithMount` when the agent's backend comes from `WithBackend` (or `WithShell`); with the default per-thread workspace or `WithBackendFactory`, mounted backends are still left to the host.
+- `orxpg`: `Migrate` replaces the thread list index `orx_threads_updated` with `orx_threads_list` on `(tenant_id, updated_at DESC, thread_id)`, which covers `List`'s keyset order. On an existing install the first `Migrate` builds the new index, blocking writes to the threads table while it runs, and drops the old one from its own schema; for a large table, create the index `CONCURRENTLY` beforehand.
 
 ## v0.9.0 — 2026-11-21
 
