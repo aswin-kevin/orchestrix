@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -17,6 +18,7 @@ import (
 func optionsServer(t *testing.T) (url string, bodies *[]map[string]json.RawMessage, hits *atomic.Int32) {
 	t.Helper()
 	var got []map[string]json.RawMessage
+	var mu sync.Mutex
 	hits = &atomic.Int32{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
@@ -25,7 +27,9 @@ func optionsServer(t *testing.T) (url string, bodies *[]map[string]json.RawMessa
 		if err := json.Unmarshal(raw, &m); err != nil {
 			t.Errorf("body is not JSON: %v", err)
 		}
+		mu.Lock()
 		got = append(got, m)
+		mu.Unlock()
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 	t.Cleanup(srv.Close)
@@ -141,8 +145,28 @@ func TestExtraMerged(t *testing.T) {
 			if got := string((*bodies)[0]["top_p"]); got != "0.5" {
 				t.Errorf("top_p = %q, want 0.5", got)
 			}
-			if _, ok := (*bodies)[0]["messages"]; !ok && f.name != "responses" {
-				t.Error("adapter fields lost in merge")
+			for _, key := range []string{"model", "stream"} {
+				if _, ok := (*bodies)[0][key]; !ok {
+					t.Errorf("adapter field %q lost in merge", key)
+				}
+			}
+			carrier := map[string]string{"anthropic": "messages", "openai": "messages", "responses": "input"}[f.name]
+			if _, ok := (*bodies)[0][carrier]; !ok {
+				t.Errorf("adapter field %q lost in merge", carrier)
+			}
+		})
+	}
+}
+
+func TestExtraNested(t *testing.T) {
+	for _, f := range optionFormats() {
+		t.Run(f.name, func(t *testing.T) {
+			url, bodies, _ := optionsServer(t)
+			req := optionRequest()
+			req.Extra = map[string]any{"metadata": map[string]any{"ids": []int{1, 2}, "k": "v"}}
+			_, _ = f.make(t, url).Complete(context.Background(), req)
+			if got := string((*bodies)[0]["metadata"]); got != `{"ids":[1,2],"k":"v"}` {
+				t.Errorf("metadata = %s", got)
 			}
 		})
 	}
@@ -153,10 +177,12 @@ func TestExtraConflict(t *testing.T) {
 		t.Run(f.name, func(t *testing.T) {
 			url, bodies, hits := optionsServer(t)
 			req := optionRequest()
-			req.Extra = map[string]any{"model": "x"}
-			_, err := f.make(t, url).Complete(context.Background(), req)
-			if !errors.Is(err, ErrExtraConflict) {
-				t.Fatalf("err = %v, want ErrExtraConflict", err)
+			for _, key := range []string{"model", "stream"} {
+				req.Extra = map[string]any{key: "x"}
+				_, err := f.make(t, url).Complete(context.Background(), req)
+				if !errors.Is(err, ErrExtraConflict) {
+					t.Fatalf("%s: err = %v, want ErrExtraConflict", key, err)
+				}
 			}
 			if hits.Load() != 0 {
 				t.Error("server was hit")

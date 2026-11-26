@@ -178,10 +178,6 @@ func (p *openAIProvider) Complete(ctx context.Context, req Request) (*Response, 
 // delivered surfaces as an error and is not replayed.
 func (p *openAIProvider) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
-		if err := req.ToolChoice.validate(req.Tools); err != nil {
-			yield(StreamEvent{}, err)
-			return
-		}
 		body, err := encodeBody(req, p.buildRequest(req))
 		if err != nil {
 			yield(StreamEvent{}, fmt.Errorf("llm: encode openai request: %w", err))

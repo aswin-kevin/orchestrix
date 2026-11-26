@@ -92,6 +92,9 @@ func mergeExtra(body []byte, extra map[string]any) ([]byte, error) {
 // encodeBody validates req's tool choice, marshals wire and merges
 // req.Extra into it.
 func encodeBody(req Request, wire any) ([]byte, error) {
+	if err := req.ToolChoice.validate(req.Tools); err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(wire)
 	if err != nil {
 		return nil, err

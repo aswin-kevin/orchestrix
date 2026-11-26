@@ -57,10 +57,6 @@ func (p *responsesProvider) Complete(ctx context.Context, req Request) (*Respons
 // a stream that breaks afterwards surfaces as an error and is not replayed.
 func (p *responsesProvider) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
-		if err := req.ToolChoice.validate(req.Tools); err != nil {
-			yield(StreamEvent{}, err)
-			return
-		}
 		body, err := encodeBody(req, p.buildRequest(req))
 		if err != nil {
 			yield(StreamEvent{}, fmt.Errorf("llm: encode responses request: %w", err))

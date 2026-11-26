@@ -89,7 +89,8 @@ type Request struct {
 
 	// ToolChoice constrains whether and which tool the model calls; the
 	// zero value leaves the provider default. An invalid choice is an error
-	// before anything is sent.
+	// before anything is sent. Anthropic rejects ToolChoiceAny and
+	// ToolChoiceTool when extended thinking is enabled.
 	ToolChoice ToolChoice
 
 	// Extra holds provider-specific top-level body fields, merged into the

@@ -354,9 +354,6 @@ func messageDeltaEvents(ev anthropicEvent) []StreamEvent {
 // request encodes req and returns the func that builds its HTTP request,
 // once per attempt.
 func (p *anthropicProvider) request(req Request, stream bool) (func() (*http.Request, error), error) {
-	if err := req.ToolChoice.validate(req.Tools); err != nil {
-		return nil, err
-	}
 	body, err := encodeBody(req, p.buildRequest(req, stream))
 	if err != nil {
 		return nil, fmt.Errorf("llm: encode anthropic request: %w", err)
