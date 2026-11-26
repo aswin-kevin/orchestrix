@@ -31,6 +31,11 @@
 // The cut between summary and kept messages never separates a tool_result
 // from its tool_use, so the view is always a valid conversation.
 //
+// The summary itself comes from a Summarizer: by default a ModelSummarizer,
+// one model call with Config.SummaryPrompt as the system prompt, made with
+// Config.Provider and Config.Model or else the request's own. Set
+// Config.Summarizer to produce summaries another way.
+//
 // This middleware must be the first ModelWrapper in the stack: it rebuilds
 // the request messages from State, which would discard any rewrite made by a
 // wrapper that ran before it.
@@ -38,9 +43,12 @@ package summarize
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/summary"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -82,42 +90,49 @@ const (
 )
 
 // DefaultSummaryPrompt is the summarizer's system prompt when
-// Config.SummaryPrompt is nil.
+// Config.SummaryPrompt and ModelSummarizer.Prompt are empty.
 const DefaultSummaryPrompt = `You compact the conversation of an AI agent so that it can continue its work with less context.
 You receive the previous summary (possibly empty) and the conversation that followed it. Write one new summary that replaces both.
 Keep everything the agent needs to continue: the user's goals, requests and constraints in their own words where it matters; decisions made and why; files, paths, commands, identifiers and values that were used or produced; errors met and how they were resolved; work completed; the current task and the next steps.
 Drop pleasantries, repetition and tool output that no longer matters. Write plain prose and short lists, without preamble.`
 
 // Config configures the summarize middleware. Zero values select the
-// defaults above.
+// defaults above; New rejects negative numbers and fractions out of range.
 type Config struct {
+	// Summarizer writes the summaries; nil means a ModelSummarizer built
+	// from Provider, Model and SummaryPrompt. Setting it together with any
+	// of those three is an error.
+	Summarizer Summarizer
 	// Provider makes the summarizer calls; nil uses the request's provider.
 	Provider llm.Provider
 	// Model is the summarizer model; empty uses the request's model. Set it
 	// when Provider is a different backend from the agent's.
 	Model string
 	// TriggerFraction is the share of the context window above which the
-	// conversation is compacted automatically; 0 means
-	// DefaultTriggerFraction.
+	// conversation is compacted automatically, in [0, 1]; 0 means
+	// DefaultTriggerFraction. At 1 only a request larger than the whole
+	// window triggers it.
 	TriggerFraction float64
 	// KeepFraction is the share of the context window kept verbatim when
-	// compacting; 0 means DefaultKeepFraction.
+	// compacting, in [0, 1); 0 means DefaultKeepFraction.
 	KeepFraction float64
 	// KeepToolResults is how many of the newest tool results are never
-	// cleared; 0 means DefaultKeepToolResults.
+	// cleared; 0 means DefaultKeepToolResults. Negative is an error.
 	KeepToolResults int
 	// ClearResultChars is the size above which older tool results are
-	// cleared in the view; 0 means DefaultClearResultChars.
+	// cleared in the view; 0 means DefaultClearResultChars. Negative is an
+	// error.
 	ClearResultChars int
 	// MaxOldInputChars is the size above which older tool inputs are
-	// shortened in the view; 0 means DefaultMaxOldInputChars.
+	// shortened in the view; 0 means DefaultMaxOldInputChars. Negative is
+	// an error.
 	MaxOldInputChars int
 	// MaxFailures is how many summarizer failures in a row stop automatic
-	// compaction; 0 means DefaultMaxFailures.
+	// compaction; 0 means DefaultMaxFailures. Negative is an error.
 	MaxFailures int
-	// SummaryPrompt is the summarizer's system prompt; nil means
-	// DefaultSummaryPrompt.
-	SummaryPrompt *string
+	// SummaryPrompt is the whole system prompt of the default summarizer;
+	// empty means DefaultSummaryPrompt.
+	SummaryPrompt string
 	// DisableOffload stops saving summarized messages to the backend; false
 	// saves them whenever the run has a backend and a ThreadID. Runs without
 	// a ThreadID never offload: they would share, and overwrite, one
@@ -126,28 +141,11 @@ type Config struct {
 }
 
 // Boundary marks how much of the history a summary replaces in the view.
-type Boundary struct {
-	// Index is the number of leading State messages, [0, Index), that
-	// Summary represents.
-	Index int `json:"index"`
-	// Summary is the summarizer's text.
-	Summary string `json:"summary"`
-	// Path is the backend file holding the transcript of the messages this
-	// compaction summarized; empty when none was written.
-	Path string `json:"path,omitempty"`
-	// Compactions counts the compactions that led to this boundary; it
-	// numbers the transcript files. Zero for no compaction.
-	Compactions int `json:"compactions,omitempty"`
-	// LastError is the error of the last failed compaction attempt; empty
-	// when the last attempt succeeded or none failed. A failure is recorded
-	// here because compaction runs outside any tool call, where no event can
-	// be forwarded, and the turn itself goes on uncompacted.
-	LastError string `json:"last_error,omitempty"`
-}
+type Boundary = summary.Boundary
 
-// BoundaryKey holds the current Boundary. It is private to the run that owns
-// it.
-var BoundaryKey = state.NewKey[Boundary]("summarize.boundary", state.Private[Boundary]())
+// boundaryKey holds the current Boundary, private to the run that owns it.
+// Hosts read it with Current.
+var boundaryKey = summary.Key
 
 // requestedKey is set by compact_conversation; the next model call compacts.
 var requestedKey = state.NewKey[bool]("summarize.requested", state.Private[bool]())
@@ -156,31 +154,53 @@ var requestedKey = state.NewKey[bool]("summarize.requested", state.Private[bool]
 // yet. The Boundary is returned either way, so its LastError can be read
 // even before the first successful compaction.
 func Current(s *state.State) (Boundary, bool) {
-	b, ok := BoundaryKey.Get(s)
+	b, ok := boundaryKey.Get(s)
 	return b, ok && b.Index > 0
 }
 
-// middleware is the summarize middleware. It is immutable after New, so it is
+// Name is the name of the summarize middleware.
+const Name = "summarize"
+
+// Middleware is the summarize middleware. It is immutable after New, so it is
 // safe to share between concurrent runs.
-type middleware struct {
-	cfg    Config
-	prompt string
+type Middleware struct {
+	cfg Config
 }
 
+// errSummarizerExcludes is New's error for a Summarizer set together with
+// the fields of the default summarizer.
+var errSummarizerExcludes = errors.New("summarize: Summarizer excludes Provider, Model and SummaryPrompt")
+
 // New returns the summarize middleware. Put it first in the middleware list
-// (see the package documentation).
-func New(cfg Config) agent.Middleware {
+// (see the package documentation). It returns an error when TriggerFraction
+// is outside [0, 1], KeepFraction is outside [0, 1), KeepToolResults,
+// ClearResultChars, MaxOldInputChars or MaxFailures is negative, or
+// Summarizer is set together with Provider, Model or SummaryPrompt.
+func New(cfg Config) (*Middleware, error) {
+	if !(cfg.TriggerFraction >= 0 && cfg.TriggerFraction <= 1) {
+		return nil, fmt.Errorf("summarize: TriggerFraction %v must be between 0 and 1", cfg.TriggerFraction)
+	}
+	if !(cfg.KeepFraction >= 0 && cfg.KeepFraction < 1) {
+		return nil, fmt.Errorf("summarize: KeepFraction %v must be at least 0 and below 1", cfg.KeepFraction)
+	}
+	for _, f := range []struct {
+		name string
+		v    int
+	}{{"KeepToolResults", cfg.KeepToolResults}, {"ClearResultChars", cfg.ClearResultChars}, {"MaxOldInputChars", cfg.MaxOldInputChars}, {"MaxFailures", cfg.MaxFailures}} {
+		if f.v < 0 {
+			return nil, fmt.Errorf("summarize: %s must not be negative", f.name)
+		}
+	}
+	if cfg.Summarizer != nil && (cfg.Provider != nil || cfg.Model != "" || cfg.SummaryPrompt != "") {
+		return nil, errSummarizerExcludes
+	}
 	cfg.TriggerFraction = orDefault(cfg.TriggerFraction, DefaultTriggerFraction)
 	cfg.KeepFraction = orDefault(cfg.KeepFraction, DefaultKeepFraction)
 	cfg.KeepToolResults = orDefault(cfg.KeepToolResults, DefaultKeepToolResults)
 	cfg.ClearResultChars = orDefault(cfg.ClearResultChars, DefaultClearResultChars)
 	cfg.MaxOldInputChars = orDefault(cfg.MaxOldInputChars, DefaultMaxOldInputChars)
 	cfg.MaxFailures = orDefault(cfg.MaxFailures, DefaultMaxFailures)
-	m := &middleware{cfg: cfg, prompt: DefaultSummaryPrompt}
-	if cfg.SummaryPrompt != nil {
-		m.prompt = *cfg.SummaryPrompt
-	}
-	return m
+	return &Middleware{cfg: cfg}, nil
 }
 
 // orDefault returns v, or def when v is not positive.
@@ -192,18 +212,18 @@ func orDefault[T int | float64](v, def T) T {
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "summarize" }
+func (m *Middleware) Name() string { return Name }
 
 // Tools implements agent.ToolProvider.
-func (m *middleware) Tools() []tool.Tool { return []tool.Tool{compactTool()} }
+func (m *Middleware) Tools() []tool.Tool { return []tool.Tool{compactTool()} }
 
 // BeforeAgent implements agent.BeforeAgent: a new run starts with the
 // circuit breaker closed.
-func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
+func (m *Middleware) BeforeAgent(_ context.Context, s *state.State) error {
 	if _, open := failuresKey.Get(s); open {
 		failuresKey.Delete(s)
 		// The error described the breaker, which is closed now.
-		BoundaryKey.Update(s, func(b Boundary) Boundary {
+		boundaryKey.Update(s, func(b Boundary) Boundary {
 			b.LastError = ""
 			return b
 		})
@@ -214,7 +234,7 @@ func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
 // AfterModel implements agent.AfterModel. It records how large the request
 // just answered was, which is what the automatic trigger measures; a
 // response without usage drops the record, as it would be stale.
-func (m *middleware) AfterModel(_ context.Context, s *state.State, resp *llm.Response) error {
+func (m *Middleware) AfterModel(_ context.Context, s *state.State, resp *llm.Response) error {
 	u := resp.Usage
 	input := u.Input + u.CacheRead + u.CacheWrite
 	if input == 0 {
@@ -239,7 +259,7 @@ func (m *middleware) AfterModel(_ context.Context, s *state.State, resp *llm.Res
 // nothing to summarize does not. After MaxFailures failures in a row
 // automatic compaction stops; a successful compaction (one the model
 // requested, or a reactive one) or a new run resets the count.
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if requested, _ := requestedKey.Get(req.State); requested {
 		requestedKey.Delete(req.State)
 		_, _ = m.compact(ctx, req, m.keepTokens(req.Profile, fullKeepShare))
@@ -266,7 +286,7 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 
 // shouldCompact reports whether the request is large enough for an automatic
 // compaction and the circuit breaker is closed.
-func (m *middleware) shouldCompact(req *agent.ModelRequest) bool {
+func (m *Middleware) shouldCompact(req *agent.ModelRequest) bool {
 	if failures, _ := failuresKey.Get(req.State); failures >= m.cfg.MaxFailures {
 		return false
 	}
@@ -291,6 +311,6 @@ const (
 
 // keepTokens is the size of the recent tail a compaction keeps verbatim: the
 // configured share of the context window, scaled by share.
-func (m *middleware) keepTokens(p llm.Profile, share float64) int {
+func (m *Middleware) keepTokens(p llm.Profile, share float64) int {
 	return int(share * m.cfg.KeepFraction * float64(contextWindow(p)))
 }

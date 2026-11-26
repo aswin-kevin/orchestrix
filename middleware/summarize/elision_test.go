@@ -39,7 +39,7 @@ func TestSummarizeViewAppliesElisionsAfterBoundary(t *testing.T) {
 	msgs := texts("u0", "a1", "u2", "a3", "u4", "a5", "u6")
 	s := state.New()
 	s.SetMessages(msgs)
-	BoundaryKey.Set(s, Boundary{Index: 2, Summary: "S"})
+	boundaryKey.Set(s, Boundary{Index: 2, Summary: "S"})
 	mustElide(t, s, elide.Elision{ID: "c1", From: 3, To: 5, Text: "E"})
 
 	got := wrapOnce(t, Config{}, s)
@@ -63,7 +63,7 @@ func TestSummarizeBoundaryStraddlingElision(t *testing.T) {
 	mustElide(t, s, elide.Elision{ID: "c1", From: 1, To: 6, Text: "E"})
 	// A boundary inside the elision: the elision no longer fits the view
 	// and is ignored, the summary covering its first part.
-	BoundaryKey.Set(s, Boundary{Index: 3, Summary: "S"})
+	boundaryKey.Set(s, Boundary{Index: 3, Summary: "S"})
 
 	got := wrapOnce(t, Config{}, s)
 
@@ -109,8 +109,8 @@ func TestSummarizeSettledCountsElidedView(t *testing.T) {
 func TestEstimateFallsBackWhenElisionsChange(t *testing.T) {
 	s := state.New()
 	s.SetMessages(texts("u0 "+strings.Repeat("x", 4000), "a1", "u2"))
-	m := New(Config{})
-	if err := m.(agent.AfterModel).AfterModel(context.Background(), s, &llm.Response{Usage: llm.Usage{Input: 50_000}}); err != nil {
+	m := mustNew(t, Config{})
+	if err := m.AfterModel(context.Background(), s, &llm.Response{Usage: llm.Usage{Input: 50_000}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := Estimate(s, elide.View(s, 0)); got != 50_000 {
@@ -122,7 +122,7 @@ func TestEstimateFallsBackWhenElisionsChange(t *testing.T) {
 		t.Fatalf("Estimate after an elision = %d, want the view's estimate %d", got, want)
 	}
 	// Observed with c1 applied, then c1 is removed: the view grows back.
-	if err := m.(agent.AfterModel).AfterModel(context.Background(), s, &llm.Response{Usage: llm.Usage{Input: 10}}); err != nil {
+	if err := m.AfterModel(context.Background(), s, &llm.Response{Usage: llm.Usage{Input: 10}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := Estimate(s, elide.View(s, 0)); got != 10 {

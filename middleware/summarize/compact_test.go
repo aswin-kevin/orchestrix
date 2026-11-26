@@ -22,9 +22,14 @@ func TestSummaryInputBounded(t *testing.T) {
 	}
 	msgs = append(msgs, llm.UserText("LAST"))
 
-	main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("k1")}}, llmtest.Turn{Text: "done"})
+	// Far larger than the window, so the first model call compacts by itself.
+	main := llmtest.New(llmtest.Turn{Text: "done"})
 	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY"})
-	runAgent(t, main, testutil.Memory(t), Config{Provider: summarizer, TriggerFraction: noAutoTrigger}, msgs)
+	runAgent(t, main, testutil.Memory(t), Config{Provider: summarizer}, msgs)
+
+	if summarizer.Calls() != 1 {
+		t.Fatalf("summarizer called %d times, want 1", summarizer.Calls())
+	}
 
 	input := summarizerInput(t, summarizer, 0)
 	const prefix = "Previous summary:\n\n\nNew conversation:\n"

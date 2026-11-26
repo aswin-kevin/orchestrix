@@ -607,6 +607,8 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 _, _ = a, err
 ```
 
+`SummaryPrompt` replaces the summarizer's whole system prompt. To write summaries another way (a different service, a fixed template), set `Summarizer` to a `summarize.Summarizer` (or `summarize.SummarizerFunc`); it then excludes `Provider`, `Model` and `SummaryPrompt`, and an error from it leaves the turn uncompacted, recorded in `summarize.Current(state).LastError`.
+
 ## Context compression
 
 `WithCompress` lets the model compress its own conversation, ahead of the `summarize` backstop. Once a request passes 60% of the context window (`TriggerFraction`), the engine proposes the oldest settled range of whole user turns, and the model answers by calling `compress_context` with a summary of that range. The request view then shows the summary in its place, while state keeps every original message. `restore_context` removes a compression, so the range shows verbatim again from state; it needs no thread. With a thread ID, the originals are also archived in the workspace under `/.orchestrix/compressed/<thread>`.

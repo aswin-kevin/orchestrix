@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -87,7 +88,7 @@ func charCount(msgs []llm.Message) int {
 // nothing to summarize. A summarizer error is counted and recorded by
 // fail; success clears the error and the failure count. State messages are
 // never changed.
-func (m *middleware) compact(ctx context.Context, req *agent.ModelRequest, keepTokens int) (bool, error) {
+func (m *Middleware) compact(ctx context.Context, req *agent.ModelRequest, keepTokens int) (bool, error) {
 	msgs := req.State.Messages()
 	prev, _ := Current(req.State)
 	if prev.Index > len(msgs) {
@@ -97,15 +98,16 @@ func (m *middleware) compact(ctx context.Context, req *agent.ModelRequest, keepT
 	if k <= prev.Index {
 		return false, nil
 	}
-	older := msgs[prev.Index:k]
-	summary, err := m.summarize(ctx, req, prev.Summary, boundedRender(older, maxSummaryInputChars))
+	// Clipped, so that a Summarizer appending to it cannot write past k.
+	older := slices.Clip(msgs[prev.Index:k])
+	text, err := m.summarize(ctx, req, prev.Summary, older)
 	if err != nil {
 		m.fail(req.State, err)
 		return false, err
 	}
-	next := Boundary{Index: k, Summary: summary, Compactions: prev.Compactions + 1}
+	next := Boundary{Index: k, Summary: text, Compactions: prev.Compactions + 1}
 	next.Path = m.offload(ctx, req, next.Compactions, Transcript(older))
-	BoundaryKey.Set(req.State, next)
+	boundaryKey.Set(req.State, next)
 	failuresKey.Delete(req.State)
 	observedKey.Delete(req.State) // describes the view before this compaction
 	return true, nil
@@ -115,7 +117,7 @@ func (m *middleware) compact(ctx context.Context, req *agent.ModelRequest, keepT
 // Boundary.LastError, where it stays until a compaction succeeds. The failure
 // that opens the circuit breaker says so, so a host reading the Boundary can
 // tell that automatic compaction has stopped.
-func (m *middleware) fail(s *state.State, cause error) {
+func (m *Middleware) fail(s *state.State, cause error) {
 	failures, _ := failuresKey.Get(s)
 	failures++
 	failuresKey.Set(s, failures)
@@ -123,7 +125,7 @@ func (m *middleware) fail(s *state.State, cause error) {
 	if failures >= m.cfg.MaxFailures {
 		msg = fmt.Sprintf("automatic compaction stopped after %d failures: %s", failures, msg)
 	}
-	BoundaryKey.Update(s, func(b Boundary) Boundary {
+	boundaryKey.Update(s, func(b Boundary) Boundary {
 		b.LastError = msg
 		return b
 	})
@@ -137,7 +139,7 @@ var errNoProgress = errors.New("compaction made no progress")
 // compactCounted is compact for the automatic and the reactive path: a
 // compaction that did not move the boundary counts as a failure. It reports
 // whether the boundary moved.
-func (m *middleware) compactCounted(ctx context.Context, req *agent.ModelRequest, keepTokens int) bool {
+func (m *Middleware) compactCounted(ctx context.Context, req *agent.ModelRequest, keepTokens int) bool {
 	moved, err := m.compact(ctx, req, keepTokens)
 	if err == nil && !moved {
 		m.fail(req.State, errNoProgress)
@@ -217,30 +219,34 @@ func tailCount(msgs []llm.Message, keepTokens int) int {
 	return len(msgs)
 }
 
-// summarize asks the summarizer for a summary of rendered, the conversation
-// after previous.
-func (m *middleware) summarize(ctx context.Context, req *agent.ModelRequest, previous, rendered string) (string, error) {
-	provider, model := m.cfg.Provider, m.cfg.Model
-	if provider == nil {
-		provider = req.Provider
+// summarize asks the Summarizer for a summary of older, the messages after
+// the summary previous: Config.Summarizer, or a ModelSummarizer built from
+// Config and the request. The reply is trimmed; a blank one is an error.
+func (m *Middleware) summarize(ctx context.Context, req *agent.ModelRequest, previous string, older []llm.Message) (string, error) {
+	s := m.cfg.Summarizer
+	if s == nil {
+		ms := &ModelSummarizer{Provider: m.cfg.Provider, Model: m.cfg.Model, Prompt: m.cfg.SummaryPrompt}
+		if ms.Provider == nil {
+			ms.Provider = req.Provider
+		}
+		if ms.Model == "" {
+			ms.Model = req.Request.Model
+		}
+		s = ms
 	}
-	if model == "" {
-		model = req.Request.Model
-	}
-	resp, err := llm.Collect(ctx, provider, llm.Request{
-		Model:     model,
-		System:    []string{m.prompt},
-		Messages:  []llm.Message{llm.UserText("Previous summary:\n" + previous + "\n\nNew conversation:\n" + rendered)},
-		MaxTokens: DefaultSummaryMaxTokens,
+	text, err := s.Summarize(ctx, SummaryRequest{
+		Messages:   older,
+		Previous:   previous,
+		Transcript: boundedRender(older, maxSummaryInputChars),
 	})
 	if err != nil {
 		return "", fmt.Errorf("summarize conversation: %w", err)
 	}
-	summary := strings.TrimSpace(resp.Message.Text())
-	if summary == "" {
+	text = strings.TrimSpace(text)
+	if text == "" {
 		return "", errors.New("summarize conversation: summarizer returned no text")
 	}
-	return summary, nil
+	return text, nil
 }
 
 // offload saves the transcript of compaction number n to its own file and
@@ -249,7 +255,7 @@ func (m *middleware) summarize(ctx context.Context, req *agent.ModelRequest, pre
 // or the write failed. Each compaction gets a new file, so no file grows past
 // what one read can load. A failed write is not an error: State still holds
 // every message, the transcript is only a convenience for the model.
-func (m *middleware) offload(ctx context.Context, req *agent.ModelRequest, n int, transcript string) string {
+func (m *Middleware) offload(ctx context.Context, req *agent.ModelRequest, n int, transcript string) string {
 	if m.cfg.DisableOffload || req.Backend == nil || req.ThreadID == "" {
 		return ""
 	}

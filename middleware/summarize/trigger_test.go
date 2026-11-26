@@ -107,7 +107,7 @@ func TestEstimateUsesObservedPlusDelta(t *testing.T) {
 func TestAfterModelObservesInputSideTokens(t *testing.T) {
 	s := state.New()
 	s.AppendMessages(llm.UserText("hi"))
-	mw := New(Config{}).(agent.AfterModel)
+	mw := mustNew(t, Config{})
 
 	err := mw.AfterModel(context.Background(), s, &llm.Response{Usage: llm.Usage{Input: 10, CacheRead: 200, CacheWrite: 30, Output: 99}})
 
@@ -179,7 +179,7 @@ func TestCircuitBreakerOpensAfterFailures(t *testing.T) {
 	if summarizer.Calls() != 3 {
 		t.Fatalf("summarizer called %d times, want exactly MaxFailures (3)", summarizer.Calls())
 	}
-	bd, _ := BoundaryKey.Get(final.State)
+	bd, _ := boundaryKey.Get(final.State)
 	if !strings.Contains(bd.LastError, "stopped after 3 failures") || !strings.Contains(bd.LastError, "summarizer down") {
 		t.Fatalf("LastError = %q, want the open breaker and the cause", bd.LastError)
 	}
@@ -214,7 +214,7 @@ func TestNoProgressCountsAsFailure(t *testing.T) {
 	if failures, _ := failuresKey.Get(final.State); failures != 1 {
 		t.Fatalf("failures = %d, want 1", failures)
 	}
-	if bd, _ := BoundaryKey.Get(final.State); !strings.Contains(bd.LastError, "no progress") {
+	if bd, _ := boundaryKey.Get(final.State); !strings.Contains(bd.LastError, "no progress") {
 		t.Fatalf("LastError = %q, want the no-progress failure", bd.LastError)
 	}
 }
@@ -222,15 +222,15 @@ func TestNoProgressCountsAsFailure(t *testing.T) {
 func TestNewRunClosesBreaker(t *testing.T) {
 	s := state.New()
 	failuresKey.Set(s, DefaultMaxFailures)
-	BoundaryKey.Set(s, Boundary{LastError: "automatic compaction stopped after 3 failures: down"})
+	boundaryKey.Set(s, Boundary{LastError: "automatic compaction stopped after 3 failures: down"})
 
-	if err := New(Config{}).(agent.BeforeAgent).BeforeAgent(context.Background(), s); err != nil {
+	if err := mustNew(t, Config{}).BeforeAgent(context.Background(), s); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := failuresKey.Get(s); ok {
 		t.Fatal("failure count survived the start of a run")
 	}
-	if bd, _ := BoundaryKey.Get(s); bd.LastError != "" {
+	if bd, _ := boundaryKey.Get(s); bd.LastError != "" {
 		t.Fatalf("LastError = %q, want the stale breaker message cleared", bd.LastError)
 	}
 }
@@ -263,7 +263,7 @@ func TestEstimateCountsTheCompactedView(t *testing.T) {
 func TestObservationDroppedWhenStale(t *testing.T) {
 	s := state.New()
 	s.AppendMessages(llm.UserText("hi"))
-	mw := New(Config{}).(agent.AfterModel)
+	mw := mustNew(t, Config{})
 	observedKey.Set(s, observed{Input: 500, Messages: 1})
 
 	if err := mw.AfterModel(context.Background(), s, &llm.Response{}); err != nil {
@@ -279,7 +279,7 @@ func TestObservationDroppedAfterCompaction(t *testing.T) {
 	s.AppendMessages(triggerHistory()...)
 	s.AppendMessages(assistantText("A3"), llm.UserText("A4"))
 	observedKey.Set(s, observed{Input: 1800, Messages: 5})
-	m := New(Config{Provider: llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})}).(*middleware)
+	m := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})})
 
 	moved, err := m.compact(context.Background(), &agent.ModelRequest{State: s}, 1)
 
@@ -328,7 +328,7 @@ func TestReactiveRetryRestoresInnerWrappersRequest(t *testing.T) {
 		Provider:       main,
 		Profile:        &llm.Profile{ContextWindow: triggerWindow, MaxOutput: 500},
 		Backend:        testutil.Memory(t),
-		Middleware:     []agent.Middleware{New(Config{Provider: summarizer}), appender{}},
+		Middleware:     []agent.Middleware{mustNew(t, Config{Provider: summarizer}), appender{}},
 		PermissionMode: permission.ModeBypass,
 	})
 	if err != nil {

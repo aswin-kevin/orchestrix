@@ -18,7 +18,7 @@ const keptInputChars = 500
 // messages after the boundary when one is set, else current (the loop's
 // elided view of all of State), then micro-compacted. current is a fresh copy
 // owned by the request, so it may be edited in place; State is never touched.
-func (m *middleware) view(s *state.State, current []llm.Message) []llm.Message {
+func (m *Middleware) view(s *state.State, current []llm.Message) []llm.Message {
 	msgs := current
 	history := s.Messages()
 	from := 0
@@ -85,7 +85,7 @@ func isToolResult(b llm.Block) bool { return b.Type == llm.BlockToolResult }
 // those, whose text is longer than ClearResultChars. Results after the last
 // assistant message answer the current turn and have not been seen by the
 // model yet, so they are never cleared.
-func (m *middleware) clearOldResults(msgs []llm.Message) {
+func (m *Middleware) clearOldResults(msgs []llm.Message) {
 	kept := 0
 	for i := lastIndex(msgs, isAssistant) - 1; i >= 0; i-- {
 		content := msgs[i].Content
@@ -112,7 +112,7 @@ func resultText(b llm.Block) string {
 // assistant messages before the last user turn; the tool loop after it is
 // left alone: it is the turn in progress, and providers may validate its
 // signed thinking against the inputs as they were sent.
-func (m *middleware) shortenOldInputs(msgs []llm.Message, settled int) {
+func (m *Middleware) shortenOldInputs(msgs []llm.Message, settled int) {
 	for i := range msgs {
 		if settled == 0 {
 			return

@@ -6,8 +6,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-// compactInput is the input of compact_conversation, which takes none.
-type compactInput struct{}
+// CompactInput is the input of compact_conversation, which takes none.
+type CompactInput struct{}
 
 func compactTool() tool.Tool {
 	return tool.New(ToolCompact,
@@ -22,7 +22,7 @@ func compactTool() tool.Tool {
 }
 
 // requestCompaction flags the run: the next model call compacts first.
-func requestCompaction(_ context.Context, _ compactInput, c *tool.Call) (tool.Result, error) {
+func requestCompaction(_ context.Context, _ CompactInput, c *tool.Call) (tool.Result, error) {
 	requestedKey.Set(c.State, true)
 	return tool.Text("The conversation will be compacted before your next turn."), nil
 }

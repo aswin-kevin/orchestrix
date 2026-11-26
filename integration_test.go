@@ -251,12 +251,16 @@ func minimalSummarizingAgent(t *testing.T, spec string, window int) *agent.Agent
 	if err != nil {
 		t.Fatal(err)
 	}
+	sm, err := summarize.New(summarize.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	a, err := agent.New(agent.Config{
 		Provider:   provider,
 		Model:      mc.Model,
 		Profile:    &llm.Profile{ContextWindow: window, MaxOutput: 1024},
 		System:     []string{"You are a terse assistant. Answer in one short line."},
-		Middleware: []agent.Middleware{summarize.New(summarize.Config{})},
+		Middleware: []agent.Middleware{sm},
 	})
 	if err != nil {
 		t.Fatal(err)

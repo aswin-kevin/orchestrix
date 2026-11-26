@@ -12,6 +12,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	filecp "github.com/aswin-kevin/orchestrix/checkpoint/file"
+	"github.com/aswin-kevin/orchestrix/internal/summary"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
@@ -219,10 +220,14 @@ func assistant(text string) llm.Message {
 func firstRequest(t *testing.T, m *Middleware, s *state.State) llm.Request {
 	t.Helper()
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
+	sm, err := summarize.New(summarize.Config{DisableOffload: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	a, err := agent.New(agent.Config{
 		Provider:       p,
 		System:         []string{"host"},
-		Middleware:     []agent.Middleware{summarize.New(summarize.Config{DisableOffload: true}), m},
+		Middleware:     []agent.Middleware{sm, m},
 		PermissionMode: permission.ModeBypass,
 	})
 	if err != nil {
@@ -261,7 +266,7 @@ func TestSkillReinjectedAfterCompaction(t *testing.T) {
 	m, _ := pdfMiddleware(t, Config{})
 	s := state.New()
 	s.SetMessages(eightMessages(t, m, s))
-	summarize.BoundaryKey.Set(s, summarize.Boundary{Index: 6, Summary: "s"})
+	summary.Key.Set(s, summary.Boundary{Index: 6, Summary: "s"})
 	before := len(s.Messages())
 
 	req := firstRequest(t, m, s)
@@ -320,7 +325,7 @@ func TestPinnedSkillNotReinjected(t *testing.T) {
 	m, _ := pdfMiddleware(t, Config{Pinned: []string{"pdf"}})
 	s := state.New()
 	s.SetMessages(eightMessages(t, m, s))
-	summarize.BoundaryKey.Set(s, summarize.Boundary{Index: 6, Summary: "s"})
+	summary.Key.Set(s, summary.Boundary{Index: 6, Summary: "s"})
 	req := firstRequest(t, m, s)
 	if strings.Contains(requestText(req), StandingHeader) {
 		t.Fatal("a pinned skill is in the system prompt already; it must not be re-injected")

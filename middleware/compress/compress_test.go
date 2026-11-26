@@ -11,6 +11,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/agent/elide"
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/summary"
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
@@ -307,7 +308,7 @@ func TestNoProposalBelowTrigger(t *testing.T) {
 
 func TestRangeStartsAfterSummaryBoundary(t *testing.T) {
 	s := seeded()
-	summarize.BoundaryKey.Set(s, summarize.Boundary{Index: 4, Summary: "S"})
+	summary.Key.Set(s, summary.Boundary{Index: 4, Summary: "S"})
 	main := llmtest.New(llmtest.Turn{Text: "done"})
 	s = run(t, main, testutil.Memory(t), testCfg, s)
 
@@ -335,12 +336,12 @@ func TestSummaryNeutralized(t *testing.T) {
 
 func TestWorksUnderSummarize(t *testing.T) {
 	s := seeded()
-	summarize.BoundaryKey.Set(s, summarize.Boundary{Index: 2, Summary: "EARLIER"})
+	summary.Key.Set(s, summary.Boundary{Index: 2, Summary: "EARLIER"})
 	main := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{compressCall("k1", "c1", "S1")}},
 		llmtest.Turn{Text: "done"},
 	)
-	stack := []agent.Middleware{summarize.New(summarize.Config{TriggerFraction: 100}), mustNew(t, testCfg)}
+	stack := []agent.Middleware{mustSummarize(t, summarize.Config{TriggerFraction: 1}), mustNew(t, testCfg)}
 	s = run(t, main, testutil.Memory(t), testCfg, s, stack...)
 
 	if e := elide.All(s); len(e) != 1 || e[0].From != 2 || e[0].To != 6 {

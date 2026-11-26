@@ -119,7 +119,7 @@ func wrapOnce(t *testing.T, cfg Config, s *state.State) []llm.Message {
 		Profile: llm.Profile{ContextWindow: 100_000},
 	}
 	var got []llm.Message
-	_, err := New(cfg).(agent.ModelWrapper).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := mustNew(t, cfg).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		got = r.Request.Messages
 		return &llm.Response{Message: assistantText("ok")}, nil
 	})
@@ -133,7 +133,7 @@ func TestViewUsesBoundaryStateUntouched(t *testing.T) {
 	s := state.New()
 	s.SetMessages(mixedHistory()[:10])
 	before := s.Messages()
-	BoundaryKey.Set(s, Boundary{Index: 6, Summary: "S", Path: "/.orchestrix/conversation_history/t1/1.md"})
+	boundaryKey.Set(s, Boundary{Index: 6, Summary: "S", Path: "/.orchestrix/conversation_history/t1/1.md"})
 
 	got := wrapOnce(t, Config{}, s)
 
@@ -155,7 +155,7 @@ func TestViewUsesBoundaryStateUntouched(t *testing.T) {
 func TestViewWithoutPathOmitsTranscriptPointer(t *testing.T) {
 	s := state.New()
 	s.SetMessages(mixedHistory()[:4])
-	BoundaryKey.Set(s, Boundary{Index: 2, Summary: "S"})
+	boundaryKey.Set(s, Boundary{Index: 2, Summary: "S"})
 	got := wrapOnce(t, Config{}, s)
 	if want := "<summary>\nS\n</summary>\nEarlier conversation was summarized above."; got[0].Text() != want {
 		t.Fatalf("summary message = %q, want %q", got[0].Text(), want)
@@ -264,7 +264,7 @@ func TestOldToolInputTruncatedValidJSON(t *testing.T) {
 func TestStaleBoundaryIgnored(t *testing.T) {
 	s := state.New()
 	s.SetMessages(mixedHistory()[:4])
-	BoundaryKey.Set(s, Boundary{Index: 9, Summary: "S", Compactions: 1})
+	boundaryKey.Set(s, Boundary{Index: 9, Summary: "S", Compactions: 1})
 	got := wrapOnce(t, Config{}, s)
 	if len(got) != 4 || strings.Contains(got[0].Text(), "<summary>") {
 		t.Fatalf("view = %d messages starting %q, want the 4 state messages", len(got), got[0].Text())
@@ -275,7 +275,7 @@ func TestBoundaryCheckpointRoundTrip(t *testing.T) {
 	s := state.New()
 	s.SetMessages(mixedHistory()[:4])
 	want := Boundary{Index: 2, Summary: "S", Path: HistoryDir + "/t1/1.md", Compactions: 1, LastError: "boom"}
-	BoundaryKey.Set(s, want)
+	boundaryKey.Set(s, want)
 
 	data, err := json.Marshal(s)
 	if err != nil {
@@ -339,7 +339,7 @@ func TestStopContinuationIsNotATurn(t *testing.T) {
 		Provider:       p,
 		Profile:        &llm.Profile{ContextWindow: 100_000, MaxOutput: 500},
 		Tools:          []tool.Tool{noopTool()},
-		Middleware:     []agent.Middleware{New(Config{}), continuing{}},
+		Middleware:     []agent.Middleware{mustNew(t, Config{}), continuing{}},
 		PermissionMode: permission.ModeBypass,
 	})
 	if err != nil {

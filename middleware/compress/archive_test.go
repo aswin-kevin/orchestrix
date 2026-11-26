@@ -76,7 +76,7 @@ func TestSameTurnCompactionClosesOpenProposal(t *testing.T) {
 		llmtest.Turn{Text: "done"},
 	)
 	summarizer := llmtest.New(llmtest.Turn{Text: "EARLIER"})
-	stack := []agent.Middleware{summarize.New(summarize.Config{Provider: summarizer, TriggerFraction: 100, DisableOffload: true}), mustNew(t, testCfg)}
+	stack := []agent.Middleware{mustSummarize(t, summarize.Config{Provider: summarizer, TriggerFraction: 1, DisableOffload: true}), mustNew(t, testCfg)}
 	s := run(t, main, testutil.Memory(t), testCfg, seeded(), stack...)
 
 	if id := proposed(main.Requests[0]); id != "c1" {

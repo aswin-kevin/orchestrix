@@ -175,7 +175,7 @@ func (s *settings) closeBuilt() {
 // summarize comes first because it rebuilds the request messages from State,
 // which would discard the rewrites of any model wrapper before it.
 func (s *settings) baseStack() []agent.Middleware {
-	stack := []agent.Middleware{summarize.New(s.summarize)}
+	stack := s.appendBuilt(nil, "WithSummarize", func() (agent.Middleware, error) { return summarize.New(s.summarize) })
 	if s.compress != nil {
 		stack = s.appendBuilt(stack, "WithCompress", func() (agent.Middleware, error) { return compress.New(*s.compress) })
 	}

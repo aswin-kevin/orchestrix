@@ -3,6 +3,7 @@ package summarize
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -20,9 +21,10 @@ import (
 // so each padded message below (3000+ characters) moves the cut by one.
 const testWindow = 4000
 
-// noAutoTrigger is a TriggerFraction that never fires, so tests of the
+// noAutoTrigger is a TriggerFraction that never fires for the padded
+// history, which stays below the whole window, so tests of the
 // compact_conversation tool see only the compactions they ask for.
-const noAutoTrigger = 100
+const noAutoTrigger = 1
 
 // padded returns a message text starting with marker and long enough that a
 // few of them exceed the kept tail.
@@ -68,12 +70,13 @@ func runInput(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, in
 // runWindow runs the test agent with the given context window and returns
 // its Final whatever the reason.
 func runWindow(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, in agent.Input, window int) *agent.Final {
+	t.Helper()
 	a, err := agent.New(agent.Config{
 		Provider:       main,
 		Profile:        &llm.Profile{ContextWindow: window, MaxOutput: 500},
 		Backend:        b,
 		Tools:          []tool.Tool{noopTool()},
-		Middleware:     []agent.Middleware{New(cfg)},
+		Middleware:     []agent.Middleware{mustNew(t, cfg)},
 		PermissionMode: permission.ModeBypass,
 	})
 	if err != nil {
@@ -268,7 +271,7 @@ func TestFailedCompactionRecordedAndRequestUncompacted(t *testing.T) {
 	if failures, _ := failuresKey.Get(final.State); failures != 1 {
 		t.Fatalf("failures = %d, want the requested compaction's summarizer error counted", failures)
 	}
-	bd, _ := BoundaryKey.Get(final.State)
+	bd, _ := boundaryKey.Get(final.State)
 	if !strings.Contains(bd.LastError, "summarizer down") {
 		t.Fatalf("LastError = %q, want the summarizer error", bd.LastError)
 	}
@@ -319,5 +322,207 @@ func TestCompactAlongsideParallelCalls(t *testing.T) {
 func TestHistoryDirIsUnderTheInternalRoot(t *testing.T) {
 	if HistoryDir != "/.orchestrix/conversation_history" {
 		t.Fatalf("HistoryDir = %q, want it under /.orchestrix", HistoryDir)
+	}
+}
+
+func TestName(t *testing.T) {
+	if Name != "summarize" {
+		t.Fatalf("Name = %q, want summarize", Name)
+	}
+	if got := mustNew(t, Config{}).Name(); got != Name {
+		t.Fatalf("Name() = %q, want %q", got, Name)
+	}
+}
+
+// recordingSummarizer answers with replies in turn and records every request.
+type recordingSummarizer struct {
+	replies  []string
+	requests []SummaryRequest
+}
+
+func (r *recordingSummarizer) Summarize(_ context.Context, req SummaryRequest) (string, error) {
+	r.requests = append(r.requests, req)
+	reply := r.replies[0]
+	r.replies = r.replies[1:]
+	return reply, nil
+}
+
+func TestCustomSummarizerUsed(t *testing.T) {
+	main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}}, llmtest.Turn{Text: "done"})
+	var got []SummaryRequest
+	s := SummarizerFunc(func(_ context.Context, req SummaryRequest) (string, error) {
+		got = append(got, req)
+		return " S\n", nil
+	})
+
+	final := runAgent(t, main, testutil.Memory(t), Config{Summarizer: s}, paddedHistory())
+
+	if bd, ok := Current(final.State); !ok || bd.Summary != "S" || bd.Index != 3 {
+		t.Fatalf("boundary = %+v (set %v), want the trimmed custom summary at index 3", bd, ok)
+	}
+	if main.Calls() != 2 {
+		t.Fatalf("main provider got %d requests, want only the 2 agent turns", main.Calls())
+	}
+	if len(got) != 1 {
+		t.Fatalf("summarizer called %d times, want 1", len(got))
+	}
+	req := got[0]
+	if req.Previous != "" || len(req.Messages) != 3 || !strings.HasPrefix(req.Messages[0].Text(), "A0 ") {
+		t.Fatalf("request = previous %q, %d messages, want none and A0..A2", req.Previous, len(req.Messages))
+	}
+	if req.Transcript != boundedRender(req.Messages, maxSummaryInputChars) {
+		t.Fatal("Transcript is not the bounded rendering of Messages")
+	}
+}
+
+func TestSummarizerSeesPrevious(t *testing.T) {
+	main := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}},
+		llmtest.Turn{Text: "B " + strings.Repeat("x", 5000), ToolCalls: []llmtest.Call{compactCall("c2")}},
+		llmtest.Turn{Text: "done"},
+	)
+	rec := &recordingSummarizer{replies: []string{"S1", "S2"}}
+
+	final := runAgent(t, main, testutil.Memory(t), Config{Summarizer: rec}, paddedHistory())
+
+	if len(rec.requests) != 2 {
+		t.Fatalf("summarizer called %d times, want 2", len(rec.requests))
+	}
+	second := rec.requests[1]
+	if second.Previous != "S1" || len(second.Messages) == 0 || !strings.HasPrefix(second.Messages[0].Text(), "A3 ") {
+		t.Fatalf("second request = previous %q, %d messages, want S1 and the messages from A3", second.Previous, len(second.Messages))
+	}
+	if !strings.Contains(second.Transcript, "A3 ") || strings.Contains(second.Transcript, "A0 ") {
+		t.Fatal("second transcript does not cover exactly the messages after the first boundary")
+	}
+	if bd, _ := Current(final.State); bd.Summary != "S2" || bd.Index != 7 {
+		t.Fatalf("boundary = %+v, want S2 at index 7", bd)
+	}
+}
+
+func TestCustomSummarizerFailureRecorded(t *testing.T) {
+	for name, s := range map[string]Summarizer{
+		"error": SummarizerFunc(func(context.Context, SummaryRequest) (string, error) { return "", errors.New("custom down") }),
+		"blank": SummarizerFunc(func(context.Context, SummaryRequest) (string, error) { return " \n", nil }),
+	} {
+		t.Run(name, func(t *testing.T) {
+			main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}}, llmtest.Turn{Text: "done"})
+
+			final := runAgent(t, main, testutil.Memory(t), Config{Summarizer: s, TriggerFraction: noAutoTrigger}, paddedHistory())
+
+			if _, ok := Current(final.State); ok {
+				t.Fatal("a failed compaction set a boundary")
+			}
+			bd, _ := boundaryKey.Get(final.State)
+			if bd.LastError == "" {
+				t.Fatal("the failure was not recorded in LastError")
+			}
+			if failures, _ := failuresKey.Get(final.State); failures != 1 {
+				t.Fatalf("failures = %d, want 1", failures)
+			}
+		})
+	}
+}
+
+func TestSummaryPromptEmptyMeansDefault(t *testing.T) {
+	req := SummaryRequest{Messages: []llm.Message{llm.UserText("hi")}, Previous: "P", Transcript: "T"}
+	for _, tc := range []struct{ prompt, want string }{{"", DefaultSummaryPrompt}, {"custom", "custom"}} {
+		p := llmtest.New(llmtest.Turn{Text: " SUMMARY \n"})
+		got, err := (&ModelSummarizer{Provider: p, Model: "m", Prompt: tc.prompt}).Summarize(context.Background(), req)
+		if err != nil || got != "SUMMARY" {
+			t.Fatalf("Summarize = %q, %v, want the trimmed reply", got, err)
+		}
+		sent := p.Requests[0]
+		if len(sent.System) != 1 || sent.System[0] != tc.want || sent.Model != "m" || sent.MaxTokens != DefaultSummaryMaxTokens {
+			t.Fatalf("prompt %q: request = %+v, want system %.20q", tc.prompt, sent, tc.want)
+		}
+		if len(sent.Messages) != 1 || sent.Messages[0].Text() != "Previous summary:\nP\n\nNew conversation:\nT" {
+			t.Fatalf("request messages = %+v", sent.Messages)
+		}
+	}
+}
+
+func TestSummaryPromptReachesDefaultSummarizer(t *testing.T) {
+	main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}}, llmtest.Turn{Text: "done"})
+	summarizer := llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})
+
+	runAgent(t, main, testutil.Memory(t), Config{Provider: summarizer, Model: "small", SummaryPrompt: "custom"}, paddedHistory())
+
+	if req := summarizer.Requests[0]; req.System[0] != "custom" || req.Model != "small" {
+		t.Fatalf("summarizer request system %q, model %q, want custom and small", req.System[0], req.Model)
+	}
+}
+
+func TestModelSummarizerFallsBackToTheRunsAgent(t *testing.T) {
+	// The run's own provider answers the summarizer call as its second
+	// request.
+	main := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}},
+		llmtest.Turn{Text: "SUMMARY-1"},
+		llmtest.Turn{Text: "done"},
+	)
+
+	final := runAgent(t, main, testutil.Memory(t), Config{Summarizer: &ModelSummarizer{}, TriggerFraction: noAutoTrigger}, paddedHistory())
+
+	if main.Calls() != 3 || main.Requests[1].System[0] != DefaultSummaryPrompt {
+		t.Fatalf("main provider got %d requests, want the summarizer call second", main.Calls())
+	}
+	if bd, _ := Current(final.State); bd.Summary != "SUMMARY-1" {
+		t.Fatalf("boundary = %+v, want SUMMARY-1", bd)
+	}
+}
+
+func TestModelSummarizerOutsideARunNeedsAProvider(t *testing.T) {
+	if _, err := (&ModelSummarizer{}).Summarize(context.Background(), SummaryRequest{}); err == nil || !strings.HasPrefix(err.Error(), "summarize: ") {
+		t.Fatalf("err = %v, want a summarize: error", err)
+	}
+}
+
+func TestNewRejectsBadFractions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+		ok   bool
+	}{
+		{"zero", Config{}, true},
+		{"trigger one is legal", Config{TriggerFraction: 1}, true},
+		{"keep just below one", Config{KeepFraction: 0.99}, true},
+		{"trigger negative", Config{TriggerFraction: -0.1}, false},
+		{"trigger above one", Config{TriggerFraction: 1.5}, false},
+		{"trigger NaN", Config{TriggerFraction: math.NaN()}, false},
+		{"keep negative", Config{KeepFraction: -0.1}, false},
+		{"keep one", Config{KeepFraction: 1}, false},
+		{"keep NaN", Config{KeepFraction: math.NaN()}, false},
+		{"KeepToolResults negative", Config{KeepToolResults: -1}, false},
+		{"ClearResultChars negative", Config{ClearResultChars: -1}, false},
+		{"MaxOldInputChars negative", Config{MaxOldInputChars: -1}, false},
+		{"MaxFailures negative", Config{MaxFailures: -1}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, err := New(tc.cfg)
+			if tc.ok != (err == nil) || tc.ok != (m != nil) {
+				t.Fatalf("New = %v, %v; want ok %v", m, err, tc.ok)
+			}
+			if err != nil && !strings.HasPrefix(err.Error(), "summarize: ") {
+				t.Fatalf("error %q lacks the summarize: prefix", err)
+			}
+		})
+	}
+}
+
+func TestSummarizerExcludesModelFields(t *testing.T) {
+	s := SummarizerFunc(func(context.Context, SummaryRequest) (string, error) { return "S", nil })
+	for name, cfg := range map[string]Config{
+		"provider": {Summarizer: s, Provider: llmtest.New()},
+		"model":    {Summarizer: s, Model: "m"},
+		"prompt":   {Summarizer: s, SummaryPrompt: "p"},
+	} {
+		_, err := New(cfg)
+		if err == nil || err.Error() != "summarize: Summarizer excludes Provider, Model and SummaryPrompt" {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	if _, err := New(Config{Summarizer: s}); err != nil {
+		t.Fatalf("Summarizer alone: %v", err)
 	}
 }

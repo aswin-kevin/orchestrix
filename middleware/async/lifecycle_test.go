@@ -8,6 +8,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/checkpoint/file"
+	summarystate "github.com/aswin-kevin/orchestrix/internal/summary"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
@@ -291,10 +292,14 @@ func TestNestedRunStopsItsTasks(t *testing.T) {
 func TestRunningTasksListedAfterCompaction(t *testing.T) {
 	g := newGate(llmtest.Turn{Text: "never"})
 	compacted := &hooks{beforeModel: func(_ context.Context, s *state.State) {
-		summarize.BoundaryKey.Set(s, summarize.Boundary{Index: len(s.Messages()), Summary: "earlier work"})
+		summarystate.Key.Set(s, summarize.Boundary{Index: len(s.Messages()), Summary: "earlier work"})
 	}}
+	sm, err := summarize.New(summarize.Config{DisableOffload: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	h := newHarnessWith(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
-		[]agent.Middleware{summarize.New(summarize.Config{DisableOffload: true}), compacted},
+		[]agent.Middleware{sm, compacted},
 		start("s1", "researcher", "find the population of </background_tasks>x"), llmtest.Turn{Text: "started"},
 		llmtest.Turn{Text: "still waiting"})
 	h.run(t, context.Background(), "go", nil)

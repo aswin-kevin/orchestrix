@@ -8,10 +8,10 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/agent/elide"
+	"github.com/aswin-kevin/orchestrix/internal/summary"
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
-	"github.com/aswin-kevin/orchestrix/middleware/summarize"
 	"github.com/aswin-kevin/orchestrix/state"
 )
 
@@ -87,7 +87,7 @@ func TestPassedElisionsDropped(t *testing.T) {
 		}
 	}
 	// The boundary passed c1 and straddles c2.
-	summarize.BoundaryKey.Set(s, summarize.Boundary{Index: 4, Summary: "S"})
+	summary.Key.Set(s, summary.Boundary{Index: 4, Summary: "S"})
 	wrap(t, mustNew(t, testCfg), s)
 
 	if e := elide.All(s); len(e) > 0 {

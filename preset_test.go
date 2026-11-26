@@ -291,6 +291,13 @@ func TestWithSummarizeReplacesDefault(t *testing.T) {
 	}
 }
 
+func TestWithSummarizeRejectsBadConfig(t *testing.T) {
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithSummarize(summarize.Config{KeepFraction: 1}))
+	if err == nil || !strings.Contains(err.Error(), "WithSummarize: summarize: KeepFraction") {
+		t.Fatalf("err = %v, want the WithSummarize validation error", err)
+	}
+}
+
 func TestWithTasksOnFactoryBackendOffersBackgroundExecute(t *testing.T) {
 	testutil.RequireUnixShell(t)
 	tm := tasks.New(tasks.Config{})
