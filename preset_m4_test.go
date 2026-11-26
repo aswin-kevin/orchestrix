@@ -80,7 +80,7 @@ func TestStackOrderM4(t *testing.T) {
 		orchestrix.WithTasks(tm),
 		orchestrix.WithHooks(hooks.Config{}),
 		orchestrix.WithInterruptOn("write_file"),
-		orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles}),
+		orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles()}),
 		orchestrix.WithSkills(testSkills()),
 		orchestrix.WithPlanMode(planmode.Config{}),
 		orchestrix.WithDeferredTools(deferred.Config{}),
@@ -149,6 +149,16 @@ func runThread(t *testing.T, a *agent.Agent, id, text string) *agent.Final {
 	return final
 }
 
+// mustFileStore returns a FileStore under memory.DefaultDir.
+func mustFileStore(t *testing.T) *memory.FileStore {
+	t.Helper()
+	fs, err := memory.NewFileStore(memory.FileStoreConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fs
+}
+
 // recallColor scripts one recall_memory call for "color" and an answer.
 func recallColor() []llmtest.Turn {
 	return []llmtest.Turn{
@@ -162,7 +172,7 @@ func TestWithMountPersistsMemoriesAcrossThreads(t *testing.T) {
 	opts := func(kvb backend.Backend) []orchestrix.Option {
 		return []orchestrix.Option{
 			orchestrix.WithPermissionMode(permission.ModeBypass),
-			orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}),
+			orchestrix.WithMemory(memory.Config{Store: mustFileStore(t)}),
 			orchestrix.WithMount(memory.DefaultDir, kvb),
 		}
 	}

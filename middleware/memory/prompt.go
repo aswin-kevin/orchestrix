@@ -15,7 +15,7 @@ const storePrompt = `You have long-term memory. Before relying on a remembered f
 
 // segment renders the files, each in a <memory> element, then the store index
 // and the guidance. It is empty when there is nothing to show.
-func (m *middleware) segment(files []File, index string) string {
+func (m *Middleware) segment(files []File, index string) string {
 	var parts []string
 	for _, f := range files {
 		note := ""

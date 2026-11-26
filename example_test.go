@@ -163,10 +163,14 @@ func ExampleWithShell() {
 }
 
 func ExampleWithMemory() {
+	entries, err := memory.NewFileStore(memory.FileStoreConfig{}) // under memory.DefaultDir
+	if err != nil {
+		log.Fatal(err)
+	}
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithMemory(memory.Config{
-			Files: memory.DefaultFiles,   // /AGENTS.md in the workspace
-			Store: &memory.StoreConfig{}, // recall_memory and record_memory
+			Files: memory.DefaultFiles(), // /AGENTS.md in the workspace
+			Store: entries,               // recall_memory and record_memory
 		}),
 	)
 	_, _ = a, err
@@ -327,8 +331,12 @@ func ExampleWithMount() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	entries, err := memory.NewFileStore(memory.FileStoreConfig{}) // under memory.DefaultDir
+	if err != nil {
+		log.Fatal(err)
+	}
 	a, err := orchestrix.NewWithProvider(model,
-		orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}),
+		orchestrix.WithMemory(memory.Config{Store: entries}),
 		orchestrix.WithMount(memory.DefaultDir, memories), // shared by every thread
 	)
 	_, _ = a, err

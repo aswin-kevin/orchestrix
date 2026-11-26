@@ -325,7 +325,7 @@ func (s *settings) subagentsMiddleware() agent.Middleware {
 	return m
 }
 
-// WithMemory loads standing instructions, such as memory.DefaultFiles, into
+// WithMemory loads standing instructions, such as memory.DefaultFiles(), into
 // the system prompt, and with cfg.Store gives the model a long-term memory
 // store. A relative path makes New fail.
 func WithMemory(cfg memory.Config) Option {

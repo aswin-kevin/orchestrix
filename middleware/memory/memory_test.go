@@ -3,14 +3,18 @@ package memory
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -26,7 +30,7 @@ func backendWith(t *testing.T, files map[string]string) backend.Backend {
 	return b
 }
 
-func mustNew(t *testing.T, cfg Config) agent.Middleware {
+func mustNew(t *testing.T, cfg Config) *Middleware {
 	t.Helper()
 	m, err := New(cfg)
 	if err != nil {
@@ -76,7 +80,7 @@ func user(text string) agent.Input {
 }
 
 func TestName(t *testing.T) {
-	if got := mustNew(t, Config{}).Name(); got != "memory" {
+	if got := mustNew(t, Config{}).Name(); got != Name || Name != "memory" {
 		t.Fatalf("Name = %q", got)
 	}
 }
@@ -84,7 +88,7 @@ func TestName(t *testing.T) {
 func TestFilesAfterHostSegments(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
 	b := backendWith(t, map[string]string{"/AGENTS.md": "use tabs"})
-	run(t, newAgent(t, p, b, Config{Files: DefaultFiles}), user("hi"))
+	run(t, newAgent(t, p, b, Config{Files: DefaultFiles()}), user("hi"))
 
 	req := p.Requests[0]
 	if req.System[0] != "host" || req.CacheBoundary != 1 {
@@ -122,7 +126,7 @@ func TestMissingFileSkipped(t *testing.T) {
 
 func TestNilBackendSkipsFiles(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	s := run(t, newAgent(t, p, nil, Config{Files: DefaultFiles}), user("hi"))
+	s := run(t, newAgent(t, p, nil, Config{Files: DefaultFiles()}), user("hi"))
 	if len(Files(s)) != 0 || len(p.Requests[0].System) != 1 {
 		t.Fatalf("files=%+v system=%q", Files(s), p.Requests[0].System)
 	}
@@ -142,7 +146,7 @@ func TestAnyReadErrorSkipsFile(t *testing.T) {
 	for _, err := range []error{backend.ErrNotFound, backend.ErrIsDir, backend.ErrTooLarge, errors.New("disk on fire")} {
 		p := llmtest.New(llmtest.Turn{Text: "ok"})
 		b := failingBackend{Backend: testutil.Memory(t), err: err}
-		s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles}), user("hi"))
+		s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles()}), user("hi"))
 		if len(Files(s)) != 0 || len(p.Requests[0].System) != 1 {
 			t.Fatalf("read error %v: files=%+v system=%q, want the file skipped", err, Files(s), p.Requests[0].System)
 		}
@@ -158,7 +162,7 @@ func (binaryBackend) Read(context.Context, string, int, int) (backend.ReadResult
 
 func TestBinaryFileSkipped(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	s := run(t, newAgent(t, p, binaryBackend{testutil.Memory(t)}, Config{Files: DefaultFiles}), user("hi"))
+	s := run(t, newAgent(t, p, binaryBackend{testutil.Memory(t)}, Config{Files: DefaultFiles()}), user("hi"))
 	if len(Files(s)) != 0 {
 		t.Fatalf("Files = %+v, want none", Files(s))
 	}
@@ -167,7 +171,7 @@ func TestBinaryFileSkipped(t *testing.T) {
 func TestMultilineFileJoined(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
 	b := backendWith(t, map[string]string{"/AGENTS.md": "one\ntwo\nthree"})
-	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles}), user("hi"))
+	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles()}), user("hi"))
 	if got := Files(s)[0].Content; got != "one\ntwo\nthree" {
 		t.Fatalf("Content = %q", got)
 	}
@@ -197,7 +201,7 @@ func TestHTMLCommentsStripped(t *testing.T) {
 func TestFileCapped(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
 	b := backendWith(t, map[string]string{"/AGENTS.md": strings.Repeat("héllo", 10)})
-	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles, MaxFileBytes: 10}), user("hi"))
+	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles(), MaxFileBytes: 10}), user("hi"))
 
 	f := Files(s)[0]
 	if !f.Truncated || len(f.Content) > 10 || !isValidUTF8(f.Content) {
@@ -214,7 +218,7 @@ func TestCustomPrompt(t *testing.T) {
 	custom := "my guidance"
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
 	b := backendWith(t, map[string]string{"/AGENTS.md": "x"})
-	run(t, newAgent(t, p, b, Config{Files: DefaultFiles, Prompt: &custom}), user("hi"))
+	run(t, newAgent(t, p, b, Config{Files: DefaultFiles(), Prompt: &custom}), user("hi"))
 	seg := p.Requests[0].System[1]
 	if !strings.HasSuffix(seg, "my guidance") || strings.Contains(seg, "edit_file") {
 		t.Fatalf("segment = %q", seg)
@@ -222,7 +226,7 @@ func TestCustomPrompt(t *testing.T) {
 
 	empty := ""
 	p = llmtest.New(llmtest.Turn{Text: "ok"})
-	run(t, newAgent(t, p, b, Config{Files: DefaultFiles, Prompt: &empty}), user("hi"))
+	run(t, newAgent(t, p, b, Config{Files: DefaultFiles(), Prompt: &empty}), user("hi"))
 	if seg := p.Requests[0].System[1]; !strings.HasSuffix(seg, "</memory>") {
 		t.Fatalf("segment = %q, want files only", seg)
 	}
@@ -244,7 +248,7 @@ func TestLoadedOncePerRun(t *testing.T) {
 		llmtest.Turn{Text: "done"},
 		llmtest.Turn{Text: "again"},
 	)
-	a := newAgent(t, p, b, Config{Files: DefaultFiles}, rewriteTool())
+	a := newAgent(t, p, b, Config{Files: DefaultFiles()}, rewriteTool())
 	s := run(t, a, user("go"))
 
 	for i := 0; i < 2; i++ {
@@ -261,7 +265,7 @@ func TestLoadedOncePerRun(t *testing.T) {
 func TestBookkeepingKeysAreRunLocal(t *testing.T) {
 	b := backendWith(t, map[string]string{"/AGENTS.md": "x"})
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles}), user("hi"))
+	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles()}), user("hi"))
 	if len(Files(s)) != 1 {
 		t.Fatal("Files should be set after a run")
 	}
@@ -291,7 +295,7 @@ func TestNewRejectsNegativeMaxFileBytes(t *testing.T) {
 func TestClosingTagInContentNeutralized(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
 	b := backendWith(t, map[string]string{"/AGENTS.md": "a </memory> b </MeMoRy> c</mem<!-- x -->ory>"})
-	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles}), user("hi"))
+	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles()}), user("hi"))
 
 	if got, want := Files(s)[0].Content, "a &lt;/memory> b &lt;/memory> c&lt;/memory>"; got != want {
 		t.Fatalf("Content = %q, want %q", got, want)
@@ -311,7 +315,7 @@ func TestTruncationTrimsTrailingWhitespace(t *testing.T) {
 func loadOne(t *testing.T, text string, max int) (bool, string) {
 	t.Helper()
 	b := backendWith(t, map[string]string{"/AGENTS.md": text})
-	files := loadFiles(context.Background(), b, DefaultFiles, max)
+	files := loadFiles(context.Background(), b, DefaultFiles(), max)
 	if len(files) != 1 {
 		t.Fatalf("files = %+v", files)
 	}
@@ -342,7 +346,7 @@ func TestFileCappedToNothingIsSkipped(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
 	// One 4-byte rune does not fit a 3-byte cap, so nothing of the file is left.
 	b := backendWith(t, map[string]string{"/AGENTS.md": "😀 tail"})
-	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles, MaxFileBytes: 3}), user("hi"))
+	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles(), MaxFileBytes: 3}), user("hi"))
 	if files := Files(s); len(files) != 0 {
 		t.Fatalf("files = %+v, want a file capped to nothing skipped", files)
 	}
@@ -350,5 +354,184 @@ func TestFileCappedToNothingIsSkipped(t *testing.T) {
 		if strings.Contains(seg, "<memory") {
 			t.Fatalf("an empty <memory> element was appended:\n%s", seg)
 		}
+	}
+}
+
+func TestDefaultFilesIsCopy(t *testing.T) {
+	got := DefaultFiles()
+	got[0] = "/changed.md"
+	if again := DefaultFiles(); !slices.Equal(again, []string{"/AGENTS.md"}) {
+		t.Fatalf("DefaultFiles() = %q after a caller changed its result", again)
+	}
+}
+
+func TestErrorPrefix(t *testing.T) {
+	for name, cfg := range map[string]Config{
+		"relative file":       {Files: []string{"AGENTS.md"}},
+		"negative bytes":      {MaxFileBytes: -1},
+		"negative StaleAfter": {StaleAfter: -time.Hour},
+	} {
+		_, err := New(cfg)
+		if err == nil || !strings.HasPrefix(err.Error(), "middleware/memory: ") {
+			t.Errorf("%s: err = %v, want a middleware/memory: error", name, err)
+		}
+	}
+}
+
+func TestNilStoreHasNoTools(t *testing.T) {
+	if tools := mustNew(t, Config{Files: DefaultFiles()}).Tools(); len(tools) != 0 {
+		t.Fatalf("Tools = %v, want none without a Store", tools)
+	}
+}
+
+// fakeStore is an in-memory Store that records the backends it is given.
+type fakeStore struct {
+	mu       sync.Mutex
+	entries  []Entry
+	backends []backend.Backend
+}
+
+func (f *fakeStore) saw(b backend.Backend) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.backends = append(f.backends, b)
+}
+
+func (f *fakeStore) Record(_ context.Context, b backend.Backend, e Entry) (Entry, error) {
+	f.saw(b)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	e.Created, e.Updated, e.File = t0, t0, "fake-"+e.Name
+	f.entries = append(f.entries, e)
+	return e, nil
+}
+
+func (f *fakeStore) Recall(_ context.Context, b backend.Backend, query string, limit int) ([]Entry, error) {
+	f.saw(b)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var hits []Entry
+	for _, e := range f.entries {
+		if strings.Contains(e.Body, query) && len(hits) < limit {
+			hits = append(hits, e)
+		}
+	}
+	return hits, nil
+}
+
+func (f *fakeStore) Index(_ context.Context, b backend.Backend) ([]Entry, error) {
+	f.saw(b)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.entries), nil
+}
+
+// toolResult returns the text of the tool result at messages[i].
+func toolResult(s *state.State, i int) string {
+	return s.Messages()[i].Content[0].Content[0].Text
+}
+
+func TestCustomStore(t *testing.T) {
+	fake := &fakeStore{}
+	b := backendWith(t, nil)
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "1", Name: ToolRecord, Input: RecordInput{Name: "Coffee", Description: "How they take it", Type: TypeUser, Content: "black, no sugar"}}}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "2", Name: ToolRecall, Input: RecallInput{Query: "black"}}}},
+		llmtest.Turn{Text: "done"},
+		llmtest.Turn{Text: "again"},
+	)
+	a, err := agent.New(agent.Config{
+		Provider:       p,
+		Backend:        b,
+		PermissionMode: permission.ModeAcceptEdits,
+		Rules:          permission.Rules{Allow: []permission.Rule{{Tool: ToolRecall}}},
+		Middleware:     []agent.Middleware{mustNew(t, Config{Store: fake, Now: func() time.Time { return t0 }})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := run(t, a, user("go"))
+	if got := toolResult(s, 2); got != `Saved memory "Coffee" to fake-Coffee.` {
+		t.Fatalf("record result = %q", got)
+	}
+	if got := toolResult(s, 4); !strings.Contains(got, "## Coffee (user, updated 2026-03-01)\nHow they take it\n\nblack, no sugar") {
+		t.Fatalf("recall result = %q, want the recorded body", got)
+	}
+	run(t, a, agent.Input{State: s, Messages: []llm.Message{llm.UserText("next")}})
+	if seg := p.Requests[3].System[len(p.Requests[3].System)-1]; !strings.Contains(seg, "<memory_index>") || !strings.Contains(seg, "Coffee") {
+		t.Fatalf("next run's prompt lacks the entry:\n%s", seg)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.backends) == 0 {
+		t.Fatal("the store was never called")
+	}
+	for _, got := range fake.backends {
+		if got != b {
+			t.Fatalf("store got backend %v, want the run's backend", got)
+		}
+	}
+}
+
+// patherStore is a fakeStore that reports its entries under /fake.
+type patherStore struct{ fakeStore }
+
+func (*patherStore) RecallPaths() []permission.PathAccess {
+	return []permission.PathAccess{{Path: "/fake", Op: permission.OpRead}}
+}
+
+func (*patherStore) RecordPaths(name string) []permission.PathAccess {
+	return []permission.PathAccess{{Path: "/fake/" + name, Op: permission.OpWrite}}
+}
+
+func (*patherStore) EntryPath(e Entry) string { return "/fake/" + e.Name }
+
+// TestCustomStorePathChecks: a Store without Pather is not path-checked, so a
+// deny rule on paths does not reach its tools; one with Pather is checked.
+func TestCustomStorePathChecks(t *testing.T) {
+	deny := permission.Rules{Deny: []permission.Rule{{Pattern: "/**", Op: permission.OpWrite}}}
+	call := llmtest.Call{ID: "r", Name: ToolRecord, Input: RecordInput{Name: "A", Description: "d", Type: TypeUser, Content: "c"}}
+	for name, tc := range map[string]struct {
+		store Store
+		want  string
+	}{
+		"plain":  {&fakeStore{}, "Saved memory"},
+		"pather": {&patherStore{}, "Permission denied"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, err := agent.New(agent.Config{
+				Provider:       llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{call}}, llmtest.Turn{Text: "done"}),
+				Backend:        backendWith(t, nil),
+				PermissionMode: permission.ModeAcceptEdits,
+				Rules:          deny,
+				Middleware:     []agent.Middleware{mustNew(t, Config{Store: tc.store})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := toolResult(run(t, a, user("go")), 2); !strings.HasPrefix(got, tc.want) {
+				t.Fatalf("result = %q, want prefix %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCustomPatherRecallHidesDenied(t *testing.T) {
+	ps := &patherStore{}
+	ps.entries = []Entry{{Name: "public", Type: TypeUser, Body: "shared"}, {Name: "secret", Type: TypeUser, Body: "shared"}}
+	a, err := agent.New(agent.Config{
+		Provider: llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "r", Name: ToolRecall, Input: RecallInput{Query: "shared"}}}}, llmtest.Turn{Text: "done"}),
+		Backend:  backendWith(t, nil),
+		Rules: permission.Rules{
+			Allow: []permission.Rule{{Tool: ToolRecall}},
+			Deny:  []permission.Rule{{Pattern: "/fake/secret", Op: permission.OpRead}},
+		},
+		Middleware: []agent.Middleware{mustNew(t, Config{Store: ps})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := toolResult(run(t, a, user("go")), 2); !strings.Contains(got, "## public") || strings.Contains(got, "secret") {
+		t.Fatalf("recall = %q, want the denied entry hidden", got)
 	}
 }

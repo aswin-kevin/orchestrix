@@ -60,7 +60,7 @@ func TestStackOrderM3(t *testing.T) {
 		orchestrix.WithTasks(tm),
 		orchestrix.WithHooks(hooks.Config{}),
 		orchestrix.WithInterruptOn("write_file"),
-		orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles}),
+		orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles()}),
 		orchestrix.WithSkills(testSkills()),
 		orchestrix.WithPlanMode(planmode.Config{}),
 		orchestrix.WithDeferredTools(deferred.Config{}),

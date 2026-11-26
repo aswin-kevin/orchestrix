@@ -60,15 +60,15 @@ func checkFeatureFlags(o options, searchGiven bool) error {
 	return nil
 }
 
-// memoryOption loads memory.DefaultFiles and then the -memory files, unless
+// memoryOption loads memory.DefaultFiles() and then the -memory files, unless
 // -no-memory is given; -memory-store adds the structured store. A file that
 // is missing is skipped: silently for the defaults, with a warning on stderr
-// for a file the user named.
-func memoryOption(o options, stderr io.Writer) (orchestrix.Option, bool) {
+// for a file the user named. The option is nil with -no-memory.
+func memoryOption(o options, stderr io.Writer) (orchestrix.Option, error) {
 	if o.noMemory {
-		return nil, false
+		return nil, nil
 	}
-	files := slices.Clone(memory.DefaultFiles)
+	files := memory.DefaultFiles()
 	for _, p := range o.memoryPaths {
 		wp := workspacePath(p)
 		if _, err := os.Stat(filepath.Join(o.dir, filepath.FromSlash(wp))); err != nil {
@@ -78,9 +78,13 @@ func memoryOption(o options, stderr io.Writer) (orchestrix.Option, bool) {
 	}
 	cfg := memory.Config{Files: files}
 	if o.memoryStore {
-		cfg.Store = &memory.StoreConfig{Dir: memory.DefaultDir}
+		store, err := memory.NewFileStore(memory.FileStoreConfig{Dir: memory.DefaultDir})
+		if err != nil {
+			return nil, err
+		}
+		cfg.Store = store
 	}
-	return orchestrix.WithMemory(cfg), true
+	return orchestrix.WithMemory(cfg), nil
 }
 
 // statProblem describes why a -memory file cannot be loaded.

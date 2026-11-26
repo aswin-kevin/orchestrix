@@ -17,18 +17,15 @@ const (
 // prompt's own elements.
 var neutralizeTags = promptsafe.NewTagNeutralizer("memory_index", "memory")
 
-// loadIndex reads the store index for the system prompt, neutralizing a
-// literal frame tag and capping it at MaxIndexBytes. A missing or
-// unreadable index is empty.
-func loadIndex(ctx context.Context, b backend.Backend, p string) string {
-	if b == nil {
+// loadIndex renders the store's index for the system prompt, neutralizing a
+// literal frame tag and capping it at MaxIndexBytes. A store that fails or
+// has no entries gives an empty index.
+func (m *Middleware) loadIndex(ctx context.Context, b backend.Backend) string {
+	entries, err := m.store.Index(ctx, b)
+	if err != nil || len(entries) == 0 {
 		return ""
 	}
-	res, err := b.Read(ctx, p, 0, 0)
-	if err != nil || res.Binary {
-		return ""
-	}
-	index := strings.TrimSpace(strings.Join(res.Lines, "\n"))
+	index := strings.TrimSpace(renderIndex(entries, nil))
 	index = neutralizeTags(index)
 	index, _ = promptsafe.CapBytes(index, MaxIndexBytes)
 	return strings.TrimSpace(index)

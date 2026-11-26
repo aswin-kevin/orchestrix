@@ -82,7 +82,7 @@ type options struct {
 	// skillDirs are the -skills directories.
 	skillDirs stringList
 	// memoryPaths are the -memory workspace paths, loaded after
-	// memory.DefaultFiles; noMemory loads no memory at all, memoryStore adds
+	// memory.DefaultFiles(); noMemory loads no memory at all, memoryStore adds
 	// the structured store.
 	memoryPaths           stringList
 	noMemory, memoryStore bool
@@ -270,7 +270,9 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		}
 		agentOpts = append(agentOpts, orchestrix.WithSystemPrompt(string(text)))
 	}
-	if opt, ok := memoryOption(o, stderr); ok {
+	if opt, err := memoryOption(o, stderr); err != nil {
+		return fail(exitUsage, "memory: %v", err)
+	} else if opt != nil {
 		agentOpts = append(agentOpts, opt)
 	}
 	if len(o.skillDirs) > 0 {

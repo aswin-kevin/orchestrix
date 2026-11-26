@@ -834,20 +834,26 @@ Every container is labeled (`dev.orchestrix.orxdocker`, its scope, thread id and
 
 ## Memory
 
-`WithMemory` puts standing instructions into the system prompt: files you name, read from the run's workspace once per run. `memory.DefaultFiles` is `/AGENTS.md`. A zero `Files` loads nothing, every path must be absolute (a relative one makes `New` fail), and a file that cannot be read is skipped. The default prompt invites the model to keep durable notes in those files with `edit_file`; set `Prompt` to a pointer to `""` to drop that invitation.
+`WithMemory` puts standing instructions into the system prompt: files you name, read from the run's workspace once per run. `memory.DefaultFiles()` returns `/AGENTS.md`. A zero `Files` loads nothing, every path must be absolute (a relative one makes `New` fail), and a file that cannot be read is skipped. The default prompt invites the model to keep durable notes in those files with `edit_file`; set `Prompt` to a pointer to `""` to drop that invitation.
 
-`Store` adds a structured long-term store. `record_memory` saves one Markdown file per entry, with a frontmatter header (name, description, type), and `recall_memory` finds entries by keyword. An index of the entries goes into the system prompt unless `DisableIndexInPrompt` is set. An entry's file name is derived from its name: lowercased, with punctuation and spaces collapsed to `-`. A name is at most `memory.MaxNameChars` (64) characters, the same as the file-name cap. Recording a name that exists, ignoring case and spacing, updates that entry. Two different names can map to the same file, such as "C++ tips" and "C tips"; the second is then not saved, and `record_memory` tells the model which memory holds the file so it can update it or pick another name. A query made only of punctuation or one-letter words matches nothing.
+`Store` adds a structured long-term store with the `record_memory` and `recall_memory` tools. The default, `memory.NewFileStore`, saves one Markdown file per entry, with a frontmatter header (name, description, type), and `recall_memory` finds entries by keyword. An index of the entries goes into the system prompt unless `DisableIndexInPrompt` is set, and recalled entries older than `StaleAfter` (30 days) carry a note that they may be outdated. An entry's file name is derived from its name: lowercased, with punctuation and spaces collapsed to `-`. A name is at most `memory.MaxNameChars` (64) characters, the same as the file-name cap. Recording a name that exists, ignoring case and spacing, updates that entry. Two different names can map to the same file, such as "C++ tips" and "C tips"; the second is then not saved, and `record_memory` tells the model which memory holds the file so it can update it or pick another name. A query made only of punctuation or one-letter words matches nothing.
 
 ```go
 // Imports omitted; model comes from surrounding code.
+entries, err := memory.NewFileStore(memory.FileStoreConfig{}) // under memory.DefaultDir
+if err != nil {
+	log.Fatal(err)
+}
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithMemory(memory.Config{
-		Files: memory.DefaultFiles,   // /AGENTS.md in the workspace
-		Store: &memory.StoreConfig{}, // recall_memory and record_memory
+		Files: memory.DefaultFiles(), // /AGENTS.md in the workspace
+		Store: entries,               // recall_memory and record_memory
 	}),
 )
 _, _ = a, err
 ```
+
+To keep memories somewhere else, such as a database or a vector index, implement `memory.Store` (`Record`, `Recall`, `Index`) and pass it as `Store`; the middleware still validates entries and renders the index and the recall results. Permission path rules reach a store's tools only when it implements `memory.Pather`, as `FileStore` does; any other store is not path-checked, so `record_memory` still needs an allow rule, an approval or acceptEdits, but a deny rule on paths does not stop it.
 
 The store is kept in the workspace under `memory.DefaultDir` (`/.orchestrix/memories`), so by itself it lasts as long as that workspace does: across the runs of a thread, and across restarts with a disk or shell backend or a checkpointer. To keep memories across threads and restarts while the rest of the workspace stays per thread, mount that directory on a persistent backend:
 
@@ -861,8 +867,12 @@ memories, err := kv.New(store, "memories")
 if err != nil {
 	log.Fatal(err)
 }
+entries, err := memory.NewFileStore(memory.FileStoreConfig{})
+if err != nil {
+	log.Fatal(err)
+}
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
-	orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}),
+	orchestrix.WithMemory(memory.Config{Store: entries}),
 	orchestrix.WithMount(memory.DefaultDir, memories), // shared by every thread
 )
 _, _ = a, err

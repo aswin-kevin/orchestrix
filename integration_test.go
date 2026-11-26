@@ -452,7 +452,7 @@ func TestLiveMemoryRecall(t *testing.T) {
 
 	a, err := orchestrix.New(spec,
 		orchestrix.WithBackend(ws),
-		orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}),
+		orchestrix.WithMemory(memory.Config{Store: mustFileStore(t)}),
 		orchestrix.WithMaxTurns(10),
 	)
 	if err != nil {
@@ -761,7 +761,7 @@ func TestLiveMountedMemoryAcrossThreads(t *testing.T) {
 	}
 	a, err := orchestrix.New(spec,
 		orchestrix.WithMount(memory.DefaultDir, mounted),
-		orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}),
+		orchestrix.WithMemory(memory.Config{Store: mustFileStore(t)}),
 		orchestrix.WithPermissionMode(permission.ModeBypass),
 		orchestrix.WithMaxTurns(10),
 	)

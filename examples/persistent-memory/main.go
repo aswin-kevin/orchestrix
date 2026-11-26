@@ -80,8 +80,12 @@ func run(ctx context.Context, w io.Writer) error {
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "call_2", Name: memory.ToolRecall, Input: memory.RecallInput{Query: "coffee"}}}},
 		llmtest.Turn{Text: "One coffee, black, no sugar, coming up."},
 	)
+	entries, err := memory.NewFileStore(memory.FileStoreConfig{}) // under memory.DefaultDir
+	if err != nil {
+		return err
+	}
 	a, err := exmodel.New(model,
-		orchestrix.WithMemory(memory.Config{Store: &memory.StoreConfig{}}), // recall_memory and record_memory
+		orchestrix.WithMemory(memory.Config{Store: entries}), // recall_memory and record_memory
 		orchestrix.WithMount(memory.DefaultDir, memories),
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits), // recording a memory is a file edit
 		orchestrix.WithMaxTurns(5),

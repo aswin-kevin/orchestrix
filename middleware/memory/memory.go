@@ -22,19 +22,23 @@
 // untrusted page or tool result can be recalled in later runs, and its
 // descriptions reach the system prompt through the index. Treat recorded
 // entries as untrusted data, not instructions: keep DisableIndexInPrompt set
-// where that matters, and deny the record_memory tool or write access to the
-// store directory where the agent must not remember. recall_memory honors
-// read deny rules per entry, but the index in the system prompt lists the
-// name and description of every entry regardless of them, so keep secrets
-// out of names and descriptions or set DisableIndexInPrompt. The instruction
-// files above are not filtered either.
+// where that matters, and deny the record_memory tool or, for a FileStore,
+// write access to its directory where the agent must not remember.
+// recall_memory honors read deny rules per entry of a FileStore, but the
+// index in the system prompt lists the name and description of every entry
+// regardless of them, so keep secrets out of names and descriptions or set
+// DisableIndexInPrompt. The instruction files above are not filtered either.
+// A Store that does not implement Pather is not path-checked at all: only
+// rules on the tools themselves reach it.
 package memory
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path"
 	"slices"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -42,13 +46,17 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
+// Name is the name of the memory middleware.
+const Name = "memory"
+
 // DefaultMaxFileBytes is the per-file size cap applied when
 // Config.MaxFileBytes is zero.
 const DefaultMaxFileBytes = 64 << 10
 
-// DefaultFiles is the instruction file list a host gets by passing it
-// explicitly; a zero Config.Files loads nothing.
-var DefaultFiles = []string{"/AGENTS.md"}
+// DefaultFiles returns the instruction file list a host gets by passing it
+// explicitly, /AGENTS.md; a zero Config.Files loads nothing. Each call
+// returns a fresh slice.
+func DefaultFiles() []string { return []string{"/AGENTS.md"} }
 
 // Config configures the memory middleware.
 type Config struct {
@@ -69,9 +77,18 @@ type Config struct {
 	// instructions, follows whatever Prompt is.
 	Prompt *string
 	// Store enables the structured long-term store: the recall_memory and
-	// record_memory tools, and the MEMORY.md index in the system prompt. nil
-	// disables it.
-	Store *StoreConfig
+	// record_memory tools, and an index of its entries in the system prompt.
+	// nil disables it. NewFileStore returns the default, file-backed store.
+	Store Store
+	// StaleAfter is the age after which recall_memory adds an "outdated"
+	// note to an entry; 0 means DefaultStaleAfter and a negative value is
+	// rejected by New.
+	StaleAfter time.Duration
+	// Now is the clock StaleAfter is measured with; nil means time.Now.
+	Now func() time.Time
+	// DisableIndexInPrompt keeps the store's index out of the system
+	// prompt. The tools stay available.
+	DisableIndexInPrompt bool
 }
 
 // File is one instruction file as loaded for a run.
@@ -99,50 +116,55 @@ func Files(s *state.State) []File {
 	return slices.Clone(files)
 }
 
-// middleware is immutable after New, so concurrent runs may share it.
-type middleware struct {
+// Middleware is the memory middleware. It is immutable after New, so
+// concurrent runs may share it.
+type Middleware struct {
 	files        []string
 	maxFileBytes int
 	prompt       string
-	store        *store // nil without a Store
+	store        Store // nil without a Store
+	staleAfter   time.Duration
+	now          func() time.Time
+	showIndex    bool
 }
 
 // New returns the memory middleware. It fails when a configured path is
-// empty or not absolute.
-func New(cfg Config) (agent.Middleware, error) {
-	if cfg.MaxFileBytes < 0 {
-		return nil, fmt.Errorf("memory: MaxFileBytes must not be negative, got %d", cfg.MaxFileBytes)
+// empty or not absolute, or when MaxFileBytes or StaleAfter is negative.
+func New(cfg Config) (*Middleware, error) {
+	switch {
+	case cfg.MaxFileBytes < 0:
+		return nil, fmt.Errorf("middleware/memory: MaxFileBytes must not be negative, got %d", cfg.MaxFileBytes)
+	case cfg.StaleAfter < 0:
+		return nil, fmt.Errorf("middleware/memory: StaleAfter must not be negative, got %v", cfg.StaleAfter)
 	}
 	for _, p := range cfg.Files {
 		if !path.IsAbs(p) {
-			return nil, fmt.Errorf("memory: instruction file path %q must be absolute", p)
+			return nil, fmt.Errorf("middleware/memory: instruction file path %q must be absolute", p)
 		}
 	}
-	m := &middleware{
+	m := &Middleware{
 		files:        slices.Clone(cfg.Files),
-		maxFileBytes: cfg.MaxFileBytes,
+		maxFileBytes: cmp.Or(cfg.MaxFileBytes, DefaultMaxFileBytes),
 		prompt:       DefaultPrompt,
-	}
-	if m.maxFileBytes == 0 {
-		m.maxFileBytes = DefaultMaxFileBytes
+		store:        cfg.Store,
+		staleAfter:   cmp.Or(cfg.StaleAfter, DefaultStaleAfter),
+		now:          cfg.Now,
+		showIndex:    !cfg.DisableIndexInPrompt,
 	}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
 	}
-	if cfg.Store != nil {
-		var err error
-		if m.store, err = newStore(*cfg.Store); err != nil {
-			return nil, err
-		}
+	if m.now == nil {
+		m.now = time.Now
 	}
 	return m, nil
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "memory" }
+func (m *Middleware) Name() string { return Name }
 
 // BeforeAgent implements agent.BeforeAgent: each run reloads the files.
-func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
+func (m *Middleware) BeforeAgent(_ context.Context, s *state.State) error {
 	filesKey.Delete(s)
 	loadedKey.Delete(s)
 	indexKey.Delete(s)
@@ -151,21 +173,21 @@ func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
 
 // Tools implements agent.ToolProvider: the store's tools, or none without a
 // Store.
-func (m *middleware) Tools() []tool.Tool {
+func (m *Middleware) Tools() []tool.Tool {
 	if m.store == nil {
 		return nil
 	}
-	return []tool.Tool{m.store.recallTool(), m.store.recordTool()}
+	return []tool.Tool{m.recallTool(), m.recordTool()}
 }
 
 // WrapModel implements agent.ModelWrapper. The run's first call loads the
-// files and the store index; every call appends them after the host's
+// files and the store's index; every call appends them after the host's
 // segments, outside the cached prefix.
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if loaded, _ := loadedKey.Get(req.State); !loaded {
 		filesKey.Set(req.State, loadFiles(ctx, req.Backend, m.files, m.maxFileBytes))
-		if m.store != nil && m.store.showIndex {
-			indexKey.Set(req.State, loadIndex(ctx, req.Backend, m.store.indexPath()))
+		if m.store != nil && m.showIndex {
+			indexKey.Set(req.State, m.loadIndex(ctx, req.Backend))
 		}
 		loadedKey.Set(req.State, true)
 	}
