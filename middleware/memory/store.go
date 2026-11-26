@@ -463,7 +463,7 @@ func (s *FileStore) recall(ctx context.Context, b backend.Backend, query string,
 	if err != nil {
 		return nil, err
 	}
-	entries = slices.DeleteFunc(entries, func(e Entry) bool { return !keep(path.Join(s.dir, e.File)) })
+	entries = slices.DeleteFunc(entries, func(e Entry) bool { return !keep(s.EntryPath(e)) })
 	if strings.TrimSpace(query) != "" {
 		terms := queryTerms(query)
 		if len(terms) == 0 {
