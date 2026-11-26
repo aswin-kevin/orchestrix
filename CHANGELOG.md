@@ -160,7 +160,7 @@ The API freeze pass before 1.0: every public contract gets the shape it will kee
 - `hitl`: a call approved in the permission step whose `Allowed` holds neither `Approve` nor `Edit` (such as `[Respond]`) is rejected outright when the agent has an Approver, instead of asking the Approver for a decision it cannot give.
 - `backend/composite`: a `Closer` that panics no longer leaves later `Close` calls waiting forever; they report that a Closer panicked.
 - `orxdocker`: only `LabelManaged` and keys under it are reserved, so an unrelated key such as `dev.orchestrix.orxdockerfoo` is accepted again. A `Process.Stop` whose ctx had already ended no longer makes later `Stop` calls return that stale error.
-- `check_job` and `check_task` with a huge `timeout_seconds` wait for the maximum instead of overflowing into a negative wait.
+- `check_job`, `check_task`, `sleep` and `monitor` given a huge number of seconds wait for the maximum instead of overflowing into a negative wait.
 - `tool.CheckInput` finds a raw-input tool through wrappers, so tools of a deferred or gated MCP server are no longer validated against their schema by mistake.
 - `llmtest.CheckProvider` judges a cancelled stream by its first error.
 - `checkpoint.Paginate` returns a non-nil empty page for no threads, and `llmtest.ScriptedDecider` returns a copy of a turn's answers.
