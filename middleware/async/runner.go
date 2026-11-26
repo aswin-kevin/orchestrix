@@ -249,7 +249,7 @@ type localRunner struct {
 	timeout  time.Duration
 	fallback *cpmemory.Checkpointer
 	// onEvent is Config.OnEvent.
-	onEvent func(taskID string, ev agent.Event)
+	onEvent func(threadID, taskID string, ev agent.Event)
 	// bound returns the agent the middleware is bound to (see
 	// Middleware.Bind); nil when none.
 	bound func() *agent.Agent
@@ -259,7 +259,7 @@ var _ Reattacher = (*localRunner)(nil)
 
 // newLocalRunner returns the local runner of specs; New builds it when
 // Config.Runner is nil.
-func newLocalRunner(specs map[string]subagents.Subagent, timeout time.Duration, onEvent func(string, agent.Event), bound func() *agent.Agent) *localRunner {
+func newLocalRunner(specs map[string]subagents.Subagent, timeout time.Duration, onEvent func(string, string, agent.Event), bound func() *agent.Agent) *localRunner {
 	// The inbox middleware is one pointer: every child, and their children,
 	// share it, and the Launcher dedupes it by identity.
 	boxes := newInboxes()
@@ -355,7 +355,7 @@ func (l *localRunner) Start(ctx context.Context, req Request) (Handle, error) {
 	in.ThreadID = req.TaskThreadID
 	in.Ephemeral = false
 	in.Depth = info.Depth + 1
-	sess := &localSession{l: l, taskID: req.TaskID, child: child, threadID: in.ThreadID, backend: in.Backend, agentName: in.AgentName, depth: in.Depth}
+	sess := &localSession{l: l, taskID: req.TaskID, parentThread: req.ThreadID, child: child, threadID: in.ThreadID, backend: in.Backend, agentName: in.AgentName, depth: in.Depth}
 	return sess.start(ctx, in, nil)
 }
 
@@ -417,7 +417,7 @@ func (l *localRunner) Attach(ctx context.Context, rec TaskRecord) (Handle, error
 	if err != nil {
 		return nil, err
 	}
-	sess := &localSession{l: l, taskID: rec.ID, child: child, threadID: rec.TaskThreadID, backend: be, agentName: spec.Name, depth: depth}
+	sess := &localSession{l: l, taskID: rec.ID, parentThread: rec.ThreadID, child: child, threadID: rec.TaskThreadID, backend: be, agentName: spec.Name, depth: depth}
 	out := Outcome{Status: rec.Status, Text: rec.Result, Error: rec.Error}
 	intr, pending := agent.Pending(s)
 	switch {
@@ -477,12 +477,15 @@ func backendOf(parent *agent.Agent, threadID string) backend.Backend {
 
 // localSession is what every episode of one local task shares.
 type localSession struct {
-	l         *localRunner
-	taskID    string
-	child     *agent.Agent
-	threadID  string
-	backend   backend.Backend
-	agentName string
+	l      *localRunner
+	taskID string
+	// parentThread is the thread of the run that started the task (its
+	// record's ThreadID); threadID is the task's own thread.
+	parentThread string
+	child        *agent.Agent
+	threadID     string
+	backend      backend.Backend
+	agentName    string
 	// depth is the agent.Input.Depth of every episode: the starting run's
 	// plus one, so an episode started outside a tool call (after a restart,
 	// or by a host's decision) still runs nested.
@@ -595,7 +598,7 @@ func (sess *localSession) emit(ctx context.Context, ev agent.Event) {
 		return
 	}
 	defer recoverHook(ctx, "async: OnEvent panicked")
-	sess.l.onEvent(sess.taskID, ev)
+	sess.l.onEvent(sess.parentThread, sess.taskID, ev)
 }
 
 // Continue implements Continuer: the next episode runs the subagent on the

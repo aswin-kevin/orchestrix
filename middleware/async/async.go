@@ -224,11 +224,12 @@ type Config struct {
 	OnSettled func(ctx context.Context, threadID string, rec TaskRecord)
 	// OnEvent receives every event of every episode of a task the built-in
 	// runner runs, KindFinal included, synchronously and in order, on the
-	// goroutine running the episode: a slow OnEvent slows the task. taskID
-	// is the task's id; ids repeat across threads. A custom Runner does not
-	// feed it. A panic is recovered and logged as for OnSettled. nil calls
-	// nothing.
-	OnEvent func(taskID string, ev agent.Event)
+	// goroutine running the episode: a slow OnEvent slows the task.
+	// threadID is the thread of the run that started the task, as for
+	// OnSettled, and taskID the task's id: ids repeat across threads, so
+	// the pair names the task. A custom Runner does not feed it. A panic is
+	// recovered and logged as for OnSettled. nil calls nothing.
+	OnEvent func(threadID, taskID string, ev agent.Event)
 }
 
 // Name is the name of the async middleware.

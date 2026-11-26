@@ -367,11 +367,13 @@ func TestOnSettledPanicIsRecovered(t *testing.T) {
 func TestOnEventStreamsTaskEvents(t *testing.T) {
 	var mu sync.Mutex
 	var evs []agent.Event
-	onEvent := func(id string, ev agent.Event) {
+	var threads []string
+	onEvent := func(threadID, id string, ev agent.Event) {
 		if id != "async_1" {
 			return
 		}
 		mu.Lock()
+		threads = append(threads, threadID)
 		evs = append(evs, ev)
 		mu.Unlock()
 	}
@@ -390,6 +392,11 @@ func TestOnEventStreamsTaskEvents(t *testing.T) {
 	}
 	if !text || len(evs) == 0 || evs[len(evs)-1].Kind != agent.KindFinal {
 		t.Fatalf("events = %+v; want the child's text and a final KindFinal", evs)
+	}
+	for _, tid := range threads {
+		if tid != h.thread {
+			t.Fatalf("OnEvent threads = %v, want every event on the parent's thread %q", threads, h.thread)
+		}
 	}
 }
 

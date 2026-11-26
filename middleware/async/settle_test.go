@@ -228,7 +228,7 @@ func TestOnSettledPanicIsLogged(t *testing.T) {
 
 func TestOnEventPanicIsRecovered(t *testing.T) {
 	var calls atomic.Int32
-	onEvent := func(string, agent.Event) { calls.Add(1); panic("boom") }
+	onEvent := func(string, string, agent.Event) { calls.Add(1); panic("boom") }
 	child := llmtest.New(llmtest.Turn{Text: "done"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(child)}, OnEvent: onEvent, DisableStopReminder: true},
 		start("s1", "researcher", "x"), llmtest.Turn{Text: "started"})
