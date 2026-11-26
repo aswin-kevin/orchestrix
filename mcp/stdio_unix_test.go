@@ -205,11 +205,15 @@ func TestClientCloseContextExpired(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	tr := startHelper(t, "stubborn", StdioConfig{CloseGrace: 200 * time.Millisecond})
 	c := clientFor(t, tr)
+	pid, err := strconv.Atoi(callText(t, c, "pid", `{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	err := c.Close(ctx)
+	err = c.Close(ctx)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Close = %v, want DeadlineExceeded", err)
 	}
@@ -218,6 +222,9 @@ func TestClientCloseContextExpired(t *testing.T) {
 	}
 	if err := c.Close(t.Context()); err != nil {
 		t.Fatalf("second Close: %v", err)
+	}
+	if err := syscall.Kill(pid, 0); err == nil {
+		t.Fatalf("server %d still running after the draining Close", pid)
 	}
 	select {
 	case <-c.Done():

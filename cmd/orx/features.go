@@ -131,7 +131,7 @@ func connectMCP(ctx context.Context, file string, stderr io.Writer) (*mcp.Middle
 	}
 	ctx, cancel := context.WithTimeout(ctx, mcp.DefaultConnectTimeout)
 	defer cancel()
-	m, err := mcp.Connect(ctx, servers)
+	m, err := mcp.Connect(ctx, servers, mcp.ConnectConfig{})
 	if err != nil {
 		return nil, exitError, err
 	}

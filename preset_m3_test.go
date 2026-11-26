@@ -44,7 +44,7 @@ func connectMCP(t *testing.T, gated bool) *mcp.Middleware {
 		func(context.Context, json.RawMessage) (*mcp.CallToolResult, error) {
 			return mcp.TextResult("found"), nil
 		})
-	m, err := mcp.Connect(context.Background(), []mcp.ServerConfig{{Name: "docs", Transport: mcp.InProcess(srv), Gated: gated}})
+	m, err := mcp.Connect(context.Background(), []mcp.ServerConfig{{Name: "docs", Transport: mcp.InProcess(srv), Gated: gated}}, mcp.ConnectConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -72,10 +72,9 @@ type stdioTransport struct {
 	errMu sync.Mutex
 	err   error
 
-	closing  chan struct{}
-	rel      release
-	closeErr error
-	wg       sync.WaitGroup
+	closing chan struct{}
+	rel     release
+	wg      sync.WaitGroup
 }
 
 // writeRequest is one message for the writer goroutine; the write's error is
@@ -187,13 +186,13 @@ func (t *stdioTransport) Err() error {
 func (t *stdioTransport) Close(ctx context.Context) error {
 	t.rel.start(func() error {
 		close(t.closing)
-		t.closeErr = t.stop()
+		err := t.stop()
 		<-t.exited
 		// A process that left the group could hold the pipes open forever.
 		_ = t.stdout.Close()
 		_ = t.stderr.Close()
 		t.wg.Wait()
-		return t.closeErr
+		return err
 	})
 	return t.rel.wait(ctx)
 }

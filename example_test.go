@@ -193,7 +193,7 @@ func ExampleWithMCP() {
 	m, err := mcp.Connect(ctx, []mcp.ServerConfig{
 		{Name: "repo", Command: "./bin/repo-server", Args: []string{"--root", "."}},
 		{Name: "docs", URL: "https://mcp.example.com/mcp", BearerToken: os.Getenv("DOCS_TOKEN"), Defer: true},
-	})
+	}, mcp.ConnectConfig{})
 	if err != nil {
 		log.Fatal(err)
 	}

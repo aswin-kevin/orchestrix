@@ -1,15 +1,18 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,7 +40,7 @@ func boolPtr(b bool) *bool { return &b }
 // ends.
 func connectMiddleware(t *testing.T, servers ...ServerConfig) *Middleware {
 	t.Helper()
-	m, err := Connect(context.Background(), servers)
+	m, err := Connect(context.Background(), servers, ConnectConfig{})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -260,7 +263,7 @@ func TestConnectFailsFast(t *testing.T) {
 	_, err := Connect(context.Background(), []ServerConfig{
 		{Name: "stuck", Transport: stuck},
 		{Name: "bad", Command: filepath.Join(t.TempDir(), "no-such-server")},
-	})
+	}, ConnectConfig{})
 	if err == nil || !strings.Contains(err.Error(), "bad") {
 		t.Fatalf("err = %v, want the bad server's failure", err)
 	}
@@ -347,7 +350,7 @@ func TestConnectFailureClosesOthers(t *testing.T) {
 	_, err := Connect(context.Background(), []ServerConfig{
 		{Name: "good", Transport: rec},
 		{Name: "bad", Command: missing},
-	})
+	}, ConnectConfig{})
 	if err == nil || !strings.Contains(err.Error(), "bad") {
 		t.Fatalf("err = %v, want the bad server's failure", err)
 	}
@@ -407,7 +410,7 @@ func TestServerConfigValidation(t *testing.T) {
 		{"url and transport", []ServerConfig{{Name: "a", URL: "http://h", Transport: tr()}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if m, err := Connect(context.Background(), tc.servers); err == nil {
+			if m, err := Connect(context.Background(), tc.servers, ConnectConfig{}); err == nil {
 				_ = m.Close(context.Background())
 				t.Fatal("Connect succeeded, want a validation error")
 			}
@@ -416,7 +419,7 @@ func TestServerConfigValidation(t *testing.T) {
 }
 
 func TestCloseIsIdempotent(t *testing.T) {
-	m, err := Connect(context.Background(), []ServerConfig{inProcessServer("srv", newTestServer(nil))})
+	m, err := Connect(context.Background(), []ServerConfig{inProcessServer("srv", newTestServer(nil))}, ConnectConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,5 +431,123 @@ func TestCloseIsIdempotent(t *testing.T) {
 	}
 	if err := m.Close(context.Background()); err != nil {
 		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestMiddlewareName(t *testing.T) {
+	m := connectMiddleware(t, inProcessServer("srv", newTestServer(nil)))
+	if m.Name() != Name || Name != "mcp" {
+		t.Fatalf("Name() = %q, Name = %q, want mcp", m.Name(), Name)
+	}
+}
+
+func TestConnectSendsInfo(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		info Implementation
+		want string
+	}{
+		{"set", Implementation{Name: "host", Version: "1"}, "host"},
+		{"zero", Implementation{}, "orchestrix"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
+			m, err := Connect(context.Background(), []ServerConfig{{Name: "a", Transport: ft}}, ConnectConfig{Info: tc.info})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = m.Close(context.Background()) })
+			init := ft.waitSent(t, isMethod("initialize"))
+			params, _ := init["params"].(map[string]any)
+			info, _ := params["clientInfo"].(map[string]any)
+			if info["name"] != tc.want {
+				t.Fatalf("clientInfo = %v, want name %q", info, tc.want)
+			}
+		})
+	}
+}
+
+func TestConnectOnNotification(t *testing.T) {
+	srv := newTestServer(nil)
+	srv.AddTool(ToolInfo{Name: "ping"}, func(ctx context.Context, _ json.RawMessage) (*CallToolResult, error) {
+		if err := Notify(ctx, "notifications/message", map[string]int{"x": 1}); err != nil {
+			return nil, err
+		}
+		return TextResult("ok"), nil
+	})
+	type seen struct{ server, method, params string }
+	var mu sync.Mutex
+	var got []seen
+	m, err := Connect(context.Background(), []ServerConfig{inProcessServer("srv", srv)}, ConnectConfig{
+		OnNotification: func(server, method string, params json.RawMessage) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, seen{server, method, string(params)})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
+	callTool(t, findTool(t, m.DynamicTools(), "mcp__srv__ping"), state.New(), `{}`)
+	want := seen{"srv", "notifications/message", `{"x":1}`}
+	waitFor(t, "notification observed", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Contains(got, want)
+	})
+}
+
+// syncBuffer is a bytes.Buffer safe for a logger's concurrent use.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestConnectLogsConnectionEnd(t *testing.T) {
+	var buf syncBuffer
+	rec := &closeRecorder{Transport: InProcess(newTestServer(nil))}
+	m, err := Connect(context.Background(), []ServerConfig{{Name: "srv", Transport: rec}},
+		ConnectConfig{Logger: slog.New(slog.NewJSONHandler(&buf, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "" {
+		t.Fatalf("Connect logged %q", buf.String())
+	}
+	_ = rec.Transport.Close(context.Background())
+	waitFor(t, "connection end logged", func() bool {
+		out := buf.String()
+		return strings.Contains(out, `"msg":"mcp: server connection ended"`) && strings.Contains(out, `"server":"srv"`) && strings.Contains(out, `"level":"WARN"`)
+	})
+	before := buf.String()
+	_ = m.Close(context.Background())
+	if after := buf.String(); after != before {
+		t.Fatalf("Close logged: %q", strings.TrimPrefix(after, before))
+	}
+
+	// A normal Middleware.Close logs nothing.
+	var quiet syncBuffer
+	m2, err := Connect(context.Background(), []ServerConfig{inProcessServer("srv", newTestServer(nil))},
+		ConnectConfig{Logger: slog.New(slog.NewJSONHandler(&quiet, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = m2.Close(context.Background())
+	time.Sleep(50 * time.Millisecond)
+	if quiet.String() != "" {
+		t.Fatalf("Close logged: %q", quiet.String())
 	}
 }

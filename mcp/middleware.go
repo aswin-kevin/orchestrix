@@ -2,8 +2,10 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
@@ -15,6 +17,9 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
+
+// Name is the name of the middleware, as Middleware.Name reports it.
+const Name = "mcp"
 
 // Limits of the agent middleware. Everything a server sends (tool names,
 // descriptions, schemas, instructions) is untrusted and capped.
@@ -148,11 +153,32 @@ type Middleware struct {
 	closeErr  error
 }
 
+// ConnectConfig configures what Connect shares among all its servers.
+type ConnectConfig struct {
+	// Info identifies the host to every server (sent as clientInfo in the
+	// handshake); zero → {"orchestrix", the SDK version}.
+	Info Implementation
+	// OnNotification, when non-nil, receives every notification a server
+	// sends, with the server's name, after the middleware has handled it
+	// itself (tools/list_changed). It is called on the server client's
+	// reader goroutine and must not block.
+	OnNotification func(server, method string, params json.RawMessage)
+	// Logger receives the middleware's diagnostics, at Warn level: "mcp:
+	// server connection ended" (attributes "server" and "err") when a
+	// connected server's client ends before Close, and "mcp: tool list
+	// refresh failed" (attributes "server" and "err"). Close logs nothing.
+	// nil → discarded.
+	Logger *slog.Logger
+}
+
 // Connect validates servers and connects to all of them in parallel. When a
 // server that is not Optional fails, it stops the connections still in
 // progress, closes every server and returns the error (joined with those of
-// other servers that failed on their own).
-func Connect(ctx context.Context, servers []ServerConfig) (*Middleware, error) {
+// other servers that failed on their own). cfg applies to every server.
+func Connect(ctx context.Context, servers []ServerConfig, cfg ConnectConfig) (*Middleware, error) {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
 	if err := validateServers(servers); err != nil {
 		for _, cfg := range servers {
 			if cfg.Transport != nil {
@@ -162,8 +188,8 @@ func Connect(ctx context.Context, servers []ServerConfig) (*Middleware, error) {
 		return nil, err
 	}
 	m := &Middleware{}
-	for _, cfg := range servers {
-		m.servers = append(m.servers, newServerConn(cfg))
+	for _, sc := range servers {
+		m.servers = append(m.servers, newServerConn(sc, cfg))
 	}
 	// abort stops the other connections once a required server failed.
 	connectCtx, abort := context.WithCancel(ctx)
@@ -198,7 +224,7 @@ func Connect(ctx context.Context, servers []ServerConfig) (*Middleware, error) {
 }
 
 // Name implements agent.Middleware.
-func (m *Middleware) Name() string { return "mcp" }
+func (m *Middleware) Name() string { return Name }
 
 // DynamicTools implements agent.DynamicToolProvider: the current tools of
 // the servers whose connection is up, in server order. A server whose

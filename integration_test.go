@@ -473,7 +473,7 @@ func TestLiveMCPInProcess(t *testing.T) {
 		func(context.Context, json.RawMessage) (*mcp.CallToolResult, error) {
 			return mcp.TextResult("MCP-OK-7781"), nil
 		})
-	m, err := mcp.Connect(ctx, []mcp.ServerConfig{{Name: "test", Transport: mcp.InProcess(srv)}})
+	m, err := mcp.Connect(ctx, []mcp.ServerConfig{{Name: "test", Transport: mcp.InProcess(srv)}}, mcp.ConnectConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,6 +40,7 @@ type configServer struct {
 var envReference = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 // LoadConfig reads the server configuration file at path; see ParseConfig.
+// Pass the servers to Connect with a ConnectConfig.
 func LoadConfig(path string) ([]ServerConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

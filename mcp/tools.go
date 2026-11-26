@@ -26,8 +26,9 @@ import (
 const toolNameHashLen = 8
 
 // ToolName is the agent tool name of the tool named tool on the server named
-// server: names.MCPPrefix(server) + names.Sanitize(tool). A name longer than
-// MaxToolNameLen keeps its first MaxToolNameLen-9 bytes, then "_" and the
+// server: "mcp__<server>__" followed by the tool name with every rune
+// outside [A-Za-z0-9_-] replaced by '_'. A name longer than MaxToolNameLen
+// keeps its first MaxToolNameLen-9 bytes, then "_" and the
 // first 8 hex digits of the full name's SHA-256, so it stays unique and
 // deterministic.
 func ToolName(server, tool string) string {
@@ -42,7 +43,8 @@ func ToolName(server, tool string) string {
 // serverConn is the middleware's connection to one server and the agent
 // tools built from its tool list.
 type serverConn struct {
-	cfg ServerConfig
+	cfg  ServerConfig
+	conn ConnectConfig
 	// client and err are written once by connect, before Connect returns:
 	// client is nil when the server is not connected, err says why.
 	client *Client
@@ -61,10 +63,11 @@ type serverConn struct {
 	ready, hasTools, refreshing, dirty, closed bool
 	refreshErr                                 error
 	refreshes                                  sync.WaitGroup
+	watcher                                    sync.WaitGroup
 }
 
-func newServerConn(cfg ServerConfig) *serverConn {
-	s := &serverConn{cfg: cfg}
+func newServerConn(cfg ServerConfig, conn ConnectConfig) *serverConn {
+	s := &serverConn{cfg: cfg, conn: conn}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	return s
 }
@@ -79,6 +82,7 @@ func (s *serverConn) connect(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, positiveOr(s.cfg.ConnectTimeout, DefaultConnectTimeout))
 	defer cancel()
 	client, err := NewClient(ctx, t, ClientConfig{
+		Info:           s.conn.Info,
 		RequestTimeout: s.requestTimeout(),
 		OnNotification: s.notified,
 	})
@@ -94,6 +98,8 @@ func (s *serverConn) connect(ctx context.Context) error {
 		s.tools.Store(&tools)
 	}
 	s.client = client
+	s.watcher.Add(1)
+	go s.watch(client)
 	s.mu.Lock()
 	s.ready = true
 	s.hasTools = client.HasTools()
@@ -129,9 +135,25 @@ func (s *serverConn) requestTimeout() time.Duration {
 }
 
 // notified handles a server notification on the client's reader goroutine.
-func (s *serverConn) notified(method string, _ json.RawMessage) {
+func (s *serverConn) notified(method string, params json.RawMessage) {
 	if method == notifyToolListChanged {
 		s.toolsChanged()
+	}
+	if s.conn.OnNotification != nil {
+		s.conn.OnNotification(s.cfg.Name, method, params)
+	}
+}
+
+// watch logs when client ends before the server is closed. It returns when
+// the client ends or the server is closed.
+func (s *serverConn) watch(client *Client) {
+	defer s.watcher.Done()
+	select {
+	case <-client.done:
+		if s.ctx.Err() == nil {
+			s.conn.Logger.Warn("mcp: server connection ended", "server", s.cfg.Name, "err", client.Err())
+		}
+	case <-s.ctx.Done():
 	}
 }
 
@@ -177,6 +199,8 @@ func (s *serverConn) refresh() {
 	tools, err := s.listTools(ctx, s.client)
 	if err == nil {
 		s.tools.Store(&tools)
+	} else if s.ctx.Err() == nil {
+		s.conn.Logger.Warn("mcp: tool list refresh failed", "server", s.cfg.Name, "err", err)
 	}
 	s.mu.Lock()
 	s.refreshErr = err
@@ -318,6 +342,7 @@ func (s *serverConn) close(ctx context.Context) error {
 		err = s.client.Close(ctx)
 	}
 	s.refreshes.Wait()
+	s.watcher.Wait()
 	return err
 }
 

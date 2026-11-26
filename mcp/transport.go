@@ -17,6 +17,12 @@ import (
 // starts the release, and every call returns when the release is done (with
 // its result) or with ctx.Err() when ctx ends first, the release going on
 // in the background. When Close returns nil, Messages is already closed.
+//
+// ServerConfig stays flat: it carries only the common options of the stdio
+// and HTTP transports. For anything else (HTTPConfig.Client,
+// HTTPConfig.MaxMessageBytes, StdioConfig.CloseGrace and any later transport
+// option), build the Transport yourself with DialHTTP or StartStdio and pass
+// it as ServerConfig.Transport; Connect takes ownership of it.
 type Transport interface {
 	// Send delivers one message, a single JSON object. It returns once the
 	// message is handed to the other side, ctx ends, or the transport closes.
@@ -33,7 +39,10 @@ type Transport interface {
 
 // ProtocolVersionSetter is implemented by transports that must know the
 // negotiated protocol version (HTTP sends it as a header). NewClient calls
-// SetProtocolVersion once the handshake has settled on a version.
+// SetProtocolVersion once the handshake has settled on a version. A
+// transport that wraps another must forward SetProtocolVersion to it, or the
+// inner transport (such as HTTP's MCP-Protocol-Version header) never learns
+// the negotiated version.
 type ProtocolVersionSetter interface {
 	// SetProtocolVersion records the negotiated protocol version.
 	SetProtocolVersion(version string)

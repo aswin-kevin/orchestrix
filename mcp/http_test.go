@@ -852,4 +852,8 @@ func TestHTTPCloseBoundedByContext(t *testing.T) {
 	if elapsed := time.Since(start); elapsed >= time.Second {
 		t.Fatalf("Close took %v, want < 1s", elapsed)
 	}
+	// Let the background DELETE finish inside the test.
+	if err := c.Close(context.Background()); err != nil {
+		t.Fatalf("draining Close: %v", err)
+	}
 }

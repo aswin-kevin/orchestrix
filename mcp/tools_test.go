@@ -252,7 +252,7 @@ func TestDuplicateSanitizedNamesFailConnect(t *testing.T) {
 	s := NewServer(Implementation{Name: "s", Version: "1"}, "")
 	s.AddTool(ToolInfo{Name: "a.b"}, nil)
 	s.AddTool(ToolInfo{Name: "a/b"}, nil)
-	_, err := Connect(context.Background(), []ServerConfig{inProcessServer("srv", s)})
+	_, err := Connect(context.Background(), []ServerConfig{inProcessServer("srv", s)}, ConnectConfig{})
 	if err == nil || !strings.Contains(err.Error(), "a.b") || !strings.Contains(err.Error(), "a/b") {
 		t.Fatalf("err = %v, want a collision error naming both tools", err)
 	}
@@ -444,7 +444,7 @@ func TestRefreshCoalescesNotices(t *testing.T) {
 func TestCloseWaitsForRefresh(t *testing.T) {
 	srv := newTestServer(nil)
 	gate := newListGate(InProcess(srv))
-	m, err := Connect(context.Background(), []ServerConfig{{Name: "srv", Transport: gate}})
+	m, err := Connect(context.Background(), []ServerConfig{{Name: "srv", Transport: gate}}, ConnectConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
