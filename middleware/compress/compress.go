@@ -134,7 +134,7 @@ func New(cfg Config) (*Middleware, error) {
 		v    int
 	}{{"KeepTurns", cfg.KeepTurns}, {"MinRangeTokens", cfg.MinRangeTokens}, {"MaxSummaryChars", cfg.MaxSummaryChars}, {"MaxIgnored", cfg.MaxIgnored}} {
 		if f.v < 0 {
-			return nil, fmt.Errorf("compress: %s must not be negative", f.name)
+			return nil, fmt.Errorf("compress: %s is negative", f.name)
 		}
 	}
 	cfg.TriggerFraction = orDefault(cfg.TriggerFraction, DefaultTriggerFraction)

@@ -30,9 +30,9 @@ type StdioConfig struct {
 	Command string
 	// Args are its arguments.
 	Args []string
-	// Dir is its working directory; empty → the current one.
+	// Dir is its working directory; empty means the current one.
 	Dir string
-	// Env holds variables added last, overriding inherited ones; nil → none.
+	// Env holds variables added last, overriding inherited ones; nil means none.
 	// A key that is empty or holds '=' or NUL is an error.
 	Env map[string]string
 	// InheritEnv passes the whole host environment instead of only a small
@@ -41,12 +41,12 @@ type StdioConfig struct {
 	// API keys to the server.
 	InheritEnv bool
 	// MaxMessageBytes caps one message (line) from the server; a longer one
-	// ends the transport. 0 → DefaultMaxMessageBytes; negative is an
+	// ends the transport. 0 means DefaultMaxMessageBytes; negative is an
 	// error.
 	MaxMessageBytes int
 	// CloseGrace is how long each step of Close waits, how long leftovers of
 	// an exited server get after SIGTERM, and how long a crash report waits
-	// for the exit status; 0 → DefaultCloseGrace; negative is an error.
+	// for the exit status; 0 means DefaultCloseGrace; negative is an error.
 	CloseGrace time.Duration
 }
 

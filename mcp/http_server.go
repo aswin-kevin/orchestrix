@@ -53,17 +53,17 @@ type HandlerConfig struct {
 	// false lets each session keep one GET stream open.
 	DisableGET bool
 	// MaxSessions caps the live sessions; an initialize over the cap gets
-	// 503. 0 or negative → DefaultMaxSessions.
+	// 503. 0 or negative means DefaultMaxSessions.
 	MaxSessions int
 	// SessionIdleTimeout ends a session that has had no request and no open
-	// stream for this long; later requests for it get 404. 0 or negative →
+	// stream for this long; later requests for it get 404. 0 or negative means
 	// DefaultSessionIdleTimeout.
 	SessionIdleTimeout time.Duration
 	// AllowedHosts lists the Host header values the handler serves; any
 	// other gets 403. An entry is a host name or IP literal ("localhost",
 	// "127.0.0.1", "[::1]"), which matches with any port, or host:port,
 	// which matches that port only; names compare case-insensitively, and
-	// "*" allows every host. nil or empty → the loopback names localhost,
+	// "*" allows every host. nil or empty means the loopback names localhost,
 	// 127.0.0.1 and [::1] with any port, so a handler reachable under any
 	// other name (a LAN address, a public name behind a proxy) must list it.
 	AllowedHosts []string

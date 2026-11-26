@@ -186,7 +186,7 @@ func New(cfg Config) (*Middleware, error) {
 		{"MaxFinished", int64(cfg.MaxFinished)},
 	} {
 		if f.v < 0 {
-			return nil, fmt.Errorf("jobs: %s must not be negative", f.name)
+			return nil, fmt.Errorf("jobs: %s is negative", f.name)
 		}
 	}
 	return &Middleware{
@@ -265,9 +265,9 @@ func (s starter) Start(ctx context.Context, c *tool.Call, command string, timeou
 // another thread's notifications.
 //
 // Before that, a thread whose jobs all ended and were announced in earlier
-// turns is released (see registry.Manager.Release): the model had the turn
-// of each notification to read the output, and afterwards check_job reports
-// the recorded outcome only.
+// turns is released (its jobs are forgotten; check_job then reports the
+// recorded outcome): the model had the turn of each notification to read the
+// output.
 func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
 	threadID, _ := agent.ThreadID(ctx)
 	if threadID != "" {

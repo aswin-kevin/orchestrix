@@ -155,7 +155,7 @@ func New(cfg Config) (*Middleware, error) {
 		v    int
 	}{{"KeepToolResults", cfg.KeepToolResults}, {"ClearResultChars", cfg.ClearResultChars}, {"MaxOldInputChars", cfg.MaxOldInputChars}, {"MaxFailures", cfg.MaxFailures}} {
 		if f.v < 0 {
-			return nil, fmt.Errorf("summarize: %s must not be negative", f.name)
+			return nil, fmt.Errorf("summarize: %s is negative", f.name)
 		}
 	}
 	if cfg.Summarizer != nil && (cfg.Provider != nil || cfg.Model != "" || cfg.SummaryPrompt != "") {

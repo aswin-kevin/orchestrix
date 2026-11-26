@@ -125,7 +125,7 @@ func (s *State) serializedLocked(name string) (json.RawMessage, error) {
 func (s *State) mustSerializedLocked(name string) json.RawMessage {
 	raw, err := s.serializedLocked(name)
 	if err != nil {
-		panic(fmt.Sprintf("%v (a stored value was mutated into an unencodable form)", err))
+		panic(fmt.Sprintf("state: %v (a stored value was mutated into an unencodable form)", err))
 	}
 	return raw
 }

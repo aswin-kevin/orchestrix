@@ -168,7 +168,7 @@ func validate(cfg Config) error {
 		{"MaxExecTimeout", int64(cfg.MaxExecTimeout)},
 	} {
 		if f.v < 0 {
-			return fmt.Errorf("filesystem: %s must not be negative", f.name)
+			return fmt.Errorf("filesystem: %s is negative", f.name)
 		}
 	}
 	if cfg.Tools != nil {

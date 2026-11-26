@@ -60,12 +60,12 @@ func SchemaFor[T any]() map[string]any {
 	t := reflect.TypeFor[T]()
 	if s, ok := schemaHook(t); ok {
 		if s["type"] != "object" {
-			panic(fmt.Sprintf("tool.SchemaFor: %s's JSONSchema is not an object schema", t))
+			panic(fmt.Sprintf("tool: SchemaFor: %s's JSONSchema is not an object schema", t))
 		}
 		return s
 	}
 	if t.Kind() != reflect.Struct {
-		panic(fmt.Sprintf("tool.SchemaFor: %s is not a struct", t))
+		panic(fmt.Sprintf("tool: SchemaFor: %s is not a struct", t))
 	}
 	return objectSchema(t, "", nil)
 }
@@ -85,7 +85,7 @@ func emptyObjectSchema() map[string]any {
 func objectSchema(t reflect.Type, path string, stack []reflect.Type) map[string]any {
 	for _, seen := range stack {
 		if seen == t {
-			panic(fmt.Sprintf("tool.SchemaFor: recursive type %s at %q", t, path))
+			panic(fmt.Sprintf("tool: SchemaFor: recursive type %s at %q", t, path))
 		}
 	}
 	stack = append(stack, t)
@@ -148,7 +148,7 @@ func fieldSchema(f reflect.StructField, path string, stack []reflect.Type) map[s
 	}
 	if enum := f.Tag.Get("enum"); enum != "" {
 		if s["type"] != "string" {
-			panic(fmt.Sprintf("tool.SchemaFor: field %q: enum is only supported on strings", path))
+			panic(fmt.Sprintf("tool: SchemaFor: field %q: enum is only supported on strings", path))
 		}
 		s["enum"] = splitEnum(enum)
 	}
@@ -201,7 +201,7 @@ func typeSchema(t reflect.Type, path string, stack []reflect.Type) map[string]an
 	case reflect.Interface:
 		return map[string]any{}
 	default:
-		panic(fmt.Sprintf("tool.SchemaFor: field %q has unsupported kind %s", path, t.Kind()))
+		panic(fmt.Sprintf("tool: SchemaFor: field %q has unsupported kind %s", path, t.Kind()))
 	}
 }
 

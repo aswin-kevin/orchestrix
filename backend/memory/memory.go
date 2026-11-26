@@ -87,7 +87,7 @@ func (b *Backend) hasFileAncestor(p string) bool {
 }
 
 func fail(op, p string, sentinel error) error {
-	return fmt.Errorf("memory: %s %s: %w", op, p, sentinel)
+	return fmt.Errorf("backend/memory: %s %s: %w", op, p, sentinel)
 }
 
 // Ls lists the direct children of the directory at p, sorted by name.
@@ -197,7 +197,7 @@ func (b *Backend) Edit(_ context.Context, p, old, replacement string, replaceAll
 	}
 	updated, count, err := backend.ApplyEdit(f.content, old, replacement, replaceAll)
 	if err != nil {
-		return backend.EditResult{}, fmt.Errorf("memory: edit %s: %w", p, err)
+		return backend.EditResult{}, fmt.Errorf("backend/memory: edit %s: %w", p, err)
 	}
 	b.files[p] = file{content: updated, modTime: b.now()}
 	return backend.EditResult{Occurrences: count}, nil
@@ -217,7 +217,7 @@ func (b *Backend) MultiEdit(_ context.Context, p string, edits []backend.EditOp)
 	}
 	updated, count, err := backend.ApplyEdits(f.content, edits)
 	if err != nil {
-		return backend.EditResult{}, fmt.Errorf("memory: multi-edit %s: %w", p, err)
+		return backend.EditResult{}, fmt.Errorf("backend/memory: multi-edit %s: %w", p, err)
 	}
 	b.files[p] = file{content: updated, modTime: b.now()}
 	return backend.EditResult{Occurrences: count}, nil
@@ -230,7 +230,7 @@ func (b *Backend) Delete(_ context.Context, p string) error {
 		return err
 	}
 	if p == rootPath {
-		return fmt.Errorf("memory: delete %s: %w: cannot delete the root", p, backend.ErrInvalidPath)
+		return fmt.Errorf("backend/memory: delete %s: %w: cannot delete the root", p, backend.ErrInvalidPath)
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -361,7 +361,7 @@ func (b *Backend) Snapshot(ctx context.Context) (json.RawMessage, error) {
 	}
 	data, err := json.Marshal(snap)
 	if err != nil {
-		return nil, fmt.Errorf("memory: snapshot: %w", err)
+		return nil, fmt.Errorf("backend/memory: snapshot: %w", err)
 	}
 	return data, nil
 }
@@ -374,13 +374,13 @@ func (b *Backend) Restore(ctx context.Context, data json.RawMessage) error {
 	}
 	var snap snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
-		return fmt.Errorf("memory: restore: %w", err)
+		return fmt.Errorf("backend/memory: restore: %w", err)
 	}
 	files := make(map[string]file, len(snap.Files))
 	for name, f := range snap.Files {
 		clean, err := backend.Clean(name)
 		if err != nil || clean != name || clean == rootPath {
-			return fmt.Errorf("memory: restore: bad path %q", name)
+			return fmt.Errorf("backend/memory: restore: bad path %q", name)
 		}
 		files[name] = file{content: f.Content, modTime: f.ModTime}
 	}

@@ -42,32 +42,32 @@ type Rule struct {
 func ParseRule(s string) (Rule, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return Rule{}, errors.New("permission rule: empty rule")
+		return Rule{}, errors.New("permission: rule: empty rule")
 	}
 	open := strings.IndexByte(s, '(')
 	if open < 0 {
 		if strings.ContainsRune(s, ')') {
-			return Rule{}, fmt.Errorf("permission rule %q: unbalanced parentheses", s)
+			return Rule{}, fmt.Errorf("permission: rule %q: unbalanced parentheses", s)
 		}
 		if err := names.Validate(s); err != nil {
-			return Rule{}, fmt.Errorf("permission rule %q: %w", s, err)
+			return Rule{}, fmt.Errorf("permission: rule %q: %w", s, err)
 		}
 		return Rule{Tool: s}, nil
 	}
 	if !strings.HasSuffix(s, ")") {
-		return Rule{}, fmt.Errorf("permission rule %q: unbalanced parentheses", s)
+		return Rule{}, fmt.Errorf("permission: rule %q: unbalanced parentheses", s)
 	}
 	name, pattern := s[:open], s[open+1:len(s)-1]
 	if err := names.Validate(name); err != nil {
-		return Rule{}, fmt.Errorf("permission rule %q: %w", s, err)
+		return Rule{}, fmt.Errorf("permission: rule %q: %w", s, err)
 	}
 	if pattern == "" {
-		return Rule{}, fmt.Errorf("permission rule %q: empty pattern", s)
+		return Rule{}, fmt.Errorf("permission: rule %q: empty pattern", s)
 	}
 	// Commands may contain parentheses, but only balanced ones; a stray ")"
 	// usually means a typo that would silently change what the rule matches.
 	if !balancedParens(pattern) {
-		return Rule{}, fmt.Errorf("permission rule %q: unbalanced parentheses", s)
+		return Rule{}, fmt.Errorf("permission: rule %q: unbalanced parentheses", s)
 	}
 	switch Op(name) {
 	case OpRead, OpWrite:

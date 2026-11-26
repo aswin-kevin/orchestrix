@@ -48,7 +48,7 @@ func TestNewRejectsNegative(t *testing.T) {
 		"MaxFinished": {MaxFinished: -1},
 	} {
 		m, err := New(cfg)
-		if err == nil || m != nil || !strings.Contains(err.Error(), "jobs: "+name+" must not be negative") {
+		if err == nil || m != nil || !strings.Contains(err.Error(), "jobs: "+name+" is negative") {
 			t.Errorf("New with negative %s = %v, %v", name, m, err)
 		}
 	}

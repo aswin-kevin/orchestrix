@@ -1,6 +1,7 @@
 package tool
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -48,4 +49,17 @@ func TestRegistryOrderLookupAndSchemas(t *testing.T) {
 	if len(schemas) != 3 || schemas[2].Name != "mid" || schemas[2].Description != "d mid" || schemas[2].InputSchema["type"] != "object" {
 		t.Errorf("Schemas = %+v", schemas)
 	}
+}
+
+func TestErrorAndPanicTextHasPackagePrefix(t *testing.T) {
+	_, err := NewRegistry(nil)
+	if err == nil || err.Error() != "tool: registry: nil tool" {
+		t.Errorf("NewRegistry(nil) error = %v, want %q", err, "tool: registry: nil tool")
+	}
+	defer func() {
+		if got, _ := recover().(string); !strings.HasPrefix(got, "tool: Build: ") {
+			t.Errorf("Build panic = %q, want a \"tool: Build: \" prefix", got)
+		}
+	}()
+	Build(Spec{Name: "x"})
 }

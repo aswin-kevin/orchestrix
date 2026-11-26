@@ -52,7 +52,7 @@ func Events(r io.Reader, max int) iter.Seq2[Event, error] {
 		)
 		for {
 			line, err := readLine(br, max-size)
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				if hasData {
 					yield(Event{Event: eventType, Data: data.String(), ID: lastID}, nil)
 				}
@@ -109,9 +109,9 @@ func readLine(br *bufio.Reader, limit int) (string, error) {
 			return "", ErrTooLarge
 		}
 		switch {
-		case err == bufio.ErrBufferFull:
+		case errors.Is(err, bufio.ErrBufferFull):
 			continue
-		case err == io.EOF && len(line) > 0:
+		case errors.Is(err, io.EOF) && len(line) > 0:
 			return string(content), nil
 		case err != nil:
 			return "", err

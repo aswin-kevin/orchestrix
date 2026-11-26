@@ -110,9 +110,9 @@ func newClient(cc ClientConfig, policy dialPolicy) (*http.Client, error) {
 func checkClientLimits(timeout time.Duration, maxRedirects int) error {
 	switch {
 	case timeout < 0:
-		return errors.New("web: Timeout must not be negative")
+		return errors.New("web: Timeout is negative")
 	case maxRedirects < 0:
-		return errors.New("web: MaxRedirects must not be negative")
+		return errors.New("web: MaxRedirects is negative")
 	}
 	return nil
 }

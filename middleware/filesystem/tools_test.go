@@ -688,7 +688,7 @@ func TestNewRejectsNegative(t *testing.T) {
 		"MaxExecTimeout": {MaxExecTimeout: -1},
 	} {
 		_, err := New(cfg)
-		want := "filesystem: " + name + " must not be negative"
+		want := "filesystem: " + name + " is negative"
 		if err == nil || err.Error() != want {
 			t.Errorf("%s: err = %v, want %q", name, err, want)
 		}

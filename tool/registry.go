@@ -32,14 +32,14 @@ func NewRegistry(tools ...Tool) (*Registry, error) {
 // already registered.
 func (r *Registry) Add(t Tool) error {
 	if t == nil {
-		return errors.New("tool registry: nil tool")
+		return errors.New("tool: registry: nil tool")
 	}
 	name := t.Name()
 	if err := names.Validate(name); err != nil {
-		return fmt.Errorf("tool registry: %w", err)
+		return fmt.Errorf("tool: registry: %w", err)
 	}
 	if _, dup := r.byName[name]; dup {
-		return fmt.Errorf("tool registry: duplicate tool %q", name)
+		return fmt.Errorf("tool: registry: duplicate tool %q", name)
 	}
 	r.byName[name] = t
 	r.tools = append(r.tools, t)

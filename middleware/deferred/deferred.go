@@ -70,7 +70,7 @@ func New(cfg Config) (*Middleware, error) {
 		}
 	}
 	if cfg.MaxResults < 0 {
-		return nil, errors.New("deferred: MaxResults must not be negative")
+		return nil, errors.New("deferred: MaxResults is negative")
 	}
 	m := &Middleware{
 		patterns:   slices.Clone(cfg.Tools),

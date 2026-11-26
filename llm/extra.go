@@ -43,13 +43,13 @@ func (c ToolChoice) validate(tools []ToolSchema) error {
 	switch c.Mode {
 	case ToolChoiceAuto, ToolChoiceAny, ToolChoiceNone, ToolChoiceTool:
 	default:
-		return fmt.Errorf("llm: unknown tool choice mode %q", string(c.Mode))
+		return fmt.Errorf("unknown tool choice mode %q", string(c.Mode))
 	}
 	if c.Name != "" && c.Mode != ToolChoiceTool {
-		return fmt.Errorf("llm: tool choice name %q needs mode %q", c.Name, ToolChoiceTool)
+		return fmt.Errorf("tool choice name %q needs mode %q", c.Name, ToolChoiceTool)
 	}
 	if (c.Mode == ToolChoiceAny || c.Mode == ToolChoiceTool) && len(tools) == 0 {
-		return fmt.Errorf("llm: tool choice %q needs tools", string(c.Mode))
+		return fmt.Errorf("tool choice %q needs tools", string(c.Mode))
 	}
 	if c.Mode == ToolChoiceTool {
 		for _, t := range tools {
@@ -57,7 +57,7 @@ func (c ToolChoice) validate(tools []ToolSchema) error {
 				return nil
 			}
 		}
-		return fmt.Errorf("llm: tool choice names unknown tool %q", c.Name)
+		return fmt.Errorf("tool choice names unknown tool %q", c.Name)
 	}
 	return nil
 }

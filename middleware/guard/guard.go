@@ -102,10 +102,10 @@ func New(cfg Config) (*Middleware, error) {
 		return nil, errors.New("guard: at least one check is required")
 	}
 	if cfg.Timeout < 0 {
-		return nil, errors.New("guard: Timeout must not be negative")
+		return nil, errors.New("guard: Timeout is negative")
 	}
 	if cfg.MaxInputBytes < 0 {
-		return nil, errors.New("guard: MaxInputBytes must not be negative")
+		return nil, errors.New("guard: MaxInputBytes is negative")
 	}
 	m := &Middleware{decider: cfg.Decider, model: cfg.Model, failOpen: cfg.FailOpen, timeout: cfg.Timeout, maxInput: cfg.MaxInputBytes}
 	if m.timeout == 0 {
@@ -275,7 +275,7 @@ func plainArguments(raw json.RawMessage) (string, error) {
 	if err := dec.Decode(&v); err != nil {
 		return "", fmt.Errorf("guard: tool arguments are not valid JSON: %w", err)
 	}
-	if _, err := dec.Token(); err != io.EOF {
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return "", errors.New("guard: tool arguments are not a single JSON value")
 	}
 	var sb strings.Builder

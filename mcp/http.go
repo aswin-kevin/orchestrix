@@ -47,7 +47,7 @@ type HTTPConfig struct {
 	// BearerToken, when non-empty, is sent as "Authorization: Bearer
 	// <token>" unless Headers sets Authorization; empty sends none.
 	BearerToken string
-	// Client makes the requests; nil → a client of the transport's own with
+	// Client makes the requests; nil means a client of the transport's own with
 	// no overall timeout (streams are long-lived), whose idle connections
 	// are closed on Close. Either way redirects are never followed (a
 	// given client is copied with its CheckRedirect replaced), so Headers,
@@ -55,7 +55,7 @@ type HTTPConfig struct {
 	// reply is an error naming the status.
 	Client *http.Client
 	// MaxMessageBytes caps one incoming message (a JSON body or an SSE
-	// event); 0 → DefaultMaxMessageBytes; negative is an error.
+	// event); 0 means DefaultMaxMessageBytes; negative is an error.
 	MaxMessageBytes int
 }
 

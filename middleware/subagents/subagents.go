@@ -89,7 +89,7 @@ var (
 // a configuration that leaves no subagent to start.
 func New(cfg Config) (*Middleware, error) {
 	if cfg.MaxDepth < 0 {
-		return nil, errors.New("subagents: MaxDepth must not be negative")
+		return nil, errors.New("subagents: MaxDepth is negative")
 	}
 	list, err := ResolveSpecs(cfg)
 	if err != nil {

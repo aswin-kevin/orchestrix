@@ -138,7 +138,7 @@ func TestListOptionsPageLimit(t *testing.T) {
 		}
 	}
 	for _, limit := range []int{-1, math.MinInt} {
-		if _, err := (checkpoint.ListOptions{Limit: limit}).PageLimit(); err == nil || !strings.Contains(err.Error(), "checkpoint: negative list limit") {
+		if _, err := (checkpoint.ListOptions{Limit: limit}).PageLimit(); err == nil || !strings.Contains(err.Error(), "checkpoint: Limit is negative") {
 			t.Errorf("PageLimit(%d) error = %v, want a negative-limit error", limit, err)
 		}
 	}

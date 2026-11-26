@@ -154,6 +154,9 @@ func TestToolChoiceInvalid(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), c.want) {
 					t.Fatalf("err = %v, want containing %q", err, c.want)
 				}
+				if n := strings.Count(err.Error(), "llm: "); n != 1 {
+					t.Errorf("err = %q has %d \"llm: \" prefixes, want 1", err, n)
+				}
 				if hits.Load() != 0 {
 					t.Error("server was hit")
 				}

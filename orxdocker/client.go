@@ -17,7 +17,10 @@ import (
 
 // APIError is an error response from the Docker Engine API.
 type APIError struct {
-	Method, Path string
+	// Method is the HTTP method of the failed request.
+	Method string
+	// Path is the request path, including any query string.
+	Path string
 	// Status is the HTTP status code, such as 404 or 409.
 	Status int
 	// Message is the daemon's explanation.

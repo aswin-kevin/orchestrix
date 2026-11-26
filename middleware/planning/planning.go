@@ -85,10 +85,10 @@ type Middleware struct {
 // ReminderAfter or ReminderEvery is negative.
 func New(cfg Config) (*Middleware, error) {
 	if cfg.ReminderAfter < 0 {
-		return nil, errors.New("planning: ReminderAfter must not be negative")
+		return nil, errors.New("planning: ReminderAfter is negative")
 	}
 	if cfg.ReminderEvery < 0 {
-		return nil, errors.New("planning: ReminderEvery must not be negative")
+		return nil, errors.New("planning: ReminderEvery is negative")
 	}
 	m := &Middleware{
 		reminderAfter: DefaultReminderAfter,

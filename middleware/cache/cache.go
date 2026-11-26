@@ -33,7 +33,7 @@ type Middleware struct {
 // It returns an error when Recent is negative.
 func New(cfg Config) (*Middleware, error) {
 	if cfg.Recent < 0 {
-		return nil, errors.New("cache: Recent must not be negative")
+		return nil, errors.New("cache: Recent is negative")
 	}
 	if cfg.Recent == 0 {
 		cfg.Recent = DefaultRecent

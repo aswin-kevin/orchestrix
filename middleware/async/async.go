@@ -85,8 +85,8 @@ type Config struct {
 	// entries kept when the agent has no Checkpointer are pruned with their
 	// records, so delete the task threads of the store yourself once no
 	// longer needed. A task's thread is <parent thread>/async_N (IDPrefix
-	// and a number): that shape is reserved, so never give a thread of
-	// your own a segment of it after its first.
+	// and a number): that shape is reserved, so never name a thread of your
+	// own <x>/async_N.
 	Runner Runner
 	// MaxRunning is how many tasks may run at once per thread; 0 means
 	// DefaultMaxRunning. Negative values are rejected.
@@ -191,7 +191,7 @@ func New(cfg Config) (*Middleware, error) {
 		{"MaxDepth", cfg.MaxDepth < 0},
 	} {
 		if f.negative {
-			return nil, fmt.Errorf("async: %s must not be negative", f.name)
+			return nil, fmt.Errorf("async: %s is negative", f.name)
 		}
 	}
 	list, err := subagents.ResolveSpecs(subagents.Config{

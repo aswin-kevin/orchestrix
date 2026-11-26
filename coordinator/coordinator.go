@@ -107,7 +107,7 @@ func build(cfg Config, newAgent func([]orchestrix.Option) (*agent.Agent, error),
 		return nil, errors.New("coordinator: at least one worker is required")
 	}
 	if cfg.MaxConcurrency < 0 {
-		return nil, errors.New("coordinator: MaxConcurrency must not be negative")
+		return nil, errors.New("coordinator: MaxConcurrency is negative")
 	}
 	prompt := cfg.Prompt
 	if prompt == "" {

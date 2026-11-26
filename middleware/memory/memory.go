@@ -3,6 +3,7 @@ package memory
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -104,9 +105,9 @@ type Middleware struct {
 func New(cfg Config) (*Middleware, error) {
 	switch {
 	case cfg.MaxFileBytes < 0:
-		return nil, fmt.Errorf("middleware/memory: MaxFileBytes must not be negative, got %d", cfg.MaxFileBytes)
+		return nil, errors.New("middleware/memory: MaxFileBytes is negative")
 	case cfg.StaleAfter < 0:
-		return nil, fmt.Errorf("middleware/memory: StaleAfter must not be negative, got %v", cfg.StaleAfter)
+		return nil, errors.New("middleware/memory: StaleAfter is negative")
 	}
 	for _, p := range cfg.Files {
 		if !path.IsAbs(p) {

@@ -30,11 +30,14 @@ type Env struct {
 
 // Scenario is one behaviour the harness must get right.
 type Scenario struct {
-	Name        string
+	// Name identifies the scenario; Options.Filter matches against it.
+	Name string
+	// Description says what the scenario checks.
 	Description string
 	// Timeout bounds one trial; zero means DefaultTrialTimeout.
 	Timeout time.Duration
-	Run     func(ctx context.Context, env Env, t *T)
+	// Run executes one trial and records its outcome on t.
+	Run func(ctx context.Context, env Env, t *T)
 }
 
 // DefaultTrialTimeout bounds a trial whose scenario sets no Timeout.
@@ -95,16 +98,26 @@ func (t *T) SetReason(r agent.TerminalReason) { t.trial.Reason = string(r) }
 
 // Trial is the record of one run of a scenario.
 type Trial struct {
-	Pass         bool           `json:"pass"`
-	Reason       string         `json:"reason,omitempty"`
-	Turns        int            `json:"turns"`
-	InputTokens  int            `json:"input_tokens"`
-	OutputTokens int            `json:"output_tokens"`
-	WallMS       int64          `json:"wall_ms"`
-	Failure      string         `json:"failure,omitempty"`
-	Violation    string         `json:"violation,omitempty"`
-	Error        string         `json:"error,omitempty"`
-	Notes        map[string]any `json:"notes,omitempty"`
+	// Pass is true when the trial recorded no failure, violation or error.
+	Pass bool `json:"pass"`
+	// Reason is the terminal reason of the last observed run.
+	Reason string `json:"reason,omitempty"`
+	// Turns is the number of model turns across the observed runs.
+	Turns int `json:"turns"`
+	// InputTokens counts input, cache-read and cache-write tokens.
+	InputTokens int `json:"input_tokens"`
+	// OutputTokens counts the tokens the model produced.
+	OutputTokens int `json:"output_tokens"`
+	// WallMS is the wall-clock duration of the trial in milliseconds.
+	WallMS int64 `json:"wall_ms"`
+	// Failure says how the model fell short of what the scenario needs.
+	Failure string `json:"failure,omitempty"`
+	// Violation records a broken harness invariant; it is never tolerated.
+	Violation string `json:"violation,omitempty"`
+	// Error says why the trial could not be judged.
+	Error string `json:"error,omitempty"`
+	// Notes holds the metrics recorded with T.Note.
+	Notes map[string]any `json:"notes,omitempty"`
 }
 
 // scrub returns s with the configured endpoint URL (and its host) and API
@@ -163,23 +176,33 @@ func (tr *Trial) scrub() {
 
 // ScenarioResult aggregates the trials of one scenario.
 type ScenarioResult struct {
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	Trials      []Trial `json:"trials"`
-	Passes      int     `json:"passes"`
-	PassRate    float64 `json:"pass_rate"`
-	Violations  int     `json:"violations"`
-	Errors      int     `json:"errors"`
+	// Name is the scenario's name.
+	Name string `json:"name"`
+	// Description is the scenario's description.
+	Description string `json:"description"`
+	// Trials holds every trial that ran, in order.
+	Trials []Trial `json:"trials"`
+	// Passes is the number of trials that passed.
+	Passes int `json:"passes"`
+	// PassRate is Passes over the number of trials, rounded to 3 places.
+	PassRate float64 `json:"pass_rate"`
+	// Violations is the number of trials that broke a harness invariant.
+	Violations int `json:"violations"`
+	// Errors is the number of trials that could not be judged.
+	Errors int `json:"errors"`
 }
 
 // Results is the output of a run of the suite.
 type Results struct {
 	// Format is the provider prefix of the model spec (openai,
 	// openai-responses, anthropic), never the model name or endpoint.
-	Format     string           `json:"format,omitempty"`
-	Started    time.Time        `json:"started"`
-	TrialsEach int              `json:"trials_each"`
-	Scenarios  []ScenarioResult `json:"scenarios"`
+	Format string `json:"format,omitempty"`
+	// Started is when the run began, in UTC.
+	Started time.Time `json:"started"`
+	// TrialsEach is how many trials each scenario was asked to run.
+	TrialsEach int `json:"trials_each"`
+	// Scenarios holds one result per scenario that ran.
+	Scenarios []ScenarioResult `json:"scenarios"`
 	// Aborted says why the suite stopped early, empty when it ran in full.
 	Aborted string `json:"aborted,omitempty"`
 }
@@ -296,8 +319,9 @@ func RunTrial(ctx context.Context, env Env, sc Scenario) (tr Trial) {
 // Baseline holds the pass rate each scenario is expected to reach.
 type Baseline struct {
 	// TrialsEach is how many trials each rate was measured over.
-	TrialsEach int                `json:"trials_each"`
-	Scenarios  map[string]float64 `json:"scenarios"`
+	TrialsEach int `json:"trials_each"`
+	// Scenarios maps a scenario name to its measured pass rate.
+	Scenarios map[string]float64 `json:"scenarios"`
 }
 
 // BaselineOf returns the pass rates of res as a baseline.

@@ -276,8 +276,8 @@ func TestSchemaForTopLevelHookMustBeObject(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			defer func() {
 				msg, _ := recover().(string)
-				if !strings.Contains(msg, "tool.SchemaFor:") {
-					t.Errorf("panic = %q, want a tool.SchemaFor panic", msg)
+				if !strings.Contains(msg, "tool: SchemaFor:") {
+					t.Errorf("panic = %q, want a tool: SchemaFor panic", msg)
 				}
 			}()
 			f()

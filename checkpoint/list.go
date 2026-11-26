@@ -53,7 +53,7 @@ type ListOptions struct {
 func (o ListOptions) PageLimit() (int, error) {
 	switch {
 	case o.Limit < 0:
-		return 0, fmt.Errorf("checkpoint: negative list limit %d", o.Limit)
+		return 0, errors.New("checkpoint: Limit is negative")
 	case o.Limit == 0:
 		return DefaultListLimit, nil
 	}

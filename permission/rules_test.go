@@ -1,6 +1,9 @@
 package permission
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseRule(t *testing.T) {
 	tests := []struct {
@@ -157,5 +160,14 @@ func TestReadVisible(t *testing.T) {
 	}
 	if !(Rules{}).ReadVisible("/anything") {
 		t.Error("empty rules hide a path")
+	}
+}
+
+func TestParseRuleErrorPrefix(t *testing.T) {
+	for _, s := range []string{"", "Bash(", "Bash()"} {
+		_, err := ParseRule(s)
+		if err == nil || !strings.HasPrefix(err.Error(), "permission: rule") {
+			t.Errorf("ParseRule(%q) error = %v, want a \"permission: rule\" prefix", s, err)
+		}
 	}
 }

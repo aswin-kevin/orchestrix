@@ -61,10 +61,10 @@ type Spec struct {
 // which it implements only when Spec.Dispatch is set.
 func Build(s Spec) Tool {
 	if err := ValidName(s.Name); err != nil {
-		panic(fmt.Sprintf("tool.Build: %v", err))
+		panic(fmt.Sprintf("tool: Build: %v", err))
 	}
 	if s.Run == nil {
-		panic(fmt.Sprintf("tool.Build: tool %q has no Run function", s.Name))
+		panic(fmt.Sprintf("tool: Build: tool %q has no Run function", s.Name))
 	}
 	if s.Schema == nil {
 		s.Schema = emptyObjectSchema()

@@ -32,11 +32,11 @@ const maxListPages = 1000
 
 // ClientConfig configures a Client.
 type ClientConfig struct {
-	// Info identifies the client to the server; zero → {"orchestrix", the
+	// Info identifies the client to the server; zero means {"orchestrix", the
 	// SDK version}.
 	Info Implementation
 	// RequestTimeout bounds each request whose context has no deadline;
-	// 0 → DefaultRequestTimeout. A negative value is rejected by NewClient.
+	// 0 means DefaultRequestTimeout. A negative value is rejected by NewClient.
 	RequestTimeout time.Duration
 	// OnNotification, when non-nil, receives every notification from the
 	// server. It is called on the reader goroutine and must not block.

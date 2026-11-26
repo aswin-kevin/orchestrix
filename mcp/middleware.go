@@ -54,37 +54,37 @@ type ServerConfig struct {
 	Name string
 
 	// Command runs the server as a child process speaking stdio; see
-	// StdioConfig for Args, Env, Dir and InheritEnv. Empty → not stdio.
+	// StdioConfig for Args, Env, Dir and InheritEnv. Empty means not stdio.
 	Command string
-	// Args are the command's arguments; nil → none.
+	// Args are the command's arguments; nil means none.
 	Args []string
 	// Env holds variables set for the command, over the inherited ones;
-	// nil → none.
+	// nil means none.
 	Env map[string]string
-	// Dir is the command's working directory; empty → the current one.
+	// Dir is the command's working directory; empty means the current one.
 	Dir string
 	// InheritEnv passes the whole host environment to the command instead
-	// of the safe allowlist; false → allowlist only. It may expose secrets.
+	// of the safe allowlist; false means allowlist only. It may expose secrets.
 	InheritEnv bool
 
-	// URL is the server's streamable HTTP endpoint; empty → not HTTP.
+	// URL is the server's streamable HTTP endpoint; empty means not HTTP.
 	URL string
-	// Headers are sent with every HTTP request; nil → none.
+	// Headers are sent with every HTTP request; nil means none.
 	Headers map[string]string
 	// BearerToken, when set, is sent as "Authorization: Bearer <token>"
-	// unless Headers sets Authorization; empty → none.
+	// unless Headers sets Authorization; empty means none.
 	BearerToken string
 
 	// Transport is a custom transport (such as InProcess), used as is;
-	// nil → none. Connect takes ownership: it is closed with the middleware,
+	// nil means none. Connect takes ownership: it is closed with the middleware,
 	// or by Connect when it fails.
 	Transport Transport
 
 	// Tools are name patterns (as in tool.MatchName) over the server's
-	// own tool names; only matching tools are offered. Empty → all tools.
+	// own tool names; only matching tools are offered. Empty means all tools.
 	Tools []string
 	// Defer marks the server's tools deferred.Deferrer: offered by name
-	// until searched for. false → schemas always shown.
+	// until searched for. false means schemas always shown.
 	Defer bool
 	// Gated marks the server's tools deferred.Gater: hidden and refused
 	// until unlocked (deferred.Unlock with "mcp__<name>__*", as a skill
@@ -92,28 +92,28 @@ type ServerConfig struct {
 	// instructions are withheld while it is locked; they unlock only when
 	// the unlock set matches the bare prefix "mcp__<name>__", as that
 	// pattern does; unlocking single tools of the server does not unlock
-	// them. false → not gated.
+	// them. false means not gated.
 	Gated bool
 	// Optional records a connect failure in Status instead of failing
-	// Connect; false → the failure fails Connect.
+	// Connect; false means the failure fails Connect.
 	Optional bool
 	// IgnoreInstructions drops the server's instructions instead of
-	// placing them in the system prompt; false → they are placed (see
+	// placing them in the system prompt; false means they are placed (see
 	// Middleware).
 	IgnoreInstructions bool
 	// TrustReadOnlyHints makes a tool annotated readOnlyHint=true read-only
 	// and concurrency-safe, so it runs without approval in the default
-	// permission mode. false → every tool asks, whatever its hints say:
+	// permission mode. false means every tool asks, whatever its hints say:
 	// hints are untrusted.
 	TrustReadOnlyHints bool
 
 	// ConnectTimeout bounds starting the server, the handshake and the first
-	// tool listing; 0 → DefaultConnectTimeout.
+	// tool listing; 0 means DefaultConnectTimeout.
 	ConnectTimeout time.Duration
 	// RequestTimeout bounds tool-list refreshes and resource requests;
-	// 0 → DefaultRequestTimeout.
+	// 0 means DefaultRequestTimeout.
 	RequestTimeout time.Duration
-	// CallTimeout bounds each tool call; 0 → DefaultCallTimeout.
+	// CallTimeout bounds each tool call; 0 means DefaultCallTimeout.
 	CallTimeout time.Duration
 }
 
@@ -156,7 +156,7 @@ type Middleware struct {
 // ConnectConfig configures what Connect shares among all its servers.
 type ConnectConfig struct {
 	// Info identifies the host to every server (sent as clientInfo in the
-	// handshake); zero → {"orchestrix", the SDK version}.
+	// handshake); zero means {"orchestrix", the SDK version}.
 	Info Implementation
 	// OnNotification, when non-nil, receives every notification a server
 	// sends, with the server's name, after the middleware has handled it
@@ -171,7 +171,7 @@ type ConnectConfig struct {
 	// refresh failed" (attributes "server" and "err"). The connection-ended
 	// err is never nil: it is ErrClosed, wrapping the transport's reason
 	// when it gave one (a clean end of stream gives none). Close logs
-	// nothing. nil → discarded.
+	// nothing. nil means discarded.
 	Logger *slog.Logger
 }
 

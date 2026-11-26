@@ -347,7 +347,7 @@ func TestStartValidation(t *testing.T) {
 			"MaxDepth":    {MaxDepth: -1},
 		} {
 			_, err := New(cfg)
-			if want := "async: " + field + " must not be negative"; err == nil || err.Error() != want {
+			if want := "async: " + field + " is negative"; err == nil || err.Error() != want {
 				t.Errorf("New(negative %s) = %v, want %q", field, err, want)
 			}
 		}

@@ -197,9 +197,9 @@ type Middleware struct {
 func New(cfg Config) (*Middleware, error) {
 	switch {
 	case cfg.MaxBytes < 0:
-		return nil, errors.New("web: MaxBytes must not be negative")
+		return nil, errors.New("web: MaxBytes is negative")
 	case cfg.MaxChars < 0:
-		return nil, errors.New("web: MaxChars must not be negative")
+		return nil, errors.New("web: MaxChars is negative")
 	}
 	if err := checkClientLimits(cfg.Timeout, cfg.MaxRedirects); err != nil {
 		return nil, err
