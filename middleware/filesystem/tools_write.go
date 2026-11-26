@@ -125,7 +125,7 @@ func (m *middleware) multiEdit(ctx context.Context, in multiEditInput, c *tool.C
 	if failure != nil {
 		return *failure, nil
 	}
-	editor, ok := t.backend.(backend.MultiEditor)
+	editor, ok := backend.AsMultiEditor(t.backend)
 	if !ok {
 		return tool.Errorf("this backend does not support atomic multi_edit; use edit_file"), nil
 	}

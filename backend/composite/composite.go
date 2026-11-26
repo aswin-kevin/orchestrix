@@ -33,6 +33,12 @@ var ErrMountPoint = errors.New("composite: path contains a mount point")
 type composite struct {
 	def    backend.Backend
 	mounts []mount // longest prefix first
+
+	// The capabilities of def or a backend it wraps (see backend.Backend),
+	// set by withCapabilities; nil when def has none.
+	exec  backend.Executor
+	start backend.Starter
+	snap  backend.Snapshotter
 }
 
 var (
@@ -47,7 +53,8 @@ var (
 // backend.Executor and backend.Starter exactly when def implements both,
 // backend.Executor alone when def implements only that, and
 // backend.Snapshotter when def does (snapshots cover def only: routes persist
-// on their own). Commands run in def; ExecOptions.Dir inside a mount fails.
+// on their own). A capability of a backend def wraps counts as def's (see
+// backend.Backend's Unwrap). Commands run in def; ExecOptions.Dir inside a mount fails.
 // Errors: nil def or route backend, invalid or duplicate prefix.
 func New(def backend.Backend, routes ...Route) (backend.Backend, error) {
 	if def == nil {
@@ -122,7 +129,7 @@ func (c *composite) MultiEdit(ctx context.Context, p string, edits []backend.Edi
 	if err != nil {
 		return backend.EditResult{}, err
 	}
-	me, ok := b.(backend.MultiEditor)
+	me, ok := backend.AsMultiEditor(b)
 	if !ok {
 		return backend.EditResult{}, fmt.Errorf("composite: multi-edit %s: %w", p, errors.ErrUnsupported)
 	}

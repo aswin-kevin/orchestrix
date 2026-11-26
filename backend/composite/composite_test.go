@@ -327,3 +327,27 @@ func TestMemoriesPersistAcrossThreads(t *testing.T) {
 		t.Fatal("scratch file leaked across threads")
 	}
 }
+
+// unwrapping hides every optional capability of the backend it wraps but
+// exposes it through Unwrap.
+type unwrapping struct{ backend.Backend }
+
+func (u unwrapping) Unwrap() backend.Backend { return u.Backend }
+
+func TestCapabilitiesThroughUnwrap(t *testing.T) {
+	c := mustNew(t, unwrapping{memory.New()}, composite.Route{Prefix: "/m", Backend: unwrapping{memory.New()}})
+	if _, ok := c.(backend.Snapshotter); !ok {
+		t.Fatal("default wrapping a Snapshotter must yield Snapshotter")
+	}
+	put(t, c, "/m/f", "x")
+	if _, err := c.(backend.MultiEditor).MultiEdit(ctx, "/m/f", []backend.EditOp{{Old: "x", New: "y"}}); err != nil {
+		t.Fatalf("MultiEdit through a route's Unwrap = %v", err)
+	}
+	ex, ok := mustNew(t, unwrapping{execOnly{memory.New()}}).(backend.Executor)
+	if !ok {
+		t.Fatal("default wrapping an Executor must yield Executor")
+	}
+	if _, err := ex.Execute(ctx, "true", backend.ExecOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}

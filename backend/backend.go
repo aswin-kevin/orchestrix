@@ -94,6 +94,9 @@ type GrepMatch struct {
 // backend's capabilities through the decorator; the outermost implementer
 // wins. A decorator that restricts a capability implements it itself (or
 // does not Unwrap), so the unrestricted one underneath is never reached.
+// Executor and Starter both run commands; a decorator that restricts commands
+// must implement both (or not Unwrap), otherwise the inner Starter is reached
+// through Unwrap.
 type Backend interface {
 	// Ls lists the direct children of a directory.
 	Ls(ctx context.Context, path string) ([]FileInfo, error)

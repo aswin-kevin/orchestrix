@@ -536,7 +536,7 @@ func bytesOf(t *testing.T, b backend.Backend, path string) string {
 }
 
 func testMultiEdit(t *testing.T, b backend.Backend) {
-	me, ok := b.(backend.MultiEditor)
+	me, ok := backend.AsMultiEditor(b)
 	if !ok {
 		t.Skip("backend does not implement MultiEditor")
 	}

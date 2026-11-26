@@ -8,6 +8,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/sandbox"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -87,4 +88,52 @@ func scriptedResult(p *llmtest.Scripted, id string) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+// unwrapping is a decorator that hides every optional capability of the
+// backend it wraps but exposes it through Unwrap.
+type unwrapping struct{ backend.Backend }
+
+func (u unwrapping) Unwrap() backend.Backend { return u.Backend }
+
+func TestPresetReachesCapabilitiesThroughUnwrap(t *testing.T) {
+	sh := shellBackend(t)
+	if err := sh.Write(t.Context(), "/a.txt", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	tm := tasks.New(tasks.Config{})
+	defer tm.Shutdown()
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "x1", Name: "execute", Input: map[string]any{"command": "echo fg-done"}}}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e1", Name: "execute", Input: map[string]any{
+			"command": "echo job-done", "run_in_background": true,
+		}}}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "o1", Name: tasks.ToolTaskOutput, Input: map[string]any{
+			"task_id": "bg_1", "block": true, "timeout_seconds": 10,
+		}}}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "r1", Name: "read_file", Input: map[string]any{"path": "/a.txt"}}}},
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "m1", Name: "multi_edit", Input: map[string]any{
+			"path": "/a.txt", "edits": []map[string]any{{"old_string": "x", "new_string": "y"}},
+		}}}},
+		llmtest.Turn{Text: "ok"},
+	)
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithBackend(unwrapping{sh}), orchestrix.WithTasks(tm),
+		orchestrix.WithPermissionMode(permission.ModeBypass))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ev := range a.Run(t.Context(), agent.Input{ThreadID: "t1", Messages: []llm.Message{llm.UserText("go")}}) {
+		if ev.Final != nil && ev.Final.Err != nil {
+			t.Fatal(ev.Final.Err)
+		}
+	}
+	if out := scriptedResult(p, "x1"); !strings.Contains(out, "fg-done") {
+		t.Errorf("execute = %q", out)
+	}
+	if out := scriptedResult(p, "o1"); !strings.Contains(out, "job-done") {
+		t.Errorf("task_output = %q", out)
+	}
+	if out := scriptedResult(p, "m1"); out != "Applied 1 edit(s) to /a.txt" {
+		t.Errorf("multi_edit = %q", out)
+	}
 }

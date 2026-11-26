@@ -29,7 +29,7 @@ func (m *middleware) registersExecute() bool {
 	if m.cfg.Backend == nil {
 		return m.cfg.Execute
 	}
-	_, ok := m.cfg.Backend.(backend.Executor)
+	_, ok := backend.AsExecutor(m.cfg.Backend)
 	return ok
 }
 
@@ -59,7 +59,7 @@ func (m *middleware) execute(ctx context.Context, in backgroundExecuteInput, c *
 	if err != nil {
 		return tool.Errorf("%v", err), nil
 	}
-	exec, ok := b.(backend.Executor)
+	exec, ok := backend.AsExecutor(b)
 	if !ok {
 		return tool.Errorf("this backend cannot execute commands"), nil
 	}

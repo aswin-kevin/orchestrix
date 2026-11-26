@@ -18,7 +18,7 @@ func (e execer) Execute(ctx context.Context, cmd string, opts backend.ExecOption
 	if err := e.c.checkDir(opts.Dir); err != nil {
 		return backend.ExecResult{}, err
 	}
-	return e.c.def.(backend.Executor).Execute(ctx, cmd, opts)
+	return e.c.exec.Execute(ctx, cmd, opts)
 }
 
 type starter struct{ c *composite }
@@ -27,17 +27,17 @@ func (s starter) Start(ctx context.Context, cmd string, opts backend.ExecOptions
 	if err := s.c.checkDir(opts.Dir); err != nil {
 		return nil, err
 	}
-	return s.c.def.(backend.Starter).Start(ctx, cmd, opts)
+	return s.c.start.Start(ctx, cmd, opts)
 }
 
 type snapper struct{ c *composite }
 
 func (s snapper) Snapshot(ctx context.Context) (json.RawMessage, error) {
-	return s.c.def.(backend.Snapshotter).Snapshot(ctx)
+	return s.c.snap.Snapshot(ctx)
 }
 
 func (s snapper) Restore(ctx context.Context, data json.RawMessage) error {
-	return s.c.def.(backend.Snapshotter).Restore(ctx, data)
+	return s.c.snap.Restore(ctx, data)
 }
 
 // checkDir rejects a working directory inside a mount: commands run in the
@@ -86,9 +86,10 @@ type (
 // withCapabilities returns the variant of c that exposes what its default
 // backend can do.
 func withCapabilities(c *composite) backend.Backend {
-	_, exec := c.def.(backend.Executor)
-	_, start := c.def.(backend.Starter)
-	_, snap := c.def.(backend.Snapshotter)
+	var exec, start, snap bool
+	c.exec, exec = backend.AsExecutor(c.def)
+	c.start, start = backend.AsStarter(c.def)
+	c.snap, snap = backend.AsSnapshotter(c.def)
 	e, s, sn := execer{c}, starter{c}, snapper{c}
 	switch {
 	case exec && start && snap:

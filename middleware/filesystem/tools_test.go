@@ -653,3 +653,22 @@ func selfCheck(t tool.Tool, ctx context.Context, in json.RawMessage, pc permissi
 	}
 	return c.CheckPermission(ctx, in, pc)
 }
+
+// unwrapping is a decorator that hides every optional capability of the
+// backend it wraps but exposes it through Unwrap.
+type unwrapping struct{ backend.Backend }
+
+func (u unwrapping) Unwrap() backend.Backend { return u.Backend }
+
+func TestToolsReachCapabilitiesThroughUnwrap(t *testing.T) {
+	eb := &execBackend{Backend: newClockBackend(), result: backend.ExecResult{Output: "hi"}}
+	seed(t, eb, "/a.txt", "x")
+	f := newFixture(t, Config{Backend: unwrapping{eb}})
+	if _, ok := f.tools["execute"]; !ok {
+		t.Fatal("execute not registered for a decorator over an Executor")
+	}
+	wantText(t, f.run(t, "execute", obj{"command": "echo hi"}), false, "hi\n[exit code 0]")
+	f.run(t, "read_file", obj{"path": "/a.txt"})
+	wantText(t, f.run(t, "multi_edit", obj{"path": "/a.txt", "edits": []obj{{"old_string": "x", "new_string": "y"}}}), false,
+		"Applied 1 edit(s) to /a.txt")
+}

@@ -213,7 +213,7 @@ func (s starter) Start(ctx context.Context, c *tool.Call, command string, timeou
 		// them and nobody could pick up a job after its run ended.
 		return "", errors.New("background jobs need a thread id")
 	}
-	b, ok := c.Backend.(backend.Starter)
+	b, ok := backend.AsStarter(c.Backend)
 	if !ok {
 		return "", errors.New("this backend cannot run background commands")
 	}

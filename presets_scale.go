@@ -1,10 +1,8 @@
 package orchestrix
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"io"
 	"slices"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -122,23 +120,11 @@ func applyMounts(cfg *agent.Config, mount func(backend.Backend) backend.Backend)
 	case cfg.Backend != nil:
 		inner := cfg.Backend
 		cfg.Backend = mount(inner)
-		if closeInner := backendCloser(inner); closeInner != nil {
-			cfg.OnClose = append(cfg.OnClose, closeInner)
+		if c, ok := backend.AsCloser(inner); ok {
+			cfg.OnClose = append(cfg.OnClose, c.Close)
 		}
 	case cfg.BackendFactory != nil:
 		factory := cfg.BackendFactory
 		cfg.BackendFactory = func(threadID string) backend.Backend { return mount(factory(threadID)) }
 	}
-}
-
-// backendCloser returns how Agent.Close releases b (agent.Closer, else
-// io.Closer), or nil when b has nothing to release.
-func backendCloser(b backend.Backend) func(context.Context) error {
-	switch c := b.(type) {
-	case agent.Closer:
-		return c.Close
-	case io.Closer:
-		return func(context.Context) error { return c.Close() }
-	}
-	return nil
 }

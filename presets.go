@@ -149,7 +149,7 @@ func (s *settings) canStartCommands() bool {
 	if s.shell != nil || s.cfg.BackendFactory != nil {
 		return true
 	}
-	_, ok := s.cfg.Backend.(backend.Starter)
+	_, ok := backend.AsStarter(s.cfg.Backend)
 	return ok
 }
 
@@ -209,7 +209,7 @@ func (s *settings) baseStack() []agent.Middleware {
 	// Executor. With a factory the backends are unknown when tools are
 	// collected, so tasks (which needs commands) is the promise that execute
 	// works.
-	_, canExecute := s.cfg.Backend.(backend.Executor)
+	_, canExecute := backend.AsExecutor(s.cfg.Backend)
 	stack = append(stack,
 		filesystem.New(filesystem.Config{Execute: s.shell != nil || s.tasks != nil || canExecute, Background: s.tasks != nil}),
 		planning.New(planning.Config{}),
