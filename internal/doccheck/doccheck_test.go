@@ -34,9 +34,9 @@ var moduleRoots = []string{
 }
 
 // walkPackages calls fn for every non-test file of every importable package
-// under root. Nested modules, internal packages, examples, commands, test
-// data and dot-directories are skipped.
-func walkPackages(t *testing.T, root string, fn func(pkg string, f *ast.File)) {
+// under root, with the package's directory and name. Nested modules, internal
+// packages, examples, commands, test data and dot-directories are skipped.
+func walkPackages(t *testing.T, root string, fn func(dir, pkg string, f *ast.File)) {
 	t.Helper()
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -65,7 +65,7 @@ func walkPackages(t *testing.T, root string, fn func(pkg string, f *ast.File)) {
 			if err != nil {
 				return err
 			}
-			fn(f.Name.Name, f)
+			fn(path, f.Name.Name, f)
 		}
 		return nil
 	})
@@ -81,7 +81,7 @@ func walkPackages(t *testing.T, root string, fn func(pkg string, f *ast.File)) {
 func TestExportedFieldsDocumented(t *testing.T) {
 	var missing []string
 	for _, root := range moduleRoots {
-		walkPackages(t, root, func(pkg string, f *ast.File) {
+		walkPackages(t, root, func(_, pkg string, f *ast.File) {
 			missing = append(missing, undocumented(pkg, f)...)
 		})
 	}
@@ -98,7 +98,7 @@ func TestExportedFieldsDocumented(t *testing.T) {
 func TestExportedDeclsDocumented(t *testing.T) {
 	var bad []string
 	for _, root := range moduleRoots {
-		walkPackages(t, root, func(pkg string, f *ast.File) {
+		walkPackages(t, root, func(_, pkg string, f *ast.File) {
 			bad = append(bad, undocumentedDecls(pkg, f)...)
 		})
 	}
