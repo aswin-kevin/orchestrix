@@ -29,7 +29,7 @@ func connect(t *testing.T, s *Server, opts ClientConfig) *Client {
 
 func TestInProcessRoundTrip(t *testing.T) {
 	c := connect(t, newTestServer(nil), ClientConfig{})
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if got := c.ServerInfo(); got != (Implementation{Name: "test-server", Version: "1.2.3"}) {
 		t.Errorf("ServerInfo = %+v", got)
@@ -99,7 +99,7 @@ func TestListToolsPagination(t *testing.T) {
 	}
 	c := connect(t, s, ClientConfig{})
 
-	tools, err := c.ListTools(context.Background())
+	tools, err := c.ListTools(t.Context())
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestCallTimeoutCancels(t *testing.T) {
 	c := connect(t, newTestServer(blocked), ClientConfig{RequestTimeout: 200 * time.Millisecond})
 
 	start := time.Now()
-	_, err := c.CallTool(context.Background(), "block", nil)
+	_, err := c.CallTool(t.Context(), "block", nil)
 	if !errors.Is(err, ErrTimeout) {
 		t.Fatalf("err = %v, want ErrTimeout", err)
 	}
@@ -133,7 +133,7 @@ func TestCallTimeoutCancels(t *testing.T) {
 		t.Fatal("handler ctx was not cancelled by notifications/cancelled")
 	}
 
-	res, err := c.CallTool(context.Background(), "echo", json.RawMessage(`{"text":"still here"}`))
+	res, err := c.CallTool(t.Context(), "echo", json.RawMessage(`{"text":"still here"}`))
 	if err != nil {
 		t.Fatalf("call after timeout: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestCallTimeoutCancels(t *testing.T) {
 
 func TestCallCtxCancelIsNotTimeout(t *testing.T) {
 	c := connect(t, newTestServer(nil), ClientConfig{})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(50*time.Millisecond, cancel)
 	_, err := c.CallTool(ctx, "block", nil)
 	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrTimeout) {
@@ -187,7 +187,7 @@ func TestHandlerNotificationDelivered(t *testing.T) {
 		notes <- method + " " + string(params)
 	}})
 
-	res, err := c.CallTool(context.Background(), "progress", nil)
+	res, err := c.CallTool(t.Context(), "progress", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestHandlerNotificationDelivered(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("handler notification not delivered")
 	}
-	if err := Notify(context.Background(), "x", nil); err == nil {
+	if err := Notify(t.Context(), "x", nil); err == nil {
 		t.Error("Notify outside a handler succeeded")
 	}
 }
@@ -231,7 +231,7 @@ func TestPingFromServerAnswered(t *testing.T) {
 
 func TestUnsupportedVersionRejected(t *testing.T) {
 	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, "1999-01-01") })
-	_, err := NewClient(context.Background(), f, ClientConfig{})
+	_, err := NewClient(t.Context(), f, ClientConfig{})
 	if err == nil || !strings.Contains(err.Error(), "1999-01-01") {
 		t.Fatalf("err = %v, want an error naming the unsupported version", err)
 	}
@@ -269,12 +269,12 @@ func TestInitializeHandshake(t *testing.T) {
 func TestServerEchoesSupportedVersion(t *testing.T) {
 	sess := InProcess(newTestServer(nil))
 	defer sess.Close(context.Background())
-	for _, tc := range []struct{ asked, want string }{
+	for _, tt := range []struct{ asked, want string }{
 		{"2024-11-05", "2024-11-05"},
 		{"2099-01-01", ProtocolVersion},
 	} {
-		msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":%q,"capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`, tc.asked)
-		if err := sess.Send(context.Background(), json.RawMessage(msg)); err != nil {
+		msg := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":%q,"capabilities":{},"clientInfo":{"name":"t","version":"0"}}}`, tt.asked)
+		if err := sess.Send(t.Context(), json.RawMessage(msg)); err != nil {
 			t.Fatal(err)
 		}
 		var reply struct {
@@ -285,15 +285,15 @@ func TestServerEchoesSupportedVersion(t *testing.T) {
 		if err := json.Unmarshal(<-sess.Messages(), &reply); err != nil {
 			t.Fatal(err)
 		}
-		if reply.Result.ProtocolVersion != tc.want {
-			t.Errorf("asked %s: got %s, want %s", tc.asked, reply.Result.ProtocolVersion, tc.want)
+		if reply.Result.ProtocolVersion != tt.want {
+			t.Errorf("asked %s: got %s, want %s", tt.asked, reply.Result.ProtocolVersion, tt.want)
 		}
 	}
 }
 
 func TestClosedClientFailsCalls(t *testing.T) {
 	c := connect(t, newTestServer(nil), ClientConfig{})
-	if err := c.Close(context.Background()); err != nil {
+	if err := c.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	select {
@@ -301,10 +301,10 @@ func TestClosedClientFailsCalls(t *testing.T) {
 	default:
 		t.Fatal("Done not closed after Close")
 	}
-	if _, err := c.ListTools(context.Background()); !errors.Is(err, ErrClosed) {
+	if _, err := c.ListTools(t.Context()); !errors.Is(err, ErrClosed) {
 		t.Fatalf("err = %v, want ErrClosed", err)
 	}
-	if err := c.Close(context.Background()); err != nil {
+	if err := c.Close(t.Context()); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
 }
@@ -321,12 +321,12 @@ func TestReplyBeforeEndIsDelivered(t *testing.T) {
 			return []string{fmt.Sprintf(`{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"t","inputSchema":{}}]}}`, id)}
 		})
 		f.endAfter = isMethod("tools/list")
-		c, err := NewClient(context.Background(), f, ClientConfig{})
+		c, err := NewClient(t.Context(), f, ClientConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		tools, err := c.ListTools(context.Background())
-		_ = c.Close(context.Background())
+		tools, err := c.ListTools(t.Context())
+		_ = c.Close(t.Context())
 		if err != nil || len(tools) != 1 {
 			t.Fatalf("iteration %d: ListTools = %v, %v; want the reply that arrived before the end", i, tools, err)
 		}
@@ -342,7 +342,7 @@ func TestCancelSentWhenSendTimesOut(t *testing.T) {
 	}
 	defer c.Close(context.Background())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	if _, err := c.CallTool(ctx, "slow", nil); !errors.Is(err, ErrTimeout) {
 		t.Fatalf("err = %v, want ErrTimeout", err)
@@ -397,7 +397,7 @@ func TestServerRequestFloodBounded(t *testing.T) {
 		}
 	}
 
-	res, err := c.CallTool(context.Background(), "echo", nil)
+	res, err := c.CallTool(t.Context(), "echo", nil)
 	if err != nil {
 		t.Fatalf("CallTool after the flood: %v", err)
 	}
@@ -409,7 +409,7 @@ func TestServerRequestFloodBounded(t *testing.T) {
 func TestCloseWithFullReplyQueue(t *testing.T) {
 	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
 	f.hold = isResponse
-	c, err := NewClient(context.Background(), f, ClientConfig{RequestTimeout: time.Hour})
+	c, err := NewClient(t.Context(), f, ClientConfig{RequestTimeout: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +418,7 @@ func TestCloseWithFullReplyQueue(t *testing.T) {
 	}
 	f.waitSent(t, isResponse) // the replier is stuck in Send
 	closed := make(chan error, 1)
-	go func() { closed <- c.Close(context.Background()) }()
+	go func() { closed <- c.Close(t.Context()) }()
 	select {
 	case <-closed:
 	case <-time.After(2 * time.Second):
@@ -499,7 +499,7 @@ func TestClientCloseIdempotent(t *testing.T) {
 
 func TestNewClientRejectsNegativeRequestTimeout(t *testing.T) {
 	f := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
-	_, err := NewClient(context.Background(), f, ClientConfig{RequestTimeout: -time.Second})
+	_, err := NewClient(t.Context(), f, ClientConfig{RequestTimeout: -time.Second})
 	if err == nil || err.Error() != "mcp: RequestTimeout is negative" {
 		t.Fatalf("err = %v, want mcp: RequestTimeout is negative", err)
 	}
@@ -541,7 +541,7 @@ func TestFailureCleanupCloseIsBounded(t *testing.T) {
 			ctxs:          make(chan closeCtx, 1),
 		}
 	}
-	cancelled, cancel := context.WithCancel(context.Background())
+	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
 	for _, tt := range []struct {
 		name    string
@@ -549,7 +549,7 @@ func TestFailureCleanupCloseIsBounded(t *testing.T) {
 		run     func(*deadlineRecorder) error
 	}{
 		{"negative RequestTimeout", true, func(r *deadlineRecorder) error {
-			_, err := NewClient(context.Background(), r, ClientConfig{RequestTimeout: -time.Second})
+			_, err := NewClient(t.Context(), r, ClientConfig{RequestTimeout: -time.Second})
 			return err
 		}},
 		{"failed initialize", false, func(r *deadlineRecorder) error {

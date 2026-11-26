@@ -68,7 +68,7 @@ func runAgent(t *testing.T, m *Middleware, cfg agent.Config, s *state.State) *ag
 		t.Fatal(err)
 	}
 	var final *agent.Final
-	for ev, err := range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}, State: s}) {
+	for ev, err := range a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}, State: s}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +117,7 @@ func findTool(t *testing.T, tools []tool.Tool, name string) tool.Tool {
 // callTool calls tl directly in the run with State s.
 func callTool(t *testing.T, tl tool.Tool, s *state.State, input string) tool.Result {
 	t.Helper()
-	res, err := tl.Call(context.Background(), json.RawMessage(input), &tool.Call{State: s})
+	res, err := tl.Call(t.Context(), json.RawMessage(input), &tool.Call{State: s})
 	if err != nil {
 		t.Fatalf("%s: %v", tl.Name(), err)
 	}
@@ -245,13 +245,13 @@ func TestReadResourceImagesFollowProfile(t *testing.T) {
 	m := connectMiddleware(t, inProcessServer("srv", s))
 	read := m.Tools()[1]
 	in := json.RawMessage(`{"server":"srv","uri":"file:///pic.png"}`)
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		profile llm.Profile
 		want    llm.BlockType
 	}{{llm.Profile{Images: true}, llm.BlockImage}, {llm.Profile{}, llm.BlockText}} {
-		res, err := read.Call(context.Background(), in, &tool.Call{Profile: tc.profile})
-		if err != nil || len(res.Content) != 1 || res.Content[0].Type != tc.want {
-			t.Fatalf("profile %+v: result = %+v, %v; want one %s block", tc.profile, res, err, tc.want)
+		res, err := read.Call(t.Context(), in, &tool.Call{Profile: tt.profile})
+		if err != nil || len(res.Content) != 1 || res.Content[0].Type != tt.want {
+			t.Fatalf("profile %+v: result = %+v, %v; want one %s block", tt.profile, res, err, tt.want)
 		}
 	}
 }
@@ -261,7 +261,7 @@ func TestConnectFailsFast(t *testing.T) {
 	// initialize never completes
 	stuck.hold = func(map[string]any) bool { return true }
 	start := time.Now()
-	_, err := Connect(context.Background(), []ServerConfig{
+	_, err := Connect(t.Context(), []ServerConfig{
 		{Name: "stuck", Transport: stuck},
 		{Name: "bad", Command: filepath.Join(t.TempDir(), "no-such-server")},
 	}, ConnectConfig{})
@@ -348,7 +348,7 @@ func (c *closeRecorder) Close(ctx context.Context) error {
 func TestConnectFailureClosesOthers(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no-such-server")
 	rec := &closeRecorder{Transport: InProcess(newTestServer(nil))}
-	_, err := Connect(context.Background(), []ServerConfig{
+	_, err := Connect(t.Context(), []ServerConfig{
 		{Name: "good", Transport: rec},
 		{Name: "bad", Command: missing},
 	}, ConnectConfig{})
@@ -395,7 +395,7 @@ func TestConnectOverHTTP(t *testing.T) {
 
 func TestServerConfigValidation(t *testing.T) {
 	tr := func() Transport { return InProcess(newTestServer(nil)) }
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name    string
 		servers []ServerConfig
 	}{
@@ -412,9 +412,9 @@ func TestServerConfigValidation(t *testing.T) {
 		{"blank tool pattern", []ServerConfig{{Name: "a", Command: "x", Tools: []string{"ok_*", " "}}}},
 		{"empty tool pattern", []ServerConfig{{Name: "a", Command: "x", Tools: []string{""}}}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if m, err := Connect(context.Background(), tc.servers, ConnectConfig{}); err == nil {
-				_ = m.Close(context.Background())
+		t.Run(tt.name, func(t *testing.T) {
+			if m, err := Connect(t.Context(), tt.servers, ConnectConfig{}); err == nil {
+				_ = m.Close(t.Context())
 				t.Fatal("Connect succeeded, want a validation error")
 			}
 		})
@@ -422,17 +422,17 @@ func TestServerConfigValidation(t *testing.T) {
 }
 
 func TestCloseIsIdempotent(t *testing.T) {
-	m, err := Connect(context.Background(), []ServerConfig{inProcessServer("srv", newTestServer(nil))}, ConnectConfig{})
+	m, err := Connect(t.Context(), []ServerConfig{inProcessServer("srv", newTestServer(nil))}, ConnectConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if m.Name() != "mcp" {
 		t.Fatalf("Name = %q", m.Name())
 	}
-	if err := m.Close(context.Background()); err != nil {
+	if err := m.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Close(context.Background()); err != nil {
+	if err := m.Close(t.Context()); err != nil {
 		t.Fatalf("second Close: %v", err)
 	}
 }
@@ -445,7 +445,7 @@ func TestMiddlewareName(t *testing.T) {
 }
 
 func TestConnectSendsInfo(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		info Implementation
 		want string
@@ -453,9 +453,9 @@ func TestConnectSendsInfo(t *testing.T) {
 		{"set", Implementation{Name: "host", Version: "1"}, "host"},
 		{"zero", Implementation{}, "orchestrix"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			ft := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
-			m, err := Connect(context.Background(), []ServerConfig{{Name: "a", Transport: ft}}, ConnectConfig{Info: tc.info})
+			m, err := Connect(context.Background(), []ServerConfig{{Name: "a", Transport: ft}}, ConnectConfig{Info: tt.info})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -463,8 +463,8 @@ func TestConnectSendsInfo(t *testing.T) {
 			init := ft.waitSent(t, isMethod("initialize"))
 			params, _ := init["params"].(map[string]any)
 			info, _ := params["clientInfo"].(map[string]any)
-			if info["name"] != tc.want {
-				t.Fatalf("clientInfo = %v, want name %q", info, tc.want)
+			if info["name"] != tt.want {
+				t.Fatalf("clientInfo = %v, want name %q", info, tt.want)
 			}
 		})
 	}
@@ -522,7 +522,7 @@ func (b *syncBuffer) String() string {
 func TestConnectLogsConnectionEnd(t *testing.T) {
 	var buf syncBuffer
 	rec := &closeRecorder{Transport: InProcess(newTestServer(nil))}
-	m, err := Connect(context.Background(), []ServerConfig{{Name: "srv", Transport: rec}},
+	m, err := Connect(t.Context(), []ServerConfig{{Name: "srv", Transport: rec}},
 		ConnectConfig{Logger: slog.New(slog.NewJSONHandler(&buf, nil))})
 	if err != nil {
 		t.Fatal(err)
@@ -530,7 +530,7 @@ func TestConnectLogsConnectionEnd(t *testing.T) {
 	if buf.String() != "" {
 		t.Fatalf("Connect logged %q", buf.String())
 	}
-	_ = rec.Transport.Close(context.Background())
+	_ = rec.Transport.Close(t.Context())
 	waitFor(t, "connection end logged", func() bool {
 		out := buf.String()
 		return strings.Contains(out, `"msg":"mcp: server connection ended"`) && strings.Contains(out, `"server":"srv"`) && strings.Contains(out, `"level":"WARN"`)
@@ -540,19 +540,19 @@ func TestConnectLogsConnectionEnd(t *testing.T) {
 		t.Fatalf("connection end err not ErrClosed: %s", out)
 	}
 	before := buf.String()
-	_ = m.Close(context.Background())
+	_ = m.Close(t.Context())
 	if after := buf.String(); after != before {
 		t.Fatalf("Close logged: %q", strings.TrimPrefix(after, before))
 	}
 
 	// A normal Middleware.Close logs nothing.
 	var quiet syncBuffer
-	m2, err := Connect(context.Background(), []ServerConfig{inProcessServer("srv", newTestServer(nil))},
+	m2, err := Connect(t.Context(), []ServerConfig{inProcessServer("srv", newTestServer(nil))},
 		ConnectConfig{Logger: slog.New(slog.NewJSONHandler(&quiet, nil))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = m2.Close(context.Background())
+	_ = m2.Close(t.Context())
 	time.Sleep(50 * time.Millisecond)
 	if quiet.String() != "" {
 		t.Fatalf("Close logged: %q", quiet.String())

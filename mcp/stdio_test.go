@@ -138,7 +138,7 @@ func connectHelper(t *testing.T, mode string, cfg StdioConfig) *Client {
 // callText calls tool and returns its text result.
 func callText(t *testing.T, c *Client, tool, args string) string {
 	t.Helper()
-	res, err := c.CallTool(context.Background(), tool, json.RawMessage(args))
+	res, err := c.CallTool(t.Context(), tool, json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("CallTool %s: %v", tool, err)
 	}
@@ -150,18 +150,18 @@ func TestStdioHelperServer(t *testing.T) {
 	if c.ServerInfo().Name != "test-server" {
 		t.Errorf("ServerInfo = %+v", c.ServerInfo())
 	}
-	tools, err := c.ListTools(context.Background())
+	tools, err := c.ListTools(t.Context())
 	if err != nil || len(tools) < 4 {
 		t.Fatalf("ListTools = %d tools, %v", len(tools), err)
 	}
 	if got := callText(t, c, "echo", `{"text":"over stdio"}`); got != "over stdio" {
 		t.Errorf("echo = %q", got)
 	}
-	contents, err := c.ReadResource(context.Background(), "file:///readme")
+	contents, err := c.ReadResource(t.Context(), "file:///readme")
 	if err != nil || len(contents) != 1 || contents[0].Text != "hello" {
 		t.Errorf("ReadResource = %+v, %v", contents, err)
 	}
-	if err := c.Close(context.Background()); err != nil {
+	if err := c.Close(t.Context()); err != nil {
 		t.Errorf("Close: %v", err)
 	}
 }
@@ -194,7 +194,7 @@ func TestStdioEnvironment(t *testing.T) {
 
 func TestServerCrashFailsPending(t *testing.T) {
 	c := connectHelper(t, "crash", StdioConfig{})
-	_, err := c.CallTool(context.Background(), "crash", nil)
+	_, err := c.CallTool(t.Context(), "crash", nil)
 	if !errors.Is(err, ErrClosed) {
 		t.Fatalf("err = %v, want ErrClosed", err)
 	}
@@ -213,7 +213,7 @@ func TestServerCrashFailsPending(t *testing.T) {
 
 func TestOversizedMessageEndsTransport(t *testing.T) {
 	c := connectHelper(t, "serve", StdioConfig{MaxMessageBytes: 1024})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
 	_, err := c.CallTool(ctx, "big", nil)
@@ -257,12 +257,12 @@ func TestStartStdioErrors(t *testing.T) {
 func TestNoGoroutineLeak(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 
-	inproc, err := NewClient(context.Background(), InProcess(newTestServer(nil)), ClientConfig{})
+	inproc, err := NewClient(t.Context(), InProcess(newTestServer(nil)), ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	tr := startHelper(t, "serve", StdioConfig{})
-	stdio, err := NewClient(context.Background(), tr, ClientConfig{})
+	stdio, err := NewClient(t.Context(), tr, ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestNoGoroutineLeak(t *testing.T) {
 		if got := callText(t, c, "echo", `{"text":"x"}`); got != "x" {
 			t.Fatalf("echo = %q", got)
 		}
-		if err := c.Close(context.Background()); err != nil {
+		if err := c.Close(t.Context()); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 	}

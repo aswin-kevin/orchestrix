@@ -76,11 +76,7 @@ func (s *session) spawn(f func()) bool {
 	if s.closed {
 		return false
 	}
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		f()
-	}()
+	s.wg.Go(f)
 	return true
 }
 
@@ -121,13 +117,11 @@ func (s *session) start(m message) error {
 		return ErrClosed
 	}
 	s.inflight[id] = req
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		defer cancel()
 		defer s.finish(id, req)
 		s.run(ctx, m)
-	}()
+	})
 	return nil
 }
 

@@ -76,7 +76,7 @@ func NewServer() *mcp.Server {
 // given.
 func Run(t *testing.T, connect func(t *testing.T) mcp.Transport) {
 	t.Helper()
-	cases := []struct {
+	tests := []struct {
 		name string
 		run  func(t *testing.T, connect func(t *testing.T) mcp.Transport)
 	}{
@@ -88,8 +88,8 @@ func Run(t *testing.T, connect func(t *testing.T) mcp.Transport) {
 		{"CloseIdempotent", closeCase(testCloseIdempotent)},
 		{"SendAfterClose", closeCase(testSendAfterClose)},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) { c.run(t, connect) })
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { tt.run(t, connect) })
 	}
 }
 

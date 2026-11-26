@@ -201,9 +201,7 @@ func Connect(ctx context.Context, servers []ServerConfig, cfg ConnectConfig) (*M
 	errs := make([]error, len(m.servers))
 	var wg sync.WaitGroup
 	for i, s := range m.servers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			err := s.connect(connectCtx)
 			if err == nil {
 				return
@@ -214,7 +212,7 @@ func Connect(ctx context.Context, servers []ServerConfig, cfg ConnectConfig) (*M
 				errs[i] = s.err
 				abort()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if err := errors.Join(errs...); err != nil {

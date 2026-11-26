@@ -39,11 +39,9 @@ func (t *httpTransport) startListener() {
 		return
 	}
 	t.listening = true
-	t.wg.Add(1)
-	go func() {
-		defer t.wg.Done()
+	t.wg.Go(func() {
 		t.listen()
-	}()
+	})
 }
 
 // listen keeps a GET stream open, reopening it after t.retry, until the

@@ -59,7 +59,7 @@ func TestCloseKillsServerThatLeftItsGroup(t *testing.T) {
 	}
 
 	closed := make(chan error, 1)
-	go func() { closed <- c.Close(context.Background()) }()
+	go func() { closed <- c.Close(t.Context()) }()
 	select {
 	case err := <-closed:
 		if err != nil {
@@ -83,7 +83,7 @@ func TestCloseKillsStubbornServer(t *testing.T) {
 	}
 
 	start := time.Now()
-	if err := c.Close(context.Background()); err != nil {
+	if err := c.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed >= 1500*time.Millisecond {
@@ -106,7 +106,7 @@ func TestCloseKillsGrandchild(t *testing.T) {
 		t.Fatal("grandchild not running before Close")
 	}
 
-	if err := c.Close(context.Background()); err != nil {
+	if err := c.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -127,7 +127,7 @@ func TestExitedServerLeftoversKilled(t *testing.T) {
 	// only if the test failed
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 
-	if _, err := c.CallTool(context.Background(), "quit", nil); !errors.Is(err, ErrClosed) {
+	if _, err := c.CallTool(t.Context(), "quit", nil); !errors.Is(err, ErrClosed) {
 		t.Fatalf("quit: err = %v, want ErrClosed", err)
 	}
 	// No Close: the server exiting on its own takes its descendants along.

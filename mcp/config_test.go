@@ -34,7 +34,7 @@ func TestParseConfig(t *testing.T) {
 }
 
 func TestParseConfigErrors(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name, data, wantErr string
 	}{
 		{"unknown field", `{"mcpServers": {"a": {"command": "x", "comand": "y"}}}`, "comand"},
@@ -47,10 +47,10 @@ func TestParseConfigErrors(t *testing.T) {
 		{"not json", `{"mcpServers": `, "mcp"},
 		{"trailing data", `{"mcpServers": {}} {}`, "mcp"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseConfig([]byte(tc.data))
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("err = %v, want one mentioning %q", err, tc.wantErr)
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseConfig([]byte(tt.data))
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want one mentioning %q", err, tt.wantErr)
 			}
 		})
 	}

@@ -80,7 +80,7 @@ func TestToolAdapterSchemaAndDescription(t *testing.T) {
 
 func TestContentMapping(t *testing.T) {
 	image := llm.Block{Type: llm.BlockImage, Source: &llm.Source{Type: "base64", MediaType: "image/png", Data: pngData}}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		in   CallToolResult
 		want tool.Result
@@ -106,9 +106,9 @@ func TestContentMapping(t *testing.T) {
 		{"mixed", CallToolResult{Content: []Content{{Type: "text", Text: "a"}, {Type: "text", Text: "b"}}, StructuredContent: json.RawMessage(`{}`)},
 			tool.Result{Content: []llm.Block{llm.TextBlock("a"), llm.TextBlock("b")}}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := toolResult(&tc.in, imagesOK); !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("result = %+v, want %+v", got, tc.want)
+		t.Run(tt.name, func(t *testing.T) {
+			if got := toolResult(&tt.in, imagesOK); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("result = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
@@ -129,7 +129,7 @@ func TestImageGating(t *testing.T) {
 		return llm.Block{Type: llm.BlockImage, Source: &llm.Source{Type: "base64", MediaType: mediaType,
 			Data: base64.StdEncoding.EncodeToString([]byte(raw))}}
 	}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name    string
 		profile llm.Profile
 		content Content
@@ -154,10 +154,10 @@ func TestImageGating(t *testing.T) {
 		{"resource blob without images", llm.Profile{}, Content{Type: "resource", Resource: &ResourceContent{URI: "file:///i", MimeType: "image/png", Blob: pngData}},
 			llm.TextBlock("[image omitted: image/png; the model does not take images]")},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := toolResult(&CallToolResult{Content: []Content{tc.content}}, tc.profile)
-			if len(got.Content) != 1 || !reflect.DeepEqual(got.Content[0], tc.want) {
-				t.Fatalf("content = %+v, want %+v", got.Content, tc.want)
+		t.Run(tt.name, func(t *testing.T) {
+			got := toolResult(&CallToolResult{Content: []Content{tt.content}}, tt.profile)
+			if len(got.Content) != 1 || !reflect.DeepEqual(got.Content[0], tt.want) {
+				t.Fatalf("content = %+v, want %+v", got.Content, tt.want)
 			}
 		})
 	}
@@ -181,13 +181,13 @@ func TestImagesFollowCallProfile(t *testing.T) {
 	})
 	m := connectMiddleware(t, inProcessServer("srv", s))
 	pic := findTool(t, m.DynamicTools(), "mcp__srv__pic")
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		profile llm.Profile
 		want    llm.BlockType
 	}{{imagesOK, llm.BlockImage}, {llm.Profile{}, llm.BlockText}} {
-		res, err := pic.Call(context.Background(), json.RawMessage(`{}`), &tool.Call{Profile: tc.profile})
-		if err != nil || len(res.Content) != 1 || res.Content[0].Type != tc.want {
-			t.Fatalf("profile %+v: result = %+v, %v; want one %s block", tc.profile, res, err, tc.want)
+		res, err := pic.Call(t.Context(), json.RawMessage(`{}`), &tool.Call{Profile: tt.profile})
+		if err != nil || len(res.Content) != 1 || res.Content[0].Type != tt.want {
+			t.Fatalf("profile %+v: result = %+v, %v; want one %s block", tt.profile, res, err, tt.want)
 		}
 	}
 }
@@ -272,7 +272,7 @@ func TestDuplicateSanitizedNamesFailConnect(t *testing.T) {
 	s := NewServer(Implementation{Name: "s", Version: "1"}, "")
 	s.AddTool(ToolInfo{Name: "a.b"}, nil)
 	s.AddTool(ToolInfo{Name: "a/b"}, nil)
-	_, err := Connect(context.Background(), []ServerConfig{inProcessServer("srv", s)}, ConnectConfig{})
+	_, err := Connect(t.Context(), []ServerConfig{inProcessServer("srv", s)}, ConnectConfig{})
 	if err == nil || !strings.Contains(err.Error(), "a.b") || !strings.Contains(err.Error(), "a/b") {
 		t.Fatalf("err = %v, want a collision error naming both tools", err)
 	}
@@ -465,13 +465,13 @@ func TestRefreshCoalescesNotices(t *testing.T) {
 func TestCloseWaitsForRefresh(t *testing.T) {
 	srv := newTestServer(nil)
 	gate := newListGate(InProcess(srv))
-	m, err := Connect(context.Background(), []ServerConfig{{Name: "srv", Transport: gate}}, ConnectConfig{})
+	m, err := Connect(t.Context(), []ServerConfig{{Name: "srv", Transport: gate}}, ConnectConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv.AddTool(ToolInfo{Name: "x"}, nil)
 	waitFor(t, "refresh in flight", func() bool { return gate.lists.Load() == 2 })
-	_ = m.Close(context.Background())
+	_ = m.Close(t.Context())
 	if gate.returned.Load() != 1 {
 		t.Fatal("Close returned before the in-flight refresh ended")
 	}

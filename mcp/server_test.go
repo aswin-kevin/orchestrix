@@ -20,7 +20,7 @@ func rawSession(t *testing.T, s *Server) Transport {
 
 func send(t *testing.T, tr Transport, msg string) {
 	t.Helper()
-	if err := tr.Send(context.Background(), json.RawMessage(msg)); err != nil {
+	if err := tr.Send(t.Context(), json.RawMessage(msg)); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 }
@@ -77,14 +77,14 @@ func TestNotifyAfterSessionClosed(t *testing.T) {
 		return TextResult("ok"), nil
 	})
 	for range 20 {
-		c, err := NewClient(context.Background(), InProcess(s), ClientConfig{})
+		c, err := NewClient(t.Context(), InProcess(s), ClientConfig{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := c.CallTool(context.Background(), "keep", nil); err != nil {
+		if _, err := c.CallTool(t.Context(), "keep", nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := c.Close(context.Background()); err != nil {
+		if err := c.Close(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 		if err := Notify(<-kept, "notifications/progress", nil); err == nil {

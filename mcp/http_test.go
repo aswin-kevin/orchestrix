@@ -463,7 +463,7 @@ func TestHTTPSessionExpired(t *testing.T) {
 	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientConfig{})
 	expired.Store(true)
 
-	if _, err := c.CallTool(context.Background(), "echo", json.RawMessage(`{"text":"x"}`)); !errors.Is(err, ErrSessionExpired) {
+	if _, err := c.CallTool(t.Context(), "echo", json.RawMessage(`{"text":"x"}`)); !errors.Is(err, ErrSessionExpired) {
 		t.Fatalf("CallTool error = %v, want ErrSessionExpired", err)
 	}
 	select {
@@ -491,7 +491,7 @@ func TestHTTPErrorStatus(t *testing.T) {
 	failing.Store(true)
 
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	_, err := c.CallTool(ctx, "echo", json.RawMessage(`{"text":"x"}`))
 	if err == nil || !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "boom") {
@@ -515,7 +515,7 @@ func TestHTTPOversizedResponse(t *testing.T) {
 		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
 			_, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{JSONResponses: !stream, DisableGET: true})
 			c := connectHTTP(t, HTTPConfig{URL: ts.URL, MaxMessageBytes: bigResultBytes / 2}, ClientConfig{})
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			_, err := c.CallTool(ctx, "big", nil)
 			if err == nil || !strings.Contains(err.Error(), fmt.Sprint(bigResultBytes/2)) {
@@ -541,7 +541,7 @@ func TestHTTPOversizedResponse(t *testing.T) {
 
 func TestHTTPCloseSendsDelete(t *testing.T) {
 	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{})
-	c, err := NewClient(context.Background(), dialTransport(t, HTTPConfig{URL: ts.URL}), ClientConfig{})
+	c, err := NewClient(t.Context(), dialTransport(t, HTTPConfig{URL: ts.URL}), ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -549,7 +549,7 @@ func TestHTTPCloseSendsDelete(t *testing.T) {
 	rec.waitGETOpen(t)
 
 	start := time.Now()
-	if err := c.Close(context.Background()); err != nil {
+	if err := c.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
@@ -573,7 +573,7 @@ func TestHTTPNoGoroutineLeak(t *testing.T) {
 	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{})
 	baseline := runtime.NumGoroutine()
 
-	c, err := NewClient(context.Background(), dialTransport(t, HTTPConfig{URL: ts.URL}), ClientConfig{})
+	c, err := NewClient(t.Context(), dialTransport(t, HTTPConfig{URL: ts.URL}), ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -581,7 +581,7 @@ func TestHTTPNoGoroutineLeak(t *testing.T) {
 	if got := callText(t, c, "echo", `{"text":"x"}`); got != "x" {
 		t.Fatalf("echo = %q", got)
 	}
-	if err := c.Close(context.Background()); err != nil {
+	if err := c.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
@@ -598,18 +598,18 @@ func TestHTTPNoGoroutineLeak(t *testing.T) {
 func TestHTTPCallsAfterCloseFail(t *testing.T) {
 	_, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{DisableGET: true})
 	tr := dialTransport(t, HTTPConfig{URL: ts.URL})
-	c, err := NewClient(context.Background(), tr, ClientConfig{})
+	c, err := NewClient(t.Context(), tr, ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = c.Close(context.Background())
-	if err := tr.Send(context.Background(), json.RawMessage(`{"jsonrpc":"2.0","method":"x"}`)); !errors.Is(err, ErrClosed) {
+	_ = c.Close(t.Context())
+	if err := tr.Send(t.Context(), json.RawMessage(`{"jsonrpc":"2.0","method":"x"}`)); !errors.Is(err, ErrClosed) {
 		t.Errorf("Send after Close = %v, want ErrClosed", err)
 	}
 	if _, ok := <-tr.Messages(); ok {
 		t.Error("Messages still open after Close")
 	}
-	if err := tr.Close(context.Background()); err != nil {
+	if err := tr.Close(t.Context()); err != nil {
 		t.Errorf("second Close = %v", err)
 	}
 }
@@ -630,7 +630,7 @@ func TestDialHTTPValidatesURL(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DialHTTP(%q): %v", good, err)
 		}
-		if err := tr.Close(context.Background()); err != nil {
+		if err := tr.Close(t.Context()); err != nil {
 			t.Errorf("Close without a session: %v", err)
 		}
 	}
@@ -640,7 +640,7 @@ func TestHTTPIdleSessionExpires(t *testing.T) {
 	_, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{DisableGET: true, SessionIdleTimeout: 5 * testRetry})
 	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientConfig{})
 	time.Sleep(15 * testRetry)
-	if _, err := c.CallTool(context.Background(), "echo", json.RawMessage(`{"text":"x"}`)); !errors.Is(err, ErrSessionExpired) {
+	if _, err := c.CallTool(t.Context(), "echo", json.RawMessage(`{"text":"x"}`)); !errors.Is(err, ErrSessionExpired) {
 		t.Fatalf("CallTool after idling = %v, want ErrSessionExpired", err)
 	}
 }
@@ -689,8 +689,8 @@ func TestHTTPRefusesRedirects(t *testing.T) {
 				if err != nil {
 					t.Fatalf("DialHTTP: %v", err)
 				}
-				err = tr.Send(context.Background(), json.RawMessage(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
-				tr.Close(context.Background())
+				err = tr.Send(t.Context(), json.RawMessage(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
+				tr.Close(t.Context())
 				if err == nil || !strings.Contains(err.Error(), fmt.Sprint(status)) || !strings.Contains(err.Error(), "redirect") {
 					t.Errorf("Send (own client %v) error = %v, want a redirect error naming %d", client == nil, err, status)
 				}
@@ -802,7 +802,7 @@ func TestSSEReplyClosedOnTimeout(t *testing.T) {
 	rec, ts := serveHTTP(t, newTestServer(blocked), HandlerConfig{DisableGET: true})
 	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientConfig{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	if _, err := c.CallTool(ctx, "block", nil); !errors.Is(err, ErrTimeout) {
 		t.Fatalf("err = %v, want ErrTimeout", err)
@@ -845,7 +845,7 @@ func TestHTTPCloseBoundedByContext(t *testing.T) {
 		inner.ServeHTTP(w, r)
 	}))
 	t.Cleanup(ts.Close)
-	c, err := NewClient(context.Background(), dialTransport(t, HTTPConfig{URL: ts.URL}), ClientConfig{})
+	c, err := NewClient(t.Context(), dialTransport(t, HTTPConfig{URL: ts.URL}), ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -860,7 +860,7 @@ func TestHTTPCloseBoundedByContext(t *testing.T) {
 		t.Fatalf("Close took %v, want < 1s", elapsed)
 	}
 	// Let the background DELETE finish inside the test.
-	if err := c.Close(context.Background()); err != nil {
+	if err := c.Close(t.Context()); err != nil {
 		t.Fatalf("draining Close: %v", err)
 	}
 }
