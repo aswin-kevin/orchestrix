@@ -84,11 +84,11 @@ func (r modeRun) run(t *testing.T) modeOutcome {
 		// can be tested.
 		restoredModeKey.Set(in.State, r.runMode)
 	}
-	_, final := collect(t, context.Background(), a, in)
+	_, final := collect(t, t.Context(), a, in)
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
 	}
-	_, readErr := be.Read(context.Background(), "/out.md", 0, 0)
+	_, readErr := be.Read(t.Context(), "/out.md", 0, 0)
 	return modeOutcome{task: onlyResult(t, parent), child: child, written: readErr == nil}
 }
 
@@ -130,7 +130,7 @@ func TestChildInheritsPlanMode(t *testing.T) {
 
 func TestChildModeIsStricter(t *testing.T) {
 	const dontAskDenied = "Permission denied: write_file is not permitted in dontAsk mode"
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		run  modeRun
 		// denied is the child's write_file error, "" when it must write.
@@ -143,17 +143,17 @@ func TestChildModeIsStricter(t *testing.T) {
 		{"bypass child under invalid restored mode", modeRun{parentMode: permission.ModeBypass, runMode: "nope", childMode: permission.ModeBypass}, planDenied},
 		{"acceptEdits child under bypass parent", modeRun{parentMode: permission.ModeBypass, childMode: permission.ModeAcceptEdits}, ""},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := tc.run.run(t)
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.run.run(t)
 			res := got.childWriteResult(t)
-			if tc.denied == "" {
+			if tt.denied == "" {
 				if res.IsError || !got.written {
 					t.Fatalf("child write_file result = %q (written %v), want success", blockText(res), got.written)
 				}
 				return
 			}
-			if !res.IsError || blockText(res) != tc.denied {
-				t.Fatalf("child write_file result = %q (error %v), want %q", blockText(res), res.IsError, tc.denied)
+			if !res.IsError || blockText(res) != tt.denied {
+				t.Fatalf("child write_file result = %q (error %v), want %q", blockText(res), res.IsError, tt.denied)
 			}
 			if got.written {
 				t.Fatal("the child wrote /out.md")
@@ -189,7 +189,7 @@ func TestGrandchildOfPlanParentIsPlan(t *testing.T) {
 	in := userInput("go")
 	in.State = state.New()
 	mustSetMode(t, in.State, permission.ModePlan)
-	_, final := collect(t, context.Background(), a, in)
+	_, final := collect(t, t.Context(), a, in)
 
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
@@ -198,7 +198,7 @@ func TestGrandchildOfPlanParentIsPlan(t *testing.T) {
 	if len(results) != 1 || !results[0].IsError || blockText(results[0]) != planDenied {
 		t.Fatalf("grandchild write_file results = %+v, want one %q", results, planDenied)
 	}
-	if _, err := be.Read(context.Background(), "/out.md", 0, 0); err == nil {
+	if _, err := be.Read(t.Context(), "/out.md", 0, 0); err == nil {
 		t.Fatal("the grandchild wrote /out.md in plan mode")
 	}
 }
@@ -232,7 +232,7 @@ func TestForkKeepsParentRunMode(t *testing.T) {
 	if err := agent.SetPermissionMode(in.State, permission.ModePlan); err != nil {
 		t.Fatal(err)
 	}
-	_, final := collect(t, context.Background(), a, in)
+	_, final := collect(t, t.Context(), a, in)
 
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
@@ -241,7 +241,7 @@ func TestForkKeepsParentRunMode(t *testing.T) {
 	if len(results) != 1 || !results[0].IsError || blockText(results[0]) != planDenied {
 		t.Fatalf("fork write_file results = %+v, want one %q", results, planDenied)
 	}
-	if _, err := be.Read(context.Background(), "/out.md", 0, 0); err == nil {
+	if _, err := be.Read(t.Context(), "/out.md", 0, 0); err == nil {
 		t.Fatal("the fork wrote /out.md in plan mode")
 	}
 }

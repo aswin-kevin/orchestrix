@@ -3,7 +3,6 @@
 package jobs
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -28,7 +27,7 @@ func TestThreadlessRunHasNoJobs(t *testing.T) {
 		turn(call("l1", ToolList, obj{}), call("o1", ToolCheck, obj{"job_id": "bg_1"})),
 		llmtest.Turn{Text: "ok"},
 	)
-	run(t, context.Background(), newAgent(t, p, m, newShell(t)), input(""))
+	run(t, t.Context(), newAgent(t, p, m, newShell(t)), input(""))
 
 	if r := result(t, p, "e1"); !r.IsError || !strings.Contains(resultText(t, p, "e1"), "background jobs need a thread id") {
 		t.Fatalf("threadless start = %q (error %v)", resultText(t, p, "e1"), r.IsError)
@@ -54,7 +53,7 @@ func TestSettledThreadIsDropped(t *testing.T) {
 		turn(call("o2", ToolCheck, obj{"job_id": "bg_1"})),
 		llmtest.Turn{Text: "ok"},
 	)
-	run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
+	run(t, t.Context(), newAgent(t, p, m, newShell(t)), input("t1"))
 
 	if got := resultText(t, p, "o1"); !strings.Contains(got, "hi") {
 		t.Fatalf("output in the notification turn = %q", got)
@@ -67,7 +66,7 @@ func TestSettledThreadIsDropped(t *testing.T) {
 	}
 
 	sleeper := llmtest.New(turn(call("s1", ToolSleep, obj{"seconds": 1})), llmtest.Turn{Text: "ok"})
-	run(t, context.Background(), newAgent(t, sleeper, m, newShell(t)), input("t2"))
+	run(t, t.Context(), newAgent(t, sleeper, m, newShell(t)), input("t2"))
 	if n := threadCount(m); n != 0 {
 		t.Fatalf("a sleep-only thread created %d entries", n)
 	}
@@ -81,11 +80,11 @@ func TestStopKeepsStatusOfEndedJob(t *testing.T) {
 		turn(call("x1", ToolCancel, obj{"job_id": "bg_1"}), call("o1", ToolCheck, obj{"job_id": "bg_1"})),
 		llmtest.Turn{Text: "ok"},
 	)
-	run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
+	run(t, t.Context(), newAgent(t, p, m, newShell(t)), input("t1"))
 	if got := resultText(t, p, "o1"); !strings.Contains(got, "failed (exit code 3)") {
 		t.Fatalf("check_job after stopping an ended job = %q", got)
 	}
-	if stop(context.Background(), nil) == nil {
+	if stop(t.Context(), nil) == nil {
 		t.Fatal("stop accepted a nil job")
 	}
 }
@@ -97,7 +96,7 @@ func TestJobTimeoutCapsRequestedTimeout(t *testing.T) {
 		turn(call("o1", ToolCheck, obj{"job_id": "bg_1", "wait": true, "timeout_seconds": 10})),
 		llmtest.Turn{Text: "ok"},
 	)
-	run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
+	run(t, t.Context(), newAgent(t, p, m, newShell(t)), input("t1"))
 	if got := resultText(t, p, "o1"); !strings.Contains(got, "timed_out") {
 		t.Fatalf("check_job = %q, want timed_out", got)
 	}
@@ -113,7 +112,7 @@ func TestMaxFinishedEvictsAndPrunes(t *testing.T) {
 		turn(call("o1", ToolCheck, obj{"job_id": "bg_1"}), call("o2", ToolCheck, obj{"job_id": "bg_2"})),
 		llmtest.Turn{Text: "ok"},
 	)
-	final := run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
+	final := run(t, t.Context(), newAgent(t, p, m, newShell(t)), input("t1"))
 
 	if r := result(t, p, "o1"); !r.IsError {
 		t.Fatalf("evicted task still answered: %q", resultText(t, p, "o1"))
@@ -148,7 +147,7 @@ func TestNotificationSurvivesCheckpoint(t *testing.T) {
 	m := newJobs(t, Config{})
 	b := newShell(t)
 	first := llmtest.New(turn(bgExecute("e1", "sleep 0.2; echo hi")), llmtest.Turn{Text: "later"})
-	final := run(t, context.Background(), newAgent(t, first, m, b), input("t1"))
+	final := run(t, t.Context(), newAgent(t, first, m, b), input("t1"))
 
 	data, err := json.Marshal(final.State)
 	if err != nil {
@@ -167,7 +166,7 @@ func TestNotificationSurvivesCheckpoint(t *testing.T) {
 	second := llmtest.New(turn(call("o1", ToolCheck, obj{"job_id": "bg_1"})), llmtest.Turn{Text: "ok"})
 	in := input("t1")
 	in.State = restored
-	run(t, context.Background(), newAgent(t, second, m, b), in)
+	run(t, t.Context(), newAgent(t, second, m, b), in)
 
 	if got := notifications(second.Requests[0]); len(got) != 1 || !strings.Contains(got[0], "bg_1") {
 		t.Fatalf("first request notifications = %q", got)

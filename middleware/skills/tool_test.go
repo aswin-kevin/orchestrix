@@ -74,7 +74,7 @@ func toolNamed(t *testing.T, m *Middleware, name string) tool.Tool {
 func callSkill(t *testing.T, m *Middleware, s *state.State, in Input) tool.Result {
 	t.Helper()
 	raw, _ := json.Marshal(in)
-	res, err := toolNamed(t, m, ToolSkill).Call(context.Background(), raw, &tool.Call{State: s})
+	res, err := toolNamed(t, m, ToolSkill).Call(t.Context(), raw, &tool.Call{State: s})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestSkillUnlocksGatedToolsAndServers(t *testing.T) {
 	gated := toolNamed(t, m, "pdf_extract")
 	s := state.New()
 	run := func() tool.Result {
-		res, err := gated.Call(context.Background(), json.RawMessage(`{}`), &tool.Call{State: s})
+		res, err := gated.Call(t.Context(), json.RawMessage(`{}`), &tool.Call{State: s})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -233,7 +233,7 @@ func firstRequest(t *testing.T, m *Middleware, s *state.State) llm.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for ev := range a.Run(context.Background(), agent.Input{State: s, Messages: []llm.Message{llm.UserText("next")}}) {
+	for ev := range a.Run(t.Context(), agent.Input{State: s, Messages: []llm.Message{llm.UserText("next")}}) {
 		if ev.Kind == agent.KindFinal && ev.Final.Reason != agent.ReasonCompleted {
 			t.Fatalf("run: %s %v", ev.Final.Reason, ev.Final.Err)
 		}
@@ -362,7 +362,7 @@ func TestOnlySkillLoadResultsCountAsShown(t *testing.T) {
 			{Role: llm.RoleUser, Content: []llm.Block{llm.ToolResultText(id, result, false)}},
 		}
 	}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name  string
 		msgs  []llm.Message
 		shown bool
@@ -372,19 +372,19 @@ func TestOnlySkillLoadResultsCountAsShown(t *testing.T) {
 		{"skill load of another skill", call("f3", ToolSkill, `{"name":"other"}`, fake), false},
 		{"skill load", call("f4", ToolSkill, `{"name":"pdf"}`, fake), true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			msgs := append([]llm.Message{llm.UserText("go")}, tc.msgs...)
+		t.Run(tt.name, func(t *testing.T) {
+			msgs := append([]llm.Message{llm.UserText("go")}, tt.msgs...)
 			out := m.standing(s, Scope{}, msgs)
 			reinjected := strings.Contains(llm.Message{Content: out[0].Content}.Text(), StandingHeader)
-			if reinjected == tc.shown {
-				t.Fatalf("re-injected = %v, want %v", reinjected, !tc.shown)
+			if reinjected == tt.shown {
+				t.Fatalf("re-injected = %v, want %v", reinjected, !tt.shown)
 			}
 		})
 	}
 }
 
 func TestPinnedSkillsUnlockTheirTools(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name  string
 		cfg   Config
 		scope Scope
@@ -392,16 +392,16 @@ func TestPinnedSkillsUnlockTheirTools(t *testing.T) {
 		{"Config.Pinned", Config{Pinned: []string{"pdf"}}, Scope{}},
 		{"Scope.Pinned", Config{}, Scope{Pinned: []string{"pdf"}}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m, _ := pdfMiddleware(t, tc.cfg)
+		t.Run(tt.name, func(t *testing.T) {
+			m, _ := pdfMiddleware(t, tt.cfg)
 			s := state.New()
-			ScopeKey.Set(s, tc.scope)
+			ScopeKey.Set(s, tt.scope)
 			var hook agent.Middleware = m
 			before, ok := hook.(agent.BeforeAgent)
 			if !ok {
 				t.Fatal("the skills middleware has no BeforeAgent hook to unlock pinned skills' tools")
 			}
-			if err := before.BeforeAgent(context.Background(), s); err != nil {
+			if err := before.BeforeAgent(t.Context(), s); err != nil {
 				t.Fatal(err)
 			}
 			if !deferred.Unlocked(s, "pdf_extract") || !deferred.Unlocked(s, "mcp__docs__search") {
@@ -415,7 +415,7 @@ func TestPinnedSkillsUnlockTheirTools(t *testing.T) {
 	m, _ := pdfMiddleware(t, Config{})
 	s := state.New()
 	if before, ok := agent.Middleware(m).(agent.BeforeAgent); ok {
-		_ = before.BeforeAgent(context.Background(), s)
+		_ = before.BeforeAgent(t.Context(), s)
 	}
 	if deferred.Unlocked(s, "pdf_extract") {
 		t.Fatal("an unpinned skill must not unlock anything before it is loaded")
@@ -506,12 +506,12 @@ func pinRun(t *testing.T, ckptDir string, pinned []string, turns ...llmtest.Turn
 	if err != nil {
 		t.Fatal(err)
 	}
-	th, err := a.Thread(context.Background(), "t")
+	th, err := a.Thread(t.Context(), "t")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var final *agent.Final
-	for ev, err := range th.Prompt(context.Background(), "go") {
+	for ev, err := range th.Prompt(t.Context(), "go") {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -615,7 +615,7 @@ func relockMiddleware(t *testing.T) *Middleware {
 func beginRun(t *testing.T, m *Middleware, s *state.State, pins ...string) {
 	t.Helper()
 	ScopeKey.Set(s, Scope{Pinned: pins})
-	if err := m.BeforeAgent(context.Background(), s); err != nil {
+	if err := m.BeforeAgent(t.Context(), s); err != nil {
 		t.Fatal(err)
 	}
 }

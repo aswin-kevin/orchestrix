@@ -142,7 +142,7 @@ func TestIsolatedChildSeesOnlyTask(t *testing.T) {
 	mw := newMiddleware(t, Config{Subagents: []Subagent{{
 		Name: "researcher", Description: "Researches.", SystemPrompt: "you research", Provider: child,
 	}}})
-	_, final := collect(t, context.Background(), newParent(t, parent, mw), userInput("parent history that must stay hidden"))
+	_, final := collect(t, t.Context(), newParent(t, parent, mw), userInput("parent history that must stay hidden"))
 
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
@@ -176,7 +176,7 @@ func TestTwoTaskCallsRunInParallel(t *testing.T) {
 	}})
 
 	start := time.Now()
-	_, final := collect(t, context.Background(), newParent(t, parent, mw), userInput("go"))
+	_, final := collect(t, t.Context(), newParent(t, parent, mw), userInput("go"))
 	elapsed := time.Since(start)
 
 	if final.Reason != agent.ReasonCompleted {
@@ -201,7 +201,7 @@ func TestChildEventsForwardedWithAgentName(t *testing.T) {
 	mw := newMiddleware(t, Config{Subagents: []Subagent{{
 		Name: "researcher", Description: "Researches.", SystemPrompt: "you research", Provider: child,
 	}}})
-	events, _ := collect(t, context.Background(), newParent(t, parent, mw), userInput("go"))
+	events, _ := collect(t, t.Context(), newParent(t, parent, mw), userInput("go"))
 
 	var finals int
 	var forwarded bool
@@ -255,12 +255,12 @@ func TestFilesMergeBackViaSharedBackend(t *testing.T) {
 	privateKey.Set(s, "parent secret")
 	in := userInput("go")
 	in.State = s
-	_, final := collect(t, context.Background(), a, in)
+	_, final := collect(t, t.Context(), a, in)
 
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
 	}
-	got, err := be.Read(context.Background(), "/out.md", 0, 0)
+	got, err := be.Read(t.Context(), "/out.md", 0, 0)
 	if err != nil || !slices.Equal(got.Lines, []string{"report"}) {
 		t.Fatalf("parent backend /out.md = %+v, %v; want the child's file", got, err)
 	}
@@ -286,7 +286,7 @@ func TestDepthGuard(t *testing.T) {
 	mw := newMiddleware(t, Config{MaxDepth: 1, Subagents: []Subagent{{
 		Name: "researcher", Description: "Researches.", SystemPrompt: "you research", Provider: child,
 	}}})
-	_, final := collect(t, context.Background(), newParent(t, parent, mw), userInput("go"))
+	_, final := collect(t, t.Context(), newParent(t, parent, mw), userInput("go"))
 
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
@@ -318,7 +318,7 @@ func TestGeneralPurposeInheritsParentTools(t *testing.T) {
 		llmtest.Turn{Text: "gp done"},
 		llmtest.Turn{Text: "done"},
 	)
-	_, final := collect(t, context.Background(), newParent(t, p, newMiddleware(t, Config{}), echoTool()), userInput("go"))
+	_, final := collect(t, t.Context(), newParent(t, p, newMiddleware(t, Config{}), echoTool()), userInput("go"))
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
 	}
@@ -342,7 +342,7 @@ func TestGeneralPurposeInheritsParentTools(t *testing.T) {
 	mw := newMiddleware(t, Config{Subagents: []Subagent{{
 		Name: GeneralPurpose, Description: "Custom general.", SystemPrompt: "custom general prompt", Provider: custom,
 	}}})
-	collect(t, context.Background(), newParent(t, parent, mw, echoTool()), userInput("go"))
+	collect(t, t.Context(), newParent(t, parent, mw, echoTool()), userInput("go"))
 	if custom.Calls() != 1 || custom.Requests[0].System[0] != "custom general prompt" {
 		t.Fatalf("custom general-purpose not used: calls=%d", custom.Calls())
 	}
@@ -368,7 +368,7 @@ func TestStructuredOutputRetriesThenSucceeds(t *testing.T) {
 		llmtest.Turn{ToolCalls: []llmtest.Call{taskCall("t1", "counter", "count")}},
 		llmtest.Turn{Text: "done"},
 	)
-	collect(t, context.Background(), newParent(t, parent, newMiddleware(t, Config{Subagents: []Subagent{structuredSpec(child)}})), userInput("go"))
+	collect(t, t.Context(), newParent(t, parent, newMiddleware(t, Config{Subagents: []Subagent{structuredSpec(child)}})), userInput("go"))
 
 	if res := onlyResult(t, parent); res.IsError || blockText(res) != `{"n":1}` {
 		t.Fatalf("task result = %q (error=%v), want the compact JSON", blockText(res), res.IsError)
@@ -392,7 +392,7 @@ func TestStructuredOutputRetriesThenSucceeds(t *testing.T) {
 		llmtest.Turn{ToolCalls: []llmtest.Call{taskCall("t1", "counter", "count")}},
 		llmtest.Turn{Text: "done"},
 	)
-	collect(t, context.Background(), newParent(t, parent, newMiddleware(t, Config{Subagents: []Subagent{structuredSpec(bad)}})), userInput("go"))
+	collect(t, t.Context(), newParent(t, parent, newMiddleware(t, Config{Subagents: []Subagent{structuredSpec(bad)}})), userInput("go"))
 	if bad.Calls() != 1+DefaultOutputRetries {
 		t.Fatalf("child made %d requests, want %d", bad.Calls(), 1+DefaultOutputRetries)
 	}
@@ -409,7 +409,7 @@ func TestStructuredOutputSchemaWithoutType(t *testing.T) {
 		llmtest.Turn{ToolCalls: []llmtest.Call{taskCall("t1", "counter", "count")}},
 		llmtest.Turn{Text: "done"},
 	)
-	collect(t, context.Background(), newParent(t, parent, newMiddleware(t, Config{Subagents: []Subagent{spec}})), userInput("go"))
+	collect(t, t.Context(), newParent(t, parent, newMiddleware(t, Config{Subagents: []Subagent{spec}})), userInput("go"))
 	if res := onlyResult(t, parent); res.IsError || blockText(res) != `{"n":2}` {
 		t.Fatalf("task result = %q (error=%v), want the compact JSON", blockText(res), res.IsError)
 	}
@@ -432,7 +432,7 @@ func TestCancelStopsParallelChildren(t *testing.T) {
 		{Name: "b", Description: "B.", SystemPrompt: "b", Provider: llmtest.New(childTurn), Tools: []tool.Tool{block}},
 	}})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go func() {
 		started.Wait()
@@ -478,7 +478,7 @@ func TestUnknownSubagentType(t *testing.T) {
 		t.Fatal("schema accepted an unknown subagent_type")
 	}
 	// The tool itself refuses too, for callers that skip validation.
-	res, err := task.Call(context.Background(), json.RawMessage(`{"description":"x","subagent_type":"nobody"}`), &tool.Call{State: state.New()})
+	res, err := task.Call(t.Context(), json.RawMessage(`{"description":"x","subagent_type":"nobody"}`), &tool.Call{State: state.New()})
 	if err != nil || !res.IsError || !strings.Contains(res.Flatten(), `"nobody"`) {
 		t.Fatalf("result = %q (error=%v), err = %v; want an error result naming the type", res.Flatten(), res.IsError, err)
 	}
@@ -492,7 +492,7 @@ func TestReservedForkName(t *testing.T) {
 
 func TestNewRejectsInvalidSpecs(t *testing.T) {
 	valid := Subagent{Name: "ok", Description: "d", SystemPrompt: "p"}
-	cases := map[string]Config{
+	tests := map[string]Config{
 		"bad name":            {Subagents: []Subagent{{Name: "has space", Description: "d", SystemPrompt: "p"}}},
 		"missing description": {Subagents: []Subagent{{Name: "x", SystemPrompt: "p"}}},
 		"missing prompt":      {Subagents: []Subagent{{Name: "x", Description: "d"}}},
@@ -500,7 +500,7 @@ func TestNewRejectsInvalidSpecs(t *testing.T) {
 		"negative depth":      {MaxDepth: -1},
 		"no subagents":        {DisableGeneralPurpose: true},
 	}
-	for name, cfg := range cases {
+	for name, cfg := range tests {
 		t.Run(name, func(t *testing.T) {
 			if _, err := New(cfg); err == nil {
 				t.Fatal("New accepted an invalid config")
@@ -515,7 +515,7 @@ func TestToolIsConcurrentAndAllowed(t *testing.T) {
 	if !isConcurrent(task, in) {
 		t.Fatal("task tool is not concurrency-safe")
 	}
-	if d := selfCheck(task, context.Background(), in, permission.Context{}); d.Behavior != permission.Allow {
+	if d := selfCheck(task, t.Context(), in, permission.Context{}); d.Behavior != permission.Allow {
 		t.Fatalf("task permission = %+v, want allowed", d)
 	}
 }
@@ -524,7 +524,7 @@ func TestPromptAppendedAfterSystem(t *testing.T) {
 	wrap := func(cfg Config) []string {
 		var got []string
 		req := &agent.ModelRequest{Request: llm.Request{System: []string{"persona"}}}
-		_, _ = newMiddleware(t, cfg).(agent.ModelWrapper).WrapModel(context.Background(), req,
+		_, _ = newMiddleware(t, cfg).(agent.ModelWrapper).WrapModel(t.Context(), req,
 			func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 				got = r.Request.System
 				return &llm.Response{}, nil
@@ -547,7 +547,7 @@ func TestTaskToolInDontAskMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name    string
 		rules   permission.Rules
 		allowed bool
@@ -555,7 +555,7 @@ func TestTaskToolInDontAskMode(t *testing.T) {
 		{"no rule", permission.Rules{}, true},
 		{"deny rule", permission.Rules{Deny: []permission.Rule{task}}, false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			p := llmtest.New(
 				llmtest.Turn{ToolCalls: []llmtest.Call{taskCall("t1", GeneralPurpose, "do it")}},
 				llmtest.Turn{Text: "child answer"},
@@ -563,12 +563,12 @@ func TestTaskToolInDontAskMode(t *testing.T) {
 			)
 			a, err := agent.New(agent.Config{
 				Provider: p, Middleware: []agent.Middleware{newMiddleware(t, Config{})},
-				PermissionMode: permission.ModeDontAsk, Rules: tc.rules,
+				PermissionMode: permission.ModeDontAsk, Rules: tt.rules,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			collect(t, context.Background(), a, userInput("go"))
+			collect(t, t.Context(), a, userInput("go"))
 			// The child shares the provider, so the parent's last request
 			// holds the task result.
 			results := toolResults(p.Requests[len(p.Requests)-1])
@@ -576,8 +576,8 @@ func TestTaskToolInDontAskMode(t *testing.T) {
 				t.Fatalf("parent got %d tool results, want 1", len(results))
 			}
 			res := results[0]
-			if allowed := !res.IsError; allowed != tc.allowed {
-				t.Fatalf("task result = %q (error %v), want allowed=%v", blockText(res), res.IsError, tc.allowed)
+			if allowed := !res.IsError; allowed != tt.allowed {
+				t.Fatalf("task result = %q (error %v), want allowed=%v", blockText(res), res.IsError, tt.allowed)
 			}
 		})
 	}

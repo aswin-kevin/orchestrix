@@ -44,14 +44,14 @@ func (s *gatedStarter) Start(context.Context, string, backend.ExecOptions) (back
 func TestSlowBackendStartDoesNotBlockOtherThreads(t *testing.T) {
 	mg := newManager(2, 2)
 	slow := &gatedStarter{entered: make(chan struct{}), release: make(chan struct{}), proc: &fakeProcess{done: make(chan struct{})}}
-	go func() { _, _ = startJob(context.Background(), mg, slow, "a", "sleep", time.Minute, nil) }()
+	go func() { _, _ = startJob(t.Context(), mg, slow, "a", "sleep", time.Minute, nil) }()
 	<-slow.entered
 	defer func() { close(slow.release); _ = mg.Close(context.Background(), time.Second) }()
 
 	fast := &gatedStarter{entered: make(chan struct{}), release: make(chan struct{}), proc: &fakeProcess{done: make(chan struct{})}}
 	close(fast.release)
 	done := make(chan error, 1)
-	go func() { _, err := startJob(context.Background(), mg, fast, "b", "true", time.Minute, nil); done <- err }()
+	go func() { _, err := startJob(t.Context(), mg, fast, "b", "true", time.Minute, nil); done <- err }()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -71,12 +71,12 @@ func TestStartJobRefusedWhenShutdownDuringStart(t *testing.T) {
 	}
 	out := make(chan res, 1)
 	go func() {
-		j, err := startJob(context.Background(), mg, s, "t", "sleep", time.Minute, nil)
+		j, err := startJob(t.Context(), mg, s, "t", "sleep", time.Minute, nil)
 		out <- res{j, err}
 	}()
 	<-s.entered
 	shut := make(chan struct{})
-	go func() { _ = mg.Close(context.Background(), time.Second); close(shut) }()
+	go func() { _ = mg.Close(t.Context(), time.Second); close(shut) }()
 	// Wait until Shutdown refuses new jobs, so the start commits after it. A
 	// probe whose start fails registers nothing while Shutdown has not begun.
 	probe := errors.New("probe")

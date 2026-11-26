@@ -59,7 +59,7 @@ func TestLoadValidSkill(t *testing.T) {
 
 func TestInvalidSkillsSkipped(t *testing.T) {
 	long := strings.Repeat("a", MaxNameLen+1)
-	cases := map[string]struct{ dir, content string }{
+	tests := map[string]struct{ dir, content string }{
 		"name differs from dir": {"pdf", skillMD("other", "d")},
 		"uppercase":             {"Pdf", skillMD("Pdf", "d")},
 		"double hyphen":         {"a--b", skillMD("a--b", "d")},
@@ -72,10 +72,10 @@ func TestInvalidSkillsSkipped(t *testing.T) {
 		"bare star tool":        {"pdf", "---\nname: pdf\ndescription: d\nallowed-tools: \"read *\"\n---\n"},
 		"bad yaml":              {"pdf", "---\nname: [x\n---\n"},
 	}
-	for name, tc := range cases {
+	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			got, warnings, err := Load(source(map[string]string{
-				tc.dir + "/SKILL.md": tc.content,
+				tt.dir + "/SKILL.md": tt.content,
 				"ok/SKILL.md":        skillMD("ok", "fine"),
 			}))
 			if err != nil {
@@ -219,7 +219,7 @@ func system(t *testing.T, m *Middleware, s *state.State) []string {
 	t.Helper()
 	var got []string
 	req := &agent.ModelRequest{State: s, Request: llm.Request{System: []string{"host"}}}
-	_, err := m.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := m.WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		got = r.Request.System
 		return &llm.Response{}, nil
 	})

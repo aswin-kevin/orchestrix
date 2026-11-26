@@ -46,7 +46,7 @@ func runAgent(t *testing.T, cfg agent.Config) *agent.Final {
 		t.Fatal(err)
 	}
 	var final *agent.Final
-	for ev, err := range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
+	for ev, err := range a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,11 +237,11 @@ func TestNewValidation(t *testing.T) {
 		{"bad tool pattern", Adjustment{Models: []string{"x"}, ExcludeTools: []string{""}}, "invalid pattern"},
 		{"excludes itself", Adjustment{Models: []string{"x"}, ExcludeMiddleware: []string{"profiles"}}, "profiles"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := New(Config{Adjustments: []Adjustment{tc.adj}})
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("err = %v, want containing %q", err, tc.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New(Config{Adjustments: []Adjustment{tt.adj}})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want containing %q", err, tt.want)
 			}
 		})
 	}
@@ -284,9 +284,9 @@ func TestNameWildcard(t *testing.T) {
 		{"?", "/", true},
 		{"*", "", true},
 	}
-	for _, tc := range tests {
-		if got := tool.MatchName(tc.pattern, tc.name); got != tc.want {
-			t.Errorf("tool.MatchName(%q, %q) = %v, want %v", tc.pattern, tc.name, got, tc.want)
+	for _, tt := range tests {
+		if got := tool.MatchName(tt.pattern, tt.name); got != tt.want {
+			t.Errorf("tool.MatchName(%q, %q) = %v, want %v", tt.pattern, tt.name, got, tt.want)
 		}
 	}
 }
@@ -428,7 +428,7 @@ func TestMatchReturnsIndependentCopies(t *testing.T) {
 func TestWrapToolOutsideRunPassesThrough(t *testing.T) {
 	m := mustProfiles(t, Adjustment{Models: []string{"*"}, ExcludeTools: []string{"execute"}})
 	called := false
-	_, err := m.WrapTool(context.Background(), &agent.ToolCall{Name: "execute"},
+	_, err := m.WrapTool(t.Context(), &agent.ToolCall{Name: "execute"},
 		func(context.Context, *agent.ToolCall) (tool.Result, error) {
 			called = true
 			return tool.Text("ok"), nil
@@ -436,7 +436,7 @@ func TestWrapToolOutsideRunPassesThrough(t *testing.T) {
 	if err != nil || !called {
 		t.Fatalf("err = %v, called = %v, want pass-through outside a run", err, called)
 	}
-	if m.HidesTool(context.Background(), "execute") {
+	if m.HidesTool(t.Context(), "execute") {
 		t.Fatal("HidesTool true outside a run")
 	}
 }

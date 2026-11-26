@@ -1,7 +1,6 @@
 package subagents
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -42,7 +41,7 @@ func runWithSkills(t *testing.T, sk *skills.Middleware, specs []Subagent, typ st
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, final := collect(t, context.Background(), a, userInput("go"))
+	_, final := collect(t, t.Context(), a, userInput("go"))
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v)", final.Reason, final.Err)
 	}
@@ -124,7 +123,7 @@ func TestUnknownSubagentSkillsFail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	collect(t, context.Background(), a, userInput("go"))
+	collect(t, t.Context(), a, userInput("go"))
 	if res := onlyResult(t, parent); !res.IsError || !strings.Contains(blockText(res), "ghost") {
 		t.Fatalf("task result = %q (error %v)", blockText(res), res.IsError)
 	}
@@ -133,7 +132,7 @@ func TestUnknownSubagentSkillsFail(t *testing.T) {
 func TestCheckSkillsUsesInheritedStack(t *testing.T) {
 	sk := skillsMiddleware(t)
 	inherited := []agent.Middleware{sk}
-	for _, c := range []struct {
+	for _, tt := range []struct {
 		spec    Subagent
 		wantErr string
 	}{
@@ -144,12 +143,12 @@ func TestCheckSkillsUsesInheritedStack(t *testing.T) {
 		{Subagent{Name: "a", Middleware: []agent.Middleware{}, Skills: []string{"pdf"}}, "skills middleware"},
 		{Subagent{Name: "a"}, ""},
 	} {
-		err := c.spec.CheckSkills(inherited)
+		err := tt.spec.CheckSkills(inherited)
 		switch {
-		case c.wantErr == "" && err != nil:
-			t.Errorf("CheckSkills(%+v) = %v, want nil", c.spec, err)
-		case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)):
-			t.Errorf("CheckSkills(%+v) = %v, want an error mentioning %q", c.spec, err, c.wantErr)
+		case tt.wantErr == "" && err != nil:
+			t.Errorf("CheckSkills(%+v) = %v, want nil", tt.spec, err)
+		case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+			t.Errorf("CheckSkills(%+v) = %v, want an error mentioning %q", tt.spec, err, tt.wantErr)
 		}
 	}
 	if err := (Subagent{Name: "a", Skills: []string{"pdf"}}).CheckSkills(nil); err == nil {

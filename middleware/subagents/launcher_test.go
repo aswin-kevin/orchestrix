@@ -51,7 +51,7 @@ func probeRun(t *testing.T, l *Launcher, spec Subagent, st *state.State, mw ...a
 	if err != nil {
 		t.Fatal(err)
 	}
-	evs, final := collect(t, context.Background(), a, agent.Input{
+	evs, final := collect(t, t.Context(), a, agent.Input{
 		ThreadID: "t", State: st, Backend: testutil.Memory(t), Messages: []llm.Message{llm.UserText("go")},
 	})
 	if final.Reason != agent.ReasonCompleted {
@@ -100,7 +100,7 @@ func TestLauncherMatchesTaskTool(t *testing.T) {
 
 func TestLauncherInputNeedsRun(t *testing.T) {
 	l := mustLauncher(t, LauncherConfig{})
-	if _, err := l.Input(context.Background(), nil, researcher(), "x", "id", &tool.Call{State: state.New()}); err == nil {
+	if _, err := l.Input(t.Context(), nil, researcher(), "x", "id", &tool.Call{State: state.New()}); err == nil {
 		t.Fatal("want an error outside a run")
 	}
 }
@@ -150,7 +150,7 @@ func TestLauncherExtraMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, final := collect(t, context.Background(), child, userInput("go"))
+	_, final := collect(t, t.Context(), child, userInput("go"))
 	if final.Reason != agent.ReasonCompleted || n.Load() != 1 {
 		t.Fatalf("reason = %s, BeforeModel calls = %d", final.Reason, n.Load())
 	}
@@ -180,7 +180,7 @@ func TestLauncherExtraAlreadyPresentByIdentity(t *testing.T) {
 	if got := len(child.Config().Middleware); got != 1 {
 		t.Errorf("child middleware = %d, want 1 (not appended twice)", got)
 	}
-	_, final := collect(t, context.Background(), child, userInput("go"))
+	_, final := collect(t, t.Context(), child, userInput("go"))
 	if final.Reason != agent.ReasonCompleted || n.Load() != 1 {
 		t.Fatalf("reason = %s, extra BeforeModel calls = %d, want 1", final.Reason, n.Load())
 	}
@@ -225,7 +225,7 @@ func TestLauncherInputNilCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	collect(t, context.Background(), a, userInput("go"))
+	collect(t, t.Context(), a, userInput("go"))
 	if gotErr == nil {
 		t.Fatal("want an error for a nil call")
 	}
@@ -287,7 +287,7 @@ func TestResolveSpecs(t *testing.T) {
 
 func TestChildConfigNeverCarriesOutputSchema(t *testing.T) {
 	schema := map[string]any{"type": "object", "properties": map[string]any{"x": map[string]any{"type": "string"}}}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name   string
 		parent agent.Config
 		spec   Subagent
@@ -296,18 +296,18 @@ func TestChildConfigNeverCarriesOutputSchema(t *testing.T) {
 		{"spec schema", agent.Config{}, Subagent{Name: "typed", SystemPrompt: "p", OutputSchema: schema}},
 		{"both", agent.Config{OutputSchema: map[string]any{"type": "object"}}, Subagent{Name: "typed", SystemPrompt: "p", OutputSchema: schema}},
 	} {
-		cfg, err := childConfig(tc.parent, tc.spec)
+		cfg, err := childConfig(tt.parent, tt.spec)
 		if err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
+			t.Fatalf("%s: %v", tt.name, err)
 		}
 		if cfg.OutputSchema != nil {
-			t.Errorf("%s: child OutputSchema = %v, want nil", tc.name, cfg.OutputSchema)
+			t.Errorf("%s: child OutputSchema = %v, want nil", tt.name, cfg.OutputSchema)
 		}
 	}
 }
 
 func TestChildConfigMaxTurns(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		parent, spec, want int
 	}{
 		{parent: 7, spec: 0, want: 7},   // zero inherits
@@ -315,12 +315,12 @@ func TestChildConfigMaxTurns(t *testing.T) {
 		{parent: 7, spec: -1, want: -1}, // negative is unbounded
 		{parent: 0, spec: -5, want: -5},
 	} {
-		cfg, err := childConfig(agent.Config{MaxTurns: tc.parent}, Subagent{Name: "s", SystemPrompt: "p", MaxTurns: tc.spec})
+		cfg, err := childConfig(agent.Config{MaxTurns: tt.parent}, Subagent{Name: "s", SystemPrompt: "p", MaxTurns: tt.spec})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.MaxTurns != tc.want {
-			t.Errorf("parent %d, spec %d: child MaxTurns = %d, want %d", tc.parent, tc.spec, cfg.MaxTurns, tc.want)
+		if cfg.MaxTurns != tt.want {
+			t.Errorf("parent %d, spec %d: child MaxTurns = %d, want %d", tt.parent, tt.spec, cfg.MaxTurns, tt.want)
 		}
 	}
 }

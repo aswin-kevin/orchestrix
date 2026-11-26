@@ -131,7 +131,7 @@ func TestDeferredSchemasHiddenUntilSearched(t *testing.T) {
 		Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"weather"}})},
 	})
 
-	final := run(t, a.Run(context.Background(), userInput(nil)))
+	final := run(t, a.Run(t.Context(), userInput(nil)))
 
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", final)
@@ -166,7 +166,7 @@ func TestPromptListsAtMostDefaultMaxListed(t *testing.T) {
 		tools = append(tools, readOnlyTool(fmt.Sprintf("t%02d", i), "A tool."))
 	}
 	custom := "Search first."
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name   string
 		prompt *string
 		want   func(t *testing.T, system []string)
@@ -189,19 +189,19 @@ func TestPromptListsAtMostDefaultMaxListed(t *testing.T) {
 			}
 		}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			p := llmtest.New(llmtest.Turn{Text: "done"})
 			a := mustNew(t, agent.Config{
 				Provider:   p,
 				System:     []string{"host"},
 				Tools:      tools,
-				Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"t*"}, Prompt: tc.prompt})},
+				Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"t*"}, Prompt: tt.prompt})},
 			})
-			run(t, a.Run(context.Background(), userInput(nil)))
+			run(t, a.Run(t.Context(), userInput(nil)))
 			if got := schemaNames(p.Requests[0]); !slices.Equal(got, []string{ToolSearch, ToolCall}) {
 				t.Fatalf("tools = %v, want only the middleware's own", got)
 			}
-			tc.want(t, p.Requests[0].System)
+			tt.want(t, p.Requests[0].System)
 		})
 	}
 }
@@ -221,7 +221,7 @@ func TestSearchModes(t *testing.T) {
 		}
 		return out
 	}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		in   SearchInput
 		want []string
@@ -234,13 +234,13 @@ func TestSearchModes(t *testing.T) {
 		{"regex over name and description", SearchInput{Query: "^mail_|WEATHER", Regex: true}, []string{"mail_read", "mail_send", "weather"}},
 		{"max_results", SearchInput{Query: "mail", MaxResults: 1}, []string{"mail_read"}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			found, err := m.search(candidates, tc.in)
+		t.Run(tt.name, func(t *testing.T) {
+			found, err := m.search(candidates, tt.in)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := names(found); !slices.Equal(got, tc.want) {
-				t.Fatalf("search(%+v) = %v, want %v", tc.in, got, tc.want)
+			if got := names(found); !slices.Equal(got, tt.want) {
+				t.Fatalf("search(%+v) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
 	}
@@ -285,7 +285,7 @@ func TestSearchResultsThroughRun(t *testing.T) {
 		Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"weather"}})},
 	})
 
-	final := run(t, a.Run(context.Background(), userInput(nil)))
+	final := run(t, a.Run(t.Context(), userInput(nil)))
 
 	res := results(final, 0)
 	if r := res[0]; r.IsError || resultText(r) != "No matching tools." {
@@ -321,11 +321,11 @@ func TestCallToolGoesThroughPermission(t *testing.T) {
 	refused := func(t *testing.T, cfg agent.Config, want string) {
 		t.Helper()
 		a, be := newFilesystemAgent(t, oneTurn(), cfg)
-		final := run(t, a.Run(context.Background(), userInput(nil)))
+		final := run(t, a.Run(t.Context(), userInput(nil)))
 		if r := results(final, 0)[0]; !r.IsError || resultText(r) != want {
 			t.Fatalf("result = %+v, want %q", r, want)
 		}
-		if _, err := be.Read(context.Background(), "/a.txt", 0, 0); err == nil {
+		if _, err := be.Read(t.Context(), "/a.txt", 0, 0); err == nil {
 			t.Fatal("refused write_file ran")
 		}
 	}
@@ -348,7 +348,7 @@ func TestCallToolGoesThroughPermission(t *testing.T) {
 		a, be := newFilesystemAgent(t, oneTurn(), agent.Config{Rules: permission.Rules{Ask: []permission.Rule{{Tool: filesystem.ToolWriteFile}}}})
 		var interrupt *agent.Interrupt
 		var final *agent.Final
-		for ev, err := range a.Run(context.Background(), userInput(nil)) {
+		for ev, err := range a.Run(t.Context(), userInput(nil)) {
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -366,7 +366,7 @@ func TestCallToolGoesThroughPermission(t *testing.T) {
 			t.Fatalf("request = %+v, want write_file", req)
 		}
 
-		resumed := run(t, a.Resume(context.Background(), "", final.State, []agent.Decision{{ToolUseID: "c", Type: agent.Approve}}))
+		resumed := run(t, a.Resume(t.Context(), "", final.State, []agent.Decision{{ToolUseID: "c", Type: agent.Approve}}))
 
 		if resumed.Reason != agent.ReasonCompleted {
 			t.Fatalf("resumed final = %+v, want completed", resumed)
@@ -374,7 +374,7 @@ func TestCallToolGoesThroughPermission(t *testing.T) {
 		if r := results(resumed, 0)[0]; r.IsError {
 			t.Fatalf("result = %+v, want the write to succeed", r)
 		}
-		got, err := be.Read(context.Background(), "/a.txt", 0, 0)
+		got, err := be.Read(t.Context(), "/a.txt", 0, 0)
 		if err != nil || !slices.Equal(got.Lines, []string{"hi"}) {
 			t.Fatalf("file = %+v, %v; want it written", got, err)
 		}
@@ -408,7 +408,7 @@ func TestCallToolInputOptional(t *testing.T) {
 	)
 	a := mustNew(t, agent.Config{Provider: p, Tools: []tool.Tool{ping}, Middleware: []agent.Middleware{mustDeferred(t, Config{})}})
 
-	final := run(t, a.Run(context.Background(), userInput(nil)))
+	final := run(t, a.Run(t.Context(), userInput(nil)))
 
 	for i, r := range results(final, 0) {
 		if r.IsError || resultText(r) != "pong" {
@@ -437,7 +437,7 @@ func TestGatedToolHiddenAndRefused(t *testing.T) {
 		Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"echo"}})},
 	})
 
-	final := run(t, a.Run(context.Background(), userInput(nil)))
+	final := run(t, a.Run(t.Context(), userInput(nil)))
 
 	if got := schemaNames(p.Requests[0]); slices.Contains(got, "echo") {
 		t.Fatalf("request 1 tools = %v, want no locked echo", got)
@@ -487,7 +487,7 @@ func TestGatedToolLockedBeforeApproval(t *testing.T) {
 		},
 	})
 
-	final := run(t, a.Run(context.Background(), userInput(nil)))
+	final := run(t, a.Run(t.Context(), userInput(nil)))
 
 	for _, r := range results(final, 0) {
 		if !r.IsError || resultText(r) != fmt.Sprintf(LockedText, "echo") {
@@ -503,15 +503,15 @@ func TestGateWithoutMiddlewareStaysLocked(t *testing.T) {
 	g := Gate(readOnlyTool("echo", "Echo."))
 	in := json.RawMessage(`{"text":"x"}`)
 	s := state.New()
-	res, err := g.Call(context.Background(), in, &tool.Call{State: s})
+	res, err := g.Call(t.Context(), in, &tool.Call{State: s})
 	if err != nil || !res.IsError || res.Flatten() != fmt.Sprintf(LockedText, "echo") {
 		t.Fatalf("Call = %+v, %v; want the lock", res, err)
 	}
-	if res, _ := g.Call(context.Background(), in, &tool.Call{}); !res.IsError {
+	if res, _ := g.Call(t.Context(), in, &tool.Call{}); !res.IsError {
 		t.Fatal("a call without State ran a gated tool")
 	}
 	Unlock(s, "echo")
-	if res, _ := g.Call(context.Background(), in, &tool.Call{State: s}); res.IsError || res.Flatten() != "echo:x" {
+	if res, _ := g.Call(t.Context(), in, &tool.Call{State: s}); res.IsError || res.Flatten() != "echo:x" {
 		t.Fatalf("unlocked Call = %+v", res)
 	}
 }
@@ -589,7 +589,7 @@ func TestGateForwardsPermissionInterfaces(t *testing.T) {
 		s := state.New()
 		Unlock(s, filesystem.ToolWriteFile)
 
-		final := run(t, a.Run(context.Background(), userInput(s)))
+		final := run(t, a.Run(t.Context(), userInput(s)))
 
 		res := results(final, 0)
 		if r := res[0]; !r.IsError || resultText(r) != "Permission denied: denied by rule write(/secret/**)" {
@@ -647,7 +647,7 @@ func TestGateKeepsInnerPermission(t *testing.T) {
 	in := json.RawMessage(`{"text":"x"}`)
 
 	pc, ok := tool.As[tool.PermissionChecker](g)
-	if !ok || pc.CheckPermission(context.Background(), in, permission.Context{}).Behavior != permission.Deny {
+	if !ok || pc.CheckPermission(t.Context(), in, permission.Context{}).Behavior != permission.Deny {
 		t.Fatal("Gate hid the inner Deny")
 	}
 	sub, ok := tool.As[tool.Subjecter](g)
@@ -670,7 +670,7 @@ func TestGateKeepsInnerPermission(t *testing.T) {
 	})
 	s := state.New()
 	Unlock(s, "guarded")
-	final := run(t, a.Run(context.Background(), userInput(s)))
+	final := run(t, a.Run(t.Context(), userInput(s)))
 	if r := results(final, 0)[0]; !r.IsError || resultText(r) != "Permission denied: guarded refuses" {
 		t.Fatalf("result = %+v, want the inner Deny", r)
 	}
@@ -710,7 +710,7 @@ func TestGatedDispatcher(t *testing.T) {
 
 	t.Run("locked is refused before dispatch", func(t *testing.T) {
 		p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{through("v")}}, llmtest.Turn{Text: "done"})
-		final := run(t, newAgent(p).Run(context.Background(), userInput(state.New())))
+		final := run(t, newAgent(p).Run(t.Context(), userInput(state.New())))
 		if r := results(final, 0)[0]; !r.IsError || resultText(r) != fmt.Sprintf(LockedText, "via") {
 			t.Fatalf("result = %+v, want the lock", r)
 		}
@@ -720,7 +720,7 @@ func TestGatedDispatcher(t *testing.T) {
 		p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{through("v")}}, llmtest.Turn{Text: "done"})
 		s := state.New()
 		Unlock(s, "via")
-		final := run(t, newAgent(p).Run(context.Background(), userInput(s)))
+		final := run(t, newAgent(p).Run(t.Context(), userInput(s)))
 		if r := results(final, 0)[0]; r.IsError || resultText(r) != "echo:x" {
 			t.Fatalf("result = %+v, want echo to run", r)
 		}
@@ -733,7 +733,7 @@ func TestGatedDispatcher(t *testing.T) {
 		)
 		s := state.New()
 		Unlock(s, "via")
-		final := run(t, newAgent(p).Run(context.Background(), userInput(s)))
+		final := run(t, newAgent(p).Run(t.Context(), userInput(s)))
 		if r := results(final, 0)[0]; !r.IsError || resultText(r) != "tool via cannot be called through call_tool" {
 			t.Fatalf("result = %+v, want the nested dispatch refused", r)
 		}
@@ -781,7 +781,7 @@ func TestDeferAndGateShareOneWrapper(t *testing.T) {
 			Tools:      []tool.Tool{Defer(Gate(inner)), unlockTool()},
 			Middleware: []agent.Middleware{mustDeferred(t, Config{})},
 		})
-		final := run(t, a.Run(context.Background(), userInput(nil)))
+		final := run(t, a.Run(t.Context(), userInput(nil)))
 		if got := schemaNames(p.Requests[0]); slices.Contains(got, "echo") {
 			t.Fatalf("request 1 tools = %v", got)
 		}
@@ -868,7 +868,7 @@ func TestDynamicToolsTakenOncePerTurn(t *testing.T) {
 		llmtest.Turn{Text: "done"},
 	)
 	a := mustNew(t, agent.Config{Provider: p, Middleware: []agent.Middleware{mustDeferred(t, Config{}), dyn}})
-	final := run(t, a.Run(context.Background(), userInput(state.New())))
+	final := run(t, a.Run(t.Context(), userInput(state.New())))
 	if got := resultText(results(final, 1)[0]); got != "remote:x" {
 		t.Fatalf("remote result = %q, want the call to have run", got)
 	}
@@ -924,7 +924,7 @@ func TestCallToolDenyIsCheckedBeforeTheTarget(t *testing.T) {
 		Middleware: []agent.Middleware{mustDeferred(t, Config{})},
 		Rules:      permission.Rules{Deny: []permission.Rule{{Tool: ToolCall}}},
 	})
-	final := run(t, a.Run(context.Background(), userInput(state.New())))
+	final := run(t, a.Run(t.Context(), userInput(state.New())))
 	if got := resultText(results(final, 0)[0]); got != "Permission denied: denied by rule call_tool" {
 		t.Fatalf("result = %q, want the call_tool deny, not a panic of the target", got)
 	}
@@ -954,7 +954,7 @@ func TestSearchedRecordsSearchUnlocksOnly(t *testing.T) {
 		Tools:      []tool.Tool{readOnlyTool("echo", "Echo."), unlockTool()},
 		Middleware: []agent.Middleware{mustDeferred(t, Config{Tools: []string{"echo"}})},
 	})
-	final := run(t, a.Run(context.Background(), userInput(nil)))
+	final := run(t, a.Run(t.Context(), userInput(nil)))
 	if got := Searched(final.State); !slices.Equal(got, []string{"echo"}) {
 		t.Fatalf("Searched = %v, want [echo]", got)
 	}
@@ -975,11 +975,11 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		{"NUL pattern", Config{Tools: []string{"a\x00b"}}, false},
 		{"negative MaxResults", Config{MaxResults: -1}, false},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := New(tc.cfg)
-			if (err == nil) != tc.ok {
-				t.Fatalf("New(%+v) error = %v, want ok = %v", tc.cfg, err, tc.ok)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New(tt.cfg)
+			if (err == nil) != tt.ok {
+				t.Fatalf("New(%+v) error = %v, want ok = %v", tt.cfg, err, tt.ok)
 			}
 			if err != nil && !strings.HasPrefix(err.Error(), "deferred: ") {
 				t.Errorf("error %q lacks the package prefix", err)

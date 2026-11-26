@@ -117,12 +117,12 @@ func drain(t *testing.T, seq func(func(agent.Event, error) bool)) ([]agent.Event
 
 func run(t *testing.T, a *agent.Agent) ([]agent.Event, *agent.Final) {
 	t.Helper()
-	return drain(t, a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}))
+	return drain(t, a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}))
 }
 
 func resume(t *testing.T, a *agent.Agent, s *state.State, d ...agent.Decision) ([]agent.Event, *agent.Final) {
 	t.Helper()
-	return drain(t, a.Resume(context.Background(), "", s, d))
+	return drain(t, a.Resume(t.Context(), "", s, d))
 }
 
 func mustInterrupt(t *testing.T, events []agent.Event, f *agent.Final) *agent.Interrupt {
@@ -585,7 +585,7 @@ func callTurns(name string) []llmtest.Turn {
 }
 
 func TestInterruptOnPattern(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		tool  string
 		pause bool
 	}{
@@ -593,11 +593,11 @@ func TestInterruptOnPattern(t *testing.T) {
 		{"mcp__other__x", true},
 		{"read_file", false},
 	} {
-		t.Run(tc.tool, func(t *testing.T) {
+		t.Run(tt.tool, func(t *testing.T) {
 			l := &log{}
-			a := newAgent(t, on("mcp__*"), withTools(bypass, named(l, tc.tool)), callTurns(tc.tool)...)
+			a := newAgent(t, on("mcp__*"), withTools(bypass, named(l, tt.tool)), callTurns(tt.tool)...)
 			events, final := run(t, a)
-			if !tc.pause {
+			if !tt.pause {
 				mustComplete(t, final)
 				if hasInterrupt(events) || len(l.all()) != 1 {
 					t.Fatalf("interrupted %v, ran %v; want one unpaused call", hasInterrupt(events), l.all())
@@ -608,7 +608,7 @@ func TestInterruptOnPattern(t *testing.T) {
 			if len(l.all()) != 0 {
 				t.Fatalf("ran %v before approval", l.all())
 			}
-			if got := intr.Requests[0].Reason; got != "Approval required for "+tc.tool {
+			if got := intr.Requests[0].Reason; got != "Approval required for "+tt.tool {
 				t.Fatalf("Reason = %q", got)
 			}
 		})
@@ -621,7 +621,7 @@ func TestExactKeyBeatsPattern(t *testing.T) {
 		"mcp__srv__write": {Reason: "B", Allowed: []agent.DecisionType{agent.Approve, agent.Respond}},
 		"mcp__srv__*":     {Reason: "C", Allowed: []agent.DecisionType{agent.Reject}},
 	}}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		tool, reason string
 		allowed      []agent.DecisionType
 	}{
@@ -630,12 +630,12 @@ func TestExactKeyBeatsPattern(t *testing.T) {
 		// No exact key: patterns combine; the most specific one's Reason.
 		{"mcp__srv__read", "C", []agent.DecisionType{agent.Reject}},
 	} {
-		t.Run(tc.tool, func(t *testing.T) {
-			a := newAgent(t, cfg, withTools(bypass, named(&log{}, tc.tool)), callTurns(tc.tool)...)
+		t.Run(tt.tool, func(t *testing.T) {
+			a := newAgent(t, cfg, withTools(bypass, named(&log{}, tt.tool)), callTurns(tt.tool)...)
 			events, final := run(t, a)
 			req := mustInterrupt(t, events, final).Requests[0]
-			if req.Reason != tc.reason || !slices.Equal(req.Allowed, tc.allowed) {
-				t.Fatalf("request = %q %v, want %q %v", req.Reason, req.Allowed, tc.reason, tc.allowed)
+			if req.Reason != tt.reason || !slices.Equal(req.Allowed, tt.allowed) {
+				t.Fatalf("request = %q %v, want %q %v", req.Reason, req.Allowed, tt.reason, tt.allowed)
 			}
 		})
 	}
@@ -751,7 +751,7 @@ func TestDefaultAllowedIsCopy(t *testing.T) {
 }
 
 func TestNewValidates(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		on   map[string]InterruptConfig
 		want string
@@ -760,9 +760,9 @@ func TestNewValidates(t *testing.T) {
 		{"blank key", map[string]InterruptConfig{"  ": {}}, "hitl: "},
 		{"NUL key", map[string]InterruptConfig{"a\x00": {}}, "hitl: "},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if _, err := New(Config{InterruptOn: tc.on}); err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("err = %v, want containing %q", err, tc.want)
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := New(Config{InterruptOn: tt.on}); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want containing %q", err, tt.want)
 			}
 		})
 	}
@@ -824,7 +824,7 @@ func approverRun(t *testing.T, cfg Config, name string, approver permission.Appr
 
 func TestApproverAllowHonoursAllowed(t *testing.T) {
 	rejectOnly := []agent.DecisionType{agent.Reject}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name    string
 		cfg     Config
 		rewrite string
@@ -847,12 +847,12 @@ func TestApproverAllowHonoursAllowed(t *testing.T) {
 		}}, `{"path":"/edited"}`, []string{"/a"}},
 		{"default", on("mcp__a__x"), "", []string{"/a"}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ran, text, isErr := approverRun(t, tc.cfg, "mcp__a__x", allowAll(tc.rewrite))
-			if !slices.Equal(ran, tc.ran) {
-				t.Fatalf("ran %v, want %v (result %q)", ran, tc.ran, text)
+		t.Run(tt.name, func(t *testing.T) {
+			ran, text, isErr := approverRun(t, tt.cfg, "mcp__a__x", allowAll(tt.rewrite))
+			if !slices.Equal(ran, tt.ran) {
+				t.Fatalf("ran %v, want %v (result %q)", ran, tt.ran, text)
 			}
-			if tc.ran == nil && (!isErr || !strings.HasPrefix(text, "Rejected")) {
+			if tt.ran == nil && (!isErr || !strings.HasPrefix(text, "Rejected")) {
 				t.Fatalf("result = %q (error %v), want a rejection", text, isErr)
 			}
 		})
@@ -861,21 +861,21 @@ func TestApproverAllowHonoursAllowed(t *testing.T) {
 
 func TestEmptyAllowedMeansRejectOnly(t *testing.T) {
 	empty := []agent.DecisionType{}
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		cfg  Config
 	}{
 		{"exact key", Config{InterruptOn: map[string]InterruptConfig{"mcp__a__x": {Allowed: empty}, "mcp__*": {}}}},
 		{"single pattern", Config{InterruptOn: map[string]InterruptConfig{"mcp__a__*": {Allowed: empty}}}},
 	} {
-		t.Run(tc.name+"/interrupt", func(t *testing.T) {
-			req := interruptRequest(t, tc.cfg, "mcp__a__x")
+		t.Run(tt.name+"/interrupt", func(t *testing.T) {
+			req := interruptRequest(t, tt.cfg, "mcp__a__x")
 			if req == nil || !slices.Equal(req.Allowed, []agent.DecisionType{agent.Reject}) {
 				t.Fatalf("request = %+v, want Allowed [reject]", req)
 			}
 		})
-		t.Run(tc.name+"/approver", func(t *testing.T) {
-			if ran, text, _ := approverRun(t, tc.cfg, "mcp__a__x", allowAll("")); len(ran) != 0 {
+		t.Run(tt.name+"/approver", func(t *testing.T) {
+			if ran, text, _ := approverRun(t, tt.cfg, "mcp__a__x", allowAll("")); len(ran) != 0 {
 				t.Fatalf("ran %v (result %q), want the Allow refused", ran, text)
 			}
 		})
@@ -930,7 +930,7 @@ func TestPermissionApprovalDoesNotBypassRejectOnly(t *testing.T) {
 }
 
 func TestPermissionApprovalStillNeedsHitlEdit(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name    string
 		rewrite string
 		ran     []string
@@ -938,20 +938,20 @@ func TestPermissionApprovalStillNeedsHitlEdit(t *testing.T) {
 		{"plain allow refused", "", nil},
 		{"rewrite runs", `{"path":"/edited"}`, []string{"/edited"}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			l := &log{}
 			var asked atomic.Int32
 			ac := askRule(withTools(agent.Config{}, writeFile(l)))
 			ac.Approver = func(_ context.Context, req permission.Request, r string) permission.Decision {
 				asked.Add(1)
-				return allowAll(tc.rewrite)(context.Background(), req, r)
+				return allowAll(tt.rewrite)(t.Context(), req, r)
 			}
 			a := newAgent(t, allowedOn("write_file", agent.Edit, agent.Reject), ac, writeTurns("/a.txt")...)
 			_, final := run(t, a)
 
 			mustComplete(t, final)
-			if !slices.Equal(l.all(), tc.ran) {
-				t.Fatalf("ran %v, want %v", l.all(), tc.ran)
+			if !slices.Equal(l.all(), tt.ran) {
+				t.Fatalf("ran %v, want %v", l.all(), tt.ran)
 			}
 			if asked.Load() != 2 {
 				t.Fatalf("approver asked %d times, want the permission step and hitl", asked.Load())

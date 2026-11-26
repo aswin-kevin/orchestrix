@@ -181,7 +181,7 @@ func convertWithin(t *testing.T, d time.Duration, ctx context.Context, doc strin
 func TestMarkdownNestedBlockquotesBounded(t *testing.T) {
 	const depth = 500
 	doc := strings.Repeat("<blockquote>", depth) + strings.Repeat("word ", 4<<20/5) + strings.Repeat("</blockquote>", depth)
-	md, truncated, err := convertWithin(t, 2*time.Second, context.Background(), doc)
+	md, truncated, err := convertWithin(t, 2*time.Second, t.Context(), doc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestMarkdownNestedBlockquotesBounded(t *testing.T) {
 func TestMarkdownNestedListsBounded(t *testing.T) {
 	const depth = 200
 	doc := strings.Repeat("<ul><li>x", depth) + strings.Repeat("</li></ul>", depth)
-	md, _, err := convertWithin(t, 2*time.Second, context.Background(), doc)
+	md, _, err := convertWithin(t, 2*time.Second, t.Context(), doc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestMarkdownNestedListsBounded(t *testing.T) {
 func TestMarkdownNestedTablesBounded(t *testing.T) {
 	const depth = 120
 	doc := strings.Repeat("<table><tr><td>a|b</td><td>", depth) + "c|d" + strings.Repeat("</td></tr></table>", depth)
-	md, _, err := convertWithin(t, 2*time.Second, context.Background(), doc)
+	md, _, err := convertWithin(t, 2*time.Second, t.Context(), doc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func TestFenceForLinear(t *testing.T) {
 }
 
 func TestMarkdownHonoursContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, _, _, err := HTMLToMarkdown(ctx, strings.NewReader("<p>text</p>"), nil, DefaultMaxMarkdownBytes)
 	if !errors.Is(err, context.Canceled) {
@@ -281,7 +281,7 @@ func (c *cancelAfter) Err() error {
 }
 
 func TestMarkdownCancelledMidway(t *testing.T) {
-	ctx := &cancelAfter{Context: context.Background(), n: 2}
+	ctx := &cancelAfter{Context: t.Context(), n: 2}
 	doc := strings.Repeat("<p>a</p>", 10*checkEvery)
 	_, md, _, err := HTMLToMarkdown(ctx, strings.NewReader(doc), nil, DefaultMaxMarkdownBytes)
 	if !errors.Is(err, context.Canceled) || md != "" {

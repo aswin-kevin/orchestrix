@@ -72,7 +72,7 @@ func must[T any](v T, err error) T {
 func TestDuckDuckGoParses(t *testing.T) {
 	srv, got := backendServer(t, 200, "text/html", ddgFixture)
 	b := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL, UserAgent: "test-agent"}))
-	res, err := b.Search(context.Background(), "golang & more", 10)
+	res, err := b.Search(t.Context(), "golang & more", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestDuckDuckGoParses(t *testing.T) {
 
 func TestDuckDuckGoLimitsResults(t *testing.T) {
 	srv, _ := backendServer(t, 200, "text/html", ddgFixture)
-	res, err := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 2)
+	res, err := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(t.Context(), "q", 2)
 	if err != nil || len(res) != 2 {
 		t.Fatalf("results = %v, err = %v", res, err)
 	}
@@ -109,7 +109,7 @@ func TestBraveRequestAndParse(t *testing.T) {
 		{"title":"Bad","url":"ftp://bad.example/","description":"dropped"},
 		{"title":"Two","url":"https://two.example/","description":"second"}]}}`)
 	b := must(NewBrave(BraveConfig{APIKey: "k", BaseURL: srv.URL}))
-	res, err := b.Search(context.Background(), "go lang", 3)
+	res, err := b.Search(t.Context(), "go lang", 3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestTavilyRequestAndParse(t *testing.T) {
 		{"title":"A","url":"https://a.example/","content":" about a "},
 		{"title":"B","url":"/relative","content":"dropped"}]}`)
 	b := must(NewTavily(TavilyConfig{APIKey: "secret", BaseURL: srv.URL}))
-	res, err := b.Search(context.Background(), "query", 4)
+	res, err := b.Search(t.Context(), "query", 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestSearchHTTPErrorStatus(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = b.Search(context.Background(), "q", 5)
+			_, err = b.Search(t.Context(), "q", 5)
 			if err == nil || !strings.Contains(err.Error(), "HTTP 429") || !strings.HasPrefix(err.Error(), name+":") {
 				t.Fatalf("err = %v", err)
 			}
@@ -193,7 +193,7 @@ func TestSearchBodyIsCapped(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = b.Search(context.Background(), "q", 5)
+			_, err = b.Search(t.Context(), "q", 5)
 			if err == nil || err.Error() != name+": response exceeds 2 MiB" {
 				t.Fatalf("err = %v", err)
 			}
@@ -207,7 +207,7 @@ func TestSearchDoesNotFollowRedirects(t *testing.T) {
 		http.Redirect(w, r, second.URL, http.StatusFound)
 	}))
 	defer first.Close()
-	_, err := must(NewBrave(BraveConfig{APIKey: "k", BaseURL: first.URL})).Search(context.Background(), "q", 3)
+	_, err := must(NewBrave(BraveConfig{APIKey: "k", BaseURL: first.URL})).Search(t.Context(), "q", 3)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 302") {
 		t.Fatalf("err = %v", err)
 	}
@@ -222,7 +222,7 @@ func TestDuckDuckGoDropsEmptyLinks(t *testing.T) {
 <div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=">Empty uddg</a></div>
 <div class="result"><a class="result__a" href="//duckduckgo.com/l/">Bare</a></div>
 <div class="result"><a class="result__a">No href</a></div>`)
-	res, err := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 5)
+	res, err := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(t.Context(), "q", 5)
 	if err != nil || len(res) != 0 {
 		t.Fatalf("results = %v, err = %v", res, err)
 	}
@@ -230,7 +230,7 @@ func TestDuckDuckGoDropsEmptyLinks(t *testing.T) {
 
 func TestDuckDuckGoChallengeIsAnError(t *testing.T) {
 	srv, _ := backendServer(t, 202, "text/html", "<html>verify you are human</html>")
-	_, err := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(context.Background(), "q", 5)
+	_, err := must(NewDuckDuckGo(DuckDuckGoConfig{BaseURL: srv.URL})).Search(t.Context(), "q", 5)
 	if err == nil || err.Error() != "duckduckgo: HTTP 202 (challenge)" {
 		t.Fatalf("err = %v", err)
 	}
@@ -239,7 +239,7 @@ func TestDuckDuckGoChallengeIsAnError(t *testing.T) {
 func TestSearchNonPositiveN(t *testing.T) {
 	srv, _ := backendServer(t, 200, "application/json", `{"results":[{"title":"A","url":"https://a.example/"}]}`)
 	for _, n := range []int{0, -1} {
-		res, err := must(NewTavily(TavilyConfig{APIKey: "k", BaseURL: srv.URL})).Search(context.Background(), "q", n)
+		res, err := must(NewTavily(TavilyConfig{APIKey: "k", BaseURL: srv.URL})).Search(t.Context(), "q", n)
 		if err != nil || res != nil {
 			t.Fatalf("n = %d: results = %v, err = %v", n, res, err)
 		}
@@ -252,7 +252,7 @@ func TestSearchNonPositiveN(t *testing.T) {
 func TestBraveBaseURLWithQuery(t *testing.T) {
 	srv, got := backendServer(t, 200, "application/json", `{"web":{"results":[]}}`)
 	b := must(NewBrave(BraveConfig{APIKey: "k", BaseURL: srv.URL + "/search?country=us"}))
-	if _, err := b.Search(context.Background(), "go", 2); err != nil {
+	if _, err := b.Search(t.Context(), "go", 2); err != nil {
 		t.Fatal(err)
 	}
 	if got.query.Get("country") != "us" || got.query.Get("q") != "go" || got.query.Get("count") != "2" {
@@ -262,7 +262,7 @@ func TestBraveBaseURLWithQuery(t *testing.T) {
 
 func TestBraveInvalidJSON(t *testing.T) {
 	srv, _ := backendServer(t, 200, "text/html", "<html>not json</html>")
-	_, err := must(NewBrave(BraveConfig{APIKey: "k", BaseURL: srv.URL})).Search(context.Background(), "q", 3)
+	_, err := must(NewBrave(BraveConfig{APIKey: "k", BaseURL: srv.URL})).Search(t.Context(), "q", 3)
 	if err == nil || !strings.Contains(err.Error(), "invalid response") {
 		t.Fatalf("err = %v", err)
 	}
@@ -274,7 +274,7 @@ func TestSearchCancelledContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	res, err := mw.Tools()[0].Call(ctx, json.RawMessage(`{"query":"q"}`), &tool.Call{})
 	if err != nil || !res.IsError {
@@ -311,7 +311,7 @@ func TestSearchPermission(t *testing.T) {
 			t.Fatal(err)
 		}
 		var final *agent.Final
-		for ev, err := range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
+		for ev, err := range a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -356,7 +356,7 @@ func TestSearchUsesProxy(t *testing.T) {
 	}
 	// The endpoint is never reachable directly; only the proxy answers.
 	b := must(NewTavily(TavilyConfig{APIKey: "k", BaseURL: "http://search.invalid/search", Client: client}))
-	res, err := b.Search(context.Background(), "q", 3)
+	res, err := b.Search(t.Context(), "q", 3)
 	if err != nil || len(res) != 1 {
 		t.Fatalf("results = %v, err = %v", res, err)
 	}
@@ -400,7 +400,7 @@ func TestSearchToolFormatsAndClamps(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		res, err := mw.Tools()[0].Call(context.Background(), json.RawMessage(input), &tool.Call{})
+		res, err := mw.Tools()[0].Call(t.Context(), json.RawMessage(input), &tool.Call{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -459,7 +459,7 @@ func TestSearchPromptOnlyWhenEnabled(t *testing.T) {
 			t.Fatal(err)
 		}
 		var out string
-		_, err = mw.WrapModel(context.Background(), &agent.ModelRequest{}, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+		_, err = mw.WrapModel(t.Context(), &agent.ModelRequest{}, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 			out = strings.Join(r.Request.System, "|")
 			return &llm.Response{}, nil
 		})

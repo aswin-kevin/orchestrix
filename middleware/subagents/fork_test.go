@@ -1,7 +1,6 @@
 package subagents
 
 import (
-	"context"
 	"reflect"
 	"slices"
 	"strings"
@@ -27,7 +26,7 @@ func TestForkReusesParentPrefix(t *testing.T) {
 		llmtest.Turn{Text: "fork result"},
 		llmtest.Turn{Text: "done"},
 	)
-	_, final := collect(t, context.Background(), newParent(t, p, newMiddleware(t, Config{}), echoTool()), userInput("parent history"))
+	_, final := collect(t, t.Context(), newParent(t, p, newMiddleware(t, Config{}), echoTool()), userInput("parent history"))
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
 	}
@@ -71,7 +70,7 @@ func TestForkCannotDelegate(t *testing.T) {
 		llmtest.Turn{Text: "fork did it itself"},
 		llmtest.Turn{Text: "done"},
 	)
-	_, final := collect(t, context.Background(), newParent(t, p, newMiddleware(t, Config{})), userInput("go"))
+	_, final := collect(t, t.Context(), newParent(t, p, newMiddleware(t, Config{})), userInput("go"))
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
 	}
@@ -102,14 +101,14 @@ func TestForkStateMergesBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, final := collect(t, context.Background(), a, userInput("go"))
+	_, final := collect(t, t.Context(), a, userInput("go"))
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
 	}
 	if res := toolResults(p.Requests[2]); len(res) != 1 || res[0].IsError {
 		t.Fatalf("writer result in fork = %+v, want success", res)
 	}
-	if got, err := be.Read(context.Background(), "/out.md", 0, 0); err != nil || !slices.Equal(got.Lines, []string{"report"}) {
+	if got, err := be.Read(t.Context(), "/out.md", 0, 0); err != nil || !slices.Equal(got.Lines, []string{"report"}) {
 		t.Fatalf("parent backend /out.md = %+v, %v; want the fork's file", got, err)
 	}
 	if v, _ := sharedKey.Get(final.State); v != "from child" {

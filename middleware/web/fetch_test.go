@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -41,7 +40,7 @@ func runFetch(t *testing.T, tl tool.Tool, in FetchInput) tool.Result {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := tl.Call(context.Background(), raw, &tool.Call{})
+	res, err := tl.Call(t.Context(), raw, &tool.Call{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +390,7 @@ func TestFetchFinishedContentOutlivesDeadline(t *testing.T) {
 				}, nil
 			})}
 			f := newFetcher(client, Config{Timeout: 20 * time.Millisecond})
-			res, err := f.fetch(context.Background(), FetchInput{URL: "https://site.test/"}, &tool.Call{})
+			res, err := f.fetch(t.Context(), FetchInput{URL: "https://site.test/"}, &tool.Call{})
 			if err != nil {
 				t.Fatal(err)
 			}

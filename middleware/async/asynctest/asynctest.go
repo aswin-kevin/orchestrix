@@ -60,7 +60,7 @@ const stopTimeout = 5 * time.Second
 // than that fails.
 func Run(t *testing.T, start StartFunc) {
 	t.Helper()
-	cases := []struct {
+	tests := []struct {
 		name string
 		sc   Scenario
 		fn   func(t *testing.T, h async.Handle)
@@ -78,11 +78,11 @@ func Run(t *testing.T, start StartFunc) {
 		{"ResolveReturnsNewHandle", ScenarioWait, testResolveReturnsNewHandle},
 		{"ResolveOnce", ScenarioWait, testResolveOnce},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			h := start(t, c.sc)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := start(t, tt.sc)
 			if h == nil {
-				t.Skipf("the runner does not support scenario %s", c.sc)
+				t.Skipf("the runner does not support scenario %s", tt.sc)
 			}
 			t.Cleanup(func() {
 				if isClosed(h.Done()) {
@@ -96,7 +96,7 @@ func Run(t *testing.T, start StartFunc) {
 				case <-ctx.Done():
 				}
 			})
-			c.fn(t, h)
+			tt.fn(t, h)
 		})
 	}
 }

@@ -19,7 +19,7 @@ import (
 // and returns the request that reached the provider.
 func wrap(t *testing.T, m agent.Middleware, s *state.State) llm.Request {
 	t.Helper()
-	if err := m.(agent.BeforeModel).BeforeModel(context.Background(), s); err != nil {
+	if err := m.(agent.BeforeModel).BeforeModel(t.Context(), s); err != nil {
 		t.Fatal(err)
 	}
 	req := &agent.ModelRequest{
@@ -28,7 +28,7 @@ func wrap(t *testing.T, m agent.Middleware, s *state.State) llm.Request {
 		Profile: llm.Profile{ContextWindow: testWindow},
 	}
 	var sent llm.Request
-	_, err := m.(agent.ModelWrapper).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := m.(agent.ModelWrapper).WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		sent = r.Request
 		return &llm.Response{}, nil
 	})

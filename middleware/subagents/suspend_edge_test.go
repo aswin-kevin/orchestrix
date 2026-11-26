@@ -26,7 +26,7 @@ func TestStaleSuspendedPrunedOnNewRun(t *testing.T) {
 	// Resume run keeps it: TestChildInterruptSurfacesAndResumes.)
 	in := userInput("never mind")
 	in.State = s
-	_, final := collect(t, context.Background(), f.agent, in)
+	_, final := collect(t, t.Context(), f.agent, in)
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed", final.Reason, final.Err)
 	}
@@ -72,7 +72,7 @@ func confirmParent(t *testing.T, allowed ...agent.DecisionType) (*agent.Agent, *
 
 func TestChildNeedsUnrelayableDecision(t *testing.T) {
 	a, parent := confirmParent(t, agent.Respond)
-	_, final := collect(t, context.Background(), a, userInput("go"))
+	_, final := collect(t, t.Context(), a, userInput("go"))
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed: the parent cannot relay a respond", final.Reason, final.Err)
 	}
@@ -87,7 +87,7 @@ func TestChildNeedsUnrelayableDecision(t *testing.T) {
 
 func TestParentAllowsOnlyWhatChildAllows(t *testing.T) {
 	a, _ := confirmParent(t, agent.Approve, agent.Respond)
-	_, final := collect(t, context.Background(), a, userInput("go"))
+	_, final := collect(t, t.Context(), a, userInput("go"))
 	pending, ok := agent.Pending(final.State)
 	if final.Reason != agent.ReasonInterrupted || !ok {
 		t.Fatalf("reason = %s, want interrupted", final.Reason)
@@ -161,7 +161,7 @@ func testSuspendedTasksResume(t *testing.T, maxConcurrency, wantRounds int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, final := collect(t, context.Background(), a, userInput("go"))
+	_, final := collect(t, t.Context(), a, userInput("go"))
 	rounds := 0
 	for final.Reason == agent.ReasonInterrupted {
 		rounds++
@@ -179,7 +179,7 @@ func testSuspendedTasksResume(t *testing.T, maxConcurrency, wantRounds int) {
 		}
 		state := final.State
 		final = nil
-		for ev := range a.Resume(context.Background(), "thread", state, decisions) {
+		for ev := range a.Resume(t.Context(), "thread", state, decisions) {
 			if ev.Kind == agent.KindFinal {
 				final = ev.Final
 			}
@@ -225,14 +225,14 @@ func TestForkSuspendsAndResumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, final := collect(t, context.Background(), a, userInput("go"))
+	_, final := collect(t, t.Context(), a, userInput("go"))
 	pending, ok := agent.Pending(final.State)
 	if final.Reason != agent.ReasonInterrupted || !ok || !strings.HasPrefix(pending.Requests[0].Reason, "Subagent fork needs approval: write_file(") {
 		t.Fatalf("final = %s, pending = %+v; want the fork's write surfaced", final.Reason, pending)
 	}
 
 	var resumed *agent.Final
-	for ev := range a.Resume(context.Background(), "thread", final.State, []agent.Decision{{ToolUseID: "t1", Type: agent.Approve}}) {
+	for ev := range a.Resume(t.Context(), "thread", final.State, []agent.Decision{{ToolUseID: "t1", Type: agent.Approve}}) {
 		if ev.Kind == agent.KindFinal {
 			resumed = ev.Final
 		}
@@ -243,7 +243,7 @@ func TestForkSuspendsAndResumes(t *testing.T) {
 	if writes.Load() != 1 {
 		t.Fatalf("write_file ran %d times, want once", writes.Load())
 	}
-	if got, err := be.Read(context.Background(), "/approved.md", 0, 0); err != nil || !slices.Equal(got.Lines, []string{"forked"}) {
+	if got, err := be.Read(t.Context(), "/approved.md", 0, 0); err != nil || !slices.Equal(got.Lines, []string{"forked"}) {
 		t.Fatalf("parent backend = %+v, %v; want the fork's file", got, err)
 	}
 	inner := toolResults(p.Requests[3])

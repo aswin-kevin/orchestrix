@@ -169,7 +169,7 @@ func TestBackgroundExecuteAndNotification(t *testing.T) {
 		llmtest.Turn{Text: "ok"},
 	)
 	start := time.Now()
-	final := run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
+	final := run(t, t.Context(), newAgent(t, p, m, newShell(t)), input("t1"))
 
 	if got := resultText(t, p, "e1"); !strings.Contains(got, "Started background job bg_1.") {
 		t.Fatalf("execute result = %q", got)
@@ -216,7 +216,7 @@ func TestCancelJobKillsJob(t *testing.T) {
 		turn(call("o1", ToolCheck, obj{"job_id": "bg_1"}), call("l1", ToolList, obj{})),
 		llmtest.Turn{Text: "ok"},
 	)
-	final := run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
+	final := run(t, t.Context(), newAgent(t, p, m, newShell(t)), input("t1"))
 
 	pid := pidFrom(t, p, "m1")
 	if alive(pid) {
@@ -242,7 +242,7 @@ func TestCancelJobKillsJob(t *testing.T) {
 func TestCancelJobAllowsItself(t *testing.T) {
 	m := mustNew(t, Config{})
 	for _, tl := range m.Tools() {
-		d := selfCheck(tl, context.Background(), json.RawMessage(`{}`), permission.Context{})
+		d := selfCheck(tl, t.Context(), json.RawMessage(`{}`), permission.Context{})
 		readOnly := isReadOnly(tl, json.RawMessage(`{}`))
 		switch tl.Name() {
 		case ToolCancel:
@@ -263,7 +263,7 @@ func TestMaxRunningEnforced(t *testing.T) {
 		turn(bgExecute("e1", "sleep 1000"), bgExecute("e2", "sleep 1000")),
 		llmtest.Turn{Text: "ok"},
 	)
-	run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
+	run(t, t.Context(), newAgent(t, p, m, newShell(t)), input("t1"))
 
 	if got := resultText(t, p, "e1"); !strings.Contains(got, "bg_1") {
 		t.Fatalf("first start = %q", got)
@@ -282,7 +282,7 @@ func TestMonitorPattern(t *testing.T) {
 		turn(call("m2", ToolMonitor, obj{"job_id": "bg_1", "pattern": "("})),
 		llmtest.Turn{Text: "ok"},
 	)
-	run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
+	run(t, t.Context(), newAgent(t, p, m, newShell(t)), input("t1"))
 
 	got := resultText(t, p, "m1")
 	if !strings.Contains(got, "Pattern matched in job bg_1 (still running)") || !strings.HasSuffix(got, "tick2") {
@@ -303,7 +303,7 @@ func TestLostJobAfterRestart(t *testing.T) {
 	)
 	in := input("t1")
 	in.State = s
-	final := run(t, context.Background(), newAgent(t, p, m, newShell(t)), in)
+	final := run(t, t.Context(), newAgent(t, p, m, newShell(t)), in)
 
 	want := "<job-notification>Background job bg_1 (`make serve`) lost (exit code -1). Use check_job to read its output.</job-notification>"
 	if got := notifications(p.Requests[0]); len(got) != 1 || got[0] != want {
@@ -341,7 +341,7 @@ func TestCloseKillsAll(t *testing.T) {
 			turn(pidMonitor("m1", "bg_1")),
 			llmtest.Turn{Text: "ok"},
 		)
-		run(t, context.Background(), newAgent(t, p, m, b), input(thread))
+		run(t, t.Context(), newAgent(t, p, m, b), input(thread))
 		pids = append(pids, pidFrom(t, p, "m1"))
 	}
 	for _, pid := range pids {
@@ -350,7 +350,7 @@ func TestCloseKillsAll(t *testing.T) {
 		}
 	}
 
-	if err := m.Close(context.Background()); err != nil {
+	if err := m.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	for _, pid := range pids {
@@ -364,7 +364,7 @@ func TestCloseKillsAll(t *testing.T) {
 
 	// A closed middleware starts nothing new.
 	p := llmtest.New(turn(bgExecute("e1", "true")), llmtest.Turn{Text: "ok"})
-	run(t, context.Background(), newAgent(t, p, m, b), input("t3"))
+	run(t, t.Context(), newAgent(t, p, m, b), input("t3"))
 	if r := result(t, p, "e1"); !r.IsError {
 		t.Fatalf("start after Close = %q", resultText(t, p, "e1"))
 	}
@@ -399,7 +399,7 @@ func TestNestedRunStopsOwnJobs(t *testing.T) {
 		turn(call("sp1", "spawn", obj{})),
 		llmtest.Turn{Text: "ok"},
 	)
-	run(t, context.Background(), newAgent(t, parentP, m, b, spawnTool(child)), input("parent"))
+	run(t, t.Context(), newAgent(t, parentP, m, b, spawnTool(child)), input("parent"))
 
 	if got := resultText(t, parentP, "sp1"); got != "child done" {
 		t.Fatalf("spawn = %q", got)
@@ -411,7 +411,7 @@ func TestNestedRunStopsOwnJobs(t *testing.T) {
 	if !alive(parentPID) {
 		t.Fatalf("top-level run's job %d was stopped", parentPID)
 	}
-	if err := m.Close(context.Background()); err != nil {
+	if err := m.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	waitGone(t, parentPID)
@@ -425,7 +425,7 @@ func TestCheckJobWaitsAndUnknownJob(t *testing.T) {
 			call("o2", ToolCheck, obj{"job_id": "bg_9"})),
 		llmtest.Turn{Text: "ok"},
 	)
-	run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
+	run(t, t.Context(), newAgent(t, p, m, newShell(t)), input("t1"))
 
 	if got := resultText(t, p, "o1"); !strings.Contains(got, "Job bg_1 (`sleep 0.2; echo late`): completed (exit code 0)") || !strings.Contains(got, "late") {
 		t.Fatalf("check_job with wait = %q, want the ended job with its output", got)
@@ -471,7 +471,7 @@ func TestCancelJobRecordsCancelled(t *testing.T) {
 		turn(call("x1", ToolCancel, obj{"job_id": "bg_1"})),
 		llmtest.Turn{Text: "ok"},
 	)
-	final := run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
+	final := run(t, t.Context(), newAgent(t, p, m, newShell(t)), input("t1"))
 
 	if got := resultText(t, p, "x1"); got != "Cancelled job bg_1." {
 		t.Fatalf("cancel_job = %q", got)

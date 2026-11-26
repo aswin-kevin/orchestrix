@@ -81,13 +81,13 @@ func TestOnSettledResolvesWaitingTask(t *testing.T) {
 		start("s1", "researcher", "write"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "noted"})
 	mp.Store(h.m)
 	h.be = testutil.Memory(t)
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	eventually(t, "the decision", func() bool { return resolveErr.Load() != nil })
 	if err := *resolveErr.Load(); err != nil {
 		t.Fatalf("Resolve from OnSettled = %v", err)
 	}
 	eventually(t, "the task's end", func() bool { return w.runs.Load() == 1 && liveRecord(t, h, "async_1").terminal() })
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	if r := record(t, h.st, "async_1"); r.Status != StatusCompleted || r.Result != "wrote it" || !r.Notified {
 		t.Fatalf("record = %+v, want completed and announced", r)
 	}
@@ -114,8 +114,8 @@ func TestSlowOnSettledDoesNotDelayClose(t *testing.T) {
 	run := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
 	h := newHarness(t, Config{Runner: run, OnSettled: hook, DisableStopReminder: true},
 		start("s1", gp, "x"), llmtest.Turn{Text: "started"})
-	h.run(t, context.Background(), "go", nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	h.run(t, t.Context(), "go", nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	began := time.Now()
 	_ = h.m.Close(ctx)
@@ -135,21 +135,21 @@ func TestSameCallWaitingAgainIsAnnounced(t *testing.T) {
 	spec.Tools = []tool.Tool{askTwice}
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{spec}, DisableStopReminder: true},
 		start("s1", "researcher", "x"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "noted"}, llmtest.Turn{Text: "again"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "next", nil) // announces the wait
+	h.run(t, t.Context(), "next", nil) // announces the wait
 	r := record(t, h.st, "async_1")
 	if r.Status != StatusWaiting || !r.Notified {
 		t.Fatalf("record = %+v", r)
 	}
-	if err := h.m.Resolve(context.Background(), "t", "async_1", approveAll(t, r)); err != nil {
+	if err := h.m.Resolve(t.Context(), "t", "async_1", approveAll(t, r)); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	eventually(t, "the second wait", func() bool {
 		out, _, ok := h.m.jobs.Get("t", "async_1").Handle.outcome()
 		return ok && out.Status == StatusWaiting
 	})
-	h.run(t, context.Background(), "and now?", nil)
+	h.run(t, t.Context(), "and now?", nil)
 	var waits int
 	for _, n := range notifications(h.p) {
 		if strings.Contains(n.Text(), "is waiting for a decision") {
@@ -166,14 +166,14 @@ func TestEndNestedCancelsClaimedWaitingTask(t *testing.T) {
 	run := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
 	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
 		start("s1", gp, "x"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "noted"})
-	h.run(t, context.Background(), "go", nil)
-	h.run(t, context.Background(), "next", nil) // announces the wait
+	h.run(t, t.Context(), "go", nil)
+	h.run(t, t.Context(), "next", nil) // announces the wait
 	// A decision claimed the task and has not committed its episode yet.
 	tk := h.m.jobs.Get("t", "async_1").Handle
 	tk.mu.Lock()
 	tk.state = episodeClaimed
 	tk.mu.Unlock()
-	ctx, _ := agenttest.Context(context.Background(), agent.RunInfo{ThreadID: "t", Depth: 1})
+	ctx, _ := agenttest.Context(t.Context(), agent.RunInfo{ThreadID: "t", Depth: 1})
 	if err := h.m.AfterAgent(ctx, h.st); err != nil {
 		t.Fatal(err)
 	}
@@ -197,12 +197,12 @@ func TestTaskStoppedAsItStartedIsNotReported(t *testing.T) {
 		defer close(shutdown)
 		<-entered
 		stopped := make(chan struct{})
-		go func() { _ = h.m.Close(context.Background()); close(stopped) }()
+		go func() { _ = h.m.Close(t.Context()); close(stopped) }()
 		defer func() { <-stopped }()
 		eventually(t, "the stop", func() bool { return h.m.jobs.Get("t", "async_1").Stopped() })
 		close(proceed)
 	}()
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	<-shutdown
 	<-hd.Done()
 	// a report would run on its own goroutine
@@ -219,7 +219,7 @@ func TestOnSettledPanicIsLogged(t *testing.T) {
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(child)}, OnSettled: hook, DisableStopReminder: true},
 		start("s1", "researcher", "x"), llmtest.Turn{Text: "started"})
 	buf := logged(t, h)
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	eventually(t, "OnSettled", called.Load)
 	eventually(t, "the log line", func() bool { return strings.Contains(buf.String(), "async: OnSettled panicked") })
 	if !strings.Contains(buf.String(), "boom") {
@@ -234,7 +234,7 @@ func TestOnEventPanicIsRecovered(t *testing.T) {
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(child)}, OnEvent: onEvent, DisableStopReminder: true},
 		start("s1", "researcher", "x"), llmtest.Turn{Text: "started"})
 	buf := logged(t, h)
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	if out := outcomeOf(t, h.m, h.st, "async_1"); out.Status != StatusCompleted || out.Text != "done" {
 		t.Fatalf("outcome = %+v, want the task completed despite the panics", out)

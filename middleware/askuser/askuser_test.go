@@ -64,7 +64,7 @@ func drain(t *testing.T, seq func(func(agent.Event, error) bool)) *agent.Final {
 
 func run(t *testing.T, a *agent.Agent) *agent.Final {
 	t.Helper()
-	return drain(t, a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}))
+	return drain(t, a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}))
 }
 
 // resultFor returns the text and error flag of the last tool result for id.
@@ -124,7 +124,7 @@ func TestAskUserInterruptAndRespond(t *testing.T) {
 
 	// A structured answer.
 	b, pb := newAgent(t, Config{}, agent.Config{}, llmtest.Turn{Text: "done"})
-	drain(t, b.Resume(context.Background(), "", final.State.Clone(), []agent.Decision{
+	drain(t, b.Resume(t.Context(), "", final.State.Clone(), []agent.Decision{
 		Respond("q", []Answer{{Question: "Which database?", Selected: []string{"Postgres"}}}),
 	}))
 	if got, isErr := resultFor(t, pb, "q"); isErr || got != "User answers:\n- Which database?: Postgres" {
@@ -133,7 +133,7 @@ func TestAskUserInterruptAndRespond(t *testing.T) {
 
 	// Free text answers every question.
 	c, pc := newAgent(t, Config{}, agent.Config{}, llmtest.Turn{Text: "done"})
-	drain(t, c.Resume(context.Background(), "", final.State.Clone(), []agent.Decision{
+	drain(t, c.Resume(t.Context(), "", final.State.Clone(), []agent.Decision{
 		{ToolUseID: "q", Type: agent.Respond, Message: "use sqlite"},
 	}))
 	if got, _ := resultFor(t, pc, "q"); !strings.Contains(got, "use sqlite") {
@@ -177,7 +177,7 @@ func TestAskUserRejectDeclines(t *testing.T) {
 	a, _ := newAgent(t, Config{}, agent.Config{}, llmtest.Turn{ToolCalls: []llmtest.Call{askCall(dbQuestion())}})
 	final, _ := interrupted(t, a)
 	b, p := newAgent(t, Config{}, agent.Config{}, llmtest.Turn{Text: "done"})
-	drain(t, b.Resume(context.Background(), "", final.State, []agent.Decision{
+	drain(t, b.Resume(t.Context(), "", final.State, []agent.Decision{
 		{ToolUseID: "q", Type: agent.Reject, Message: "not now"},
 	}))
 	if text, isErr := resultFor(t, p, "q"); isErr || text != "The user declined to answer. not now" {
@@ -188,7 +188,7 @@ func TestAskUserRejectDeclines(t *testing.T) {
 func TestAskUserValidation(t *testing.T) {
 	q := func(text string, o []obj) obj { return obj{"question": text, "options": o} }
 	long := func(n int) string { return strings.Repeat("x", n) }
-	cases := []struct {
+	tests := []struct {
 		name string
 		qs   []obj
 		want string
@@ -205,18 +205,18 @@ func TestAskUserValidation(t *testing.T) {
 		{"long label", []obj{q("a", opts("x", long(MaxLabelRunes+1)))}, "longer than 200"},
 		{"long description", []obj{q("a", []obj{{"label": "x", "description": long(MaxDescriptionRunes + 1)}, {"label": "y"}})}, "longer than 500"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			cfg := Config{Asker: AskerFunc(func(context.Context, []Question) ([]Answer, error) {
 				t.Error("callback must not run for invalid questions")
 				return nil, nil
 			})}
 			a, p := newAgent(t, cfg, agent.Config{},
-				llmtest.Turn{ToolCalls: []llmtest.Call{askCall(tc.qs...)}},
+				llmtest.Turn{ToolCalls: []llmtest.Call{askCall(tt.qs...)}},
 				llmtest.Turn{Text: "done"})
 			run(t, a)
-			if text, isErr := resultFor(t, p, "q"); !isErr || !strings.Contains(text, tc.want) {
-				t.Fatalf("result = %q (error %v), want error containing %q", text, isErr, tc.want)
+			if text, isErr := resultFor(t, p, "q"); !isErr || !strings.Contains(text, tt.want) {
+				t.Fatalf("result = %q (error %v), want error containing %q", text, isErr, tt.want)
 			}
 		})
 	}
@@ -291,7 +291,7 @@ func TestAskUserCapsFreeTextAnswer(t *testing.T) {
 	a, _ := newAgent(t, Config{}, agent.Config{}, llmtest.Turn{ToolCalls: []llmtest.Call{askCall(dbQuestion())}})
 	final, _ := interrupted(t, a)
 	b, p := newAgent(t, Config{}, agent.Config{}, llmtest.Turn{Text: "done"})
-	drain(t, b.Resume(context.Background(), "", final.State, []agent.Decision{
+	drain(t, b.Resume(t.Context(), "", final.State, []agent.Decision{
 		{ToolUseID: "q", Type: agent.Respond, Message: strings.Repeat("é", MaxAnswerRunes+500)},
 	}))
 	text, _ := resultFor(t, p, "q")
@@ -379,7 +379,7 @@ func respondWith(t *testing.T, d agent.Decision) string {
 	final, _ := interrupted(t, a)
 	b, p := newAgent(t, Config{}, agent.Config{}, llmtest.Turn{Text: "done"})
 	d.ToolUseID = "q"
-	drain(t, b.Resume(context.Background(), "", final.State, []agent.Decision{d}))
+	drain(t, b.Resume(t.Context(), "", final.State, []agent.Decision{d}))
 	text, _ := resultFor(t, p, "q")
 	return text
 }

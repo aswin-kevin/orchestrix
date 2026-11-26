@@ -28,7 +28,7 @@ func TestStartTaskRunsInBackground(t *testing.T) {
 		llmtest.Turn{Text: "waiting"},
 		llmtest.Turn{Text: "noted"},
 	)
-	evs, _ := h.run(t, context.Background(), "go", nil)
+	evs, _ := h.run(t, t.Context(), "go", nil)
 	res := result(t, evs, ToolStart)
 	want := "Started background task async_1 (researcher). You will be notified when it finishes; use check_task to see its progress."
 	if res.IsError || res.Flatten() != want {
@@ -43,7 +43,7 @@ func TestStartTaskRunsInBackground(t *testing.T) {
 
 	g.release()
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	notes := notifications(h.p)
 	if len(notes) != 1 {
 		t.Fatalf("notifications = %+v", notes)
@@ -66,7 +66,7 @@ func TestTaskSurvivesCallReturn(t *testing.T) {
 	g := newGate(llmtest.Turn{Text: "late answer"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
 		start("s1", "researcher", "slow"), llmtest.Turn{Text: "bye"})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	h.run(t, ctx, "go", nil)
 	cancel()
 	g.waitEntered(t, 1)
@@ -92,7 +92,7 @@ func TestCheckTaskWait(t *testing.T) {
 	// earlier, at c1's result, it could end before the turn that asks for c2,
 	// whose BeforeModel would then rightly announce it before check_task
 	// shows the result.
-	evs, _ := h.run(t, context.Background(), "go", func(ev agent.Event) {
+	evs, _ := h.run(t, t.Context(), "go", func(ev agent.Event) {
 		if ev.Kind == agent.KindToolUse && ev.ToolID == "c2" {
 			g.release()
 		}
@@ -111,7 +111,7 @@ func TestCheckTaskWait(t *testing.T) {
 		t.Fatalf("second check = %q", second)
 	}
 	// check_task showed the whole result, so no notification repeats it.
-	h.run(t, context.Background(), "more", nil)
+	h.run(t, t.Context(), "more", nil)
 	if notes := notifications(h.p); len(notes) != 0 {
 		t.Fatalf("notifications = %+v", notes)
 	}
@@ -128,7 +128,7 @@ func TestCancelTask(t *testing.T) {
 		llmtest.Turn{Text: "cancelled it"},
 		llmtest.Turn{Text: "ok"},
 	)
-	evs, _ := h.run(t, context.Background(), "go", func(ev agent.Event) {
+	evs, _ := h.run(t, t.Context(), "go", func(ev agent.Event) {
 		if ev.Kind == agent.KindToolResult && ev.ToolID == "s1" {
 			g.waitEntered(t, 1)
 		}
@@ -142,7 +142,7 @@ func TestCancelTask(t *testing.T) {
 	if r := record(t, h.st, "async_1"); r.Status != StatusCancelled || !r.Notified {
 		t.Fatalf("record = %+v", r)
 	}
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	if notes := notifications(h.p); len(notes) != 0 {
 		t.Fatalf("notifications = %+v", notes)
 	}
@@ -155,7 +155,7 @@ func TestMaxRunning(t *testing.T) {
 		start("s2", "researcher", "two"),
 		llmtest.Turn{Text: "done"},
 	)
-	evs, _ := h.run(t, context.Background(), "go", nil)
+	evs, _ := h.run(t, t.Context(), "go", nil)
 	rs := results(evs, ToolStart)
 	if len(rs) != 2 || rs[0].IsError || !rs[1].IsError || !strings.Contains(rs[1].Flatten(), "limit 1") {
 		t.Fatalf("results = %+v", rs)
@@ -177,9 +177,9 @@ func TestWaitingOnApproval(t *testing.T) {
 	child := llmtest.New(call("w1", "write_file", obj{}), llmtest.Turn{Text: "unreachable"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{writeFileSpec(child)}, DisableStopReminder: true},
 		start("s1", "researcher", "write"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"}, llmtest.Turn{Text: "again"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	r := record(t, h.st, "async_1")
 	if r.Status != StatusWaiting || r.Error != "" || r.Pending == nil || len(r.Pending.Requests) != 1 || r.Pending.Requests[0].Tool != "write_file" {
 		t.Fatalf("record = %+v", r)
@@ -196,7 +196,7 @@ func TestWaitingOnApproval(t *testing.T) {
 	if j := h.m.jobs.Get("t", "async_1"); j == nil || j.Notified() {
 		t.Fatalf("job = %+v", j)
 	}
-	h.run(t, context.Background(), "again", nil)
+	h.run(t, t.Context(), "again", nil)
 	if notes := notifications(h.p); len(notes) != 1 {
 		t.Fatalf("the waiting task was announced again: %+v", notes)
 	}
@@ -218,7 +218,7 @@ func TestWaitingTaskTools(t *testing.T) {
 		call("u1", ToolUpdate, obj{"task_id": "async_1", "message": "go on"}),
 		call("x1", ToolCancel, obj{"task_id": "async_1"}),
 		llmtest.Turn{Text: "x"})
-	evs, _ := h.run(t, context.Background(), "go", nil)
+	evs, _ := h.run(t, t.Context(), "go", nil)
 	if res := result(t, evs, ToolCheck).Flatten(); !strings.Contains(res, "waiting for a decision on: write_file") {
 		t.Fatalf("check = %q", res)
 	}
@@ -240,9 +240,9 @@ func TestRefusedTaskFails(t *testing.T) {
 	child := llmtest.New(llmtest.Turn{Text: "I can't help with that.", StopReason: llm.StopRefusal})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(child)}, DisableStopReminder: true},
 		start("s1", "researcher", "do it"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	r := record(t, h.st, "async_1")
 	if r.Status != StatusFailed || !strings.HasPrefix(r.Error, "refused") {
 		t.Fatalf("record = %+v", r)
@@ -287,7 +287,7 @@ func TestCustomRunner(t *testing.T) {
 	fr := &fakeRunner{out: Outcome{Status: StatusCompleted, Text: "remote answer"}}
 	h := newHarness(t, Config{Runner: fr, DisableStopReminder: true},
 		start("s1", subagents.GeneralPurpose, "d"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	if len(fr.reqs) != 1 {
 		t.Fatalf("requests = %+v", fr.reqs)
 	}
@@ -300,7 +300,7 @@ func TestCustomRunner(t *testing.T) {
 		t.Fatalf("request = %+v", got)
 	}
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	notes := notifications(h.p)
 	if len(notes) != 1 || !strings.Contains(notes[0].Text(), "remote answer") {
 		t.Fatalf("notifications = %+v", notes)
@@ -310,7 +310,7 @@ func TestCustomRunner(t *testing.T) {
 func TestStartValidation(t *testing.T) {
 	t.Run("unknown type", func(t *testing.T) {
 		h := newHarness(t, Config{}, start("s1", "nope", "d"), llmtest.Turn{Text: "x"})
-		evs, _ := h.run(t, context.Background(), "go", nil)
+		evs, _ := h.run(t, t.Context(), "go", nil)
 		if res := result(t, evs, ToolStart); !res.IsError {
 			t.Fatalf("result = %+v", res)
 		}
@@ -318,7 +318,7 @@ func TestStartValidation(t *testing.T) {
 	t.Run("no thread", func(t *testing.T) {
 		h := newHarness(t, Config{Runner: &fakeRunner{}}, start("s1", subagents.GeneralPurpose, "d"), llmtest.Turn{Text: "x"})
 		h.thread = ""
-		evs, _ := h.run(t, context.Background(), "go", nil)
+		evs, _ := h.run(t, t.Context(), "go", nil)
 		if res := result(t, evs, ToolStart); !res.IsError || !strings.Contains(res.Flatten(), "thread") {
 			t.Fatalf("result = %+v", res)
 		}
@@ -328,7 +328,7 @@ func TestStartValidation(t *testing.T) {
 		child := llmtest.New(start("n1", "researcher", "nested"), llmtest.Turn{Text: "child done"})
 		h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(child)}, MaxDepth: 1, DisableStopReminder: true},
 			start("s1", "researcher", "outer"), llmtest.Turn{Text: "x"})
-		h.run(t, context.Background(), "go", nil)
+		h.run(t, t.Context(), "go", nil)
 		waitEnded(t, h.m, "async_1")
 		if child.Calls() != 2 {
 			t.Fatalf("child calls = %d", child.Calls())
@@ -359,9 +359,9 @@ func TestNotificationNeutralized(t *testing.T) {
 	g.release()
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
 		start("s1", "researcher", "x"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	notes := notifications(h.p)
 	if len(notes) != 1 {
 		t.Fatalf("notifications = %+v", notes)
@@ -379,16 +379,16 @@ func TestCloseStopsTasks(t *testing.T) {
 		start("s1", "researcher", "a"), start("s2", "researcher", "b"), llmtest.Turn{Text: "started"},
 		start("s3", "researcher", "c"), llmtest.Turn{Text: "refused"},
 	)
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	g.waitEntered(t, 2)
 	begin := time.Now()
-	if err := h.m.Close(context.Background()); err != nil {
+	if err := h.m.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if d := time.Since(begin); d > DefaultStopWait {
 		t.Fatalf("Close took %s", d)
 	}
-	evs, _ := h.run(t, context.Background(), "next", nil)
+	evs, _ := h.run(t, t.Context(), "next", nil)
 	for _, id := range []string{"async_1", "async_2"} {
 		if r := record(t, h.st, id); r.Status != StatusCancelled {
 			t.Fatalf("record = %+v", r)
@@ -404,9 +404,9 @@ func TestNoGoroutineLeak(t *testing.T) {
 	g := newGate(llmtest.Turn{Text: "never"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
 		start("s1", "researcher", "a"), start("s2", "researcher", "b"), llmtest.Turn{Text: "started"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	g.waitEntered(t, 2)
-	if err := h.m.Close(context.Background()); err != nil {
+	if err := h.m.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -421,13 +421,13 @@ func TestNoGoroutineLeak(t *testing.T) {
 
 func TestPromptSegment(t *testing.T) {
 	h := newHarness(t, Config{Runner: &fakeRunner{}}, llmtest.Turn{Text: "x"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	if sys := h.p.Requests[0].System; !slices.Contains(sys, DefaultPrompt) {
 		t.Fatalf("system = %q", sys)
 	}
 	empty := ""
 	h = newHarness(t, Config{Runner: &fakeRunner{}, Prompt: &empty}, llmtest.Turn{Text: "x"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	if sys := h.p.Requests[0].System; slices.Contains(sys, DefaultPrompt) {
 		t.Fatalf("system = %q", sys)
 	}
@@ -474,10 +474,10 @@ func TestAgentCloseDrainsTasksBeforeResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := &harness{m: m, a: a, p: p, st: state.New(), thread: "t"}
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	g.waitEntered(t, 1)
 
-	ctx, cancel := context.WithTimeout(context.Background(), DefaultStopWait)
+	ctx, cancel := context.WithTimeout(t.Context(), DefaultStopWait)
 	defer cancel()
 	if err := a.Close(ctx); err != nil {
 		t.Fatalf("Close: %v", err)

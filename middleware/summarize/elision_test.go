@@ -1,7 +1,6 @@
 package summarize
 
 import (
-	"context"
 	"fmt"
 	"reflect"
 	"strings"
@@ -110,7 +109,7 @@ func TestEstimateFallsBackWhenElisionsChange(t *testing.T) {
 	s := state.New()
 	s.SetMessages(texts("u0 "+strings.Repeat("x", 4000), "a1", "u2"))
 	m := mustNew(t, Config{})
-	if err := m.AfterModel(context.Background(), s, &llm.Response{Usage: llm.Usage{Input: 50_000}}); err != nil {
+	if err := m.AfterModel(t.Context(), s, &llm.Response{Usage: llm.Usage{Input: 50_000}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := Estimate(s, elide.View(s, 0)); got != 50_000 {
@@ -122,7 +121,7 @@ func TestEstimateFallsBackWhenElisionsChange(t *testing.T) {
 		t.Fatalf("Estimate after an elision = %d, want the view's estimate %d", got, want)
 	}
 	// Observed with c1 applied, then c1 is removed: the view grows back.
-	if err := m.AfterModel(context.Background(), s, &llm.Response{Usage: llm.Usage{Input: 10}}); err != nil {
+	if err := m.AfterModel(t.Context(), s, &llm.Response{Usage: llm.Usage{Input: 10}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := Estimate(s, elide.View(s, 0)); got != 10 {

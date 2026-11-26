@@ -32,7 +32,7 @@ func TestFetchPermission(t *testing.T) {
 			t.Fatal(err)
 		}
 		var final *agent.Final
-		for ev, err := range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
+		for ev, err := range a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -93,7 +93,7 @@ func TestPromptSegment(t *testing.T) {
 				t.Fatal(err)
 			}
 			req := &agent.ModelRequest{Request: llm.Request{System: []string{"host"}}}
-			_, err = mw.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+			_, err = mw.WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 				want := []string{"host"}
 				if tt.want != "" {
 					want = append(want, tt.want)
@@ -178,7 +178,7 @@ func systemOf(t *testing.T, mw *Middleware) string {
 	t.Helper()
 	var system []string
 	req := &agent.ModelRequest{}
-	_, err := mw.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := mw.WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		system = r.Request.System
 		return &llm.Response{}, nil
 	})
@@ -213,7 +213,7 @@ func TestPromptDescribesOfferedTools(t *testing.T) {
 func TestZeroHTTPFetcherFails(t *testing.T) {
 	u, _ := url.Parse("https://example.com/")
 	for name, f := range map[string]*HTTPFetcher{"zero": {}, "nil": nil} {
-		if _, err := f.Fetch(context.Background(), u, 10); err == nil || !strings.Contains(err.Error(), "NewHTTPFetcher") {
+		if _, err := f.Fetch(t.Context(), u, 10); err == nil || !strings.Contains(err.Error(), "NewHTTPFetcher") {
 			t.Errorf("%s HTTPFetcher Fetch = %v, want an error naming NewHTTPFetcher", name, err)
 		}
 	}

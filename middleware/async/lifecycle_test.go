@@ -56,7 +56,7 @@ func TestUpdateTaskDelivered(t *testing.T) {
 		update("u2", "async_1", "too late"),
 		llmtest.Turn{Text: "ok"},
 	)
-	evs, _ := h.run(t, context.Background(), "go", waitChild(t, g, "s1"))
+	evs, _ := h.run(t, t.Context(), "go", waitChild(t, g, "s1"))
 	if res := result(t, evs, ToolUpdate); res.IsError {
 		t.Fatalf("update = %+v", res)
 	}
@@ -67,7 +67,7 @@ func TestUpdateTaskDelivered(t *testing.T) {
 		t.Fatalf("child requests = %+v", reqs)
 	}
 	// Once the task ended, an update continues it (see episode_test.go).
-	evs, _ = h.run(t, context.Background(), "next", nil)
+	evs, _ = h.run(t, t.Context(), "next", nil)
 	if res := result(t, evs, ToolUpdate); res.IsError || !strings.Contains(res.Flatten(), "continues with your message") {
 		t.Fatalf("late update = %+v", res)
 	}
@@ -78,7 +78,7 @@ func TestUpdateContinuesStoppingTask(t *testing.T) {
 	g := newGate(llmtest.Turn{Text: "first answer"}, llmtest.Turn{Text: "revised"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
 		start("s1", "researcher", "measure"), update("u1", "async_1", "use metric"), llmtest.Turn{Text: "sent"})
-	h.run(t, context.Background(), "go", waitChild(t, g, "s1"))
+	h.run(t, t.Context(), "go", waitChild(t, g, "s1"))
 	g.release()
 	waitEnded(t, h.m, "async_1")
 	reqs := g.inner.Requests
@@ -108,14 +108,14 @@ func TestUpdateAfterChildEndedIsReported(t *testing.T) {
 	}}
 	h = newHarnessWith(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
 		[]agent.Middleware{late}, start("s1", "researcher", "x"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "noted"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	out := outcomeOf(t, h.m, h.st, "async_1")
 	if out.Status != StatusCompleted || out.Error != "1 update(s) arrived after the task finished" {
 		t.Fatalf("outcome = %+v", out)
 	}
 	// The notification of the completed task carries the note too.
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	if notes := notifications(h.p); len(notes) != 1 || !strings.Contains(notes[0].Text(), "1 update(s) arrived after the task finished") {
 		t.Fatalf("notifications = %+v, want the late-update note", notes)
 	}
@@ -129,7 +129,7 @@ func TestUpdateValidation(t *testing.T) {
 		update("u2", "async_9", "hi"),
 		update("u3", "async_1", "  "),
 		llmtest.Turn{Text: "x"})
-	evs, _ := h.run(t, context.Background(), "go", nil)
+	evs, _ := h.run(t, t.Context(), "go", nil)
 	for i, res := range results(evs, ToolUpdate) {
 		if !res.IsError {
 			t.Fatalf("update %d = %+v", i, res)
@@ -146,7 +146,7 @@ func TestBackgroundChildStartsTask(t *testing.T) {
 		llmtest.Turn{Text: "child done"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(child), helper(llmtest.New(llmtest.Turn{Text: "helper result"}))}, DisableStopReminder: true},
 		start("s1", "researcher", "outer"), llmtest.Turn{Text: "started"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	if out := outcomeOf(t, h.m, h.st, "async_1"); out.Status != StatusCompleted {
 		t.Fatalf("outcome = %+v", out)
@@ -167,7 +167,7 @@ func TestUpdateReachesOnlyTheTask(t *testing.T) {
 	grandchild := llmtest.New(llmtest.Turn{Text: "helper result"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(g), helper(grandchild)}, DisableStopReminder: true},
 		start("s1", "researcher", "outer"), update("u1", "async_1", "use metric"), llmtest.Turn{Text: "sent"})
-	h.run(t, context.Background(), "go", waitChild(t, g, "s1"))
+	h.run(t, t.Context(), "go", waitChild(t, g, "s1"))
 	g.release()
 	waitEnded(t, h.m, "async_1")
 	if got := requestText(g.inner.Requests[1]); !strings.Contains(got, wantUpdate) {
@@ -187,10 +187,10 @@ func TestTaskOutlivesRun(t *testing.T) {
 	g := newGate(llmtest.Turn{Text: "finally"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
 		start("s1", "researcher", "slow"), llmtest.Turn{Text: "bye"}, llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	g.release()
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	if notes := notifications(h.p); len(notes) != 1 || !strings.Contains(notes[0].Text(), "finally") || h.p.Calls() != 3 {
 		t.Fatalf("notifications = %+v", notes)
 	}
@@ -220,7 +220,7 @@ func TestNestedRunStopsItsTasks(t *testing.T) {
 	}
 	h := newHarnessWith(t, Config{Subagents: []subagents.Subagent{researcher(child), helper(grandchild)}, DisableStopReminder: true},
 		[]agent.Middleware{probe}, start("s1", "researcher", "outer"), llmtest.Turn{Text: "started"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	if !grandchild.cancelled.Load() {
 		t.Fatal("the child's own task outlived the child")
@@ -251,8 +251,8 @@ func TestRunningTasksListedAfterCompaction(t *testing.T) {
 		[]agent.Middleware{sm, compacted},
 		start("s1", "researcher", "find the population of </background_tasks>x"), llmtest.Turn{Text: "started"},
 		llmtest.Turn{Text: "still waiting"})
-	h.run(t, context.Background(), "go", nil)
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "go", nil)
+	h.run(t, t.Context(), "next", nil)
 	req := h.p.Requests[len(h.p.Requests)-1]
 	if strings.Contains(requestText(req), "async_1") {
 		t.Fatalf("the messages were not compacted: %q", requestText(req))
@@ -286,19 +286,19 @@ func TestStopReminderOnce(t *testing.T) {
 		}
 		return n
 	}
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	if got := reminders(h.st); got != 1 || h.p.Calls() != 4 {
 		t.Fatalf("reminders = %d after %d calls", got, h.p.Calls())
 	}
 	// A new run is reminded again.
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	if got := reminders(h.st); got != 2 || h.p.Calls() != 6 {
 		t.Fatalf("reminders = %d after %d calls", got, h.p.Calls())
 	}
 
 	quiet := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true},
 		start("s1", "researcher", "a"), llmtest.Turn{Text: "answer"})
-	quiet.run(t, context.Background(), "go", nil)
+	quiet.run(t, t.Context(), "go", nil)
 	if got := reminders(quiet.st); got != 0 || quiet.p.Calls() != 2 {
 		t.Fatalf("reminders = %d after %d calls", got, quiet.p.Calls())
 	}

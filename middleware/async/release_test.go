@@ -31,7 +31,7 @@ func TestTopLevelThreadReleasedAfterRun(t *testing.T) {
 		[]agent.Middleware{probe}, start("s1", subagents.GeneralPurpose, "quick"), llmtest.Turn{Text: "answer"})
 	m = h.m
 
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 
 	if r := record(t, h.st, "async_1"); !r.terminal() || !r.Notified {
 		t.Fatalf("record = %+v, want an ended task the model was told about", r)
@@ -59,7 +59,7 @@ func TestNestedThreadReleasedAfterRun(t *testing.T) {
 		[]agent.Middleware{probe}, start("s1", "researcher", "outer"), llmtest.Turn{Text: "started"})
 	m = h.m
 
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 
 	if grandchild.Calls() != 1 || child.Calls() != 2 {
@@ -97,7 +97,7 @@ func TestCheckTaskCapsResult(t *testing.T) {
 		call("c1", ToolCheck, obj{"task_id": "async_1", "wait": true}),
 		llmtest.Turn{Text: "done"})
 
-	evs, _ := h.run(t, context.Background(), "go", nil)
+	evs, _ := h.run(t, t.Context(), "go", nil)
 
 	res := result(t, evs, ToolCheck).Flatten()
 	if len(res) > MaxCheckResultBytes+500 || !strings.Contains(res, "truncated") {

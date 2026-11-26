@@ -1,7 +1,6 @@
 package web
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -127,7 +126,7 @@ func TestRedirectToBlockedAddressRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := newFetcher(client, Config{})
-	res, err := f.fetch(context.Background(), FetchInput{URL: first.URL}, nil)
+	res, err := f.fetch(t.Context(), FetchInput{URL: first.URL}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

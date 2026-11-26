@@ -17,7 +17,7 @@ import (
 
 func readAll(t *testing.T, b backend.Backend, path string) string {
 	t.Helper()
-	res, err := b.Read(context.Background(), path, 0, 1_000_000)
+	res, err := b.Read(t.Context(), path, 0, 1_000_000)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
@@ -28,7 +28,7 @@ func readAll(t *testing.T, b backend.Backend, path string) string {
 func wrapToolWith(t *testing.T, cfg Config, name, id string, res tool.Result) tool.Result {
 	t.Helper()
 	call := &agent.ToolCall{ID: id, Name: name, State: state.New(), Call: &tool.Call{Backend: cfg.Backend}}
-	out, err := mustNew(t, cfg).WrapTool(context.Background(), call, func(context.Context, *agent.ToolCall) (tool.Result, error) {
+	out, err := mustNew(t, cfg).WrapTool(t.Context(), call, func(context.Context, *agent.ToolCall) (tool.Result, error) {
 		return res, nil
 	})
 	if err != nil {
@@ -67,7 +67,7 @@ func TestOwnToolsNotOffloaded(t *testing.T) {
 	if out.Flatten() != res.Flatten() {
 		t.Fatal("read_file result was offloaded")
 	}
-	if _, err := b.Read(context.Background(), "/.orchestrix/large_tool_results/call_1.txt", 0, 1); err == nil {
+	if _, err := b.Read(t.Context(), "/.orchestrix/large_tool_results/call_1.txt", 0, 1); err == nil {
 		t.Fatal("file written for own tool")
 	}
 }
@@ -124,7 +124,7 @@ func requestMessages(t *testing.T, cfg Config, msgs []llm.Message) []llm.Message
 	t.Helper()
 	req := &agent.ModelRequest{Request: llm.Request{Messages: msgs}}
 	var got []llm.Message
-	_, err := mustNew(t, cfg).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := mustNew(t, cfg).WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		got = r.Request.Messages
 		return &llm.Response{}, nil
 	})
@@ -182,7 +182,7 @@ func TestLargeUserMessageUsesRequestBackend(t *testing.T) {
 	huge := strings.Repeat("z", MessageOffloadChars+10)
 	req := &agent.ModelRequest{Request: llm.Request{Messages: []llm.Message{llm.UserText(huge)}}, Backend: b}
 	var got []llm.Message
-	_, err := mustNew(t, Config{}).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := mustNew(t, Config{}).WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		got = r.Request.Messages
 		return &llm.Response{}, nil
 	})

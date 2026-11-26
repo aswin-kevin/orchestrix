@@ -101,7 +101,7 @@ func runWith(t *testing.T, cfg Config, ac agent.Config, input string, turns ...l
 	if err != nil {
 		t.Fatal(err)
 	}
-	return drain(t, a.Run(context.Background(), agent.Input{ThreadID: "th", Messages: []llm.Message{llm.UserText(input)}})), p
+	return drain(t, a.Run(t.Context(), agent.Input{ThreadID: "th", Messages: []llm.Message{llm.UserText(input)}})), p
 }
 
 func drain(t *testing.T, seq func(func(agent.Event, error) bool)) *agent.Final {
@@ -338,7 +338,7 @@ func TestPostToolUseFailureOnlyOnError(t *testing.T) {
 }
 
 func TestMatcher(t *testing.T) {
-	cases := map[string]struct {
+	tests := map[string]struct {
 		tools []string
 		want  []string
 	}{
@@ -347,12 +347,12 @@ func TestMatcher(t *testing.T) {
 		"star":        {[]string{"*"}, []string{"read_file", "write_file"}},
 		"other tools": {[]string{"grep"}, nil},
 	}
-	for name, tc := range cases {
+	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			rec := &recorder{}
 			var fired []string
 			cfg := Config{PreToolUse: []PreToolUseHook{{
-				Matcher: Matcher{Tools: tc.tools},
+				Matcher: Matcher{Tools: tt.tools},
 				Fn: func(_ context.Context, in ToolInput) (PreToolUseOutput, error) {
 					fired = append(fired, in.Tool)
 					return PreToolUseOutput{}, nil
@@ -363,7 +363,7 @@ func TestMatcher(t *testing.T) {
 					call("r", "read_file", obj{"path": "/a"}), call("w", "write_file", obj{"path": "/a"})}},
 				llmtest.Turn{Text: "done"})
 			mustCompleted(t, final)
-			equal(t, "tools the hook fired for", fired, tc.want)
+			equal(t, "tools the hook fired for", fired, tt.want)
 			equal(t, "tools that ran", rec.all(), []string{"/a", "/a"})
 		})
 	}
@@ -577,12 +577,12 @@ func TestHooksFireAgainWhenAnInterruptedCallResumes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := drain(t, a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}))
+	first := drain(t, a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}))
 	if first.Reason != agent.ReasonInterrupted || fired != 1 {
 		t.Fatalf("after the run: reason=%v fired=%d, want interrupted with one firing", first.Reason, fired)
 	}
 
-	resumed := drain(t, a.Resume(context.Background(), "", first.State,
+	resumed := drain(t, a.Resume(t.Context(), "", first.State,
 		[]agent.Decision{{ToolUseID: "q", Type: agent.Respond, Message: "blue"}}))
 	mustCompleted(t, resumed)
 	if fired != 2 {
@@ -810,7 +810,7 @@ func TestMatcherPattern(t *testing.T) {
 }
 
 func TestNilFnIsError(t *testing.T) {
-	cases := map[string]struct {
+	tests := map[string]struct {
 		cfg  Config
 		want string
 	}{
@@ -825,10 +825,10 @@ func TestNilFnIsError(t *testing.T) {
 		}}, {}}}, "hooks: Stop[1] has no Fn"},
 		"SubagentStart": {Config{SubagentStart: []SubagentStartHook{{}}}, "hooks: SubagentStart[0] has no Fn"},
 	}
-	for name, tc := range cases {
+	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			if _, err := New(tc.cfg); err == nil || err.Error() != tc.want {
-				t.Fatalf("err = %v, want %q", err, tc.want)
+			if _, err := New(tt.cfg); err == nil || err.Error() != tt.want {
+				t.Fatalf("err = %v, want %q", err, tt.want)
 			}
 		})
 	}
@@ -866,7 +866,7 @@ func TestNewCopiesConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustCompleted(t, drain(t, a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}})))
+	mustCompleted(t, drain(t, a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}})))
 	if fired != 1 {
 		t.Fatalf("hook fired %d times, want 1 with the config as given to New", fired)
 	}

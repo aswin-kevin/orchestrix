@@ -60,7 +60,7 @@ func waitingHarness(t *testing.T, cfg Config, w *writer, before []agent.Middlewa
 	turns := append([]llmtest.Turn{start("s1", "researcher", "write"), {Text: "started"}}, more...)
 	h := newHarnessWith(t, cfg, before, turns...)
 	h.be = testutil.Memory(t)
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	return h
 }
@@ -93,7 +93,7 @@ func liveRecord(t *testing.T, h *harness, id string) TaskRecord {
 func TestWaitingSurfacesPending(t *testing.T) {
 	w := newWriter()
 	h := waitingHarness(t, Config{}, w, nil, llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	r := record(t, h.st, "async_1")
 	if r.Status != StatusWaiting || r.Pending == nil || r.Pending.Requests[0].Tool != "write_file" {
 		t.Fatalf("record = %+v", r)
@@ -115,7 +115,7 @@ func TestParentCannotResolveWaiting(t *testing.T) {
 		llmtest.Turn{Text: "ok"})
 	fb := h.m.runner.(*localRunner).fallback
 	pendingNow := func() *agent.Interrupt {
-		s, _, err := fb.Load(context.Background(), "t/async_1")
+		s, _, err := fb.Load(t.Context(), "t/async_1")
 		if err != nil {
 			t.Fatalf("task thread: %v", err)
 		}
@@ -126,7 +126,7 @@ func TestParentCannotResolveWaiting(t *testing.T) {
 		return p
 	}
 	before := pendingNow()
-	evs, _ := h.run(t, context.Background(), "next", nil)
+	evs, _ := h.run(t, t.Context(), "next", nil)
 	if res := result(t, evs, ToolUpdate); !res.IsError || res.Flatten() != "cannot update task async_1: it is waiting for a decision only the user can make" {
 		t.Fatalf("update_task = %+v", res)
 	}
@@ -153,7 +153,7 @@ func TestWaitingNotReleased(t *testing.T) {
 	w := newWriter(llmtest.Turn{Text: "done"})
 	h := waitingHarness(t, Config{}, w, nil, llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"}, llmtest.Turn{Text: "c"})
 	for range 3 {
-		h.run(t, context.Background(), "more", nil)
+		h.run(t, t.Context(), "more", nil)
 	}
 	r := record(t, h.st, "async_1")
 	if r.Status != StatusWaiting {
@@ -162,7 +162,7 @@ func TestWaitingNotReleased(t *testing.T) {
 	if h.m.jobs.Get("t", "async_1") == nil {
 		t.Fatal("the waiting task was released")
 	}
-	if err := h.m.Resolve(context.Background(), "t", "async_1", approveAll(t, r)); err != nil {
+	if err := h.m.Resolve(t.Context(), "t", "async_1", approveAll(t, r)); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	waitEnded(t, h.m, "async_1")
@@ -171,13 +171,13 @@ func TestWaitingNotReleased(t *testing.T) {
 func TestHostResolveResumes(t *testing.T) {
 	w := newWriter(llmtest.Turn{Text: "wrote it"})
 	h := waitingHarness(t, Config{}, w, nil, llmtest.Turn{Text: "ok"}, llmtest.Turn{Text: "noted"})
-	h.run(t, context.Background(), "next", nil) // announces the wait
+	h.run(t, t.Context(), "next", nil) // announces the wait
 	r := record(t, h.st, "async_1")
-	if err := h.m.Resolve(context.Background(), "t", "async_1", approveAll(t, r)); err != nil {
+	if err := h.m.Resolve(t.Context(), "t", "async_1", approveAll(t, r)); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "after", nil)
+	h.run(t, t.Context(), "after", nil)
 	notes := notifications(h.p) // the wait's, then the end's
 	if len(notes) != 2 || !strings.Contains(notes[1].Text(), "Background task async_1 (researcher) completed.") || !strings.Contains(notes[1].Text(), "wrote it") {
 		t.Fatalf("notifications = %+v", notes)
@@ -188,7 +188,7 @@ func TestHostResolveResumes(t *testing.T) {
 	if w.runs.Load() != 1 {
 		t.Fatalf("write_file ran %d times, want 1", w.runs.Load())
 	}
-	got, err := h.be.Read(context.Background(), "/out.txt", 0, 10)
+	got, err := h.be.Read(t.Context(), "/out.txt", 0, 10)
 	if err != nil || len(got.Lines) != 1 || got.Lines[0] != "hello" {
 		t.Fatalf("backend file = %+v, %v", got, err)
 	}
@@ -203,7 +203,7 @@ func TestHostResolvedEpisodeIsNested(t *testing.T) {
 	w := newWriter(llmtest.Turn{Text: "wrote it"})
 	h := waitingHarness(t, Config{}, w, []agent.Middleware{spy.hooks()})
 	r := liveRecord(t, h, "async_1")
-	if err := h.m.Resolve(context.Background(), "t", "async_1", approveAll(t, r)); err != nil {
+	if err := h.m.Resolve(t.Context(), "t", "async_1", approveAll(t, r)); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	waitEnded(t, h.m, "async_1")
@@ -217,7 +217,7 @@ func TestHostResolvedEpisodeIsNested(t *testing.T) {
 func TestResolveErrors(t *testing.T) {
 	w := newWriter(llmtest.Turn{Text: "wrote it"})
 	h := waitingHarness(t, Config{}, w, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := h.m.Resolve(ctx, "t", "async_9", nil); !errors.Is(err, ErrUnknownTask) {
 		t.Fatalf("unknown task: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestResolveRaceRunsOnce(t *testing.T) {
 	errs := make([]error, 2)
 	var wg sync.WaitGroup
 	for i := range errs {
-		wg.Go(func() { errs[i] = h.m.Resolve(context.Background(), "t", "async_1", decisions) })
+		wg.Go(func() { errs[i] = h.m.Resolve(t.Context(), "t", "async_1", decisions) })
 	}
 	wg.Wait()
 	wins := 0
@@ -325,7 +325,7 @@ func TestOnSettledEndAndWaiting(t *testing.T) {
 		first.Started.IsZero() || first.Notified {
 		t.Fatalf("first OnSettled record = %+v", first)
 	}
-	if err := h.m.Resolve(context.Background(), "t", "async_1", approveAll(t, first)); err != nil {
+	if err := h.m.Resolve(t.Context(), "t", "async_1", approveAll(t, first)); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	got = calls.waitCalls(t, 2)
@@ -358,7 +358,7 @@ func TestOnSettledPanicIsRecovered(t *testing.T) {
 	if !called.Load() {
 		t.Fatal("OnSettled was not called")
 	}
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	if r := record(t, h.st, "async_1"); r.Status != StatusWaiting {
 		t.Fatalf("record = %+v", r)
 	}
@@ -380,7 +380,7 @@ func TestOnEventStreamsTaskEvents(t *testing.T) {
 	child := llmtest.New(llmtest.Turn{Text: "child says hi"})
 	h := newHarness(t, Config{Subagents: []subagents.Subagent{researcher(child)}, OnEvent: onEvent, DisableStopReminder: true},
 		start("s1", "researcher", "x"), llmtest.Turn{Text: "started"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	mu.Lock()
 	defer mu.Unlock()
@@ -419,7 +419,7 @@ func TestApproverStaysInBand(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := &harness{m: m, a: a, p: p, st: state.New(), thread: "t", be: testutil.Memory(t)}
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, m, "async_1")
 	calls.waitCalls(t, 1)
 	time.Sleep(20 * time.Millisecond)
@@ -438,9 +438,9 @@ func TestCancelWaitingTask(t *testing.T) {
 	h := newHarness(t, Config{Runner: run, OnSettled: calls.hook, DisableStopReminder: true},
 		start("s1", gp, "x"), llmtest.Turn{Text: "started"},
 		call("c1", ToolCancel, obj{"task_id": "async_1"}), llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	began := time.Now()
-	evs, _ := h.run(t, context.Background(), "cancel", nil)
+	evs, _ := h.run(t, t.Context(), "cancel", nil)
 	if took := time.Since(began); took > time.Second {
 		t.Fatalf("cancelling a waiting task took %v", took)
 	}
@@ -457,7 +457,7 @@ func TestCancelWaitingTask(t *testing.T) {
 	if hd.stops.Load() != 1 {
 		t.Fatalf("Stop called %d times, want 1", hd.stops.Load())
 	}
-	if err := h.m.Resolve(context.Background(), "t", "async_1", nil); err == nil {
+	if err := h.m.Resolve(t.Context(), "t", "async_1", nil); err == nil {
 		t.Fatal("Resolve of a cancelled task succeeded")
 	}
 	// The host is told the waiting task ended.
@@ -471,15 +471,15 @@ func TestCloseAnnouncesCancelledWaiting(t *testing.T) {
 	run := funcRunner(func(context.Context, Request) (Handle, error) { return waitingHandle(), nil })
 	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
 		start("s1", gp, "x"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"}, llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
-	h.run(t, context.Background(), "next", nil) // announces the wait
+	h.run(t, t.Context(), "go", nil)
+	h.run(t, t.Context(), "next", nil) // announces the wait
 	if r := record(t, h.st, "async_1"); r.Status != StatusWaiting || !r.Notified {
 		t.Fatalf("record = %+v", r)
 	}
-	if err := h.m.Close(context.Background()); err != nil {
+	if err := h.m.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	h.run(t, context.Background(), "after close", nil)
+	h.run(t, t.Context(), "after close", nil)
 	notes := notifications(h.p) // the wait's, then the cancellation's
 	if len(notes) != 2 || notes[1].Text() != "<task-notification>Background task async_1 (general-purpose) cancelled.</task-notification>" {
 		t.Fatalf("notifications = %+v", notes)
@@ -513,7 +513,7 @@ func TestWaitingSurvivesEviction(t *testing.T) {
 		start("s3", gp, "c"), llmtest.Turn{Text: "started"},
 		llmtest.Turn{Text: "ok"})
 	for range 4 {
-		h.run(t, context.Background(), "go", nil)
+		h.run(t, t.Context(), "go", nil)
 	}
 	if h.m.jobs.Get("t", "async_1") == nil {
 		t.Fatal("the waiting task was evicted")
@@ -531,7 +531,7 @@ func TestWaitingSurvivesEviction(t *testing.T) {
 	if r.Status != StatusWaiting {
 		t.Fatalf("record = %+v", r)
 	}
-	if err := h.m.Resolve(context.Background(), "t", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}); err != nil {
+	if err := h.m.Resolve(t.Context(), "t", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	if waiting.calls.Load() != 1 {
@@ -546,18 +546,18 @@ func TestResolvedRecordIsRunningThenAnnounced(t *testing.T) {
 	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
 		start("s1", gp, "a"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"},
 		llmtest.Turn{Text: "ok"}, llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
-	h.run(t, context.Background(), "next", nil) // announces the wait
-	if err := h.m.Resolve(context.Background(), "t", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}); err != nil {
+	h.run(t, t.Context(), "go", nil)
+	h.run(t, t.Context(), "next", nil) // announces the wait
+	if err := h.m.Resolve(t.Context(), "t", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
-	h.run(t, context.Background(), "while it runs", nil)
+	h.run(t, t.Context(), "while it runs", nil)
 	if r := record(t, h.st, "async_1"); r.Status != StatusRunning || r.Pending != nil || r.Notified {
 		t.Fatalf("record while the resolved episode runs = %+v", r)
 	}
 	next.end(Outcome{Status: StatusCompleted, Text: "resolved"})
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "after", nil)
+	h.run(t, t.Context(), "after", nil)
 	notes := notifications(h.p) // the wait's, then the end's
 	if len(notes) != 2 || !strings.Contains(notes[1].Text(), "completed") {
 		t.Fatalf("notifications = %+v", notes)
@@ -578,12 +578,12 @@ func TestContinueAfterCancelledWaitingReleasedDoesNotRunPending(t *testing.T) {
 		call("c1", ToolCancel, obj{"task_id": "async_1"}), llmtest.Turn{Text: "cancelled"},
 		llmtest.Turn{Text: "idle"},
 		update("u1", "async_1", "go on"), llmtest.Turn{Text: "asked"})
-	h.run(t, context.Background(), "cancel it", nil)
-	h.run(t, context.Background(), "idle", nil)
+	h.run(t, t.Context(), "cancel it", nil)
+	h.run(t, t.Context(), "idle", nil)
 	if h.m.jobs.Get("t", "async_1") != nil {
 		t.Fatal("the cancelled task is still held")
 	}
-	evs, _ := h.run(t, context.Background(), "go on", nil)
+	evs, _ := h.run(t, t.Context(), "go on", nil)
 	// As on the held path: the task was cancelled while it waited.
 	res := result(t, evs, ToolUpdate)
 	if !res.IsError || !strings.Contains(res.Flatten(), "cancelled while it waited") {
@@ -600,9 +600,9 @@ func TestLocalResolveAppliesStricterParentMode(t *testing.T) {
 	if err := agent.SetPermissionMode(h.st, permission.ModePlan); err != nil {
 		t.Fatal(err)
 	}
-	h.run(t, context.Background(), "plan now", nil)
+	h.run(t, t.Context(), "plan now", nil)
 	r := record(t, h.st, "async_1")
-	if err := h.m.Resolve(context.Background(), "t", "async_1", approveAll(t, r)); err != nil {
+	if err := h.m.Resolve(t.Context(), "t", "async_1", approveAll(t, r)); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	waitEnded(t, h.m, "async_1")
@@ -616,7 +616,7 @@ func TestAttachReadsPendingFromThread(t *testing.T) {
 	h := waitingHarness(t, Config{}, w, nil)
 	lr := h.m.runner.(*localRunner)
 	rec := liveRecord(t, h, "async_1")
-	ctx, _ := agenttest.Context(context.Background(), agent.RunInfo{Agent: h.a, ThreadID: "t", Depth: 0})
+	ctx, _ := agenttest.Context(t.Context(), agent.RunInfo{Agent: h.a, ThreadID: "t", Depth: 0})
 	ctx = withFollowUp(ctx, followUp{backend: h.be})
 	stale := rec
 	stale.Pending = &agent.Interrupt{Requests: []agent.ActionRequest{{ToolUseID: "stale", Tool: "write_file"}}}

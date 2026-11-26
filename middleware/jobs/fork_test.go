@@ -3,7 +3,6 @@
 package jobs
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -51,7 +50,7 @@ func TestForkLeavesParentJobRunning(t *testing.T) {
 		turn(call("l1", ToolList, obj{})),
 		llmtest.Turn{Text: "ok"},
 	)
-	run(t, context.Background(), newForkingAgent(t, p, m), input("parent"))
+	run(t, t.Context(), newForkingAgent(t, p, m), input("parent"))
 
 	if got := resultText(t, p, "l1"); !strings.Contains(got, "bg_1") || !strings.Contains(got, string(StatusRunning)) {
 		t.Fatalf("parent list_jobs after the fork = %q, want bg_1 running", got)
@@ -60,7 +59,7 @@ func TestForkLeavesParentJobRunning(t *testing.T) {
 	if !alive(pid) {
 		t.Fatalf("the fork stopped the parent's job %d", pid)
 	}
-	if err := m.Close(context.Background()); err != nil {
+	if err := m.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	waitGone(t, pid)
@@ -82,7 +81,7 @@ func TestForkDoesNotTakeParentNotification(t *testing.T) {
 		turn(call("l1", ToolList, obj{})),
 		llmtest.Turn{Text: "ok"},
 	)
-	run(t, context.Background(), newForkingAgent(t, p, m), input("parent"))
+	run(t, t.Context(), newForkingAgent(t, p, m), input("parent"))
 
 	fork, parent := p.Requests[1], p.Requests[2]
 	if got := notifications(fork); len(got) != 0 {

@@ -67,7 +67,7 @@ func newProc(t *testing.T, cfg Config, cp checkpoint.Checkpointer, be backend.Ba
 // changes that State first.
 func (pr *proc) run(t *testing.T, text string, mutate func(*state.State)) []agent.Event {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	s, v := pr.st, checkpoint.Version("")
 	if pr.cp != nil {
 		var err error
@@ -101,7 +101,7 @@ func (pr *proc) run(t *testing.T, text string, mutate func(*state.State)) []agen
 // crash ends process 1: its tasks stop, its memory is gone.
 func (pr *proc) crash(t *testing.T) {
 	t.Helper()
-	if err := pr.m.Close(context.Background()); err != nil {
+	if err := pr.m.Close(t.Context()); err != nil {
 		t.Fatalf("Close = %v", err)
 	}
 }
@@ -305,11 +305,11 @@ func TestResolveAfterRestart(t *testing.T) {
 		settled = append(settled, rec)
 	}}, cp, be, []agent.Middleware{spy.hooks()}, llmtest.Turn{Text: "noted"})
 	approve := []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}
-	if err := p2.m.Resolve(context.Background(), "t", "async_1", approve); err != nil {
+	if err := p2.m.Resolve(t.Context(), "t", "async_1", approve); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	waitEnded(t, p2.m, "async_1")
-	if err := p2.m.Resolve(context.Background(), "t", "async_1", approve); !errors.Is(err, ErrNotWaiting) {
+	if err := p2.m.Resolve(t.Context(), "t", "async_1", approve); !errors.Is(err, ErrNotWaiting) {
 		t.Fatalf("second Resolve = %v, want ErrNotWaiting", err)
 	}
 	p2.run(t, "next", nil)
@@ -320,7 +320,7 @@ func TestResolveAfterRestart(t *testing.T) {
 	if w.runs.Load() != 1 {
 		t.Fatalf("write_file ran %d times, want 1", w.runs.Load())
 	}
-	got, err := be.Read(context.Background(), "/out.txt", 0, 10)
+	got, err := be.Read(t.Context(), "/out.txt", 0, 10)
 	if err != nil || len(got.Lines) != 1 || got.Lines[0] != "hello" {
 		t.Fatalf("backend file = %+v, %v", got, err)
 	}
@@ -352,11 +352,11 @@ func TestResolveAfterRestartWithoutCheckpointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := unbound.Resolve(context.Background(), "t", "async_1", approve); !errors.Is(err, ErrCannotReattach) || !errors.Is(err, ErrUnknownTask) {
+	if err := unbound.Resolve(t.Context(), "t", "async_1", approve); !errors.Is(err, ErrCannotReattach) || !errors.Is(err, ErrUnknownTask) {
 		t.Fatalf("Resolve without a bound agent = %v, want ErrCannotReattach", err)
 	}
 	p := newProc(t, Config{}, nil, testutil.Memory(t), nil)
-	if err := p.m.Resolve(context.Background(), "t", "async_1", approve); !errors.Is(err, ErrCannotReattach) {
+	if err := p.m.Resolve(t.Context(), "t", "async_1", approve); !errors.Is(err, ErrCannotReattach) {
 		t.Fatalf("Resolve without a Checkpointer = %v, want ErrCannotReattach", err)
 	}
 }
@@ -365,7 +365,7 @@ func TestResolveAfterRestartErrors(t *testing.T) {
 	cp, be := cpmemory.New(), testutil.Memory(t)
 	crashWhileWaiting(t, cp, be)
 	p2 := newProc(t, Config{Subagents: []subagents.Subagent{newWriter().spec()}}, cp, be, nil, llmtest.Turn{Text: "ok"})
-	ctx := context.Background()
+	ctx := t.Context()
 	approve := []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}
 	if err := p2.m.Resolve(ctx, "t", "async_9", approve); !errors.Is(err, ErrUnknownTask) {
 		t.Fatalf("unknown task: %v", err)
@@ -442,7 +442,7 @@ func TestBindKeepsFirstAgent(t *testing.T) {
 	cp1, cp2 := cpmemory.New(), cpmemory.New()
 	s := state.New()
 	addRecord(s, TaskRecord{ID: "async_1", ThreadID: "t", TaskThreadID: "t/async_1", SubagentType: "general-purpose", Status: StatusCompleted})
-	if _, err := cp1.Save(context.Background(), "t", s, checkpoint.Version("")); err != nil {
+	if _, err := cp1.Save(t.Context(), "t", s, checkpoint.Version("")); err != nil {
 		t.Fatal(err)
 	}
 	newAgent := func(cp checkpoint.Checkpointer) *agent.Agent {
@@ -458,7 +458,7 @@ func TestBindKeepsFirstAgent(t *testing.T) {
 		t.Fatal("the middleware is not bound to the first agent")
 	}
 	// The record is found in the first agent's store: it is not waiting.
-	err = m.Resolve(context.Background(), "t", "async_1", []agent.Decision{{ToolUseID: "x", Type: agent.Approve}})
+	err = m.Resolve(t.Context(), "t", "async_1", []agent.Decision{{ToolUseID: "x", Type: agent.Approve}})
 	if !errors.Is(err, ErrNotWaiting) {
 		t.Fatalf("Resolve = %v, want ErrNotWaiting from the first agent's store", err)
 	}
@@ -479,7 +479,7 @@ func TestResolveAfterRestartRecordedRunning(t *testing.T) {
 
 	w2 := &writer{child: llmtest.New(llmtest.Turn{Text: "wrote it"})}
 	p2 := newProc(t, Config{Subagents: []subagents.Subagent{w2.spec()}}, cp, be, nil)
-	if err := p2.m.Resolve(context.Background(), "t", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}); err != nil {
+	if err := p2.m.Resolve(t.Context(), "t", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	waitEnded(t, p2.m, "async_1")
@@ -597,7 +597,7 @@ func TestReattachRunsOnRunBackend(t *testing.T) {
 	p2.runBackend = runBe
 	p2.run(t, "status?", nil)
 	waitEnded(t, p2.m, "async_1")
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := runBe.Read(ctx, "/mark.txt", 0, 10); err != nil {
 		t.Fatalf("the reattached task did not work on the run's backend: %v", err)
 	}
@@ -617,7 +617,7 @@ func TestResolveAfterRestartRunsUnderBoundAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, _ := agenttest.Context(context.Background(), agent.RunInfo{Agent: other, ThreadID: "elsewhere", Depth: 3})
+	ctx, _ := agenttest.Context(t.Context(), agent.RunInfo{Agent: other, ThreadID: "elsewhere", Depth: 3})
 	if err := p2.m.Resolve(ctx, "t", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
@@ -637,7 +637,7 @@ func TestResolveAfterRestartRunsUnderBoundAgent(t *testing.T) {
 func TestResolveRefusesTaskThread(t *testing.T) {
 	cp, be := cpmemory.New(), testutil.Memory(t)
 	p := newProc(t, Config{}, cp, be, nil)
-	err := p.m.Resolve(context.Background(), "t/async_1", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}})
+	err := p.m.Resolve(t.Context(), "t/async_1", "async_1", []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}})
 	if !errors.Is(err, ErrCannotReattach) {
 		t.Fatalf("Resolve on a task's thread = %v, want ErrCannotReattach", err)
 	}

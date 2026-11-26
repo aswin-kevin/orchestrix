@@ -1,7 +1,6 @@
 package subagents
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -34,7 +33,7 @@ func TestRefusedChildIsErrorResult(t *testing.T) {
 	)
 	mw := newMiddleware(t, Config{Subagents: []Subagent{{Name: "researcher", Description: "d", SystemPrompt: "p", Provider: child}}})
 	a := newParent(t, parent, mw)
-	collect(t, context.Background(), a, userInput("go"))
+	collect(t, t.Context(), a, userInput("go"))
 	res := onlyResult(t, parent)
 	if want := "subagent researcher refused: I can't help with that."; !res.IsError || blockText(res) != want {
 		t.Fatalf("task result = %q (error %v), want error %q", blockText(res), res.IsError, want)
@@ -77,7 +76,7 @@ func TestCustomSkillsDefiner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	collect(t, context.Background(), a, userInput("go"))
+	collect(t, t.Context(), a, userInput("go"))
 	if res := onlyResult(t, parent); res.IsError || blockText(res) != "child done" {
 		t.Fatalf("task result = %q (error %v)", blockText(res), res.IsError)
 	}

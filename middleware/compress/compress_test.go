@@ -85,7 +85,7 @@ func run(t *testing.T, p llm.Provider, b backend.Backend, cfg Config, s *state.S
 		t.Fatalf("agent.New: %v", err)
 	}
 	var final *agent.Final
-	for ev := range a.Run(context.Background(), agent.Input{ThreadID: "t", State: s, Messages: input()}) {
+	for ev := range a.Run(t.Context(), agent.Input{ThreadID: "t", State: s, Messages: input()}) {
 		if ev.Kind == agent.KindFinal {
 			final = ev.Final
 		}
@@ -182,19 +182,19 @@ func TestCompressReplacesRangeInView(t *testing.T) {
 	if _, open := proposalKey.Get(s); open {
 		t.Fatal("the proposal stayed open after compress_context")
 	}
-	res, err := b.Read(context.Background(), ArchiveDir+"/t/c1.md", 0, 1000)
+	res, err := b.Read(t.Context(), ArchiveDir+"/t/c1.md", 0, 1000)
 	if err != nil || !strings.Contains(strings.Join(res.Lines, "\n"), "U0 xxx") {
 		t.Fatalf("archive = %v, %v; want the first turn's text", res, err)
 	}
 }
 
 func TestCompressValidation(t *testing.T) {
-	cases := map[string]llmtest.Call{
+	tests := map[string]llmtest.Call{
 		"wrong id":      compressCall("k1", "c9", "S1"),
 		"empty summary": compressCall("k1", "c1", "  \n "),
 		"long summary":  compressCall("k1", "c1", strings.Repeat("s", DefaultMaxSummaryChars+1)),
 	}
-	for name, call := range cases {
+	for name, call := range tests {
 		t.Run(name, func(t *testing.T) {
 			main := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{call}}, llmtest.Turn{Text: "done"})
 			s := run(t, main, testutil.Memory(t), testCfg, seeded())
@@ -287,12 +287,12 @@ func TestIgnoredProposalsStop(t *testing.T) {
 }
 
 func TestNoProposalBelowTrigger(t *testing.T) {
-	cases := map[string]Config{
+	tests := map[string]Config{
 		"below the trigger": {MinRangeTokens: 100, TriggerFraction: 0.99},
 		// Above the trigger, but no range reaches DefaultMinRangeTokens.
 		"below the minimum range": {},
 	}
-	for name, cfg := range cases {
+	for name, cfg := range tests {
 		t.Run(name, func(t *testing.T) {
 			main := llmtest.New(llmtest.Turn{Text: "done"})
 			s := run(t, main, testutil.Memory(t), cfg, seeded())
@@ -378,11 +378,11 @@ func TestNewValidates(t *testing.T) {
 		{"negative MaxSummaryChars", Config{MaxSummaryChars: -1}, false},
 		{"negative MaxIgnored", Config{MaxIgnored: -1}, false},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := New(tc.cfg)
-			if (err == nil) != tc.ok {
-				t.Fatalf("New(%+v) error = %v, want ok = %v", tc.cfg, err, tc.ok)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New(tt.cfg)
+			if (err == nil) != tt.ok {
+				t.Fatalf("New(%+v) error = %v, want ok = %v", tt.cfg, err, tt.ok)
 			}
 			if err != nil && !strings.HasPrefix(err.Error(), "compress: ") {
 				t.Errorf("error %q lacks the package prefix", err)

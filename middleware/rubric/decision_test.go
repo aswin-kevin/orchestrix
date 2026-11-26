@@ -41,7 +41,7 @@ var decisionReq = GradeRequest{Task: "t", Answer: "a", Criteria: []string{"first
 
 func TestDecisionGraderAllPass(t *testing.T) {
 	g := DecisionGrader{Decider: yesValues(0.9, 0.5, 1)}
-	got, err := g.Grade(context.Background(), decisionReq)
+	got, err := g.Grade(t.Context(), decisionReq)
 	if err != nil || got != (Grade{Pass: true}) {
 		t.Fatalf("got %+v, %v", got, err)
 	}
@@ -49,7 +49,7 @@ func TestDecisionGraderAllPass(t *testing.T) {
 
 func TestDecisionGraderFeedbackListsFailed(t *testing.T) {
 	g := DecisionGrader{Decider: yesValues(0.9, 0.2, 0.7), Threshold: 0.6}
-	got, err := g.Grade(context.Background(), decisionReq)
+	got, err := g.Grade(t.Context(), decisionReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestDecisionGraderRequestShape(t *testing.T) {
 		seen = req
 		return yesValues(1, 1, 1)(ctx, req)
 	})
-	if _, err := (DecisionGrader{Decider: d, Model: "m"}).Grade(context.Background(), decisionReq); err != nil {
+	if _, err := (DecisionGrader{Decider: d, Model: "m"}).Grade(t.Context(), decisionReq); err != nil {
 		t.Fatal(err)
 	}
 	if seen.Model != "m" || len(seen.Questions) != 3 {
@@ -120,10 +120,10 @@ func TestDecisionGraderErrors(t *testing.T) {
 			return nil, boom
 		})}, "boom"},
 	}
-	for name, tc := range tests {
-		_, err := tc.g.Grade(context.Background(), decisionReq)
-		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
+	for name, tt := range tests {
+		_, err := tt.g.Grade(t.Context(), decisionReq)
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tt.want)
 		}
 	}
 }
@@ -133,7 +133,7 @@ func TestDecisionGraderTimeout(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
-	_, err := DecisionGrader{Decider: d, Timeout: 10 * time.Millisecond}.Grade(context.Background(), decisionReq)
+	_, err := DecisionGrader{Decider: d, Timeout: 10 * time.Millisecond}.Grade(t.Context(), decisionReq)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want deadline exceeded", err)
 	}

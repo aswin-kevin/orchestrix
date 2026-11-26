@@ -119,7 +119,7 @@ func wrapOnce(t *testing.T, cfg Config, s *state.State) []llm.Message {
 		Profile: llm.Profile{ContextWindow: 100_000},
 	}
 	var got []llm.Message
-	_, err := mustNew(t, cfg).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := mustNew(t, cfg).WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		got = r.Request.Messages
 		return &llm.Response{Message: assistantText("ok")}, nil
 	})
@@ -345,7 +345,7 @@ func TestStopContinuationIsNotATurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
+	for range a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
 	}
 
 	// The call answered the run's input; the continuations after it are

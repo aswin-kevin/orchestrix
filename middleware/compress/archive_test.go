@@ -24,7 +24,7 @@ type failingWrites struct{ backend.Backend }
 func (failingWrites) Write(context.Context, string, []byte) error { return errors.New("disk full") }
 
 func TestCompressWithoutArchive(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name    string
 		cfg     Config
 		b       backend.Backend
@@ -37,8 +37,8 @@ func TestCompressWithoutArchive(t *testing.T) {
 		{"no backend", testCfg, nil, "t", false},
 		{"failed write", testCfg, failingWrites{testutil.Memory(t)}, "t", false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m := mustNew(t, tc.cfg)
+		t.Run(tt.name, func(t *testing.T) {
+			m := mustNew(t, tt.cfg)
 			s := state.New()
 			s.SetMessages(append(history(5), llm.UserText(turnText("U", 5))))
 			wrap(t, m, s)
@@ -47,8 +47,8 @@ func TestCompressWithoutArchive(t *testing.T) {
 				t.Fatal("no proposal")
 			}
 
-			res, err := m.compress(context.Background(), Input{RangeID: p.ID, Summary: "S1"},
-				&tool.Call{State: s, Backend: tc.b, ThreadID: tc.thread})
+			res, err := m.compress(t.Context(), Input{RangeID: p.ID, Summary: "S1"},
+				&tool.Call{State: s, Backend: tt.b, ThreadID: tt.thread})
 
 			if err != nil || res.IsError {
 				t.Fatalf("compress = %+v, %v; archiving must never fail it", res, err)
@@ -57,11 +57,11 @@ func TestCompressWithoutArchive(t *testing.T) {
 			if len(e) != 1 || !strings.Contains(e[0].Text, "S1") {
 				t.Fatalf("elisions = %+v, want the compressed range", e)
 			}
-			if got := strings.Contains(e[0].Text, "archive="); got != tc.archive {
-				t.Fatalf("elision text %q names an archive: %v, want %v", e[0].Text, got, tc.archive)
+			if got := strings.Contains(e[0].Text, "archive="); got != tt.archive {
+				t.Fatalf("elision text %q names an archive: %v, want %v", e[0].Text, got, tt.archive)
 			}
-			if mem, ok := tc.b.(*memory.Backend); ok && !tc.archive {
-				if infos, _ := mem.Glob(context.Background(), "**", "/"); len(infos) != 0 {
+			if mem, ok := tt.b.(*memory.Backend); ok && !tt.archive {
+				if infos, _ := mem.Glob(t.Context(), "**", "/"); len(infos) != 0 {
 					t.Fatalf("files written although nothing should be archived: %+v", infos)
 				}
 			}

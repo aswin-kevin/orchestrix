@@ -35,7 +35,7 @@ func newClockBackend(t testing.TB) *memory.Backend {
 
 func seed(t *testing.T, b backend.Backend, path, content string) {
 	t.Helper()
-	if err := b.Write(context.Background(), path, []byte(content)); err != nil {
+	if err := b.Write(t.Context(), path, []byte(content)); err != nil {
 		t.Fatalf("seed %s: %v", path, err)
 	}
 }
@@ -65,7 +65,7 @@ func (f fixture) run(t *testing.T, name string, input any) tool.Result {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := tl.Call(context.Background(), raw, f.call)
+	res, err := tl.Call(t.Context(), raw, f.call)
 	if err != nil {
 		t.Fatalf("%s: unexpected Go error: %v", name, err)
 	}
@@ -172,7 +172,7 @@ func TestMultiEditAtomic(t *testing.T) {
 	f := newFixture(t, Config{Backend: b})
 	f.run(t, "read_file", obj{"path": "/a.txt"})
 	lines := func() string {
-		got, _ := b.Read(context.Background(), "/a.txt", 0, 0)
+		got, _ := b.Read(t.Context(), "/a.txt", 0, 0)
 		return strings.Join(got.Lines, "|")
 	}
 
@@ -377,7 +377,7 @@ func TestExecuteTimeoutCappedAndSubject(t *testing.T) {
 	if isReadOnly(tl, raw) {
 		t.Fatal("execute must not be read-only")
 	}
-	if d := selfCheck(tl, context.Background(), raw, permission.Context{}); d.Behavior != "" {
+	if d := selfCheck(tl, t.Context(), raw, permission.Context{}); d.Behavior != "" {
 		t.Fatalf("execute self-check = %v, want no opinion", d.Behavior)
 	}
 }
@@ -407,7 +407,7 @@ func TestExecuteOptInWithPerCallBackend(t *testing.T) {
 
 func TestPathsAreCleanedAbsolute(t *testing.T) {
 	f := newFixture(t, Config{Backend: newClockBackend(t), Execute: true})
-	cases := []struct {
+	tests := []struct {
 		tool string
 		in   string
 		want permission.Op
@@ -425,14 +425,14 @@ func TestPathsAreCleanedAbsolute(t *testing.T) {
 		{"grep", `{"pattern":"x","path":"../../etc"}`, permission.OpRead, "/etc"},
 		{"grep", `{"pattern":"x"}`, permission.OpRead, "/"},
 	}
-	for _, tc := range cases {
-		pa, ok := f.tools[tc.tool].(tool.PathAccessor)
+	for _, tt := range tests {
+		pa, ok := f.tools[tt.tool].(tool.PathAccessor)
 		if !ok {
-			t.Fatalf("%s does not report paths", tc.tool)
+			t.Fatalf("%s does not report paths", tt.tool)
 		}
-		got := pa.Paths(json.RawMessage(tc.in))
-		if len(got) != 1 || got[0].Path != tc.path || got[0].Op != tc.want {
-			t.Errorf("%s %s: Paths = %+v, want [{%s %s}]", tc.tool, tc.in, got, tc.path, tc.want)
+		got := pa.Paths(json.RawMessage(tt.in))
+		if len(got) != 1 || got[0].Path != tt.path || got[0].Op != tt.want {
+			t.Errorf("%s %s: Paths = %+v, want [{%s %s}]", tt.tool, tt.in, got, tt.path, tt.want)
 		}
 	}
 }
@@ -489,7 +489,7 @@ func TestAllowlist(t *testing.T) {
 	mw := mustNew(t, Config{Tools: []string{"read_file", "grep"}})
 	req := &agent.ModelRequest{Request: llm.Request{Tools: []llm.ToolSchema{{Name: "read_file"}, {Name: "write_file"}, {Name: "mine"}}}}
 	var seen []llm.ToolSchema
-	_, _ = mw.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, _ = mw.WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		seen = r.Request.Tools
 		return &llm.Response{}, nil
 	})
@@ -502,7 +502,7 @@ func wrapSystem(t *testing.T, cfg Config, system []string, boundary int) ([]stri
 	t.Helper()
 	req := &agent.ModelRequest{Request: llm.Request{System: system, CacheBoundary: boundary}}
 	var got llm.Request
-	_, err := mustNew(t, cfg).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := mustNew(t, cfg).WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		got = r.Request
 		return &llm.Response{}, nil
 	})

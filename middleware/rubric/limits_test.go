@@ -14,7 +14,7 @@ import (
 func TestTaskCapped(t *testing.T) {
 	gp := llmtest.New(llmtest.Turn{Text: `{"pass":true}`})
 	task := strings.Repeat("t", DefaultMaxTaskBytes*2)
-	if _, err := (ModelGrader{Provider: gp}).Grade(context.Background(), GradeRequest{Task: task, Criteria: []string{"c"}}); err != nil {
+	if _, err := (ModelGrader{Provider: gp}).Grade(t.Context(), GradeRequest{Task: task, Criteria: []string{"c"}}); err != nil {
 		t.Fatal(err)
 	}
 	if n := len(lastUser(gp.Requests[0])); n > DefaultMaxTaskBytes+200 {
@@ -49,7 +49,7 @@ func (hangingProvider) Complete(ctx context.Context, _ llm.Request) (*llm.Respon
 func TestModelGraderTimeout(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
-		_, err := ModelGrader{Provider: hangingProvider{}, Timeout: 50 * time.Millisecond}.Grade(context.Background(), GradeRequest{Criteria: []string{"c"}})
+		_, err := ModelGrader{Provider: hangingProvider{}, Timeout: 50 * time.Millisecond}.Grade(t.Context(), GradeRequest{Criteria: []string{"c"}})
 		done <- err
 	}()
 	select {

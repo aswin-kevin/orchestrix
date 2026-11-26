@@ -109,7 +109,7 @@ func TestAfterModelObservesInputSideTokens(t *testing.T) {
 	s.AppendMessages(llm.UserText("hi"))
 	mw := mustNew(t, Config{})
 
-	err := mw.AfterModel(context.Background(), s, &llm.Response{Usage: llm.Usage{Input: 10, CacheRead: 200, CacheWrite: 30, Output: 99}})
+	err := mw.AfterModel(t.Context(), s, &llm.Response{Usage: llm.Usage{Input: 10, CacheRead: 200, CacheWrite: 30, Output: 99}})
 
 	if got, _ := observedKey.Get(s); err != nil || got != (observed{Input: 240, Messages: 1}) {
 		t.Fatalf("observed = %+v, err %v, want 240 tokens at 1 message", got, err)
@@ -224,7 +224,7 @@ func TestNewRunClosesBreaker(t *testing.T) {
 	failuresKey.Set(s, DefaultMaxFailures)
 	boundaryKey.Set(s, Boundary{LastError: "automatic compaction stopped after 3 failures: down"})
 
-	if err := mustNew(t, Config{}).BeforeAgent(context.Background(), s); err != nil {
+	if err := mustNew(t, Config{}).BeforeAgent(t.Context(), s); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := failuresKey.Get(s); ok {
@@ -266,7 +266,7 @@ func TestObservationDroppedWhenStale(t *testing.T) {
 	mw := mustNew(t, Config{})
 	observedKey.Set(s, observed{Input: 500, Messages: 1})
 
-	if err := mw.AfterModel(context.Background(), s, &llm.Response{}); err != nil {
+	if err := mw.AfterModel(t.Context(), s, &llm.Response{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := observedKey.Get(s); ok {
@@ -281,7 +281,7 @@ func TestObservationDroppedAfterCompaction(t *testing.T) {
 	observedKey.Set(s, observed{Input: 1800, Messages: 5})
 	m := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "SUMMARY-1"})})
 
-	moved, err := m.compact(context.Background(), &agent.ModelRequest{State: s}, 1)
+	moved, err := m.compact(t.Context(), &agent.ModelRequest{State: s}, 1)
 
 	if !moved || err != nil {
 		t.Fatalf("compact = %v, %v, want a moved boundary", moved, err)
@@ -334,7 +334,7 @@ func TestReactiveRetryRestoresInnerWrappersRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range a.Run(context.Background(), agent.Input{ThreadID: "t1", Messages: triggerHistory()}) {
+	for range a.Run(t.Context(), agent.Input{ThreadID: "t1", Messages: triggerHistory()}) {
 	}
 
 	if main.Calls() != 2 {

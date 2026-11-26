@@ -83,7 +83,7 @@ func drain(t *testing.T, seq func(func(agent.Event, error) bool)) *agent.Final {
 
 func runToEnd(t *testing.T, a *agent.Agent) *agent.Final {
 	t.Helper()
-	return drain(t, a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}))
+	return drain(t, a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}))
 }
 
 // results returns the tool results the model saw, in order, flattened.
@@ -151,7 +151,7 @@ func TestEnterFlipsToPlan(t *testing.T) {
 	if hasSegment(p.Requests[0], DefaultPrompt) {
 		t.Fatal("turn 1 has the plan-mode segment before entering")
 	}
-	if !Active(context.Background(), final.State) {
+	if !Active(t.Context(), final.State) {
 		t.Fatal("Active = false in plan mode")
 	}
 }
@@ -211,7 +211,7 @@ func newCheckpointed(t *testing.T, dir string, cfg Config, mode permission.Mode,
 
 func pendingOf(t *testing.T, a *agent.Agent, id string) (*agent.Thread, *agent.Interrupt) {
 	t.Helper()
-	th, err := a.Thread(context.Background(), id)
+	th, err := a.Thread(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,11 +230,11 @@ func interruptedExit(t *testing.T, dir string, cfg Config, mode permission.Mode,
 		turn(call("e", ToolEnter, obj{})),
 		turn(exitCall(plan)),
 	)
-	th, err := a.Thread(context.Background(), "t1")
+	th, err := a.Thread(t.Context(), "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	final := drain(t, th.Prompt(context.Background(), "go"))
+	final := drain(t, th.Prompt(t.Context(), "go"))
 	if final.Reason != agent.ReasonInterrupted {
 		t.Fatalf("reason = %s (%v), want interrupted", final.Reason, final.Err)
 	}
@@ -262,7 +262,7 @@ func TestExitInterruptsAndApproveRestores(t *testing.T) {
 	if intr == nil {
 		t.Fatal("pending interrupt not restored")
 	}
-	final := drain(t, th.Resume(context.Background(), []agent.Decision{{ToolUseID: "x", Type: agent.Approve}}))
+	final := drain(t, th.Resume(t.Context(), []agent.Decision{{ToolUseID: "x", Type: agent.Approve}}))
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v)", final.Reason, final.Err)
 	}
@@ -291,7 +291,7 @@ func resumeWith(t *testing.T, cfg Config, d agent.Decision) (*agent.Agent, *llmt
 	a, p := newCheckpointed(t, dir, cfg, permission.ModeAcceptEdits, &writes{}, llmtest.Turn{Text: "done"})
 	th, _ := pendingOf(t, a, "t1")
 	d.ToolUseID = "x"
-	final := drain(t, th.Resume(context.Background(), []agent.Decision{d}))
+	final := drain(t, th.Resume(t.Context(), []agent.Decision{d}))
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v)", final.Reason, final.Err)
 	}
@@ -340,7 +340,7 @@ func TestApproveModeOverride(t *testing.T) {
 	interruptedExit(t, dir, Config{ApproveMode: permission.ModeDefault}, permission.ModeBypass, "p")
 	a2, _ := newCheckpointed(t, dir, Config{ApproveMode: permission.ModeDefault}, permission.ModeBypass, &writes{}, llmtest.Turn{Text: "done"})
 	th, _ := pendingOf(t, a2, "t1")
-	f := drain(t, th.Resume(context.Background(), []agent.Decision{{ToolUseID: "x", Type: agent.Approve}}))
+	f := drain(t, th.Resume(t.Context(), []agent.Decision{{ToolUseID: "x", Type: agent.Approve}}))
 	if got := effectiveMode(a2, f.State); got != permission.ModeDefault {
 		t.Fatalf("mode from bypass = %s, want default", got)
 	}
@@ -615,11 +615,11 @@ func TestSiblingAfterPendingExitIsHeldThenReevaluated(t *testing.T) {
 		turn(call("e", ToolEnter, obj{})),
 		turn(exitCall("plan"), call("w", "write_file", obj{"path": "/a"})),
 	)
-	th, err := a.Thread(context.Background(), "t1")
+	th, err := a.Thread(t.Context(), "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f := drain(t, th.Prompt(context.Background(), "go")); f.Reason != agent.ReasonInterrupted {
+	if f := drain(t, th.Prompt(t.Context(), "go")); f.Reason != agent.ReasonInterrupted {
 		t.Fatalf("reason = %s (%v)", f.Reason, f.Err)
 	}
 	if w.count() != 0 {
@@ -629,7 +629,7 @@ func TestSiblingAfterPendingExitIsHeldThenReevaluated(t *testing.T) {
 	w2 := &writes{}
 	a2, p2 := newCheckpointed(t, dir, Config{}, permission.ModeAcceptEdits, w2, llmtest.Turn{Text: "done"})
 	th2, _ := pendingOf(t, a2, "t1")
-	f := drain(t, th2.Resume(context.Background(), []agent.Decision{{ToolUseID: "x", Type: agent.Approve}}))
+	f := drain(t, th2.Resume(t.Context(), []agent.Decision{{ToolUseID: "x", Type: agent.Approve}}))
 	if f.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v)", f.Reason, f.Err)
 	}
@@ -665,7 +665,7 @@ func TestPlanAccessor(t *testing.T) {
 	if intr == nil {
 		t.Fatal("pending interrupt not restored")
 	}
-	final := drain(t, th.Resume(context.Background(), []agent.Decision{{ToolUseID: "x", Type: agent.Approve}}))
+	final := drain(t, th.Resume(t.Context(), []agent.Decision{{ToolUseID: "x", Type: agent.Approve}}))
 	if plan, ok := Plan(final.State); !ok || plan != "1. write a.txt" {
 		t.Fatalf("Plan = %q, %v; want the approved plan, true", plan, ok)
 	}

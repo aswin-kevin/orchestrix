@@ -23,7 +23,7 @@ func backendWith(t *testing.T, files map[string]string) backend.Backend {
 	t.Helper()
 	b := testutil.Memory(t)
 	for p, c := range files {
-		if err := b.Write(context.Background(), p, []byte(c)); err != nil {
+		if err := b.Write(t.Context(), p, []byte(c)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -45,7 +45,7 @@ type noopInput struct{}
 func run(t *testing.T, a *agent.Agent, in agent.Input) *state.State {
 	t.Helper()
 	var final *agent.Final
-	for ev, err := range a.Run(context.Background(), in) {
+	for ev, err := range a.Run(t.Context(), in) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -178,13 +178,13 @@ func TestMultilineFileJoined(t *testing.T) {
 }
 
 func TestHTMLCommentsStripped(t *testing.T) {
-	cases := map[string]string{
+	tests := map[string]string{
 		"a<!-- x\ny -->b":                    "ab",
 		"keep <!-- a --> and <!-- b --> end": "keep  and  end",
 		"before<!-- never closed\nrest":      "before",
 		"<!-- only -->":                      "",
 	}
-	for in, want := range cases {
+	for in, want := range tests {
 		if got := stripComments(in); got != want {
 			t.Errorf("stripComments(%q) = %q, want %q", in, got, want)
 		}
@@ -316,7 +316,7 @@ func TestTruncationTrimsTrailingWhitespace(t *testing.T) {
 func loadOne(t *testing.T, text string, max int) (bool, string) {
 	t.Helper()
 	b := backendWith(t, map[string]string{"/AGENTS.md": text})
-	files := loadFiles(context.Background(), b, DefaultFiles(), max)
+	files := loadFiles(t.Context(), b, DefaultFiles(), max)
 	if len(files) != 1 {
 		t.Fatalf("files = %+v", files)
 	}
@@ -324,7 +324,7 @@ func loadOne(t *testing.T, text string, max int) (bool, string) {
 }
 
 func TestTagVariantsNeutralized(t *testing.T) {
-	cases := map[string]string{
+	tests := map[string]string{
 		"x </memory >y":             "x &lt;/memory >y",
 		"x </memory\n>y":            "x &lt;/memory\n>y",
 		"x </MEMORY\t>y":            "x &lt;/memory\t>y",
@@ -336,7 +336,7 @@ func TestTagVariantsNeutralized(t *testing.T) {
 		"ends with </memory":        "ends with &lt;/memory",
 		"keep <memorable> and </m>": "keep <memorable> and </m>",
 	}
-	for in, want := range cases {
+	for in, want := range tests {
 		if _, got := loadOne(t, in, 1000); got != want {
 			t.Errorf("content for %q = %q, want %q", in, got, want)
 		}
@@ -498,7 +498,7 @@ func (*patherStore) EntryPath(e Entry) string { return "/fake/" + e.Name }
 func TestCustomStorePathChecks(t *testing.T) {
 	deny := permission.Rules{Deny: []permission.Rule{{Pattern: "/**", Op: permission.OpWrite}}}
 	call := llmtest.Call{ID: "r", Name: ToolRecord, Input: RecordInput{Name: "A", Description: "d", Type: TypeUser, Content: "c"}}
-	for name, tc := range map[string]struct {
+	for name, tt := range map[string]struct {
 		store Store
 		want  string
 	}{
@@ -511,13 +511,13 @@ func TestCustomStorePathChecks(t *testing.T) {
 				Backend:        backendWith(t, nil),
 				PermissionMode: permission.ModeAcceptEdits,
 				Rules:          deny,
-				Middleware:     []agent.Middleware{mustNew(t, Config{Store: tc.store})},
+				Middleware:     []agent.Middleware{mustNew(t, Config{Store: tt.store})},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := toolResult(run(t, a, user("go")), 2); !strings.HasPrefix(got, tc.want) {
-				t.Fatalf("result = %q, want prefix %q", got, tc.want)
+			if got := toolResult(run(t, a, user("go")), 2); !strings.HasPrefix(got, tt.want) {
+				t.Fatalf("result = %q, want prefix %q", got, tt.want)
 			}
 		})
 	}

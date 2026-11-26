@@ -83,7 +83,7 @@ func runWindow(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, i
 		t.Fatalf("agent.New: %v", err)
 	}
 	var final *agent.Final
-	for ev := range a.Run(context.Background(), in) {
+	for ev := range a.Run(t.Context(), in) {
 		if ev.Kind == agent.KindFinal {
 			final = ev.Final
 		}
@@ -93,7 +93,7 @@ func runWindow(t *testing.T, main llm.Provider, b backend.Backend, cfg Config, i
 
 func readFile(t *testing.T, b backend.Backend, path string) string {
 	t.Helper()
-	res, err := b.Read(context.Background(), path, 0, 1_000_000)
+	res, err := b.Read(t.Context(), path, 0, 1_000_000)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
@@ -235,7 +235,7 @@ func TestDisableOffloadAndDefaultSummarizer(t *testing.T) {
 	if bd, _ := Current(final.State); bd.Summary != "SUMMARY-1" || bd.Path != "" {
 		t.Fatalf("boundary = %+v, want SUMMARY-1 without a path", bd)
 	}
-	if _, err := b.Read(context.Background(), HistoryDir+"/t1/1.md", 0, 1); err == nil {
+	if _, err := b.Read(t.Context(), HistoryDir+"/t1/1.md", 0, 1); err == nil {
 		t.Fatal("transcript written although offload is disabled")
 	}
 }
@@ -250,7 +250,7 @@ func TestThreadlessRunSkipsOffload(t *testing.T) {
 	if bd, ok := Current(final.State); !ok || bd.Summary != "SUMMARY-1" || bd.Path != "" {
 		t.Fatalf("boundary = %+v, want SUMMARY-1 without a path", bd)
 	}
-	if files, _ := b.Glob(context.Background(), "**", HistoryDir); len(files) != 0 {
+	if files, _ := b.Glob(t.Context(), "**", HistoryDir); len(files) != 0 {
 		t.Fatalf("threadless run wrote transcripts: %+v", files)
 	}
 }
@@ -427,15 +427,15 @@ func TestCustomSummarizerFailureRecorded(t *testing.T) {
 
 func TestSummaryPromptEmptyMeansDefault(t *testing.T) {
 	req := SummaryRequest{Messages: []llm.Message{llm.UserText("hi")}, Previous: "P", Transcript: "T"}
-	for _, tc := range []struct{ prompt, want string }{{"", DefaultSummaryPrompt}, {"custom", "custom"}} {
+	for _, tt := range []struct{ prompt, want string }{{"", DefaultSummaryPrompt}, {"custom", "custom"}} {
 		p := llmtest.New(llmtest.Turn{Text: " SUMMARY \n"})
-		got, err := (&ModelSummarizer{Provider: p, Model: "m", Prompt: tc.prompt}).Summarize(context.Background(), req)
+		got, err := (&ModelSummarizer{Provider: p, Model: "m", Prompt: tt.prompt}).Summarize(t.Context(), req)
 		if err != nil || got != "SUMMARY" {
 			t.Fatalf("Summarize = %q, %v, want the trimmed reply", got, err)
 		}
 		sent := p.Requests[0]
-		if len(sent.System) != 1 || sent.System[0] != tc.want || sent.Model != "m" || sent.MaxTokens != DefaultSummaryMaxTokens {
-			t.Fatalf("prompt %q: request = %+v, want system %.20q", tc.prompt, sent, tc.want)
+		if len(sent.System) != 1 || sent.System[0] != tt.want || sent.Model != "m" || sent.MaxTokens != DefaultSummaryMaxTokens {
+			t.Fatalf("prompt %q: request = %+v, want system %.20q", tt.prompt, sent, tt.want)
 		}
 		if len(sent.Messages) != 1 || sent.Messages[0].Text() != "Previous summary:\nP\n\nNew conversation:\nT" {
 			t.Fatalf("request messages = %+v", sent.Messages)
@@ -474,13 +474,13 @@ func TestModelSummarizerFallsBackToTheRunsAgent(t *testing.T) {
 }
 
 func TestModelSummarizerOutsideARunNeedsAProvider(t *testing.T) {
-	if _, err := (&ModelSummarizer{}).Summarize(context.Background(), SummaryRequest{}); err == nil || !strings.HasPrefix(err.Error(), "summarize: ") {
+	if _, err := (&ModelSummarizer{}).Summarize(t.Context(), SummaryRequest{}); err == nil || !strings.HasPrefix(err.Error(), "summarize: ") {
 		t.Fatalf("err = %v, want a summarize: error", err)
 	}
 }
 
 func TestNewRejectsBadFractions(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		cfg  Config
 		ok   bool
@@ -499,10 +499,10 @@ func TestNewRejectsBadFractions(t *testing.T) {
 		{"MaxOldInputChars negative", Config{MaxOldInputChars: -1}, false},
 		{"MaxFailures negative", Config{MaxFailures: -1}, false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m, err := New(tc.cfg)
-			if tc.ok != (err == nil) || tc.ok != (m != nil) {
-				t.Fatalf("New = %v, %v; want ok %v", m, err, tc.ok)
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := New(tt.cfg)
+			if tt.ok != (err == nil) || tt.ok != (m != nil) {
+				t.Fatalf("New = %v, %v; want ok %v", m, err, tt.ok)
 			}
 			if err != nil && !strings.HasPrefix(err.Error(), "summarize: ") {
 				t.Fatalf("error %q lacks the summarize: prefix", err)

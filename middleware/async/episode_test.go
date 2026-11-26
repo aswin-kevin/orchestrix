@@ -59,12 +59,12 @@ func continueHistory(t *testing.T, cfg Config, cp checkpoint.Checkpointer, extra
 		llmtest.Turn{Text: "done"},
 	)
 	h := newHarnessSaved(t, cfg, cp, nil, turns...)
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	for range len(extra) {
-		h.run(t, context.Background(), "more", nil)
+		h.run(t, t.Context(), "more", nil)
 	}
-	evs, _ := h.run(t, context.Background(), "ask more", nil)
+	evs, _ := h.run(t, t.Context(), "ask more", nil)
 	if res := result(t, evs, ToolUpdate); res.IsError || res.Flatten() != "Task async_1 continues with your message; you will be notified when it finishes." {
 		t.Fatalf("update_task = %+v", res)
 	}
@@ -72,7 +72,7 @@ func continueHistory(t *testing.T, cfg Config, cp checkpoint.Checkpointer, extra
 		t.Fatalf("record after update_task = %+v", r)
 	}
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	return h, child
 }
 
@@ -106,9 +106,9 @@ func TestContinueSavesTaskThread(t *testing.T) {
 		start("s1", "researcher", "find A"), llmtest.Turn{Text: "started"},
 		update("u1", "async_1", "and B?"), llmtest.Turn{Text: "asked"},
 	)
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
-	s, v, err := cp.Load(context.Background(), "t/async_1")
+	s, v, err := cp.Load(t.Context(), "t/async_1")
 	if err != nil {
 		t.Fatalf("task thread after the first episode: %v", err)
 	}
@@ -116,9 +116,9 @@ func TestContinueSavesTaskThread(t *testing.T) {
 		t.Fatalf("first episode saved %d messages, want 2", n)
 	}
 	firstVersion = v
-	h.run(t, context.Background(), "ask more", nil)
+	h.run(t, t.Context(), "ask more", nil)
 	waitEnded(t, h.m, "async_1")
-	s, v, err = cp.Load(context.Background(), "t/async_1")
+	s, v, err = cp.Load(t.Context(), "t/async_1")
 	if err != nil {
 		t.Fatalf("task thread after the second episode: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestContinueSavesTaskThread(t *testing.T) {
 		t.Fatalf("versions %q then %q; want the second later in the same generation", firstVersion, v)
 	}
 	if fb := h.m.runner.(*localRunner).fallback; fb != nil {
-		if _, _, err := fb.Load(context.Background(), "t/async_1"); !errors.Is(err, checkpoint.ErrNotFound) {
+		if _, _, err := fb.Load(t.Context(), "t/async_1"); !errors.Is(err, checkpoint.ErrNotFound) {
 			t.Fatalf("the fallback store holds the task thread (%v); the parent's Checkpointer should", err)
 		}
 	}
@@ -142,8 +142,8 @@ func TestContinueUnsupportedHandle(t *testing.T) {
 	h := newHarness(t, Config{Runner: f, DisableStopReminder: true},
 		start("s1", "general-purpose", "x"), llmtest.Turn{Text: "started"},
 		update("u1", "async_1", "more"), llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
-	evs, _ := h.run(t, context.Background(), "more", nil)
+	h.run(t, t.Context(), "go", nil)
+	evs, _ := h.run(t, t.Context(), "more", nil)
 	if res := result(t, evs, ToolUpdate); !res.IsError || !strings.Contains(res.Flatten(), "already finished") {
 		t.Fatalf("update_task = %+v", res)
 	}
@@ -160,9 +160,9 @@ func TestContinueRespectsMaxRunning(t *testing.T) {
 	h := newHarness(t, Config{Subagents: specs, MaxRunning: 1, DisableStopReminder: true},
 		start("s1", "quick", "a"), llmtest.Turn{Text: "started"},
 		start("s2", "slow", "b"), update("u1", "async_1", "more"), llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
-	evs, _ := h.run(t, context.Background(), "more", nil)
+	evs, _ := h.run(t, t.Context(), "more", nil)
 	if res := result(t, evs, ToolStart); res.IsError {
 		t.Fatalf("start_task = %+v", res)
 	}
@@ -184,23 +184,23 @@ func TestPrunedRecordDropsFallbackThread(t *testing.T) {
 		start("s2", "researcher", "b"), llmtest.Turn{Text: "started"},
 		llmtest.Turn{Text: "noted"})
 	fb := h.m.runner.(*localRunner).fallback
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
-	if _, _, err := fb.Load(context.Background(), "t/async_1"); err != nil {
+	if _, _, err := fb.Load(t.Context(), "t/async_1"); err != nil {
 		t.Fatalf("fallback thread of async_1: %v", err)
 	}
 	// announces async_1, starts async_2
-	h.run(t, context.Background(), "more", nil)
+	h.run(t, t.Context(), "more", nil)
 	waitEnded(t, h.m, "async_2")
 	// announces async_2: async_1's record is pruned
-	h.run(t, context.Background(), "more", nil)
+	h.run(t, t.Context(), "more", nil)
 	if hasRecord(h.st, "async_1") {
 		t.Fatalf("async_1 was not pruned: %+v", Tasks(h.st))
 	}
-	if _, _, err := fb.Load(context.Background(), "t/async_1"); !errors.Is(err, checkpoint.ErrNotFound) {
+	if _, _, err := fb.Load(t.Context(), "t/async_1"); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("fallback thread of the pruned async_1: %v, want ErrNotFound", err)
 	}
-	if _, _, err := fb.Load(context.Background(), "t/async_2"); err != nil {
+	if _, _, err := fb.Load(t.Context(), "t/async_2"); err != nil {
 		t.Fatalf("fallback thread of async_2: %v", err)
 	}
 }
@@ -237,13 +237,13 @@ func TestContinueUsesStricterParentMode(t *testing.T) {
 	if err := agent.SetPermissionMode(h.st, permission.ModeAcceptEdits); err != nil {
 		t.Fatal(err)
 	}
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	// The parent is now in plan mode: the task may not write any more.
 	if err := agent.SetPermissionMode(h.st, permission.ModePlan); err != nil {
 		t.Fatal(err)
 	}
-	evs, _ := h.run(t, context.Background(), "ask more", nil)
+	evs, _ := h.run(t, t.Context(), "ask more", nil)
 	if res := result(t, evs, ToolUpdate); res.IsError {
 		t.Fatalf("update_task = %+v", res)
 	}
@@ -272,12 +272,12 @@ func TestContinueAfterRelease(t *testing.T) {
 	if err := agent.SetPermissionMode(h.st, permission.ModeAcceptEdits); err != nil {
 		t.Fatal(err)
 	}
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	waitEnded(t, h.m, "async_1")
 	// The first run announces the end, the next releases the thread's
 	// entry, so the job is no longer held.
-	h.run(t, context.Background(), "more", nil)
-	h.run(t, context.Background(), "more", nil)
+	h.run(t, t.Context(), "more", nil)
+	h.run(t, t.Context(), "more", nil)
 	if h.m.jobs.Get("t", "async_1") != nil {
 		t.Fatal("the job is still held")
 	}
@@ -285,12 +285,12 @@ func TestContinueAfterRelease(t *testing.T) {
 	if err := agent.SetPermissionMode(h.st, permission.ModePlan); err != nil {
 		t.Fatal(err)
 	}
-	evs, _ := h.run(t, context.Background(), "ask more", nil)
+	evs, _ := h.run(t, t.Context(), "ask more", nil)
 	if res := result(t, evs, ToolUpdate); res.IsError {
 		t.Fatalf("update_task = %+v", res)
 	}
 	waitEnded(t, h.m, "async_1")
-	h.run(t, context.Background(), "next", nil)
+	h.run(t, t.Context(), "next", nil)
 	reqs := child.Requests
 	if len(reqs) != 2 || !strings.Contains(strings.Join(roleTexts(reqs[1]), "\n"), "user: find A\nassistant: A\nuser: "+wantFollowUp) {
 		t.Fatalf("child requests = %+v", reqs)
@@ -328,13 +328,13 @@ func (c *contHandle) Continue(context.Context, string) (Handle, error) {
 }
 
 func TestContinueClaimsTaskOnce(t *testing.T) {
-	tk := newTask(context.Background())
+	tk := newTask(t.Context())
 	h := &contHandle{ctlHandle: ended(Outcome{Status: StatusCompleted, Text: "x"})}
 	tk.attach(h)
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i := range errs {
-		wg.Go(func() { errs[i] = tk.continueWith(context.Background(), context.Background(), "more") })
+		wg.Go(func() { errs[i] = tk.continueWith(t.Context(), t.Context(), "more") })
 	}
 	wg.Wait()
 	wins := 0
@@ -379,8 +379,8 @@ func TestContinueAfterCancelledWaitingDoesNotRunPending(t *testing.T) {
 			{ID: "u1", Name: ToolUpdate, Input: obj{"task_id": "async_1", "message": "go on"}},
 		}},
 		llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
-	evs, _ := h.run(t, context.Background(), "more", nil)
+	h.run(t, t.Context(), "go", nil)
+	evs, _ := h.run(t, t.Context(), "more", nil)
 	if res := result(t, evs, ToolCancel); res.IsError || res.Flatten() != "Cancelled task async_1." {
 		t.Fatalf("cancel_task = %+v", res)
 	}
@@ -404,7 +404,7 @@ func TestStopRacingInterruptIsCancelled(t *testing.T) {
 	run := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
 	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
 		start("s1", "general-purpose", "x"), call("c1", ToolCancel, obj{"task_id": "async_1"}), llmtest.Turn{Text: "ok"})
-	evs, _ := h.run(t, context.Background(), "go", nil)
+	evs, _ := h.run(t, t.Context(), "go", nil)
 	if res := result(t, evs, ToolCancel); res.IsError || res.Flatten() != "Cancelled task async_1." {
 		t.Fatalf("cancel_task = %+v", res)
 	}
@@ -418,8 +418,8 @@ func TestEndNestedCancelsWaitingTask(t *testing.T) {
 	run := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
 	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
 		start("s1", "general-purpose", "x"), llmtest.Turn{Text: "started"})
-	h.run(t, context.Background(), "go", nil)
-	ctx, _ := agenttest.Context(context.Background(), agent.RunInfo{ThreadID: "t", Depth: 1})
+	h.run(t, t.Context(), "go", nil)
+	ctx, _ := agenttest.Context(t.Context(), agent.RunInfo{ThreadID: "t", Depth: 1})
 	if err := h.m.AfterAgent(ctx, h.st); err != nil {
 		t.Fatal(err)
 	}
@@ -436,8 +436,8 @@ func TestCloseStopsWaitingTask(t *testing.T) {
 	run := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
 	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
 		start("s1", "general-purpose", "x"), llmtest.Turn{Text: "started"})
-	h.run(t, context.Background(), "go", nil)
-	if err := h.m.Close(context.Background()); err != nil {
+	h.run(t, t.Context(), "go", nil)
+	if err := h.m.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if hd.stops.Load() != 1 {
@@ -454,7 +454,7 @@ func TestWaitingRecordWithoutJobStaysWaiting(t *testing.T) {
 	run := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
 	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
 		start("s1", "general-purpose", "x"), llmtest.Turn{Text: "started"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	other, err := New(Config{Runner: run})
 	if err != nil {
 		t.Fatal(err)
@@ -521,7 +521,7 @@ func TestFollowUpModeReachesCustomRunner(t *testing.T) {
 	if err := agent.SetPermissionMode(h.st, permission.ModeAcceptEdits); err != nil {
 		t.Fatal(err)
 	}
-	evs, _ := h.run(t, context.Background(), "go", nil)
+	evs, _ := h.run(t, t.Context(), "go", nil)
 	if res := result(t, evs, ToolUpdate); res.IsError {
 		t.Fatalf("update_task = %+v", res)
 	}
@@ -543,11 +543,11 @@ func TestCustomRunnerFollowUpRefusedInStricterMode(t *testing.T) {
 	if err := agent.SetPermissionMode(h.st, permission.ModeAcceptEdits); err != nil {
 		t.Fatal(err)
 	}
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	if err := agent.SetPermissionMode(h.st, permission.ModePlan); err != nil {
 		t.Fatal(err)
 	}
-	evs, _ := h.run(t, context.Background(), "more", nil)
+	evs, _ := h.run(t, t.Context(), "more", nil)
 	want := "cannot update task async_1: the conversation is now in plan mode, stricter than when the task started (acceptEdits), and its runner cannot be made to apply it; start a new task instead"
 	if res := result(t, evs, ToolUpdate); !res.IsError || res.Flatten() != want {
 		t.Fatalf("update_task = %+v", res)
@@ -562,14 +562,14 @@ func TestCustomRunnerResolveRefusedInStricterMode(t *testing.T) {
 	run := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
 	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
 		start("s1", gp, "x"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"}, llmtest.Turn{Text: "ok"})
-	h.run(t, context.Background(), "go", nil)
+	h.run(t, t.Context(), "go", nil)
 	approve := []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}
 	if err := agent.SetPermissionMode(h.st, permission.ModePlan); err != nil {
 		t.Fatal(err)
 	}
 	// the middleware sees the parent's mode
-	h.run(t, context.Background(), "plan now", nil)
-	if err := h.m.Resolve(context.Background(), "t", "async_1", approve); err == nil || !strings.Contains(err.Error(), "plan mode") {
+	h.run(t, t.Context(), "plan now", nil)
+	if err := h.m.Resolve(t.Context(), "t", "async_1", approve); err == nil || !strings.Contains(err.Error(), "plan mode") {
 		t.Fatalf("Resolve in plan mode = %v, want a refusal", err)
 	}
 	if modes, _ := hd.calls(); len(modes) != 0 {
@@ -578,8 +578,8 @@ func TestCustomRunnerResolveRefusedInStricterMode(t *testing.T) {
 	if err := agent.SetPermissionMode(h.st, permission.ModeDefault); err != nil {
 		t.Fatal(err)
 	}
-	h.run(t, context.Background(), "default again", nil)
-	if err := h.m.Resolve(context.Background(), "t", "async_1", approve); err != nil {
+	h.run(t, t.Context(), "default again", nil)
+	if err := h.m.Resolve(t.Context(), "t", "async_1", approve); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	if modes, known := hd.calls(); len(modes) != 1 || !known[0] || modes[0] != permission.ModeDefault {

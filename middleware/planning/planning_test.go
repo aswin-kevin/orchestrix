@@ -33,7 +33,7 @@ func callWriteTodos(t *testing.T, s *state.State, input any) tool.Result {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := registeredWriteTodos(t).Call(context.Background(), raw, &tool.Call{State: s})
+	res, err := registeredWriteTodos(t).Call(t.Context(), raw, &tool.Call{State: s})
 	if err != nil {
 		t.Fatalf("unexpected Go error: %v", err)
 	}
@@ -84,18 +84,18 @@ func TestWriteTodosRejectsTwoInProgress(t *testing.T) {
 }
 
 func TestWriteTodosRejectsBadItems(t *testing.T) {
-	cases := map[string]struct {
+	tests := map[string]struct {
 		todos []obj
 		want  string
 	}{
 		"empty content": {[]obj{{"content": "ok", "status": "pending"}, {"content": " ", "status": "pending"}}, "todo 2 has empty content"},
 		"bad status":    {[]obj{{"content": "ok", "status": "x"}}, `todo 1 has invalid status "x" (use pending, in_progress, or completed)`},
 	}
-	for name, tc := range cases {
+	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			res := callWriteTodos(t, state.New(), obj{"todos": tc.todos})
-			if !res.IsError || res.Flatten() != tc.want {
-				t.Fatalf("result = %q (error=%v), want error %q", res.Flatten(), res.IsError, tc.want)
+			res := callWriteTodos(t, state.New(), obj{"todos": tt.todos})
+			if !res.IsError || res.Flatten() != tt.want {
+				t.Fatalf("result = %q (error=%v), want error %q", res.Flatten(), res.IsError, tt.want)
 			}
 		})
 	}
@@ -141,7 +141,7 @@ func TestReminderCadence(t *testing.T) {
 		t.Fatal(err)
 	}
 	var final *agent.Final
-	for ev, err := range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
+	for ev, err := range a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -185,7 +185,7 @@ func TestNoReminderWhenAllCompleted(t *testing.T) {
 
 	var seen llm.Request
 	req := &agent.ModelRequest{State: s, Request: llm.Request{Messages: s.Messages()}}
-	_, _ = m.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, _ = m.WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		seen = r.Request
 		return &llm.Response{}, nil
 	})
@@ -251,7 +251,7 @@ func TestWriteTodosInputExported(t *testing.T) {
 		t.Fatal(err)
 	}
 	var final *agent.Final
-	for ev, err := range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
+	for ev, err := range a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
 		if err != nil {
 			t.Fatal(err)
 		}

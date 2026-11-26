@@ -172,10 +172,10 @@ func TestRecallStaleWarning(t *testing.T) {
 func TestIndexRebuiltFromDirectory(t *testing.T) {
 	env := newStoreEnv(t, FileStoreConfig{})
 	manual := "---\nname: Manual\ndescription: Hand written\ntype: project\n---\nbody"
-	if err := env.b.Write(context.Background(), "/memories/manual.md", []byte(manual)); err != nil {
+	if err := env.b.Write(t.Context(), "/memories/manual.md", []byte(manual)); err != nil {
 		t.Fatal(err)
 	}
-	if err := env.b.Write(context.Background(), "/memories/broken.md", []byte("---\nname: [oops\n---\n")); err != nil {
+	if err := env.b.Write(t.Context(), "/memories/broken.md", []byte("---\nname: [oops\n---\n")); err != nil {
 		t.Fatal(err)
 	}
 	env.record("Editor", "Preferred editor", TypeUser, "vim")
@@ -216,7 +216,7 @@ func TestRecordPermission(t *testing.T) {
 	if !strings.HasPrefix(got, "Permission denied") {
 		t.Fatalf("result = %q, want a permission denial", got)
 	}
-	if _, err := b.Read(context.Background(), "/memories/a.md", 0, 0); err == nil {
+	if _, err := b.Read(t.Context(), "/memories/a.md", 0, 0); err == nil {
 		t.Fatal("denied record must not write")
 	}
 
@@ -230,7 +230,7 @@ func TestRecallHonorsReadRules(t *testing.T) {
 	b := backendWith(t, nil)
 	for _, f := range []string{"public", "secret"} {
 		doc := "---\nname: " + f + "\ndescription: shared topic\ntype: project\n---\nshared body"
-		if err := b.Write(context.Background(), "/memories/"+f+".md", []byte(doc)); err != nil {
+		if err := b.Write(t.Context(), "/memories/"+f+".md", []byte(doc)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -309,16 +309,16 @@ func TestDefaultDirIsInternal(t *testing.T) {
 	m := mustNew(t, Config{Store: mustFileStore(t, FileStoreConfig{})})
 	b := backendWith(t, nil)
 	raw, _ := json.Marshal(RecordInput{Name: "A", Description: "d", Type: TypeUser, Content: "c"})
-	if _, err := toolsByName(m)[ToolRecord].Call(context.Background(), raw, &tool.Call{Backend: b}); err != nil {
+	if _, err := toolsByName(m)[ToolRecord].Call(t.Context(), raw, &tool.Call{Backend: b}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Read(context.Background(), backend.InternalDir+"/memories/a.md", 0, 0); err != nil {
+	if _, err := b.Read(t.Context(), backend.InternalDir+"/memories/a.md", 0, 0); err != nil {
 		t.Fatalf("default dir: %v", err)
 	}
 }
 
 func TestFileStoreRoundTrip(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fs := mustFileStore(t, FileStoreConfig{Now: func() time.Time { return t0 }})
 	b := backendWith(t, nil)
 	got, err := fs.Record(ctx, b, Entry{Name: " Favorite color ", Description: "d", Type: TypeUser, Body: "teal\n"})
@@ -387,7 +387,7 @@ func TestFileStoreIsPather(t *testing.T) {
 
 func TestValidation(t *testing.T) {
 	env := newStoreEnv(t, FileStoreConfig{})
-	cases := map[string]RecordInput{
+	tests := map[string]RecordInput{
 		"bad type":       {Name: "A", Description: "d", Type: "nope", Content: "c"},
 		"empty slug":     {Name: "!!!", Description: "d", Type: TypeUser, Content: "c"},
 		"empty content":  {Name: "A", Description: "d", Type: TypeUser},
@@ -395,7 +395,7 @@ func TestValidation(t *testing.T) {
 		"long desc":      {Name: "A", Description: strings.Repeat("d", MaxDescriptionChars+1), Type: TypeUser, Content: "c"},
 		"multiline desc": {Name: "A", Description: "a\nb", Type: TypeUser, Content: "c"},
 	}
-	for name, in := range cases {
+	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {
 			if res := env.call(ToolRecord, in); !res.IsError {
 				t.Fatalf("result = %q, want an error", res.Flatten())
@@ -529,14 +529,14 @@ func TestRecordRefusesMalformedFile(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := newStoreEnv(t, FileStoreConfig{})
-			if err := env.b.Write(context.Background(), "/memories/foo-bar.md", []byte(content)); err != nil {
+			if err := env.b.Write(t.Context(), "/memories/foo-bar.md", []byte(content)); err != nil {
 				t.Fatal(err)
 			}
 			res := env.record("Foo Bar", "d", TypeUser, "new")
 			if !res.IsError || !strings.Contains(res.Flatten(), "exists but is not a readable memory") {
 				t.Fatalf("result = %+v, want a refusal naming the unreadable file", res)
 			}
-			if res, err := env.b.Read(context.Background(), "/memories/foo-bar.md", 0, 0); err != nil {
+			if res, err := env.b.Read(t.Context(), "/memories/foo-bar.md", 0, 0); err != nil {
 				t.Fatal(err)
 			} else if res.Binary {
 				if name != "binary" {
@@ -563,7 +563,7 @@ func TestRecordReadErrorReported(t *testing.T) {
 	if !res.IsError || !strings.Contains(res.Flatten(), "record failed") {
 		t.Fatalf("result = %+v, want a record failed error", res)
 	}
-	if _, err := env.b.Ls(context.Background(), "/memories"); err == nil {
+	if _, err := env.b.Ls(t.Context(), "/memories"); err == nil {
 		t.Fatal("nothing may be written after a read error")
 	}
 }

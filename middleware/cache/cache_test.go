@@ -14,7 +14,7 @@ func wrap(t *testing.T, cfg Config, caching bool, in llm.Request) llm.Request {
 	m := mustNew(t, cfg)
 	var seen llm.Request
 	req := &agent.ModelRequest{Request: in, Profile: llm.Profile{Caching: caching}}
-	_, err := m.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := m.WrapModel(t.Context(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		seen = r.Request
 		return &llm.Response{}, nil
 	})

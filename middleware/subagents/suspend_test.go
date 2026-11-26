@@ -108,7 +108,7 @@ func newInterruptFixture(t *testing.T, approver permission.Approver) *interruptF
 // the parent's state after a JSON round trip, as a host would store it.
 func (f *interruptFixture) interrupt(t *testing.T) *state.State {
 	t.Helper()
-	events, final := collect(t, context.Background(), f.agent, userInput("go"))
+	events, final := collect(t, t.Context(), f.agent, userInput("go"))
 	if final.Reason != agent.ReasonInterrupted {
 		t.Fatalf("reason = %s (%v), want interrupted", final.Reason, final.Err)
 	}
@@ -151,7 +151,7 @@ func (f *interruptFixture) interrupt(t *testing.T) *state.State {
 func (f *interruptFixture) resume(t *testing.T, s *state.State, d agent.Decision) *agent.Final {
 	t.Helper()
 	var final *agent.Final
-	for ev := range f.agent.Resume(context.Background(), "thread", s, []agent.Decision{d}) {
+	for ev := range f.agent.Resume(t.Context(), "thread", s, []agent.Decision{d}) {
 		if ev.Kind == agent.KindFinal {
 			final = ev.Final
 		}
@@ -174,7 +174,7 @@ func TestChildInterruptSurfacesAndResumes(t *testing.T) {
 		t.Fatalf("task result = %q (error=%v), want the child's final text", blockText(res), res.IsError)
 	}
 	// The resumed child wrote to the parent's backend, not one of its own.
-	got, err := f.backends.get("thread").Read(context.Background(), "/approved.md", 0, 0)
+	got, err := f.backends.get("thread").Read(t.Context(), "/approved.md", 0, 0)
 	if err != nil || !slices.Equal(got.Lines, []string{"hello"}) {
 		t.Fatalf("parent backend /approved.md = %+v, %v; want the child's file", got, err)
 	}
@@ -215,7 +215,7 @@ func TestChildUsesParentApprover(t *testing.T) {
 		asked.Add(1)
 		return permission.Allowed()
 	})
-	_, final := collect(t, context.Background(), f.agent, userInput("go"))
+	_, final := collect(t, t.Context(), f.agent, userInput("go"))
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v), want completed without an interrupt", final.Reason, final.Err)
 	}
