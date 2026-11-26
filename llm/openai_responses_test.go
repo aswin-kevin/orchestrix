@@ -431,3 +431,64 @@ func TestResponsesFirstEventErrorEndsStream(t *testing.T) {
 			"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"late\"}\n\n")
 	checkFirstEventError(t, newTestResponses(t, srv.URL))
 }
+
+// Some servers reuse an output_index for a later item, against the spec;
+// each announced item must still get its own block.
+func TestResponsesReusedOutputIndexStartsNewBlock(t *testing.T) {
+	stream := responsesBody(
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1"}}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"done"}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_2"}}`,
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"delta":"why"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_2","encrypted_content":"ENC"}}`,
+		responsesCompleted,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectResponses(t, newTestResponses(t, srv.URL), Request{})
+
+	content := resp.Message.Content
+	if len(content) != 2 {
+		t.Fatalf("content = %+v, want a text and a thinking block", content)
+	}
+	if content[0].Type != BlockText || content[0].Text != "done" {
+		t.Errorf("block 0 = %+v, want text %q", content[0], "done")
+	}
+	if th := content[1]; th.Type != BlockThinking || th.Thinking != "why" || th.Signature != "ENC" ||
+		th.ProviderData[responsesReasoningIDKey] != "rs_2" {
+		t.Errorf("block 1 = %+v, want thinking %q signed ENC from rs_2", th, "why")
+	}
+}
+
+// A delta of another kind at an output_index, with no item announced, opens a
+// new block instead of failing the stream.
+func TestResponsesKindChangeWithoutAddedStartsNewBlock(t *testing.T) {
+	stream := responsesBody(
+		`{"type":"response.output_text.delta","output_index":0,"delta":"answer"}`,
+		`{"type":"response.reasoning_text.delta","output_index":0,"delta":"thought"}`,
+		responsesCompleted,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectResponses(t, newTestResponses(t, srv.URL), Request{})
+
+	content := resp.Message.Content
+	if len(content) != 2 || content[0].Text != "answer" || content[1].Thinking != "thought" {
+		t.Errorf("content = %+v, want text %q then thinking %q", content, "answer", "thought")
+	}
+}
+
+// An item announced twice under the same id stays one block.
+func TestResponsesRepeatedItemAnnouncementKeepsBlock(t *testing.T) {
+	stream := responsesBody(
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1"}}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"one "}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1"}}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"block"}`,
+		responsesCompleted,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectResponses(t, newTestResponses(t, srv.URL), Request{})
+
+	if content := resp.Message.Content; len(content) != 1 || content[0].Text != "one block" {
+		t.Errorf("content = %+v, want one text block %q", content, "one block")
+	}
+}

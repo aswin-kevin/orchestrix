@@ -2,6 +2,12 @@
 
 Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `orxdocker`, `evals`). The project is pre-1.0, so a minor release may break the API; every break is listed under "Breaking changes".
 
+## Unreleased
+
+### Fixed
+
+- `openai-responses`: each output item the server announces becomes its own content block, even when a server reuses an `output_index` for a later item (such as a reasoning item after the message) or streams another kind of delta at an index without announcing an item. Such streams used to fail with "llm: block N is text, got thinking event".
+
 ## v0.10.0 — 2026-11-26
 
 The API freeze pass before 1.0: every public contract gets the shape it will keep. Interfaces shrink to what every implementation needs, with capabilities as optional interfaces found through `Unwrap`; constructors take `Config` structs and return errors; numeric settings follow one rule (zero is the default, a negative value is an error unless a field names a `-1` constant); background tasks become stateful. This is a clean break with v0.9: there are no compatibility aliases and no migration guide, and checkpoints saved by v0.9 that hold background task or job records are not readable (records saved under the old keys are ignored).

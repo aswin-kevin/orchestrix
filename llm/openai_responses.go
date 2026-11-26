@@ -136,7 +136,13 @@ type responsesEvent struct {
 // truncated replies are never mistaken for complete ones. It returns nil
 // without further reading once emit reports the consumer is gone.
 func streamResponsesEvents(t *Transport, events iter.Seq2[SSEEvent, error], emit func(StreamEvent) bool) error {
-	state := &responsesStreamState{t: t, argumentsSeen: make(map[int]bool), startedTools: make(map[int]bool)}
+	state := &responsesStreamState{
+		t:             t,
+		argumentsSeen: make(map[int]bool),
+		startedTools:  make(map[int]bool),
+		blocks:        make(map[int]int),
+		items:         make(map[int]responsesItem),
+	}
 	started := false
 	for sse, err := range events {
 		if err != nil {
@@ -175,7 +181,16 @@ type responsesStreamState struct {
 	// the full text on the finished item is not applied twice.
 	argumentsSeen map[int]bool
 	startedTools  map[int]bool
-	sawToolCall   bool
+	// blocks maps an output_index to the block index of the item it last
+	// announced, and items records each block's item. The spec gives every
+	// output item its own output_index, but some servers reuse one for a
+	// later item (a reasoning item after the message), so blocks are
+	// numbered by item, not by output_index. argumentsSeen and startedTools
+	// are keyed by block index.
+	blocks      map[int]int
+	items       map[int]responsesItem
+	next        int
+	sawToolCall bool
 	// model and id are the first the events reported (response.created
 	// carries them), reported with the closing events.
 	model string
@@ -191,13 +206,13 @@ func (s *responsesStreamState) translate(data string) (events []StreamEvent, don
 	}
 	s.model = firstNonEmpty(s.model, ev.Response.Model)
 	s.id = firstNonEmpty(s.id, ev.Response.ID)
-	index := ev.OutputIndex
 	switch ev.Type {
 	case respEvTextDelta:
-		return []StreamEvent{{Type: EventTextDelta, Index: index, Text: ev.Delta}}, false, nil
+		return []StreamEvent{{Type: EventTextDelta, Index: s.blockFor(ev.OutputIndex, BlockText), Text: ev.Delta}}, false, nil
 	case respEvReasoningDelta, respEvReasoningText:
-		return []StreamEvent{{Type: EventThinkingDelta, Index: index, Text: ev.Delta}}, false, nil
+		return []StreamEvent{{Type: EventThinkingDelta, Index: s.blockFor(ev.OutputIndex, BlockThinking), Text: ev.Delta}}, false, nil
 	case respEvArgumentsDelta:
+		index := s.blockFor(ev.OutputIndex, BlockToolUse)
 		s.argumentsSeen[index] = true
 		return []StreamEvent{{Type: EventToolInputDelta, Index: index, Text: ev.Delta}}, false, nil
 	case respEvOutputItemAdded:
@@ -214,24 +229,88 @@ func (s *responsesStreamState) translate(data string) (events []StreamEvent, don
 }
 
 func (s *responsesStreamState) itemAdded(ev responsesEvent) []StreamEvent {
+	index := s.announce(ev)
 	if ev.Item.Type != responsesFunctionCallType {
 		return nil
 	}
-	return s.startTool(ev)
+	return s.startTool(index, ev)
 }
 
-// startTool records the call and announces it once per output index.
-func (s *responsesStreamState) startTool(ev responsesEvent) []StreamEvent {
+// responsesItem identifies the output item a block holds: its id (empty when
+// the server sent none) and the block type its events fill ("" until known).
+type responsesItem struct {
+	id   string
+	kind BlockType
+}
+
+// announce returns the block index for an output_item.added event, opening a
+// new block unless the output_index already holds the same item.
+func (s *responsesStreamState) announce(ev responsesEvent) int {
+	item := responsesItem{id: ev.Item.ID, kind: responsesItemKind(ev.Item.Type)}
+	if b, ok := s.blocks[ev.OutputIndex]; ok {
+		if cur := s.items[b]; cur.id == item.id && (cur.kind == "" || item.kind == "" || cur.kind == item.kind) {
+			return b
+		}
+	}
+	return s.open(ev.OutputIndex, item)
+}
+
+// blockFor returns the block index for an event of type kind at output
+// index out: the block of the item announced there, or a new block when none
+// was announced or the announced item holds another type.
+func (s *responsesStreamState) blockFor(out int, kind BlockType) int {
+	if b, ok := s.blocks[out]; ok {
+		switch cur := s.items[b]; cur.kind {
+		case kind:
+			return b
+		case "":
+			cur.kind = kind
+			s.items[b] = cur
+			return b
+		}
+	}
+	return s.open(out, responsesItem{kind: kind})
+}
+
+// open numbers a new block for out and records its item.
+func (s *responsesStreamState) open(out int, item responsesItem) int {
+	b := s.next
+	s.next++
+	s.blocks[out] = b
+	s.items[b] = item
+	return b
+}
+
+// responsesItemKind returns the block type an output item's events fill, or
+// "" for an item type the adapter does not read.
+func responsesItemKind(itemType string) BlockType {
+	switch itemType {
+	case responsesMessageType:
+		return BlockText
+	case responsesReasoningType:
+		return BlockThinking
+	case responsesFunctionCallType:
+		return BlockToolUse
+	}
+	return ""
+}
+
+// startTool records the call and announces it once per block.
+func (s *responsesStreamState) startTool(index int, ev responsesEvent) []StreamEvent {
 	s.sawToolCall = true
-	if s.startedTools[ev.OutputIndex] {
+	if s.startedTools[index] {
 		return nil
 	}
-	s.startedTools[ev.OutputIndex] = true
-	return []StreamEvent{{Type: EventToolStart, Index: ev.OutputIndex, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}
+	s.startedTools[index] = true
+	return []StreamEvent{{Type: EventToolStart, Index: index, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}
 }
 
 func (s *responsesStreamState) itemDone(ev responsesEvent) []StreamEvent {
-	index := ev.OutputIndex
+	kind := responsesItemKind(ev.Item.Type)
+	if kind == "" {
+		return nil
+	}
+	index := s.blockFor(ev.OutputIndex, kind)
 	switch ev.Item.Type {
 	case responsesReasoningType:
 		return []StreamEvent{
@@ -242,7 +321,7 @@ func (s *responsesStreamState) itemDone(ev responsesEvent) []StreamEvent {
 	case responsesFunctionCallType:
 		// Some servers send the call only on the finished item, arguments
 		// included.
-		events := s.startTool(ev)
+		events := s.startTool(index, ev)
 		if !s.argumentsSeen[index] && ev.Item.Arguments != "" {
 			events = append(events, StreamEvent{Type: EventToolInputDelta, Index: index, Text: ev.Item.Arguments})
 		}
