@@ -106,12 +106,21 @@ type Answer struct {
 
 // Asker answers questions for the human, synchronously.
 //
+// The Asker must be safe for concurrent use: parallel subagents, and
+// concurrent runs sharing the middleware, may call Ask at the same time, so
+// it should serialise its prompts to the human itself. Ask runs inside the
+// ask_user call and holds it until it returns: it should honour ctx, which
+// is cancelled when the run is, and return promptly with ctx's error then.
+//
 // One host UI object can serve both approvals and questions: pass its
 // approve method to orchestrix.WithApprover and the object itself as
 // Config.Asker.
 type Asker interface {
-	// Ask returns one Answer per question, in order. An error is shown to
-	// the model as a tool error.
+	// Ask returns one Answer per question, in the order of questions. A
+	// missing Answer (a shorter slice) or one that selects nothing reads
+	// as no answer to that question; extra Answers are ignored. A returned
+	// error becomes an error result of the ask_user call, quoting it, and
+	// the run continues: the model decides what to do without the answers.
 	Ask(ctx context.Context, questions []Question) ([]Answer, error)
 }
 

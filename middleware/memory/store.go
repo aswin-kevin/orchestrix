@@ -84,9 +84,16 @@ var types = []Type{TypeUser, TypeFeedback, TypeProject, TypeReference}
 // The middleware validates an entry before Record (see RecordInput) and
 // renders the prompt index and recall results itself. Permission path rules
 // reach a Store's tools only when it also implements Pather; FileStore does.
+// Further capabilities are added as optional interfaces like Pather, so the
+// interface itself stays as it is.
+//
+// An error from Record or Recall is shown to the model verbatim in the
+// tool's error result, so it must not carry secrets. An error from Index is
+// swallowed: the system prompt then shows no index, and the run goes on.
 type Store interface {
 	// Record creates or replaces the entry with e.Name's slug and returns
-	// it as stored (File, Created, Updated set).
+	// it as stored (File, Created, Updated set). Replacing an entry keeps
+	// its Created time and sets Updated.
 	Record(ctx context.Context, b backend.Backend, e Entry) (Entry, error)
 	// Recall returns at most limit entries matching query, best first; an
 	// empty query returns the most recently updated.

@@ -85,6 +85,9 @@ type Config struct {
 	// rejected by New.
 	StaleAfter time.Duration
 	// Now is the clock StaleAfter is measured with; nil means time.Now.
+	// With a FileStore, keep it in step with FileStoreConfig.Now, the clock
+	// that stamps the entries, or entries may look older or newer than
+	// they are.
 	Now func() time.Time
 	// DisableIndexInPrompt keeps the store's index out of the system
 	// prompt. The tools stay available.
