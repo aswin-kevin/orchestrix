@@ -179,13 +179,12 @@ type Config struct {
 	Temperature *float64
 
 	// MaxTurns bounds the model turns of a run that call tools; zero means
-	// DefaultMaxTurns and Unlimited (-1) means unbounded; any other
-	// negative value is an error. A run that reaches it ends with
-	// ReasonMaxTurns after the tools of its last turn ran. This is not
-	// Settlement.MaxTurns.
+	// DefaultMaxTurns and Unlimited (-1) means unbounded; any other negative
+	// value is an error. A run that reaches it ends with ReasonMaxTurns after
+	// the tools of its last turn ran. This is not Settlement.MaxTurns.
 	MaxTurns int
-	// MaxDuration bounds the wall-clock time of a run; zero means
-	// unbounded and a negative value is an error.
+	// MaxDuration bounds the wall-clock time of a run; zero means unbounded
+	// and a negative value is an error.
 	MaxDuration time.Duration
 	// MaxTotalTokens is a hard cap on the tokens a run spends; zero means no
 	// cap and a negative value is an error. The count is the sum of
@@ -264,8 +263,8 @@ type Config struct {
 	// WorkingDir is the directory tools treat as the current one.
 	WorkingDir string
 	// MaxToolOutputChars caps the combined size, in bytes, of the text blocks
-	// of each tool result; text is cut at a rune boundary so no UTF-8
-	// sequence is split (see tool.Truncate). Zero means
-	// DefaultMaxToolOutputChars and a negative value is an error.
+	// of each tool result; text is cut at a rune boundary so no UTF-8 sequence
+	// is split (see tool.Truncate). Zero means DefaultMaxToolOutputChars and a
+	// negative value is an error.
 	MaxToolOutputChars int
 }

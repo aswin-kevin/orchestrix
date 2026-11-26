@@ -95,10 +95,10 @@ type Input struct {
 
 // New validates cfg, applies its defaults and builds the agent. It fails for a
 // missing Provider, an unknown non-empty PermissionMode, a negative numeric
-// field (other than a documented -1 constant), an invalid middleware
-// stack (see Compose), tools with clashing or illegal names across
-// Config.Tools and every ToolProvider, or an OutputSchema whose top-level
-// "type" is not "object" or that cannot be encoded as JSON.
+// field (other than a documented -1 constant), an invalid middleware stack
+// (see Compose), tools with clashing or illegal names across Config.Tools and
+// every ToolProvider, or an OutputSchema whose top-level "type" is not
+// "object" or that cannot be encoded as JSON.
 //
 // The composed stack is then filtered by every MiddlewareExcluder for
 // Config.Model; New fails when an excluder names a middleware that is
@@ -218,8 +218,8 @@ func (a *Agent) stream(ctx context.Context, in Input, resume *resumption) iter.S
 }
 
 // checkNegatives returns an error naming the first numeric field of cfg that
-// is negative, accepting only the -1 constants the fields document
-// (Unlimited, NoOutputRetries).
+// is negative, accepting only the -1 constants the fields document (Unlimited,
+// NoOutputRetries).
 func checkNegatives(cfg Config) error {
 	for _, f := range []struct {
 		name string

@@ -1,12 +1,12 @@
-// Package agent runs the model/tool loop and defines the contracts that
-// extend it.
+// Package agent runs the model/tool loop and defines the contracts that extend
+// it.
 //
 // Compatibility: EventKind and TerminalReason may gain values in minor
 // releases. Hosts ignore event kinds they do not know and treat unknown
-// terminal reasons as failures. Interfaces in this package never gain
-// methods; new hooks arrive as new optional interfaces. Agent, Thread and
-// the permission mode are concrete on purpose: they are the fail-closed
-// safety boundary.
+// terminal reasons as failures. Interfaces in this package never gain methods;
+// new hooks arrive as new optional interfaces. Agent, Thread and the
+// permission mode are concrete on purpose: they are the fail-closed safety
+// boundary.
 //
 // # Middleware
 //
