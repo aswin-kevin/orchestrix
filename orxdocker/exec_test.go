@@ -394,7 +394,7 @@ func TestStopFallsBackToRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Stop(context.Background()); err != nil {
+	if err := p.Stop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -503,7 +503,7 @@ func TestThreadsEvictLRU(t *testing.T) {
 		t.Fatalf("busy executors evicted: %d threads, removed %v", n, f.removedIDs())
 	}
 	for _, p := range procs {
-		_ = p.Stop(context.Background())
+		_ = p.Stop(t.Context())
 	}
 }
 
@@ -551,7 +551,7 @@ func TestStopTermFailureTriesKill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Stop(context.Background()); err != nil {
+	if err := p.Stop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -572,7 +572,7 @@ func TestStopTermFailureTriesKill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Stop(context.Background()); err != nil {
+	if err := p.Stop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -655,7 +655,7 @@ func exitedAfter(started *sync.Map, d time.Duration, code int) func(*fakeExec, i
 // (killed by the command, which deleted its pid file) or something still
 // holds its output after it exited.
 func TestTimeoutUnconfirmedKillRemovesContainer(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name       string
 		holdStream bool // the stream stays open after the exec exits
 		pidStatus  int  // the signal exec's status: 0 or exitNoPID
@@ -668,14 +668,14 @@ func TestTimeoutUnconfirmedKillRemovesContainer(t *testing.T) {
 		{"no pid, finished at the timeout", false, exitNoPID, 0, false},
 		{"signalled and ended", false, 0, 143, false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			f := newFakeEngine(t)
 			var started sync.Map
 			f.stream = func(x *fakeExec, w http.ResponseWriter, r *http.Request) {
 				_, _ = w.Write(frame(streamStdout, "started\n"))
 				w.(http.Flusher).Flush()
 				started.Store(x.id, time.Now())
-				if tc.holdStream {
+				if tt.holdStream {
 					hang(x, w, r)
 					return
 				}
@@ -685,8 +685,8 @@ func TestTimeoutUnconfirmedKillRemovesContainer(t *testing.T) {
 				case <-r.Context().Done():
 				}
 			}
-			f.state = exitedAfter(&started, 200*time.Millisecond, tc.exit)
-			f.signalStatus = tc.pidStatus
+			f.state = exitedAfter(&started, 200*time.Millisecond, tt.exit)
+			f.signalStatus = tt.pidStatus
 			m := f.manager(Config{})
 			m.killGrace = 300 * time.Millisecond
 			m.hardGrace = time.Hour
@@ -700,7 +700,7 @@ func TestTimeoutUnconfirmedKillRemovesContainer(t *testing.T) {
 				t.Fatalf("result = %+v, want timed out", res)
 			}
 			removed := f.removedIDs()
-			if tc.wantRemove {
+			if tt.wantRemove {
 				if len(removed) != 1 || removed[0] != "c1" || !strings.Contains(res.Output, "container was removed") {
 					t.Fatalf("removed = %v, output %q; want c1 removed and reported", removed, res.Output)
 				}

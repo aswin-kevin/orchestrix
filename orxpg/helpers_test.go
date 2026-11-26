@@ -16,8 +16,6 @@ import (
 // database. Tests that need it are skipped when it is unset.
 const dsnEnv = "ORX_TEST_PG_DSN"
 
-var ctx = context.Background()
-
 func randomName(prefix string) string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
@@ -28,6 +26,7 @@ func randomName(prefix string) string {
 // its name; the schema is dropped when the test ends.
 func testSchema(t *testing.T) string {
 	t.Helper()
+	ctx := t.Context()
 	schema := emptySchema(t)
 	if err := orxpg.Migrate(ctx, newPool(t, schema), orxpg.Config{}); err != nil {
 		t.Fatalf("Migrate: %v", err)
@@ -39,6 +38,7 @@ func testSchema(t *testing.T) string {
 // dropped when the test ends.
 func emptySchema(t *testing.T) string {
 	t.Helper()
+	ctx := t.Context()
 	dsn := os.Getenv(dsnEnv)
 	if dsn == "" {
 		t.Skipf("%s is not set", dsnEnv)
@@ -71,6 +71,7 @@ func emptySchema(t *testing.T) string {
 // already quoted where needed.
 func newPool(t *testing.T, schema string) *pgxpool.Pool {
 	t.Helper()
+	ctx := t.Context()
 	cfg, err := pgxpool.ParseConfig(os.Getenv(dsnEnv))
 	if err != nil {
 		t.Fatalf("parse %s: %v", dsnEnv, err)
@@ -89,6 +90,7 @@ func newPool(t *testing.T, schema string) *pgxpool.Pool {
 // when the test ends.
 func newConn(t *testing.T, schema string) *pgx.Conn {
 	t.Helper()
+	ctx := t.Context()
 	cfg, err := pgx.ParseConfig(os.Getenv(dsnEnv))
 	if err != nil {
 		t.Fatalf("parse %s: %v", dsnEnv, err)

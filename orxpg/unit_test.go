@@ -65,6 +65,7 @@ func TestSchemaInvalidPrefix(t *testing.T) {
 }
 
 func TestNewRejectsNilDB(t *testing.T) {
+	ctx := t.Context()
 	// An untyped nil: a typed nil *pgxpool.Pool is a non-nil DB.
 	if _, err := orxpg.NewCheckpointer(nil, "t", orxpg.Config{}); err == nil || err.Error() != "orxpg: nil db" {
 		t.Errorf("NewCheckpointer(nil) = %v, want orxpg: nil db", err)
@@ -80,6 +81,7 @@ func TestNewRejectsNilDB(t *testing.T) {
 // offlinePool is a pool that never connects: building one does not dial.
 func offlinePool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	ctx := t.Context()
 	pool, err := pgxpool.New(ctx, "postgres://localhost:1/none")
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +91,7 @@ func offlinePool(t *testing.T) *pgxpool.Pool {
 }
 
 func TestNewRejectsInvalidArguments(t *testing.T) {
+	ctx := t.Context()
 	pool := offlinePool(t)
 	for _, id := range []string{"", "a\x00b", "bad\xff", strings.Repeat("x", orxpg.MaxTenantIDBytes+1)} {
 		if _, err := orxpg.NewCheckpointer(pool, id, orxpg.Config{}); !errors.Is(err, orxpg.ErrInvalidTenantID) {
@@ -115,6 +118,7 @@ func TestNewRejectsInvalidArguments(t *testing.T) {
 // TestOfflineChecks covers argument checks that fail before any statement
 // reaches the database.
 func TestOfflineChecks(t *testing.T) {
+	ctx := t.Context()
 	pool := offlinePool(t)
 	c, err := orxpg.NewCheckpointer(pool, "t", orxpg.Config{})
 	if err != nil {

@@ -29,7 +29,7 @@ func scenario(t *testing.T, name string) Scenario {
 
 func runScripted(t *testing.T, name string, turns ...llmtest.Turn) Trial {
 	t.Helper()
-	tr := RunTrial(context.Background(), Env{Model: llmtest.New(turns...)}, scenario(t, name))
+	tr := RunTrial(t.Context(), Env{Model: llmtest.New(turns...)}, scenario(t, name))
 	if !tr.Pass {
 		t.Fatalf("trial = %+v, want a pass", tr)
 	}
@@ -130,14 +130,14 @@ func TestViolationFailsTheTrial(t *testing.T) {
 		t.Failf("model")
 		t.Violationf("harness")
 	}}
-	tr := RunTrial(context.Background(), Env{}, sc)
+	tr := RunTrial(t.Context(), Env{}, sc)
 	if tr.Pass || tr.Violation != "harness" || tr.Failure != "model" {
 		t.Errorf("trial = %+v", tr)
 	}
 }
 
 func TestPanicIsAViolation(t *testing.T) {
-	tr := RunTrial(context.Background(), Env{}, Scenario{Name: "x", Run: func(context.Context, Env, *T) { panic("boom") }})
+	tr := RunTrial(t.Context(), Env{}, Scenario{Name: "x", Run: func(context.Context, Env, *T) { panic("boom") }})
 	if tr.Pass || !strings.Contains(tr.Violation, "boom") {
 		t.Errorf("trial = %+v, want a violation naming the panic", tr)
 	}
@@ -181,7 +181,7 @@ func TestReportScrubbed(t *testing.T) {
 		tt.Note("endpoint", url)
 		tt.Note("list", []string{"x", url})
 	}}
-	res := RunSuite(context.Background(), Env{}, []Scenario{sc}, Options{Trials: 1})
+	res := RunSuite(t.Context(), Env{}, []Scenario{sc}, Options{Trials: 1})
 	path := filepath.Join(t.TempDir(), "report.json")
 	if err := WriteJSON(path, res); err != nil {
 		t.Fatal(err)

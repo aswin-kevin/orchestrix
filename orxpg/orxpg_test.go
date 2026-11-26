@@ -55,6 +55,7 @@ func stateWith(texts ...string) *state.State {
 // TestSeparatePoolsOneSaveWins races two Checkpointers on separate pools
 // over one thread: in every round exactly one save succeeds.
 func TestSeparatePoolsOneSaveWins(t *testing.T) {
+	ctx := t.Context()
 	schema := testSchema(t)
 	cps := []*orxpg.Checkpointer{
 		newCheckpointer(t, newPool(t, schema), "tenant"),
@@ -73,9 +74,7 @@ func TestSeparatePoolsOneSaveWins(t *testing.T) {
 		)
 		start := make(chan struct{})
 		for i, c := range cps {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				v, err := c.Save(ctx, "shared", stateWith("base", strings.Repeat("w", i+1)), base)
 				mu.Lock()
@@ -88,7 +87,7 @@ func TestSeparatePoolsOneSaveWins(t *testing.T) {
 				default:
 					t.Errorf("round %d: Save: %v", round, err)
 				}
-			}()
+			})
 		}
 		close(start)
 		wg.Wait()
@@ -107,6 +106,7 @@ func TestSeparatePoolsOneSaveWins(t *testing.T) {
 // TestSeparatePoolsOneLeaseWins races two Checkpointers on separate pools
 // for one thread's lease.
 func TestSeparatePoolsOneLeaseWins(t *testing.T) {
+	ctx := t.Context()
 	schema := testSchema(t)
 	cps := []*orxpg.Checkpointer{
 		newCheckpointer(t, newPool(t, schema), "tenant"),
@@ -121,9 +121,7 @@ func TestSeparatePoolsOneLeaseWins(t *testing.T) {
 		)
 		start := make(chan struct{})
 		for i, c := range cps {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start
 				lease, err := c.Acquire(ctx, "shared", strings.Repeat("o", i+1), time.Minute)
 				mu.Lock()
@@ -136,7 +134,7 @@ func TestSeparatePoolsOneLeaseWins(t *testing.T) {
 				default:
 					t.Errorf("round %d: Acquire: %v", round, err)
 				}
-			}()
+			})
 		}
 		close(start)
 		wg.Wait()
@@ -150,6 +148,7 @@ func TestSeparatePoolsOneLeaseWins(t *testing.T) {
 }
 
 func TestLeaseBeforeFirstSave(t *testing.T) {
+	ctx := t.Context()
 	c := newCheckpointer(t, newPool(t, testSchema(t)), "tenant")
 	lease, err := c.Acquire(ctx, "new", "a", time.Minute)
 	if err != nil {
@@ -170,6 +169,7 @@ func TestLeaseBeforeFirstSave(t *testing.T) {
 }
 
 func TestTenantIsolation(t *testing.T) {
+	ctx := t.Context()
 	pool := newPool(t, testSchema(t))
 	a := newCheckpointer(t, pool, "tenant-a")
 	b := newCheckpointer(t, pool, "tenant-b")
@@ -234,6 +234,7 @@ func TestTenantIsolation(t *testing.T) {
 }
 
 func TestStateBytesKept(t *testing.T) {
+	ctx := t.Context()
 	pool := newPool(t, testSchema(t))
 	c := newCheckpointer(t, pool, "tenant")
 	s := state.New()
@@ -257,21 +258,21 @@ func TestStateBytesKept(t *testing.T) {
 }
 
 func TestMigrateIdempotent(t *testing.T) {
+	ctx := t.Context()
 	schema := testSchema(t) // already migrated once
 	var wg sync.WaitGroup
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := orxpg.Migrate(ctx, newPool(t, schema), orxpg.Config{}); err != nil {
 				t.Errorf("Migrate again: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }
 
 func TestTablePrefix(t *testing.T) {
+	ctx := t.Context()
 	pool := newPool(t, testSchema(t))
 	cfg := orxpg.Config{TablePrefix: "app_"}
 	if err := orxpg.Migrate(ctx, pool, cfg); err != nil {
@@ -297,6 +298,7 @@ func TestTablePrefix(t *testing.T) {
 // tenant the same updated_at, so their order rests on the tie-break alone.
 func saveThreads(t *testing.T, db orxpg.DB, c *orxpg.Checkpointer, ids ...string) {
 	t.Helper()
+	ctx := t.Context()
 	for _, id := range ids {
 		if _, err := c.Save(ctx, id, stateWith(id), ""); err != nil {
 			t.Fatal(err)
@@ -310,6 +312,7 @@ func saveThreads(t *testing.T, db orxpg.DB, c *orxpg.Checkpointer, ids ...string
 // listAll pages through c with limit and returns each page's ids.
 func listAll(t *testing.T, c *orxpg.Checkpointer, limit int) [][]string {
 	t.Helper()
+	ctx := t.Context()
 	var pages [][]string
 	cursor := ""
 	for range 100 {
@@ -382,6 +385,7 @@ func TestListTieBreakIsByteOrder(t *testing.T) {
 // TestListHugeLimit checks that the largest Limit does not overflow the
 // one-extra-row LIMIT the query fetches.
 func TestListHugeLimit(t *testing.T) {
+	ctx := t.Context()
 	c := newCheckpointer(t, newPool(t, testSchema(t)), "tenant")
 	for _, id := range []string{"a", "b", "c"} {
 		if _, err := c.Save(ctx, id, stateWith(id), ""); err != nil {
@@ -397,6 +401,7 @@ func TestListHugeLimit(t *testing.T) {
 // TestCheckpointerInsideTx runs a Checkpointer and a Store over a pgx.Tx:
 // their writes are the transaction's, gone after a rollback.
 func TestCheckpointerInsideTx(t *testing.T) {
+	ctx := t.Context()
 	pool := newPool(t, testSchema(t))
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -445,6 +450,7 @@ func TestCheckpointerInsideTx(t *testing.T) {
 // TestMigrateOverConn migrates over a single *pgx.Conn and over a pgx.Tx
 // (where Migrate's own transaction becomes a savepoint).
 func TestMigrateOverConn(t *testing.T) {
+	ctx := t.Context()
 	conn := newConn(t, emptySchema(t))
 	if err := orxpg.Migrate(ctx, conn, orxpg.Config{}); err != nil {
 		t.Fatalf("Migrate over a conn: %v", err)
@@ -480,6 +486,7 @@ func TestMigrateOverConn(t *testing.T) {
 // releases up to v0.9 did, in the first schema of db's search_path.
 func createV09Threads(t *testing.T, db orxpg.DB) {
 	t.Helper()
+	ctx := t.Context()
 	for _, stmt := range []string{
 		`CREATE TABLE orx_threads (
     tenant_id  text COLLATE "C" NOT NULL,
@@ -501,6 +508,7 @@ func createV09Threads(t *testing.T, db orxpg.DB) {
 // indexes returns the index definitions of schema, keyed by index name.
 func indexes(t *testing.T, db orxpg.DB, schema string) map[string]string {
 	t.Helper()
+	ctx := t.Context()
 	rows, err := db.Query(ctx, `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1`, schema)
 	if err != nil {
 		t.Fatal(err)
@@ -523,6 +531,7 @@ func indexes(t *testing.T, db orxpg.DB, schema string) map[string]string {
 // the list index gains the thread_id tie-break, the old index is dropped
 // and the stored threads stay.
 func TestMigrateReplacesListIndex(t *testing.T) {
+	ctx := t.Context()
 	schema := emptySchema(t)
 	pool := newPool(t, schema)
 	createV09Threads(t, pool)
@@ -559,6 +568,7 @@ func TestMigrateReplacesListIndex(t *testing.T) {
 // touches only the schema Migrate creates tables in, even when a later
 // schema of the search_path holds an older install.
 func TestMigrateLeavesOtherSchemas(t *testing.T) {
+	ctx := t.Context()
 	first, second := emptySchema(t), emptySchema(t)
 	createV09Threads(t, newPool(t, second))
 	pool := newPool(t, first+", "+second)

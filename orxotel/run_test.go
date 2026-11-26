@@ -24,7 +24,7 @@ func TestRunSpan(t *testing.T) {
 		{Text: "hello", Usage: llm.Usage{Input: 12, Output: 5, CacheRead: 3}},
 	})
 
-	final := drain(t, a.Run(context.Background(), prompt("hi")))
+	final := drain(t, a.Run(t.Context(), prompt("hi")))
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s, want completed", final.Reason)
 	}
@@ -60,7 +60,7 @@ func TestRunSpanErrorStatus(t *testing.T) {
 			{Err: errors.New("model exploded")},
 		})
 
-		final := drain(t, a.Run(context.Background(), prompt("hi")))
+		final := drain(t, a.Run(t.Context(), prompt("hi")))
 		if final.Reason != agent.ReasonModelError {
 			t.Fatalf("reason = %s, want model_error", final.Reason)
 		}
@@ -85,7 +85,7 @@ func TestRunSpanErrorStatus(t *testing.T) {
 			{Text: "never reached"},
 		}, orchestrix.WithMaxTurns(1))
 
-		final := drain(t, a.Run(context.Background(), prompt("hi")))
+		final := drain(t, a.Run(t.Context(), prompt("hi")))
 		if final.Reason != agent.ReasonMaxTurns {
 			t.Fatalf("reason = %s, want max_turns", final.Reason)
 		}
@@ -104,7 +104,7 @@ func TestRunSpanEndsWhenConsumerStops(t *testing.T) {
 		{Text: "first words"},
 	})
 
-	for ev, err := range a.Run(context.Background(), prompt("hi")) {
+	for ev, err := range a.Run(t.Context(), prompt("hi")) {
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
@@ -123,7 +123,7 @@ func TestRunSpanEndsWhenConsumerStops(t *testing.T) {
 
 func TestResumedRunSpan(t *testing.T) {
 	rec, tp := newRecorder(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const threadID = "thread-42"
 	a := newAgent(t, "writer", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
 		{ToolCalls: []llmtest.Call{{ID: "w1", Name: "write_file",
@@ -190,7 +190,7 @@ func TestGlobalProviderDefault(t *testing.T) {
 	t.Cleanup(func() { otel.SetTracerProvider(prev) })
 
 	a := newAgent(t, "global", orxotel.Config{}, []llmtest.Turn{{Text: "ok"}})
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	oneSpan(t, rec, "invoke_agent global")
 }
@@ -214,7 +214,7 @@ func TestGlobalProviderResolvedPerRun(t *testing.T) {
 		{ToolCalls: []llmtest.Call{{ID: "c1", Name: "swap", Input: map[string]any{"text": "x"}}}},
 		{Text: "done"},
 	}, orchestrix.WithTools(swap))
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	if got := len(rec2.Ended()); got != 0 {
 		t.Errorf("provider set mid-run got %d spans, want 0", got)
@@ -232,7 +232,7 @@ func TestGlobalProviderResolvedPerRun(t *testing.T) {
 			{Text: "never reached"},
 		}, orchestrix.WithMaxTotalTokens(100))
 
-		final := drain(t, a.Run(context.Background(), prompt("hi")))
+		final := drain(t, a.Run(t.Context(), prompt("hi")))
 		if final.Reason != agent.ReasonTokenLimit {
 			t.Fatalf("reason = %s, want token_limit", final.Reason)
 		}

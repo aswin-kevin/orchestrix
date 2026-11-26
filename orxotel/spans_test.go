@@ -74,7 +74,7 @@ func TestChatSpan(t *testing.T) {
 				{Text: "hello", StopReason: "end_turn", Usage: llm.Usage{Input: 12, Output: 5, CacheRead: 3}},
 			}, withModel("test-model"))
 
-			drain(t, a.Run(context.Background(), prompt("hi")))
+			drain(t, a.Run(t.Context(), prompt("hi")))
 
 			run := oneSpan(t, rec, "invoke_agent researcher")
 			s := oneSpan(t, rec, "chat test-model")
@@ -114,7 +114,7 @@ func TestChatSpanError(t *testing.T) {
 		{Err: errors.New("model exploded")},
 	}, withModel("m"))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	s := oneSpan(t, rec, "chat m")
 	if s.Status().Code != codes.Error {
@@ -138,7 +138,7 @@ func TestToolSpan(t *testing.T) {
 		{Text: "done"},
 	}, orchestrix.WithTools(echoTool("echo")))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	run := oneSpan(t, rec, "invoke_agent worker")
 	s := oneSpan(t, rec, "execute_tool echo")
@@ -164,7 +164,7 @@ func TestToolErrorResult(t *testing.T) {
 		{Text: "done"},
 	}, orchestrix.WithTools(failTool()))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	s := oneSpan(t, rec, "execute_tool fail")
 	if s.Status().Code != codes.Error {
@@ -186,7 +186,7 @@ func TestNoContentByDefault(t *testing.T) {
 		{Text: "done"},
 	}, orchestrix.WithTools(echoTool("echo"), failTool()))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	for _, name := range []string{"execute_tool echo", "execute_tool fail"} {
 		s := oneSpan(t, rec, name)
@@ -209,7 +209,7 @@ func TestCaptureContent(t *testing.T) {
 		{Text: "done"},
 	}, orchestrix.WithTools(echoTool("echo"), failTool()))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	s := oneSpan(t, rec, "execute_tool echo")
 	for _, key := range []string{"gen_ai.tool.call.arguments", "gen_ai.tool.call.result"} {
@@ -287,7 +287,7 @@ func TestParallelToolSpans(t *testing.T) {
 		{Text: "done"},
 	}, orchestrix.WithTools(barrierTool("echo", barrier), barrierTool("lookup", barrier)))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 	if barrier.timedOut.Load() {
 		t.Fatal("the three tools did not all run at once")
 	}
@@ -318,7 +318,7 @@ func TestSubagentSpanNesting(t *testing.T) {
 		Name: "reviewer", Description: "reviews code", SystemPrompt: "Review.", Provider: child,
 	}))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 	if child.Calls() != 1 {
 		t.Fatalf("child model calls = %d, want 1", child.Calls())
 	}
@@ -363,7 +363,7 @@ func TestChatSpanTemperature(t *testing.T) {
 	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{{Text: "ok"}},
 		withModel("m"), orchestrix.WithConfig(func(c *agent.Config) { c.Temperature = &temp }))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	wantAttr(t, oneSpan(t, rec, "chat m"), "gen_ai.request.temperature", 0.25)
 }
@@ -393,7 +393,7 @@ func runOneCall(t *testing.T, tl tool.Tool, opts ...orchestrix.Option) (*tracete
 		{ToolCalls: []llmtest.Call{{ID: "c1", Name: tl.Name(), Input: map[string]any{"text": "x"}}}},
 		{Text: "done"},
 	}, append([]orchestrix.Option{orchestrix.WithTools(tl)}, opts...)...)
-	return rec, drain(t, a.Run(context.Background(), prompt("hi")))
+	return rec, drain(t, a.Run(t.Context(), prompt("hi")))
 }
 
 func TestToolGoError(t *testing.T) {
@@ -495,7 +495,7 @@ func TestToolSpanVia(t *testing.T) {
 		{Text: "done"},
 	}, orchestrix.WithTools(dispatcher, echoTool("echo")))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	s := oneSpan(t, rec, "execute_tool echo")
 	wantAttr(t, s, "gen_ai.tool.name", "echo")
@@ -523,7 +523,7 @@ func TestErrorTextHiddenWithoutCapture(t *testing.T) {
 	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
 		{Err: apiErr()},
 	}, withModel("m"))
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	for _, name := range []string{"chat m", "invoke_agent worker"} {
 		s := oneSpan(t, rec, name)
@@ -545,7 +545,7 @@ func TestErrorTextWithCapture(t *testing.T) {
 	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp, CaptureContent: true}, []llmtest.Turn{
 		{Err: apiErr()},
 	}, withModel("m"))
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 	s := oneSpan(t, rec, "chat m")
 	if !strings.Contains(errorTexts(s), "SECRET-FRAGMENT") {
 		t.Errorf("error text missing with CaptureContent: %q", errorTexts(s))
@@ -560,7 +560,7 @@ func TestRedactErrorHook(t *testing.T) {
 			CaptureContent: capture,
 			RedactError:    func(err error) string { return "redacted-by-hook" },
 		}, []llmtest.Turn{{Err: apiErr()}}, withModel("m"))
-		drain(t, a.Run(context.Background(), prompt("hi")))
+		drain(t, a.Run(t.Context(), prompt("hi")))
 		for _, name := range []string{"chat m", "invoke_agent worker"} {
 			s := oneSpan(t, rec, name)
 			if s.Status().Description != "redacted-by-hook" {
@@ -578,7 +578,7 @@ func TestNoEmptyFinishReason(t *testing.T) {
 	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{
 		{Text: "ok", StopReason: ""},
 	}, withModel("m"), orchestrix.WithMiddleware(blankStop{}))
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 	s := oneSpan(t, rec, "chat m")
 	for _, kv := range s.Attributes() {
 		if kv.Key == "gen_ai.response.finish_reasons" {

@@ -150,13 +150,11 @@ func (m *Manager) Executor(threadID string) *Executor {
 	if len(m.threads) >= m.cfg.MaxThreads {
 		if id := m.evictLocked(); id != "" {
 			m.removing[id]++
-			m.evictions.Add(1)
-			go func() {
-				defer m.evictions.Done()
+			m.evictions.Go(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 				defer cancel()
 				_ = m.finishRemoval(ctx, id) // a failure leaves it to Reap
-			}()
+			})
 		}
 	}
 	m.threads[threadID] = e

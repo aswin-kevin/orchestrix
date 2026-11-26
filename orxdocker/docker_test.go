@@ -475,7 +475,7 @@ func TestDockerStartAndStop(t *testing.T) {
 	if _, ok := p.Result(); ok {
 		t.Fatal("result before the command ended")
 	}
-	if err := p.Stop(context.Background()); err != nil {
+	if err := p.Stop(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -486,7 +486,7 @@ func TestDockerStartAndStop(t *testing.T) {
 	if res, _ := p.Result(); res.ExitCode == 0 || res.Output != "begin\n" {
 		t.Errorf("stopped result = %+v", res)
 	}
-	if err := p.Stop(context.Background()); err != nil {
+	if err := p.Stop(t.Context()); err != nil {
 		t.Errorf("second Stop: %v", err)
 	}
 	if ps := processes(t, e); strings.Contains(ps, "sleep 604") {

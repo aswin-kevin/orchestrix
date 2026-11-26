@@ -38,7 +38,7 @@ func TestRecordFallback(t *testing.T) {
 		t.Fatalf("orchestrix.New: %v", err)
 	}
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	chat := oneSpan(t, rec, "chat")
 	var attrs map[attribute.Key]attribute.Value
@@ -67,9 +67,11 @@ func TestRecordFallback(t *testing.T) {
 	}
 }
 
+// TestRecordFallbackNoSpan pins that recording a fallback without a span in
+// the context does not panic.
 func TestRecordFallbackNoSpan(t *testing.T) {
-	orxotel.RecordFallback(context.Background(), llm.FallbackEvent{From: "a", To: "b"})
-	orxotel.RecordFallback(context.Background(), llm.FallbackEvent{From: "a", To: "b", Err: context.Canceled})
+	orxotel.RecordFallback(t.Context(), llm.FallbackEvent{From: "a", To: "b"})
+	orxotel.RecordFallback(t.Context(), llm.FallbackEvent{From: "a", To: "b", Err: context.Canceled})
 }
 
 // fallbackEvents returns the orchestrix.fallback events of a span.
@@ -120,8 +122,8 @@ func TestResponseSourceDuringCooldown(t *testing.T) {
 				t.Fatalf("orchestrix.New: %v", err)
 			}
 
-			drain(t, a.Run(context.Background(), prompt("first")))
-			drain(t, a.Run(context.Background(), prompt("second")))
+			drain(t, a.Run(t.Context(), prompt("first")))
+			drain(t, a.Run(t.Context(), prompt("second")))
 
 			var chats []sdktrace.ReadOnlySpan
 			for _, s := range rec.Ended() {
@@ -149,7 +151,7 @@ func TestResponseSourceDuringCooldown(t *testing.T) {
 func TestNoResponseSourceWithoutFallback(t *testing.T) {
 	rec, tp := newRecorder(t)
 	a := newAgent(t, "worker", orxotel.Config{TracerProvider: tp}, []llmtest.Turn{{Text: "ok"}})
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 	for _, s := range rec.Ended() {
 		if strings.HasPrefix(s.Name(), "chat") {
 			noAttr(t, s, "orchestrix.response.source")

@@ -42,7 +42,7 @@ func TestDefaultMaxContentBytesCapsZeroConfig(t *testing.T) {
 		{Text: "done"},
 	}, orchestrix.WithTools(echoTool("echo")))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	v := attrs(oneSpan(t, rec, "execute_tool echo"))["gen_ai.tool.call.result"]
 	if got := len(v.AsString()); got != orxotel.DefaultMaxContentBytes {
@@ -65,7 +65,7 @@ func TestAttributesOnEverySpan(t *testing.T) {
 		{Text: "done"},
 	}, orchestrix.WithTools(echoTool("echo")))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	if n := calls.Load(); n != 1 {
 		t.Errorf("Attributes called %d times, want 1", n)
@@ -96,7 +96,7 @@ func TestAttributesSeeRunInfo(t *testing.T) {
 	a := newAgent(t, "worker", cfg, []llmtest.Turn{{Text: "done"}})
 
 	in := agent.Input{Messages: []llm.Message{llm.UserText("hi")}, ThreadID: "t1"}
-	drain(t, a.Run(context.Background(), in))
+	drain(t, a.Run(t.Context(), in))
 
 	if got.ThreadID != "t1" {
 		t.Errorf("info.ThreadID = %q, want t1", got.ThreadID)
@@ -122,7 +122,7 @@ func TestAttributesNeverReplaceOwn(t *testing.T) {
 		{Text: "done"},
 	}, orchestrix.WithTools(echoTool("echo")))
 
-	drain(t, a.Run(context.Background(), prompt("hi")))
+	drain(t, a.Run(t.Context(), prompt("hi")))
 
 	run := oneSpan(t, rec, "invoke_agent worker")
 	tool := oneSpan(t, rec, "execute_tool echo")
