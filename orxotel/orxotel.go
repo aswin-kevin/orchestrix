@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -52,8 +51,10 @@ type Config struct {
 	MaxContentBytes int
 	// Attributes, when set, returns attributes added to the run span and to
 	// every model and tool span of the run. It is called once per run, in
-	// WrapRun, with the run's context and RunInfo. It only adds: the
-	// attributes this package sets keep their values.
+	// WrapRun, synchronously and before the run's span starts, with the
+	// run's context and RunInfo; it must not block or panic. It only adds:
+	// an attribute whose key is one this package sets on any span (the
+	// gen_ai.* and orchestrix.* keys) is ignored.
 	Attributes func(ctx context.Context, info agent.RunInfo) []attribute.KeyValue
 }
 
@@ -114,14 +115,44 @@ func (m *Middleware) tracer(ctx context.Context) trace.Tracer {
 	return m.newTracer()
 }
 
-// runAttrs returns a copy of the Config.Attributes result of the run in ctx. Callers
-// put them before their own attributes, so this package's values win a
-// duplicate key.
+// runAttrs returns the filtered Config.Attributes result of the run in ctx.
+// The slice is shared and read-only; callers append it to their own.
 func runAttrs(ctx context.Context) []attribute.KeyValue {
 	if st, ok := ctx.Value(tracerKey{}).(*runState); ok {
-		return slices.Clone(st.attrs)
+		return st.attrs
 	}
 	return nil
+}
+
+// ownKeys is every attribute key this package sets on a span. A key from
+// Config.Attributes that is in it is dropped, so a host cannot replace or
+// crowd out the package's own attributes, whatever the TracerProvider does
+// with duplicate keys or attribute limits.
+var ownKeys = map[attribute.Key]bool{
+	keyOperationName: true, keyProviderName: true, keyAgentName: true,
+	keyConversationID: true, keyRequestModel: true, keyRequestMaxTokens: true,
+	keyRequestTemperature: true, keyFinishReasons: true,
+	keyInputTokens: true, keyOutputTokens: true, keyToolName: true,
+	keyToolCallID: true, keyToolCallArguments: true, keyToolCallResult: true,
+	keyRunDepth: true, keyRunResumed: true, keyRunReason: true,
+	keyRunTurns: true, keyCacheReadTokens: true, keyResponseSource: true,
+	keyTurn: true, keyToolVia: true, keyToolApproved: true,
+	keyToolIsError: true, keyToolOutcome: true,
+}
+
+// hostAttrs calls Config.Attributes and returns a private copy of its
+// result without the keys in ownKeys.
+func (m *Middleware) hostAttrs(ctx context.Context, info agent.RunInfo) []attribute.KeyValue {
+	if m.cfg.Attributes == nil {
+		return nil
+	}
+	var out []attribute.KeyValue
+	for _, kv := range m.cfg.Attributes(ctx, info) {
+		if kv.Key != "" && !ownKeys[kv.Key] {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // WrapRun implements agent.RunWrapper: it starts the run span, which
@@ -136,11 +167,8 @@ func (m *Middleware) WrapRun(ctx context.Context, info agent.RunInfo) (context.C
 	if info.ThreadID != "" {
 		attrs = append(attrs, attribute.String(keyConversationID, info.ThreadID))
 	}
-	st := &runState{tracer: m.newTracer()}
-	if m.cfg.Attributes != nil {
-		st.attrs = m.cfg.Attributes(ctx, info)
-		attrs = append(slices.Clone(st.attrs), attrs...)
-	}
+	st := &runState{tracer: m.newTracer(), attrs: m.hostAttrs(ctx, info)}
+	attrs = append(attrs, st.attrs...)
 	tracer := st.tracer
 	ctx = context.WithValue(ctx, tracerKey{}, st)
 	ctx, span := tracer.Start(ctx, spanName(opInvokeAgent, info.AgentName),
@@ -198,7 +226,7 @@ func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 	if t := req.Request.Temperature; t != nil {
 		attrs = append(attrs, attribute.Float64(keyRequestTemperature, *t))
 	}
-	attrs = append(runAttrs(ctx), attrs...)
+	attrs = append(attrs, runAttrs(ctx)...)
 	ctx, span := m.tracer(ctx).Start(ctx, spanName(opChat, req.Request.Model),
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attrs...),
@@ -260,7 +288,7 @@ func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 	if m.cfg.CaptureContent {
 		attrs = append(attrs, attribute.String(keyToolCallArguments, m.capped(string(call.Input))))
 	}
-	attrs = append(runAttrs(ctx), attrs...)
+	attrs = append(attrs, runAttrs(ctx)...)
 	ctx, span := m.tracer(ctx).Start(ctx, spanName(opExecuteTool, call.Name),
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attrs...),
