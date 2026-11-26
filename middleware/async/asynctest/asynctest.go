@@ -58,16 +58,20 @@ func (sc Scenario) String() string {
 // fails t itself when the task cannot be started.
 type StartFunc func(t *testing.T, sc Scenario) async.Handle
 
-// EpisodeTimeout bounds how long the suite waits for a ScenarioComplete or
-// ScenarioWait episode to stop.
-const EpisodeTimeout = 30 * time.Second
+// episodeTimeout bounds how long the suite waits for a ScenarioComplete or
+// ScenarioWait episode to stop (see Run).
+const episodeTimeout = 30 * time.Second
 
-// StopTimeout bounds how long the suite waits for a stopped episode to end.
-const StopTimeout = 5 * time.Second
+// stopTimeout bounds how long the suite waits for a stopped episode to end
+// (see Run).
+const stopTimeout = 5 * time.Second
 
 // Run executes the conformance suite, one subtest per check, each with tasks
 // of its own from start. Every Handle start returns that is still running
-// when its subtest ends is stopped then.
+// when its subtest ends is stopped then. The suite waits up to 30 seconds
+// for a ScenarioComplete or ScenarioWait episode (or a next episode) to
+// stop, and up to 5 seconds for a Stop to end an episode; a Handle slower
+// than that fails.
 func Run(t *testing.T, start StartFunc) {
 	t.Helper()
 	cases := []struct {
@@ -98,7 +102,7 @@ func Run(t *testing.T, start StartFunc) {
 				if isClosed(h.Done()) {
 					return
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), StopTimeout)
+				ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 				defer cancel()
 				_ = h.Stop(ctx)
 				select {
@@ -117,7 +121,7 @@ func stopLater(t *testing.T, h async.Handle) {
 		if isClosed(h.Done()) {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), StopTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 		defer cancel()
 		_ = h.Stop(ctx)
 		select {
@@ -179,10 +183,10 @@ func sameOutcome(a, b async.Outcome) bool {
 }
 
 func testDoneStaysClosed(t *testing.T, h async.Handle) {
-	waitDone(t, h, EpisodeTimeout, "the start")
+	waitDone(t, h, episodeTimeout, "the start")
 	first := outcome(t, h)
 	// Stop is a no-op once Done: the episode must not reopen nor change.
-	ctx, cancel := context.WithTimeout(context.Background(), StopTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), stopTimeout)
 	defer cancel()
 	if err := h.Stop(ctx); err != nil {
 		t.Fatalf("Stop after Done = %v, want nil", err)
@@ -198,7 +202,7 @@ func testDoneStaysClosed(t *testing.T, h async.Handle) {
 }
 
 func testCompleteOutcome(t *testing.T, h async.Handle) {
-	waitDone(t, h, EpisodeTimeout, "the start")
+	waitDone(t, h, episodeTimeout, "the start")
 	out := outcome(t, h)
 	if out.Status != async.StatusCompleted {
 		t.Fatalf("Status = %q, want %q (outcome %+v)", out.Status, async.StatusCompleted, out)
@@ -215,7 +219,7 @@ func testStopCancels(t *testing.T, h async.Handle) {
 	if isClosed(h.Done()) {
 		t.Fatal("Done closed before Stop in a task that runs until stopped")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), StopTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), stopTimeout)
 	defer cancel()
 	// Readers and stoppers race the Stop, so -race catches a Handle that
 	// is not safe for concurrent use.
@@ -226,7 +230,7 @@ func testStopCancels(t *testing.T, h async.Handle) {
 			// with its own message instead of hanging the test.
 			select {
 			case <-h.Done():
-			case <-time.After(StopTimeout):
+			case <-time.After(stopTimeout):
 				return
 			}
 			_, _ = h.Outcome()
@@ -237,7 +241,7 @@ func testStopCancels(t *testing.T, h async.Handle) {
 	if err := h.Stop(ctx); err != nil {
 		t.Fatalf("Stop = %v, want nil", err)
 	}
-	waitDone(t, h, StopTimeout, "Stop")
+	waitDone(t, h, stopTimeout, "Stop")
 	wg.Wait()
 	if err := h.Stop(ctx); err != nil {
 		t.Fatalf("second Stop = %v, want nil (a no-op once Done)", err)
@@ -252,8 +256,8 @@ func testStopCancels(t *testing.T, h async.Handle) {
 }
 
 func testSendAfterDone(t *testing.T, h async.Handle) {
-	waitDone(t, h, EpisodeTimeout, "the start")
-	ctx, cancel := context.WithTimeout(context.Background(), StopTimeout)
+	waitDone(t, h, episodeTimeout, "the start")
+	ctx, cancel := context.WithTimeout(t.Context(), stopTimeout)
 	defer cancel()
 	if err := h.Send(ctx, "one more thing"); !errors.Is(err, async.ErrFinished) {
 		t.Fatalf("Send after Done = %v, want an error wrapping async.ErrFinished", err)
@@ -261,7 +265,7 @@ func testSendAfterDone(t *testing.T, h async.Handle) {
 }
 
 func testWaitOutcome(t *testing.T, h async.Handle) {
-	waitDone(t, h, EpisodeTimeout, "the start")
+	waitDone(t, h, episodeTimeout, "the start")
 	out := outcome(t, h)
 	if out.Status != async.StatusWaiting {
 		t.Fatalf("Status = %q, want %q (outcome %+v)", out.Status, async.StatusWaiting, out)
@@ -269,7 +273,7 @@ func testWaitOutcome(t *testing.T, h async.Handle) {
 	if out.Pending == nil || len(out.Pending.Requests) == 0 {
 		t.Fatalf("Pending = %+v, want an interrupt with at least one request", out.Pending)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), StopTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), stopTimeout)
 	defer cancel()
 	if err := h.Send(ctx, "go on"); !errors.Is(err, async.ErrFinished) {
 		t.Errorf("Send to a waiting episode = %v, want an error wrapping async.ErrFinished", err)
@@ -281,9 +285,9 @@ func testContinueReturnsNewHandle(t *testing.T, h async.Handle) {
 	if !ok {
 		t.Skip("the Handle does not implement async.Continuer")
 	}
-	waitDone(t, h, EpisodeTimeout, "the start")
+	waitDone(t, h, episodeTimeout, "the start")
 	first := outcome(t, h)
-	ctx, cancel := context.WithTimeout(context.Background(), EpisodeTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), episodeTimeout)
 	defer cancel()
 	next, err := c.Continue(ctx, "one more thing")
 	if err != nil {
@@ -307,7 +311,7 @@ func testContinueReturnsNewHandle(t *testing.T, h async.Handle) {
 			t.Fatalf("new Outcome = %+v, true before its Done closed", out)
 		}
 	}
-	waitDone(t, next, EpisodeTimeout, "Continue")
+	waitDone(t, next, episodeTimeout, "Continue")
 	if out := outcome(t, next); out.Status != async.StatusCompleted {
 		t.Fatalf("the next episode's Status = %q, want %q (outcome %+v)", out.Status, async.StatusCompleted, out)
 	}
@@ -318,8 +322,8 @@ func testContinueOnce(t *testing.T, h async.Handle) {
 	if !ok {
 		t.Skip("the Handle does not implement async.Continuer")
 	}
-	waitDone(t, h, EpisodeTimeout, "the start")
-	ctx, cancel := context.WithTimeout(context.Background(), EpisodeTimeout)
+	waitDone(t, h, episodeTimeout, "the start")
+	ctx, cancel := context.WithTimeout(t.Context(), episodeTimeout)
 	defer cancel()
 	once(t, func() (async.Handle, error) { return c.Continue(ctx, "one more thing") }, async.ErrFinished, "Continue")
 }
@@ -329,7 +333,7 @@ func testResolveReturnsNewHandle(t *testing.T, h async.Handle) {
 	if !ok {
 		t.Skip("the Handle does not implement async.Resolver")
 	}
-	waitDone(t, h, EpisodeTimeout, "the start")
+	waitDone(t, h, episodeTimeout, "the start")
 	first := outcome(t, h)
 	if first.Pending == nil {
 		t.Fatalf("waiting Outcome without Pending: %+v", first)
@@ -338,7 +342,7 @@ func testResolveReturnsNewHandle(t *testing.T, h async.Handle) {
 	for i, req := range first.Pending.Requests {
 		decisions[i] = agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Approve}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), EpisodeTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), episodeTimeout)
 	defer cancel()
 	next, err := r.Resolve(ctx, decisions)
 	if err != nil {
@@ -357,7 +361,7 @@ func testResolveReturnsNewHandle(t *testing.T, h async.Handle) {
 	if again := outcome(t, h); !sameOutcome(first, again) {
 		t.Fatalf("the waiting episode's Outcome changed: %+v, then %+v", first, again)
 	}
-	waitDone(t, next, EpisodeTimeout, "Resolve")
+	waitDone(t, next, episodeTimeout, "Resolve")
 	if out := outcome(t, next); out.Status != async.StatusCompleted {
 		t.Fatalf("the resolved episode's Status = %q, want %q (outcome %+v)", out.Status, async.StatusCompleted, out)
 	}
@@ -368,7 +372,7 @@ func testResolveOnce(t *testing.T, h async.Handle) {
 	if !ok {
 		t.Skip("the Handle does not implement async.Resolver")
 	}
-	waitDone(t, h, EpisodeTimeout, "the start")
+	waitDone(t, h, episodeTimeout, "the start")
 	out := outcome(t, h)
 	if out.Pending == nil {
 		t.Fatalf("waiting Outcome without Pending: %+v", out)
@@ -377,7 +381,7 @@ func testResolveOnce(t *testing.T, h async.Handle) {
 	for i, req := range out.Pending.Requests {
 		decisions[i] = agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Reject, Message: "not now"}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), EpisodeTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), episodeTimeout)
 	defer cancel()
 	once(t, func() (async.Handle, error) { return r.Resolve(ctx, decisions) }, async.ErrNotWaiting, "Resolve")
 }
