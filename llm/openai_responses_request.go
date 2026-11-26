@@ -12,6 +12,7 @@ type responsesRequest struct {
 	MaxOutputTokens int                       `json:"max_output_tokens"`
 	Temperature     *float64                  `json:"temperature,omitempty"`
 	Reasoning       *responsesReasoningConfig `json:"reasoning,omitempty"`
+	ToolChoice      any                       `json:"tool_choice,omitempty"`
 	Include         []string                  `json:"include"`
 	Store           bool                      `json:"store"`
 	Stream          bool                      `json:"stream"`
@@ -88,6 +89,7 @@ func (p *responsesProvider) buildRequest(req Request) responsesRequest {
 		Tools:           toResponsesTools(req.Tools),
 		MaxOutputTokens: firstNonZero(req.MaxTokens, p.cfg.DefaultMaxTokens, DefaultMaxTokens),
 		Temperature:     req.Temperature,
+		ToolChoice:      responsesToolChoice(req.ToolChoice),
 		Include:         []string{responsesIncludeEncrypted},
 		Stream:          true,
 	}

@@ -86,6 +86,17 @@ type Request struct {
 	// ReasoningEffort is "" to inherit the provider default, or one of the
 	// Effort constants.
 	ReasoningEffort ReasoningEffort
+
+	// ToolChoice constrains whether and which tool the model calls; the
+	// zero value leaves the provider default. An invalid choice is an error
+	// before anything is sent.
+	ToolChoice ToolChoice
+
+	// Extra holds provider-specific top-level body fields, merged into the
+	// request body as-is. It may not set a field the adapter set for this
+	// request: that is an error wrapping ErrExtraConflict, not ignored.
+	// Decision formats ignore it.
+	Extra map[string]any
 }
 
 // ThinkingMode selects whether and how a model reasons before it answers.

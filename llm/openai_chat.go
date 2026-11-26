@@ -75,6 +75,7 @@ type openAIRequest struct {
 	Stop                []string            `json:"stop,omitempty"`
 	ReasoningEffort     string              `json:"reasoning_effort,omitempty"`
 	Thinking            *openAIThinking     `json:"thinking,omitempty"`
+	ToolChoice          any                 `json:"tool_choice,omitempty"`
 	Stream              bool                `json:"stream"`
 	StreamOptions       openAIStreamOptions `json:"stream_options"`
 }
@@ -177,7 +178,11 @@ func (p *openAIProvider) Complete(ctx context.Context, req Request) (*Response, 
 // delivered surfaces as an error and is not replayed.
 func (p *openAIProvider) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
-		body, err := json.Marshal(p.buildRequest(req))
+		if err := req.ToolChoice.validate(req.Tools); err != nil {
+			yield(StreamEvent{}, err)
+			return
+		}
+		body, err := encodeBody(req, p.buildRequest(req))
 		if err != nil {
 			yield(StreamEvent{}, fmt.Errorf("llm: encode openai request: %w", err))
 			return
@@ -523,6 +528,7 @@ func (p *openAIProvider) buildRequest(req Request) openAIRequest {
 		Tools:           toOpenAITools(req.Tools),
 		Temperature:     req.Temperature,
 		Stop:            req.Stop,
+		ToolChoice:      openAIToolChoice(req.ToolChoice),
 		ReasoningEffort: string(firstNonEmpty(req.ReasoningEffort, p.cfg.ReasoningEffort)),
 		Stream:          true,
 		StreamOptions:   openAIStreamOptions{IncludeUsage: true},

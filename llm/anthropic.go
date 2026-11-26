@@ -57,6 +57,7 @@ type anthropicRequest struct {
 	StopSequences []string           `json:"stop_sequences,omitempty"`
 	Thinking      *anthropicThinking `json:"thinking,omitempty"`
 	OutputConfig  *anthropicOutput   `json:"output_config,omitempty"`
+	ToolChoice    any                `json:"tool_choice,omitempty"`
 	Stream        bool               `json:"stream"`
 }
 
@@ -353,7 +354,10 @@ func messageDeltaEvents(ev anthropicEvent) []StreamEvent {
 // request encodes req and returns the func that builds its HTTP request,
 // once per attempt.
 func (p *anthropicProvider) request(req Request, stream bool) (func() (*http.Request, error), error) {
-	body, err := json.Marshal(p.buildRequest(req, stream))
+	if err := req.ToolChoice.validate(req.Tools); err != nil {
+		return nil, err
+	}
+	body, err := encodeBody(req, p.buildRequest(req, stream))
 	if err != nil {
 		return nil, fmt.Errorf("llm: encode anthropic request: %w", err)
 	}
@@ -406,6 +410,7 @@ func (p *anthropicProvider) buildRequest(req Request, stream bool) anthropicRequ
 		Temperature:   req.Temperature,
 		StopSequences: req.Stop,
 		Thinking:      thinkingCfg,
+		ToolChoice:    anthropicToolChoice(req.ToolChoice),
 		Stream:        stream,
 	}
 	if thinking == ThinkingEnabled || thinking == ThinkingAdaptive {
