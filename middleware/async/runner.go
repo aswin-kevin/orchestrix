@@ -77,8 +77,9 @@ type Handle interface {
 	// task ended, another error when it cannot take messages.
 	Send(message string) error
 	// Stop asks the task to end; it is a no-op once the task ended. The task
-	// should then end promptly with StatusCancelled.
-	Stop() error
+	// should then end promptly with StatusCancelled. ctx bounds the request
+	// itself (a remote runner that calls out), not the wait for Done.
+	Stop(ctx context.Context) error
 }
 
 // Runner starts background tasks; the default runs them as subagents in this
@@ -261,7 +262,7 @@ func (t *localTask) Progress() string {
 func (t *localTask) Send(message string) error { return t.inbox.send(message) }
 
 // Stop implements Handle: it cancels the subagent's run.
-func (t *localTask) Stop() error {
+func (t *localTask) Stop(context.Context) error {
 	t.stop(errStopped)
 	return nil
 }

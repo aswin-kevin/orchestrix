@@ -21,6 +21,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix"
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/disk"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 	"github.com/aswin-kevin/orchestrix/checkpoint/file"
@@ -315,8 +316,8 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		// The shell workspace keeps its directory open (on Windows that
 		// directory cannot be removed meanwhile): release it last, once the
 		// jobs and servers that may still use it have stopped.
-		if ws, ok := ag.Config().Backend.(io.Closer); ok {
-			cleanups = slices.Insert(cleanups, 0, func() { _ = ws.Close() })
+		if c, ok := backend.AsCloser(ag.Config().Backend); ok {
+			cleanups = slices.Insert(cleanups, 0, func() { _ = c.Close(context.WithoutCancel(ctx)) })
 		}
 	}
 	return ag, shutdown, exitOK

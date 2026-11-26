@@ -325,7 +325,7 @@ func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 		return nil
 	}
 	if info.Depth > 0 {
-		m.endNested(s, info.ThreadID)
+		m.endNested(ctx, s, info.ThreadID)
 	}
 	m.jobs.Release(info.ThreadID)
 	return nil
@@ -333,10 +333,10 @@ func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 
 // endNested stops the running tasks of a nested run's thread and marks every
 // ended task of it as seen.
-func (m *Middleware) endNested(s *state.State, threadID string) {
+func (m *Middleware) endNested(ctx context.Context, s *state.State, threadID string) {
 	records, _ := TasksKey.Get(s)
 	if ids := runningIDs(jobs.ThreadRecords(records, threadID)); len(ids) > 0 {
-		m.jobs.StopAndForget(threadID, ids, DefaultStopWait, func() {
+		m.jobs.StopAndForget(ctx, threadID, ids, DefaultStopWait, func() {
 			m.updateRecords(s, threadID, func(r *TaskRecord) {
 				if slices.Contains(ids, r.ID) {
 					m.markNotified(r)

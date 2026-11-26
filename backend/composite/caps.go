@@ -32,12 +32,12 @@ func (s starter) Start(ctx context.Context, cmd string, opts backend.ExecOptions
 
 type snapper struct{ c *composite }
 
-func (s snapper) Snapshot() (json.RawMessage, error) {
-	return s.c.def.(backend.Snapshotter).Snapshot()
+func (s snapper) Snapshot(ctx context.Context) (json.RawMessage, error) {
+	return s.c.def.(backend.Snapshotter).Snapshot(ctx)
 }
 
-func (s snapper) Restore(data json.RawMessage) error {
-	return s.c.def.(backend.Snapshotter).Restore(data)
+func (s snapper) Restore(ctx context.Context, data json.RawMessage) error {
+	return s.c.def.(backend.Snapshotter).Restore(ctx, data)
 }
 
 // checkDir rejects a working directory inside a mount: commands run in the

@@ -17,13 +17,17 @@ type fake struct {
 	// onStop, when set, runs on the first Stop before the handle ends.
 	onStop func()
 	stop   sync.Once
+	// stopErr records the Err of the ctx the first Stop got.
+	stopErr  atomic.Pointer[error]
+	stopOnce sync.Once
 }
 
 func newFake() *fake { return &fake{done: make(chan struct{})} }
 
 func (f *fake) Done() <-chan struct{} { return f.done }
 func (f *fake) end()                  { f.once.Do(func() { close(f.done) }) }
-func (f *fake) Stop() error {
+func (f *fake) Stop(ctx context.Context) error {
+	f.stopOnce.Do(func() { err := ctx.Err(); f.stopErr.Store(&err) })
 	if f.onStop != nil {
 		f.stop.Do(f.onStop)
 	}
@@ -186,7 +190,7 @@ func TestStopAndForgetRefreshBeforeDrop(t *testing.T) {
 	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
 	j, _ := startFake(t, m, "t")
 	var sawEnded, sawKnown bool
-	m.StopAndForget("t", []string{j.ID, "missing"}, time.Second, func() {
+	m.StopAndForget(t.Context(), "t", []string{j.ID, "missing"}, time.Second, func() {
 		got := m.Get("t", j.ID)
 		sawKnown, sawEnded = got != nil, got != nil && got.Ended()
 	})
@@ -278,7 +282,7 @@ func TestRequestStopAndStop(t *testing.T) {
 	if err := Stop(context.Background(), j, time.Second); err != nil || !j.Stopped() {
 		t.Fatalf("Stop = %v, stopped %v", err, j.Stopped())
 	}
-	if running, err := RequestStop(j); running || err != nil {
+	if running, err := RequestStop(t.Context(), j); running || err != nil {
 		t.Fatalf("RequestStop on ended = %v, %v", running, err)
 	}
 
@@ -552,4 +556,25 @@ func TestStartCommittingAfterShutdownTimedOut(t *testing.T) {
 	exited := make(chan struct{})
 	go func() { m.watchers.Wait(); close(exited) }()
 	waitFor(t, exited)
+}
+
+// Stops the Manager sends as a run or the Manager ends must go out even when
+// the caller's ctx already ended.
+func TestStopRequestsOutliveCallerCtx(t *testing.T) {
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
+	j1, f1 := startFake(t, m, "t")
+	m.StopAndForget(ended, "t", []string{j1.ID}, time.Second, func() {})
+	_, f2 := startFake(t, m, "u")
+	_ = m.Close(ended, time.Second)
+	for i, f := range []*fake{f1, f2} {
+		got := f.stopErr.Load()
+		if got == nil {
+			t.Fatalf("handle %d was not stopped", i+1)
+		}
+		if *got != nil {
+			t.Errorf("handle %d: Stop got a ctx with Err %v, want a live one", i+1, *got)
+		}
+	}
 }

@@ -8,13 +8,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend"
 )
 
-// ExecStarter is an executor that can also start commands without waiting
-// for them: the kind NewStarter needs.
-type ExecStarter interface {
-	backend.Executor
-	backend.Starter
-}
-
 // StarterBackend is a Backend whose executor can also start background
 // commands. It adds backend.Starter, so it works with tasks middleware
 // (orchestrix.WithTasks). Build one with NewStarter.
@@ -36,7 +29,7 @@ var (
 // The Backend New returns never implements backend.Starter, so a type check
 // for it tells the truth about what the executor can do. NewStarter fails
 // like New.
-func NewStarter(exec ExecStarter, opts Options) (*StarterBackend, error) {
+func NewStarter(exec backend.ExecStarter, opts Options) (*StarterBackend, error) {
 	if exec == nil {
 		return nil, errors.New("sandbox: nil executor")
 	}

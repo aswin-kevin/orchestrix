@@ -47,7 +47,7 @@ func (a *Agent) workspaceFor(in Input, be backend.Backend) backend.Snapshotter {
 	if !a.cfg.SyncWorkspace || in.Backend != nil {
 		return nil
 	}
-	snapshotter, _ := be.(backend.Snapshotter)
+	snapshotter, _ := backend.AsSnapshotter(be)
 	return snapshotter
 }
 
@@ -79,7 +79,7 @@ func (r *run) restoreInto(snapshot json.RawMessage) error {
 	if len(entries) > 0 {
 		return nil
 	}
-	if err := r.workspace.Restore(snapshot); err != nil {
+	if err := r.workspace.Restore(context.WithoutCancel(r.ctx), snapshot); err != nil {
 		return fmt.Errorf("agent: restore workspace: %w", err)
 	}
 	return nil
@@ -90,7 +90,7 @@ func (r *run) snapshotWorkspace() error {
 	if r.workspace == nil {
 		return nil
 	}
-	snapshot, err := r.workspace.Snapshot()
+	snapshot, err := r.workspace.Snapshot(context.WithoutCancel(r.ctx))
 	if err != nil {
 		return fmt.Errorf("agent: snapshot workspace: %w", err)
 	}

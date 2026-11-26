@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -104,8 +105,9 @@ func (p *process) Result() (backend.ExecResult, bool) {
 func (p *process) Output() string { return p.out.String() }
 
 // Stop kills the process group; it is a no-op once the process is done or
-// its group is gone.
-func (p *process) Stop() error {
+// its group is gone. ctx is ignored: the signal is local and never blocks,
+// so Stop works with a ctx that has already ended.
+func (p *process) Stop(context.Context) error {
 	select {
 	case <-p.done:
 		return nil

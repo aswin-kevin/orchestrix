@@ -294,7 +294,7 @@ func (m *Middleware) AfterAgent(ctx context.Context, s *state.State) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	m.jobs.StopAndForget(info.ThreadID, ids, stopWait, func() {
+	m.jobs.StopAndForget(ctx, info.ThreadID, ids, stopWait, func() {
 		m.updateRecords(s, info.ThreadID, func(r *JobRecord) {
 			if slices.Contains(ids, r.ID) {
 				m.markNotified(r)

@@ -41,7 +41,7 @@ func TestMemorySnapshotShape(t *testing.T) {
 	if err := m.Write(context.Background(), "/a/b.txt", []byte("hi")); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := m.Snapshot()
+	snap, err := m.Snapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestMemorySnapshotRestore(t *testing.T) {
 	if err := m.Write(ctx, "/keep/a.txt", []byte("original")); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := m.Snapshot()
+	snap, err := m.Snapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestMemorySnapshotRestore(t *testing.T) {
 	if err := m.Write(ctx, "/extra.txt", []byte("new")); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Restore(snap); err != nil {
+	if err := m.Restore(ctx, snap); err != nil {
 		t.Fatal(err)
 	}
 
@@ -83,11 +83,11 @@ func TestMemorySnapshotRestore(t *testing.T) {
 
 func TestMemoryRestoreRejectsBadInput(t *testing.T) {
 	m := memory.New()
-	if err := m.Restore(json.RawMessage(`not json`)); err == nil {
+	if err := m.Restore(context.Background(), json.RawMessage(`not json`)); err == nil {
 		t.Fatal("want error for malformed JSON")
 	}
 	bad := json.RawMessage(`{"files":{"/a":{"content":"!!!","mod_time":"2026-01-02T03:04:05Z"}}}`)
-	if err := m.Restore(bad); err == nil {
+	if err := m.Restore(context.Background(), bad); err == nil {
 		t.Fatal("want error for malformed base64")
 	}
 }
@@ -127,5 +127,30 @@ func TestMemoryRefusesFilesOverReadLimit(t *testing.T) {
 	}
 	if _, err := m.Read(ctx, "/limit", 0, 1); err != nil {
 		t.Errorf("file at exactly the limit: %v", err)
+	}
+}
+
+func TestSnapshotHonoursCtx(t *testing.T) {
+	m := memory.New()
+	if err := m.Write(context.Background(), "/a", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := m.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := m.Snapshot(ctx); !errors.Is(err, context.Canceled) {
+		t.Errorf("Snapshot(cancelled) = %v, want context.Canceled", err)
+	}
+	if err := m.Write(context.Background(), "/b", []byte("y")); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Restore(ctx, snap); !errors.Is(err, context.Canceled) {
+		t.Errorf("Restore(cancelled) = %v, want context.Canceled", err)
+	}
+	if _, err := m.Read(context.Background(), "/b", 0, 0); err != nil {
+		t.Errorf("a refused Restore must leave the backend untouched: %v", err)
 	}
 }

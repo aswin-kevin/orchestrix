@@ -19,14 +19,28 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/aswin-kevin/orchestrix/backend"
 )
 
 // Handle is one unit of background work.
 type Handle interface {
 	// Done is closed once the work has ended.
 	Done() <-chan struct{}
-	// Stop asks the work to end; it is a no-op once the work ended.
-	Stop() error
+	// Stop asks the work to end; it is a no-op once the work ended. ctx
+	// bounds the request itself, not the wait for Done.
+	Stop(ctx context.Context) error
+}
+
+// stopRequestTimeout bounds a stop request the Manager sends on its own,
+// outside any caller's call: at Shutdown, and for a job committed after it.
+const stopRequestTimeout = backend.DefaultKillGrace
+
+// detachedStop returns a context for a stop request that must go out even
+// though ctx ended (or the caller has none): it keeps ctx's values, drops
+// its cancellation, and is bounded by stopRequestTimeout.
+func detachedStop(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), stopRequestTimeout)
 }
 
 // Limits bounds a Manager. Both fields must be positive; callers apply their
@@ -244,7 +258,9 @@ func (m *Manager[H]) Start(threadID string, recordedIDs []string, start func() (
 	closed := m.closed
 	m.mu.Unlock()
 	if closed {
-		_, _ = RequestStop(j) // a failed signal still ends in Done via the handle's own escalation
+		ctx, cancel := detachedStop(context.Background())
+		_, _ = RequestStop(ctx, j) // a failed signal still ends in Done via the handle's own escalation
+		cancel()
 	}
 	return j, nil
 }
@@ -329,14 +345,15 @@ func (m *Manager[H]) Release(threadID string) {
 	}
 }
 
-// RequestStop marks j stopped and calls its Stop when it is still running,
-// reporting whether it was. A job that already ended keeps its outcome.
-func RequestStop[H Handle](j *Job[H]) (bool, error) {
+// RequestStop marks j stopped and calls its Stop with ctx when it is still
+// running, reporting whether it was. A job that already ended keeps its
+// outcome.
+func RequestStop[H Handle](ctx context.Context, j *Job[H]) (bool, error) {
 	if j.Ended() {
 		return false, nil
 	}
 	j.stopped.Store(true)
-	if err := j.Handle.Stop(); err != nil {
+	if err := j.Handle.Stop(ctx); err != nil {
 		return true, fmt.Errorf("stop %s: %w", j.ID, err)
 	}
 	return true, nil
@@ -347,7 +364,7 @@ func Stop[H Handle](ctx context.Context, j *Job[H], wait time.Duration) error {
 	if j == nil {
 		return errors.New("stop: no such job")
 	}
-	if _, err := RequestStop(j); err != nil {
+	if _, err := RequestStop(ctx, j); err != nil {
 		return err
 	}
 	timer := time.NewTimer(wait)
@@ -363,10 +380,14 @@ func Stop[H Handle](ctx context.Context, j *Job[H], wait time.Duration) error {
 }
 
 // stopAll stops jobs concurrently and waits for them all, sharing one wait
-// deadline; it reports whether every job ended.
-func stopAll[H Handle](list []*Job[H], wait time.Duration) bool {
+// deadline; it reports whether every job ended. Each stop request runs under
+// a detached ctx of its own (see detachedStop), since stopAll runs as a run
+// or the Manager ends.
+func stopAll[H Handle](ctx context.Context, list []*Job[H], wait time.Duration) bool {
 	for _, j := range list {
-		_, _ = RequestStop(j) // a failed signal still ends in Done via the handle's own escalation
+		stopCtx, cancel := detachedStop(ctx)
+		_, _ = RequestStop(stopCtx, j) // a failed signal still ends in Done via the handle's own escalation
+		cancel()
 	}
 	deadline := time.NewTimer(wait)
 	defer deadline.Stop()
@@ -388,15 +409,16 @@ func stopAll[H Handle](list []*Job[H], wait time.Duration) bool {
 // StopAndForget stops the jobs with ids in threadID, waits for them up to wait,
 // and then drops them, and the thread once it has no jobs left and none
 // starting. refresh runs after the jobs ended (or wait passed) but before they
-// are dropped, so it can still read their outcome.
-func (m *Manager[H]) StopAndForget(threadID string, ids []string, wait time.Duration, refresh func()) {
+// are dropped, so it can still read their outcome. The stop requests keep
+// ctx's values but not its cancellation, so they go out even when ctx ended.
+func (m *Manager[H]) StopAndForget(ctx context.Context, threadID string, ids []string, wait time.Duration, refresh func()) {
 	var list []*Job[H]
 	for _, id := range ids {
 		if j := m.Get(threadID, id); j != nil {
 			list = append(list, j)
 		}
 	}
-	_ = stopAll(list, wait) // a job that outlives wait is still dropped: its run is over
+	_ = stopAll(ctx, list, wait) // a job that outlives wait is still dropped: its run is over
 	refresh()
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -432,7 +454,7 @@ func (m *Manager[H]) Close(ctx context.Context, wait time.Duration) error {
 	if ctx.Err() != nil {
 		wait = 0
 	}
-	if m.shutdown(max(wait, 0)) {
+	if m.shutdown(ctx, max(wait, 0)) {
 		return nil
 	}
 	switch {
@@ -450,11 +472,11 @@ func (m *Manager[H]) Close(ctx context.Context, wait time.Duration) error {
 // waited for with the others. A start still in flight when wait passes stops
 // its job as it commits, after Shutdown returned. The entries are kept, so
 // records refreshed afterwards show the jobs as stopped rather than lost.
-func (m *Manager[H]) Shutdown(wait time.Duration) { m.shutdown(wait) }
+func (m *Manager[H]) Shutdown(wait time.Duration) { m.shutdown(context.Background(), wait) }
 
 // shutdown is Shutdown; it reports whether every job and start ended within
-// wait.
-func (m *Manager[H]) shutdown(wait time.Duration) bool {
+// wait. ctx carries the values of the stop requests (see stopAll).
+func (m *Manager[H]) shutdown(ctx context.Context, wait time.Duration) bool {
 	deadline := time.Now().Add(wait)
 	m.mu.Lock()
 	m.closed = true
@@ -488,7 +510,7 @@ func (m *Manager[H]) shutdown(wait time.Duration) bool {
 	m.mu.Unlock()
 	// A start still in flight would Add a watcher while Wait runs, which
 	// WaitGroup forbids, so the watchers are waited for only when none is.
-	if stopAll(list, time.Until(deadline)) && startsDone {
+	if stopAll(ctx, list, time.Until(deadline)) && startsDone {
 		m.watchers.Wait()
 		return true
 	}

@@ -495,7 +495,7 @@ func TestResolverErrorKeepsWorkspace(t *testing.T) {
 	if err := old.Write(ctx, "/old.txt", []byte("old")); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := old.Snapshot()
+	snap, err := old.Snapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -521,7 +521,7 @@ func TestResolverErrorKeepsWorkspace(t *testing.T) {
 		t.Fatal("final State lost the workspace snapshot")
 	}
 	restored := memory.New()
-	if err := restored.Restore(saved); err != nil {
+	if err := restored.Restore(context.Background(), saved); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 	if _, err := restored.Read(ctx, "/old.txt", 0, 0); err != nil {

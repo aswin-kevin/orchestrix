@@ -77,7 +77,17 @@ type GrepMatch struct {
 	Count int
 }
 
-// Backend is the file-system contract used by file tools.
+// Backend is the file-system contract used by file tools. Optional
+// capabilities (Executor, Starter, Snapshotter, MultiEditor, Closer) are
+// further interfaces a Backend may implement; look them up with AsExecutor,
+// AsStarter, AsSnapshotter, AsMultiEditor and AsCloser rather than a type
+// assertion.
+//
+// A decorator that wraps another Backend should implement
+// Unwrap() Backend returning it, so the As helpers find the wrapped
+// backend's capabilities through the decorator; the outermost implementer
+// wins. A decorator that restricts a capability implements it itself (or
+// does not Unwrap), so the unrestricted one underneath is never reached.
 type Backend interface {
 	// Ls lists the direct children of a directory.
 	Ls(ctx context.Context, path string) ([]FileInfo, error)
@@ -153,9 +163,10 @@ type Process interface {
 	// Output returns the output captured so far, capped like
 	// ExecResult.Output. It is safe to call while the command runs.
 	Output() string
-	// Stop kills the process group; Done closes afterwards. Stopping a
-	// finished process is a no-op.
-	Stop() error
+	// Stop asks the command to end; Done closes afterwards. ctx bounds the
+	// request itself (a remote Stop that calls out), not the wait for Done.
+	// Stopping a finished process is a no-op.
+	Stop(ctx context.Context) error
 }
 
 // Starter starts a command without waiting for it. The process is not tied to
@@ -165,11 +176,28 @@ type Starter interface {
 	Start(ctx context.Context, cmd string, opts ExecOptions) (Process, error)
 }
 
+// ExecStarter is an executor that can also start commands without waiting
+// for them.
+type ExecStarter interface {
+	Executor
+	Starter
+}
+
 // Snapshotter is implemented by backends whose content can be captured into,
-// and restored from, a JSON value (used for checkpoints).
+// and restored from, a JSON value (used for checkpoints). ctx bounds the
+// capture or the restore.
 type Snapshotter interface {
-	Snapshot() (json.RawMessage, error)
-	Restore(json.RawMessage) error
+	// Snapshot captures the backend's content.
+	Snapshot(ctx context.Context) (json.RawMessage, error)
+	// Restore replaces the backend's content with a captured one.
+	Restore(ctx context.Context, data json.RawMessage) error
+}
+
+// Closer is implemented by a backend that holds resources (a directory,
+// containers, connections) to release when it is no longer used. ctx bounds
+// how long Close may wait for them to end.
+type Closer interface {
+	Close(ctx context.Context) error
 }
 
 // EditOp is one replacement within a MultiEditor.MultiEdit call.

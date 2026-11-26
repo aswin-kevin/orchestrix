@@ -1,6 +1,7 @@
 package async
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -29,9 +30,9 @@ func newTask() *task { return &task{done: make(chan struct{})} }
 // Done implements jobs.Handle.
 func (t *task) Done() <-chan struct{} { return t.done }
 
-// Stop implements jobs.Handle: it stops the attached Handle, or the one
-// attached later.
-func (t *task) Stop() error {
+// Stop implements jobs.Handle: it stops the attached Handle with ctx, or the
+// one attached later under a detached ctx bounded by DefaultStopWait.
+func (t *task) Stop(ctx context.Context) error {
 	t.mu.Lock()
 	h := t.h
 	t.stopped = true
@@ -39,7 +40,7 @@ func (t *task) Stop() error {
 	if h == nil {
 		return nil
 	}
-	return h.Stop()
+	return h.Stop(ctx)
 }
 
 // attach hands t the started Handle and follows it until it ends.
@@ -49,7 +50,9 @@ func (t *task) attach(h Handle) {
 	stop := t.stopped
 	t.mu.Unlock()
 	if stop {
-		_ = h.Stop() // the outcome reports what the stop achieved
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultStopWait)
+		_ = h.Stop(ctx) // the outcome reports what the stop achieved
+		cancel()
 	}
 	go func() {
 		<-h.Done()

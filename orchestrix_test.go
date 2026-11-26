@@ -370,7 +370,10 @@ func (p *stoppableProcess) Result() (backend.ExecResult, bool) {
 	}
 }
 func (p *stoppableProcess) Output() string { return "" }
-func (p *stoppableProcess) Stop() error    { p.once.Do(func() { close(p.done) }); return nil }
+func (p *stoppableProcess) Stop(context.Context) error {
+	p.once.Do(func() { close(p.done) })
+	return nil
+}
 
 // startingBackend is a memory backend that can start commands; each one runs
 // until it is stopped.

@@ -3,11 +3,13 @@
 package shell
 
 import (
+	"context"
 	"os/exec"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/internal/procgroup"
 )
 
@@ -66,4 +68,27 @@ func TestDelayedKillSkippedOnceGroupGone(t *testing.T) {
 	p.groupGone.Store(true)
 	time.Sleep(DefaultKillGrace + 300*time.Millisecond)
 	requireAlive(t, cmd, "delayed SIGKILL after the group was gone")
+}
+
+func TestStopTakesCtx(t *testing.T) {
+	b, err := New(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := b.Start(t.Context(), "sleep 5", backend.ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stop is a local signal: a cancelled ctx must neither fail it nor keep
+	// it from sending the signal.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := p.Stop(ctx); err != nil {
+		t.Fatalf("Stop(cancelled ctx) = %v, want nil", err)
+	}
+	select {
+	case <-p.Done():
+	case <-time.After(3 * backend.DefaultKillGrace):
+		t.Fatal("Done not closed after Stop")
+	}
 }

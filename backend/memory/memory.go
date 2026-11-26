@@ -351,8 +351,12 @@ type snapshot struct {
 	Files map[string]snapshotFile `json:"files"`
 }
 
-// Snapshot captures every file as JSON.
-func (b *Backend) Snapshot() (json.RawMessage, error) {
+// Snapshot captures every file as JSON. It returns ctx.Err() when ctx has
+// already ended.
+func (b *Backend) Snapshot(ctx context.Context) (json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	snap := snapshot{Files: make(map[string]snapshotFile, len(b.files))}
@@ -367,7 +371,11 @@ func (b *Backend) Snapshot() (json.RawMessage, error) {
 }
 
 // Restore replaces the backend's content with a value produced by Snapshot.
-func (b *Backend) Restore(data json.RawMessage) error {
+// It returns ctx.Err(), changing nothing, when ctx has already ended.
+func (b *Backend) Restore(ctx context.Context, data json.RawMessage) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var snap snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return fmt.Errorf("memory: restore: %w", err)

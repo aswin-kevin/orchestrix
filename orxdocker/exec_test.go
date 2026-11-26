@@ -392,7 +392,7 @@ func TestStopFallsBackToRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Stop(); err != nil {
+	if err := p.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -485,7 +485,7 @@ func TestThreadsEvictLRU(t *testing.T) {
 
 	// With every executor busy the cap is exceeded instead.
 	f.stream, f.state = hang, runningUntilGone
-	var procs []interface{ Stop() error }
+	var procs []interface{ Stop(context.Context) error }
 	for _, th := range []string{"t2", "t3"} {
 		p, err := m.Executor(th).Start(t.Context(), "busy", execOpts(time.Minute))
 		if err != nil {
@@ -501,7 +501,7 @@ func TestThreadsEvictLRU(t *testing.T) {
 		t.Fatalf("busy executors evicted: %d threads, removed %v", n, f.removedIDs())
 	}
 	for _, p := range procs {
-		_ = p.Stop()
+		_ = p.Stop(context.Background())
 	}
 }
 
@@ -549,7 +549,7 @@ func TestStopTermFailureTriesKill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Stop(); err != nil {
+	if err := p.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -570,7 +570,7 @@ func TestStopTermFailureTriesKill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Stop(); err != nil {
+	if err := p.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -713,5 +713,97 @@ func TestTimeoutUnconfirmedKillRemovesContainer(t *testing.T) {
 				t.Fatalf("removed = %v, want the container kept", removed)
 			}
 		})
+	}
+}
+
+// endOnSignal scripts f so that a command runs until a signal exec delivers
+// one of sigs, which ends it with status 143; it records each signal sent.
+func endOnSignal(f *fakeEngine, sigs ...string) (sent func() []string) {
+	ended := make(chan struct{})
+	var once sync.Once
+	var mu sync.Mutex
+	var log []string
+	f.stream = func(x *fakeExec, w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(frame(streamStdout, "started\n"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-ended:
+		case <-x.gone:
+		case <-r.Context().Done():
+		}
+	}
+	status := 143
+	f.state = func(*fakeExec, int) (bool, *int) {
+		select {
+		case <-ended:
+			return false, &status
+		default:
+			return true, nil
+		}
+	}
+	f.signal = func(sig string) int {
+		mu.Lock()
+		log = append(log, sig)
+		mu.Unlock()
+		if slices.Contains(sigs, sig) {
+			once.Do(func() { close(ended) })
+		}
+		return 0
+	}
+	return func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(log)
+	}
+}
+
+// A cancelled Execute still sends SIGTERM: the stop request gets a context of
+// its own rather than the ended one.
+func TestExecuteCancelledSendsTerm(t *testing.T) {
+	f := newFakeEngine(t)
+	sent := endOnSignal(f, "TERM")
+	m := f.manager(Options{})
+	m.hardGrace = time.Hour
+	ctx, cancel := context.WithCancel(t.Context())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	_, err := m.Executor("t1").Execute(ctx, "cmd", execOpts(time.Hour))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute = %v, want context.Canceled", err)
+	}
+	if got := sent(); len(got) == 0 || got[0] != "TERM" {
+		t.Fatalf("signals = %v, want TERM first", got)
+	}
+	if got := f.removedIDs(); len(got) != 0 {
+		t.Fatalf("TERM worked but containers were removed: %v", got)
+	}
+}
+
+// Stop with a ctx that already ended fails its request but still ends the
+// command, through the SIGKILL that follows the grace period, without
+// removing the container at once.
+func TestStopCancelledCtxStillEnds(t *testing.T) {
+	f := newFakeEngine(t)
+	sent := endOnSignal(f, "KILL")
+	m := f.manager(Options{})
+	m.hardGrace = time.Hour
+	p, err := m.Executor("t1").Start(t.Context(), "cmd", execOpts(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := p.Stop(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stop(cancelled ctx) = %v, want context.Canceled", err)
+	}
+	select {
+	case <-p.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("command still running after Stop")
+	}
+	if got := sent(); !slices.Contains(got, "KILL") {
+		t.Fatalf("signals = %v, want a KILL", got)
+	}
+	if got := f.removedIDs(); len(got) != 0 {
+		t.Fatalf("KILL worked but containers were removed: %v", got)
 	}
 }

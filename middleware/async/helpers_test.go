@@ -264,11 +264,11 @@ type fakeHandle struct {
 	out  Outcome
 }
 
-func (h *fakeHandle) Done() <-chan struct{}    { return h.done }
-func (h *fakeHandle) Outcome() (Outcome, bool) { return h.out, true }
-func (h *fakeHandle) Progress() string         { return "" }
-func (h *fakeHandle) Send(string) error        { return nil }
-func (h *fakeHandle) Stop() error              { return nil }
+func (h *fakeHandle) Done() <-chan struct{}      { return h.done }
+func (h *fakeHandle) Outcome() (Outcome, bool)   { return h.out, true }
+func (h *fakeHandle) Progress() string           { return "" }
+func (h *fakeHandle) Send(string) error          { return nil }
+func (h *fakeHandle) Stop(context.Context) error { return nil }
 
 // requestText joins the text of every message of req, tool results
 // included.
@@ -359,7 +359,7 @@ func (h *ctlHandle) Progress() string {
 
 func (h *ctlHandle) Send(string) error { return nil }
 
-func (h *ctlHandle) Stop() error {
+func (h *ctlHandle) Stop(context.Context) error {
 	h.stops.Add(1)
 	h.end(h.onStop)
 	return nil

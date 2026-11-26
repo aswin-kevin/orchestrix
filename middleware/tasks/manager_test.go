@@ -26,8 +26,8 @@ func (p *fakeProcess) Result() (backend.ExecResult, bool) {
 		return backend.ExecResult{}, false
 	}
 }
-func (p *fakeProcess) Output() string { return "" }
-func (p *fakeProcess) Stop() error    { p.once.Do(func() { close(p.done) }); return nil }
+func (p *fakeProcess) Output() string             { return "" }
+func (p *fakeProcess) Stop(context.Context) error { p.once.Do(func() { close(p.done) }); return nil }
 
 // gatedStarter is a backend.Starter whose Start waits for release.
 type gatedStarter struct {

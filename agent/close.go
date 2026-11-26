@@ -7,15 +7,15 @@ import (
 	"log/slog"
 	"runtime/debug"
 	"time"
+
+	"github.com/aswin-kevin/orchestrix/backend"
 )
 
 // Closer is implemented by a middleware, backend or checkpointer that holds
 // resources (connections, processes, background jobs) to release when the
 // agent shuts down; see Agent.Close. ctx bounds how long Close may wait for
-// them to end.
-type Closer interface {
-	Close(ctx context.Context) error
-}
+// them to end. It is backend.Closer.
+type Closer = backend.Closer
 
 // Drainer is implemented by a middleware that runs work of its own beside
 // the agent's runs, such as background agents, which use the resources of
@@ -35,10 +35,12 @@ var ErrClosed = errors.New("agent: closed")
 // stops its own work (background agents, say), which may still use the
 // resources closed next. Then it closes: every middleware of
 // Config.Middleware that implements Closer, in reverse stack order, then
-// Config.Backend and Config.Checkpointer when they implement Closer (or,
-// failing that, io.Closer, whose Close takes no ctx and so is not bounded by
-// it), then the Config.OnClose functions in reverse order. Both phases
-// include the middleware a MiddlewareExcluder left out of the run's stack.
+// Config.Backend when it, or a backend it wraps, implements Closer or
+// io.Closer (see backend.AsCloser), and Config.Checkpointer when it
+// implements Closer (or, failing that, io.Closer); an io.Closer's Close takes
+// no ctx and so is not bounded by it. Last come the Config.OnClose
+// functions, in reverse order. Both phases include the middleware a
+// MiddlewareExcluder left out of the run's stack.
 // Every one is called even when an earlier one fails or panics: the errors
 // are joined into the result and each is logged at Warn; a panic is
 // recovered, joined as a *PanicError and logged at Error by type and stack
@@ -90,8 +92,8 @@ func (a *Agent) closeResources(ctx context.Context) error {
 			call("middleware", mws[i].Name(), c.Close)
 		}
 	}
-	if fn := resourceCloser(a.cfg.Backend); fn != nil {
-		call("resource", "backend", fn)
+	if c, ok := backend.AsCloser(a.cfg.Backend); ok {
+		call("resource", "backend", c.Close)
 	}
 	if fn := resourceCloser(a.cfg.Checkpointer); fn != nil {
 		call("resource", "checkpointer", fn)

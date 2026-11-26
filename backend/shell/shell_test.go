@@ -294,7 +294,7 @@ func TestStartOutputWhileRunningAndStop(t *testing.T) {
 	if _, ok := p.Result(); ok {
 		t.Fatal("Result must not be final while the command runs")
 	}
-	if err := p.Stop(); err != nil {
+	if err := p.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 	select {
@@ -307,7 +307,7 @@ func TestStartOutputWhileRunningAndStop(t *testing.T) {
 		t.Errorf("Result = %+v, %v", res, ok)
 	}
 	requireGone(t, -firstLinePID(t, res.Output))
-	if err := p.Stop(); err != nil {
+	if err := p.Stop(context.Background()); err != nil {
 		t.Errorf("Stop after Done = %v, want nil", err)
 	}
 }
@@ -323,7 +323,7 @@ func TestStartOutlivesContext(t *testing.T) {
 	select {
 	case <-p.Done():
 	case <-time.After(5 * time.Second):
-		_ = p.Stop()
+		_ = p.Stop(context.Background())
 		t.Fatal("process did not finish")
 	}
 	if res, _ := p.Result(); res.Output != "late\n" || res.ExitCode != 0 {

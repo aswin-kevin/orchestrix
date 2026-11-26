@@ -321,7 +321,11 @@ func (e *Executor) Execute(ctx context.Context, cmd string, opts backend.ExecOpt
 		return res, nil
 	case <-ctx.Done():
 	}
-	_ = p.Stop() // the timeout's backstop still ends the command if this fails
+	// ctx has ended, so the stop request gets a context of its own that
+	// keeps ctx's values: with ctx itself the signal exec would fail at once.
+	stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), signalTimeout)
+	_ = p.Stop(stopCtx) // the timeout's backstop still ends the command if this fails
+	cancel()
 	select {
 	case <-p.Done():
 		res, _ := p.Result()
@@ -383,7 +387,7 @@ func (e *Executor) start(ctx context.Context, token string, argv, env []string, 
 	if err != nil {
 		if ctx.Err() != nil {
 			// The daemon may have started the command all the same.
-			go func() { _ = e.signal(id, token, "KILL", nil) }()
+			go func() { _ = e.signal(context.WithoutCancel(ctx), id, token, "KILL", nil) }()
 			return nil, err
 		}
 		return nil, e.goneError(id, err)
@@ -459,9 +463,11 @@ func (e *Executor) inspectExec(ctx context.Context, execID string) (execState, e
 // signal sends sig ("TERM" or "KILL") to the process group of the command
 // recorded under token in container id, through a short exec. It retries
 // while the pid is not recorded and done is open, for up to about a second,
-// then returns errNoPid; it returns errEnded when done closes first.
-func (e *Executor) signal(id, token, sig string, done <-chan struct{}) error {
-	ctx, cancel := context.WithTimeout(context.Background(), signalTimeout)
+// then returns errNoPid; it returns errEnded when done closes first. ctx,
+// further bounded by signalTimeout, bounds the whole request; once it ends
+// signal returns at once.
+func (e *Executor) signal(ctx context.Context, id, token, sig string, done <-chan struct{}) error {
+	ctx, cancel := context.WithTimeout(ctx, signalTimeout)
 	defer cancel()
 	var err error
 	for range 10 {
@@ -474,6 +480,9 @@ func (e *Executor) signal(id, token, sig string, done <-chan struct{}) error {
 			err = errNoPid
 		case err == nil:
 			err = fmt.Errorf("orxdocker: signal exec exited with status %d", code)
+		}
+		if ctx.Err() != nil {
+			return err // every retry would fail the same way
 		}
 		select {
 		case <-done:
@@ -604,13 +613,19 @@ func (p *process) Output() string { return p.out.String() }
 // sent, or the command still runs another grace period after SIGKILL, the
 // container is force-removed, which ends every command of the thread.
 // Stopping a finished command is a no-op.
-func (p *process) Stop() error {
+//
+// ctx bounds the exec that sends SIGTERM (and the SIGKILL that replaces it
+// when SIGTERM cannot be sent). When ctx ends before the signal is sent,
+// Stop returns that error but the command is still ended: SIGKILL follows
+// after the grace period, and then the container's removal, as above. Only
+// the first call signals.
+func (p *process) Stop(ctx context.Context) error {
 	select {
 	case <-p.done:
 		return nil
 	default:
 	}
-	if err := p.stop(); err != nil {
+	if err := p.stop(ctx); err != nil {
 		return fmt.Errorf("orxdocker: stop: %w", err)
 	}
 	return nil
@@ -618,24 +633,31 @@ func (p *process) Stop() error {
 
 // stop acts only on its first call. A TERM that reaches no group (the pid
 // file is missing, or the exec exited first) leaves the kill unconfirmed,
-// which follow acts on (see confirmKill).
-func (p *process) stop() error {
+// which follow acts on (see confirmKill). ctx bounds the signals sent before
+// stop returns; the escalation after it runs on its own.
+func (p *process) stop(ctx context.Context) error {
 	p.stopOnce.Do(func() {
 		p.stopping.Store(true)
 		defer close(p.termSent)
 		grace := p.e.m.killGrace
 		notSent := func(err error) bool { return errors.Is(err, errNoPid) || errors.Is(err, errEnded) }
-		err := p.e.signal(p.container, p.token, "TERM", p.exited)
+		err := p.e.signal(ctx, p.container, p.token, "TERM", p.exited)
 		switch {
 		case err == nil:
 		case notSent(err):
 			p.unconfirmed.Store(true)
+		case ctx.Err() != nil:
+			// The caller's ctx ended the request, not the container: the
+			// escalation below still kills the command.
+			p.stopErr = err
 		default:
-			kerr := p.e.signal(p.container, p.token, "KILL", p.exited)
+			kerr := p.e.signal(ctx, p.container, p.token, "KILL", p.exited)
 			switch {
 			case kerr == nil:
 			case notSent(kerr):
 				p.unconfirmed.Store(true)
+			case ctx.Err() != nil:
+				p.stopErr = errors.Join(err, kerr)
 			default:
 				// No signal can be sent: only removing the container is left.
 				if rerr := p.remove(); rerr != nil {
@@ -650,7 +672,7 @@ func (p *process) stop() error {
 			if p.ended(grace) {
 				return
 			}
-			_ = p.e.signal(p.container, p.token, "KILL", p.done)
+			_ = p.e.signal(context.Background(), p.container, p.token, "KILL", p.done)
 			if p.ended(grace) {
 				return
 			}
@@ -699,7 +721,7 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 	}()
 	timer := time.AfterFunc(timeout, func() {
 		p.timedOut.Store(true)
-		_ = p.stop()
+		_ = p.stop(context.Background())
 	})
 	defer timer.Stop()
 	var hardErr error // written before removed is closed
@@ -722,7 +744,7 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 	} else if errors.Is(err, errStillRunning) {
 		// Its status is lost: send SIGTERM (done closes right after, which
 		// ends Stop's escalation; the backstop covers the rest).
-		_ = p.stop()
+		_ = p.stop(context.Background())
 	}
 	held := false
 	select {

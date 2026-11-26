@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/memory"
 	cpmemory "github.com/aswin-kevin/orchestrix/checkpoint/memory"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
@@ -315,6 +316,30 @@ func TestAgentCloseClosesIOClosers(t *testing.T) {
 		t.Fatalf("Close = %v, want it to wrap %v", err, errCP)
 	}
 	if got, want := log.list(), []string{"io backend", "io checkpointer"}; !slices.Equal(got, want) {
+		t.Errorf("closed %v, want %v", got, want)
+	}
+}
+
+// unwrappingBackend is a decorator that exposes the backend it wraps through
+// Unwrap and implements no Close of its own.
+type unwrappingBackend struct {
+	backend.Backend
+	inner backend.Backend
+}
+
+func (b unwrappingBackend) Unwrap() backend.Backend { return b.inner }
+
+func TestCloseClosesWrappedBackend(t *testing.T) {
+	log := &closeLog{}
+	inner := ioClosingBackend{Backend: memory.New(), log: log}
+	a := mustNew(t, Config{
+		Provider: llmtest.New(),
+		Backend:  unwrappingBackend{Backend: inner, inner: inner},
+	})
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := log.list(), []string{"io backend"}; !slices.Equal(got, want) {
 		t.Errorf("closed %v, want %v", got, want)
 	}
 }

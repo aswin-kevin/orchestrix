@@ -258,7 +258,7 @@ func TestWorkspaceNotRestoredIntoNonEmptyBackend(t *testing.T) {
 	if err := old.Write(ctx, "/old.txt", []byte("old")); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := old.Snapshot()
+	snap, err := old.Snapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestWorkspaceNotRestoredIntoNonEmptyBackend(t *testing.T) {
 	// The end-of-run snapshot reflects the live backend.
 	restored := memory.New()
 	saved, _ := WorkspaceKey.Get(final.State)
-	if err := restored.Restore(saved); err != nil {
+	if err := restored.Restore(context.Background(), saved); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 	if _, err := restored.Read(ctx, "/live.txt", 0, 0); err != nil {
@@ -325,9 +325,9 @@ type countingBackend struct {
 	snapshots atomic.Int32
 }
 
-func (b *countingBackend) Snapshot() (json.RawMessage, error) {
+func (b *countingBackend) Snapshot(ctx context.Context) (json.RawMessage, error) {
 	b.snapshots.Add(1)
-	return b.Backend.Snapshot()
+	return b.Backend.Snapshot(ctx)
 }
 
 func TestWorkspaceCapturedOnlyAfterTools(t *testing.T) {

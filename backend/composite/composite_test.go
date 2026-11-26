@@ -291,14 +291,14 @@ func TestSnapshotCoversDefaultOnly(t *testing.T) {
 	}
 	put(t, c, "/scratch.txt", "before")
 	put(t, c, "/memories/m.md", "kept")
-	data, err := snap.Snapshot()
+	data, err := snap.Snapshot(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	put(t, c, "/scratch.txt", "after")
 	put(t, c, "/extra.txt", "new")
 	put(t, c, "/memories/m.md", "changed")
-	if err := snap.Restore(data); err != nil {
+	if err := snap.Restore(context.Background(), data); err != nil {
 		t.Fatal(err)
 	}
 	if readAll(t, c, "/scratch.txt") != "before" || has(c, "/extra.txt") {

@@ -353,9 +353,9 @@ func (h *runningHandle) Outcome() (async.Outcome, bool) {
 	}
 }
 
-func (h *runningHandle) Progress() string  { return "" }
-func (h *runningHandle) Send(string) error { return nil }
-func (h *runningHandle) Stop() error       { h.once.Do(func() { close(h.done) }); return nil }
+func (h *runningHandle) Progress() string           { return "" }
+func (h *runningHandle) Send(string) error          { return nil }
+func (h *runningHandle) Stop(context.Context) error { h.once.Do(func() { close(h.done) }); return nil }
 
 // runForever is an async.Runner whose tasks run until stopped.
 type runForever struct{}
