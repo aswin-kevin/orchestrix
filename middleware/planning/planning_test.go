@@ -18,7 +18,7 @@ type obj = map[string]any
 
 func registeredWriteTodos(t *testing.T) tool.Tool {
 	t.Helper()
-	for _, tl := range New(Config{}).(agent.ToolProvider).Tools() {
+	for _, tl := range mustNew(t, Config{}).Tools() {
 		if tl.Name() == ToolWriteTodos {
 			return tl
 		}
@@ -42,7 +42,7 @@ func callWriteTodos(t *testing.T, s *state.State, input any) tool.Result {
 
 func TestWriteTodosReplacesAndRenders(t *testing.T) {
 	s := state.New()
-	TodosKey.Set(s, []Todo{{Content: "old", Status: StatusPending}})
+	todosKey.Set(s, []Todo{{Content: "old", Status: StatusPending}})
 
 	res := callWriteTodos(t, s, obj{"todos": []obj{
 		{"content": "design", "status": "completed"},
@@ -62,7 +62,7 @@ func TestWriteTodosReplacesAndRenders(t *testing.T) {
 
 func TestWriteTodosAllowsEmptyList(t *testing.T) {
 	s := state.New()
-	TodosKey.Set(s, []Todo{{Content: "old", Status: StatusPending}})
+	todosKey.Set(s, []Todo{{Content: "old", Status: StatusPending}})
 	res := callWriteTodos(t, s, obj{"todos": []obj{}})
 	if res.IsError || len(Todos(s)) != 0 {
 		t.Fatalf("empty list should clear the plan: error=%v todos=%+v", res.IsError, Todos(s))
@@ -103,7 +103,7 @@ func TestWriteTodosRejectsBadItems(t *testing.T) {
 
 func TestTodosReturnsCopy(t *testing.T) {
 	s := state.New()
-	TodosKey.Set(s, []Todo{{Content: "a", Status: StatusPending}})
+	todosKey.Set(s, []Todo{{Content: "a", Status: StatusPending}})
 	Todos(s)[0].Content = "changed"
 	if Todos(s)[0].Content != "a" {
 		t.Fatal("mutating the returned slice changed the state")
@@ -135,7 +135,7 @@ func TestReminderCadence(t *testing.T) {
 	turns = append(turns, llmtest.Turn{Text: "done"})
 	p := llmtest.New(turns...)
 
-	a, err := agent.New(agent.Config{Provider: p, Tools: []tool.Tool{noopTool()}, Middleware: []agent.Middleware{New(Config{})}})
+	a, err := agent.New(agent.Config{Provider: p, Tools: []tool.Tool{noopTool()}, Middleware: []agent.Middleware{mustNew(t, Config{})}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,14 +177,14 @@ func TestReminderCadence(t *testing.T) {
 }
 
 func TestNoReminderWhenAllCompleted(t *testing.T) {
-	m := New(Config{ReminderAfter: 1, ReminderEvery: 1})
+	m := mustNew(t, Config{ReminderAfter: 1, ReminderEvery: 1})
 	s := state.New()
-	TodosKey.Set(s, []Todo{{Content: "a", Status: StatusCompleted}})
+	todosKey.Set(s, []Todo{{Content: "a", Status: StatusCompleted}})
 	s.SetMessages([]llm.Message{llm.UserText("go"), {Role: llm.RoleAssistant, Content: []llm.Block{llm.TextBlock("x")}}, llm.UserText("more")})
 
 	var seen llm.Request
 	req := &agent.ModelRequest{State: s, Request: llm.Request{Messages: s.Messages()}}
-	_, _ = m.(agent.ModelWrapper).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, _ = m.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		seen = r.Request
 		return &llm.Response{}, nil
 	})
@@ -215,4 +215,50 @@ func TestTodosKeyIsNamespaced(t *testing.T) {
 func isReadOnly(t tool.Tool, in json.RawMessage) bool {
 	r, ok := tool.As[tool.ReadOnlyer](t)
 	return ok && r.ReadOnly(in)
+}
+
+func TestNewRejectsNegative(t *testing.T) {
+	for name, cfg := range map[string]Config{
+		"ReminderAfter": {ReminderAfter: -1},
+		"ReminderEvery": {ReminderEvery: -1},
+	} {
+		m, err := New(cfg)
+		if err == nil || !strings.HasPrefix(err.Error(), "planning: ") || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: New = %v, %v; want a planning error naming the field", name, m, err)
+		}
+	}
+}
+
+func TestName(t *testing.T) {
+	if Name != "planning" || mustNew(t, Config{}).Name() != Name {
+		t.Fatalf("Name = %q", Name)
+	}
+}
+
+func TestWriteTodosInputExported(t *testing.T) {
+	want := []Todo{{Content: "a", Status: StatusInProgress}, {Content: "b", Status: StatusPending}}
+	raw, err := json.Marshal(WriteTodosInput{Todos: want})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "w", Name: ToolWriteTodos, Input: json.RawMessage(raw)}}},
+		llmtest.Turn{Text: "done"},
+	)
+	a, err := agent.New(agent.Config{Provider: p, Middleware: []agent.Middleware{mustNew(t, Config{})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var final *agent.Final
+	for ev, err := range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.Kind == agent.KindFinal {
+			final = ev.Final
+		}
+	}
+	if final == nil || !slices.Equal(Todos(final.State), want) {
+		t.Fatalf("todos = %v, want %v", Todos(final.State), want)
+	}
 }

@@ -50,7 +50,7 @@ const (
 
 // Config configures the deferred middleware.
 type Config struct {
-	// Tools are name patterns (glob: "*" and "?") of tools to defer in
+	// Tools are name patterns (as in tool.MatchName) of tools to defer in
 	// addition to the tools implementing Deferrer; nil defers only those.
 	// search_tools and call_tool are never deferred.
 	Tools []string

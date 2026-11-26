@@ -14,21 +14,24 @@ import (
 // maxGlobResults caps how many paths glob returns.
 const maxGlobResults = 1000
 
-type globInput struct {
+// GlobInput is the input of glob.
+type GlobInput struct {
+	// Pattern is a tool parameter. Glob pattern such as "**/*.go" or "src/*.ts".
 	Pattern string `json:"pattern" desc:"Glob pattern such as \"**/*.go\" or \"src/*.ts\"."`
-	Path    string `json:"path,omitempty" desc:"Directory to search under. Defaults to \"/\"."`
+	// Path is a tool parameter. Directory to search under. Defaults to "/".
+	Path string `json:"path,omitempty" desc:"Directory to search under. Defaults to \"/\"."`
 }
 
-func (m *middleware) globTool() tool.Tool {
+func (m *Middleware) globTool() tool.Tool {
 	return tool.New(ToolGlob,
 		m.description(ToolGlob, fmt.Sprintf("Find files by name pattern (supports ** for any depth). Returns matching paths one per line, at most %d.", maxGlobResults)),
 		m.glob,
 		tool.WithReadOnly(), tool.WithConcurrent(),
-		tool.WithPaths(accessFor(permission.OpRead, func(in globInput) string { return in.Path })),
+		tool.WithPaths(accessFor(permission.OpRead, func(in GlobInput) string { return in.Path })),
 	)
 }
 
-func (m *middleware) glob(ctx context.Context, in globInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) glob(ctx context.Context, in GlobInput, c *tool.Call) (tool.Result, error) {
 	b, err := m.backendFor(c)
 	if err != nil {
 		return tool.Errorf("%v", err), nil
@@ -53,25 +56,32 @@ func (m *middleware) glob(ctx context.Context, in globInput, c *tool.Call) (tool
 	return tool.Text(out), nil
 }
 
-type grepInput struct {
-	Pattern    string `json:"pattern" desc:"Regular expression (RE2 syntax), or plain text when literal is set."`
-	Path       string `json:"path,omitempty" desc:"Directory or file to search. Defaults to \"/\"."`
-	Glob       string `json:"glob,omitempty" desc:"Only search files whose path matches this glob, e.g. \"*.go\"."`
-	Mode       string `json:"mode,omitempty" enum:"files_with_matches,content,count" desc:"files_with_matches (default) lists paths; content lists path:line:text; count lists path:count."`
-	IgnoreCase bool   `json:"ignore_case,omitempty" desc:"Match case-insensitively."`
-	Literal    bool   `json:"literal,omitempty" desc:"Treat pattern as plain text, not a regular expression."`
+// GrepInput is the input of grep.
+type GrepInput struct {
+	// Pattern is a tool parameter. Regular expression (RE2 syntax), or plain text when literal is set.
+	Pattern string `json:"pattern" desc:"Regular expression (RE2 syntax), or plain text when literal is set."`
+	// Path is a tool parameter. Directory or file to search. Defaults to "/".
+	Path string `json:"path,omitempty" desc:"Directory or file to search. Defaults to \"/\"."`
+	// Glob is a tool parameter. Only search files whose path matches this glob, e.g. "*.go".
+	Glob string `json:"glob,omitempty" desc:"Only search files whose path matches this glob, e.g. \"*.go\"."`
+	// Mode is a tool parameter. files_with_matches (default) lists paths; content lists path:line:text; count lists path:count.
+	Mode string `json:"mode,omitempty" enum:"files_with_matches,content,count" desc:"files_with_matches (default) lists paths; content lists path:line:text; count lists path:count."`
+	// IgnoreCase is a tool parameter. Match case-insensitively.
+	IgnoreCase bool `json:"ignore_case,omitempty" desc:"Match case-insensitively."`
+	// Literal is a tool parameter. Treat pattern as plain text, not a regular expression.
+	Literal bool `json:"literal,omitempty" desc:"Treat pattern as plain text, not a regular expression."`
 }
 
-func (m *middleware) grepTool() tool.Tool {
+func (m *Middleware) grepTool() tool.Tool {
 	return tool.New(ToolGrep,
 		m.description(ToolGrep, fmt.Sprintf("Search file contents with a regular expression. Results are capped at %d entries. Binary and very large files are skipped.", backend.DefaultMaxResults)),
 		m.grep,
 		tool.WithReadOnly(), tool.WithConcurrent(),
-		tool.WithPaths(accessFor(permission.OpRead, func(in grepInput) string { return in.Path })),
+		tool.WithPaths(accessFor(permission.OpRead, func(in GrepInput) string { return in.Path })),
 	)
 }
 
-func (m *middleware) grep(ctx context.Context, in grepInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) grep(ctx context.Context, in GrepInput, c *tool.Call) (tool.Result, error) {
 	b, err := m.backendFor(c)
 	if err != nil {
 		return tool.Errorf("%v", err), nil
@@ -105,7 +115,7 @@ func (m *middleware) grep(ctx context.Context, in grepInput, c *tool.Call) (tool
 	return tool.Text(out), nil
 }
 
-func (m *middleware) formatMatches(matches []backend.GrepMatch, mode backend.GrepMode) string {
+func (m *Middleware) formatMatches(matches []backend.GrepMatch, mode backend.GrepMode) string {
 	lines := make([]string, len(matches))
 	for i, match := range matches {
 		switch mode {

@@ -6,6 +6,7 @@ package planning
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -47,8 +48,8 @@ type Todo struct {
 	Status Status `json:"status" desc:"One of pending, in_progress or completed."`
 }
 
-// TodosKey holds the current todo list. It is private to the run that owns it.
-var TodosKey = state.NewKey[[]Todo]("planning.todos", state.Private[[]Todo]())
+// todosKey holds the current todo list. It is private to the run that owns it.
+var todosKey = state.NewKey[[]Todo]("planning.todos", state.Private[[]Todo]())
 
 // remindedTurnKey records the assistant-turn count at which the last reminder
 // was added, so reminders keep their spacing.
@@ -56,7 +57,7 @@ var remindedTurnKey = state.NewKey[int]("planning.reminded_turn", state.Private[
 
 // Todos returns a copy of the current todo list; it is empty when none was set.
 func Todos(s *state.State) []Todo {
-	todos, _ := TodosKey.Get(s)
+	todos, _ := todosKey.Get(s)
 	return slices.Clone(todos)
 }
 
@@ -64,26 +65,36 @@ func Todos(s *state.State) []Todo {
 type Config struct {
 	// ReminderAfter is the number of assistant turns since the last
 	// write_todos call after which a reminder is added; 0 means
-	// DefaultReminderAfter.
+	// DefaultReminderAfter. Negative is an error.
 	ReminderAfter int
 	// ReminderEvery is the minimum number of assistant turns between
-	// reminders; 0 means DefaultReminderEvery.
+	// reminders; 0 means DefaultReminderEvery. Negative is an error.
 	ReminderEvery int
 	// Prompt is the system prompt segment describing write_todos. nil uses
 	// DefaultPrompt; a pointer to "" disables the segment.
 	Prompt *string
 }
 
-// middleware is the planning middleware. It is immutable after New, so it is
+// Name is the name of the planning middleware.
+const Name = "planning"
+
+// Middleware is the planning middleware. It is immutable after New, so it is
 // safe to share between concurrent runs.
-type middleware struct {
+type Middleware struct {
 	reminderAfter, reminderEvery int
 	prompt                       string
 }
 
-// New returns the planning middleware.
-func New(cfg Config) agent.Middleware {
-	m := &middleware{
+// New returns the planning middleware. It returns an error when
+// ReminderAfter or ReminderEvery is negative.
+func New(cfg Config) (*Middleware, error) {
+	if cfg.ReminderAfter < 0 {
+		return nil, errors.New("planning: ReminderAfter must not be negative")
+	}
+	if cfg.ReminderEvery < 0 {
+		return nil, errors.New("planning: ReminderEvery must not be negative")
+	}
+	m := &Middleware{
 		reminderAfter: DefaultReminderAfter,
 		reminderEvery: DefaultReminderEvery,
 		prompt:        DefaultPrompt,
@@ -97,16 +108,18 @@ func New(cfg Config) agent.Middleware {
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
 	}
-	return m
+	return m, nil
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "planning" }
+func (m *Middleware) Name() string { return Name }
 
 // Tools implements agent.ToolProvider.
-func (m *middleware) Tools() []tool.Tool { return []tool.Tool{writeTodosTool()} }
+func (m *Middleware) Tools() []tool.Tool { return []tool.Tool{writeTodosTool()} }
 
-type writeTodosInput struct {
+// WriteTodosInput is the input of write_todos.
+type WriteTodosInput struct {
+	// Todos is the complete todo list; it replaces the previous list.
 	Todos []Todo `json:"todos" desc:"The complete todo list. It replaces the previous list; send an empty list to clear it."`
 }
 
@@ -122,12 +135,12 @@ func writeTodosTool() tool.Tool {
 	)
 }
 
-func writeTodos(_ context.Context, in writeTodosInput, c *tool.Call) (tool.Result, error) {
+func writeTodos(_ context.Context, in WriteTodosInput, c *tool.Call) (tool.Result, error) {
 	if err := validate(in.Todos); err != nil {
 		return tool.Errorf("%v", err), nil
 	}
 	todos := slices.Clone(in.Todos)
-	TodosKey.Set(c.State, todos)
+	todosKey.Set(c.State, todos)
 	return tool.Text("Todo list updated:\n" + render(todos)), nil
 }
 
@@ -175,7 +188,7 @@ func marker(s Status) string {
 // WrapModel implements agent.ModelWrapper. It appends the prompt after the
 // host's system segments, so it stays outside the cached prefix, and adds the
 // reminder to the request view when one is due.
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if m.prompt != "" {
 		req.Request.System = append(slices.Clone(req.Request.System), m.prompt)
 	}
@@ -190,7 +203,7 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 // dueReminder returns the reminder text when the list is open and the agent
 // has neither updated it nor been reminded for long enough. Handing out a
 // reminder records the turn, which is what spaces the next one.
-func (m *middleware) dueReminder(s *state.State) (string, bool) {
+func (m *Middleware) dueReminder(s *state.State) (string, bool) {
 	todos := Todos(s)
 	if len(todos) == 0 || allCompleted(todos) {
 		return "", false

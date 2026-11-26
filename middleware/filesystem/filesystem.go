@@ -47,9 +47,17 @@ var allTools = []string{
 	ToolDelete, ToolGlob, ToolGrep, ToolExecute,
 }
 
-// ReadKey records, per path, the modification time of the file as the agent
+// readKey records, per path, the modification time of the file as the agent
 // last read or wrote it. It is private to the run that owns it.
-var ReadKey = state.NewKey[map[string]time.Time]("filesystem.read", state.Private[map[string]time.Time]())
+var readKey = state.NewKey[map[string]time.Time]("filesystem.read", state.Private[map[string]time.Time]())
+
+// ReadAt returns the modification time of path as the agent last read or
+// wrote it in this run, and false when it has not.
+func ReadAt(s *state.State, path string) (time.Time, bool) {
+	read, _ := readKey.Get(s)
+	t, ok := read[path]
+	return t, ok
+}
 
 // Config configures the filesystem middleware.
 type Config struct {
@@ -58,10 +66,12 @@ type Config struct {
 	Backend backend.Backend
 
 	// Tools is an allowlist of tool names; nil provides all of them. When set
-	// it must include "read_file", because read-before-edit depends on it.
+	// it must include "read_file", because read-before-edit depends on it,
+	// and name only known tools; New returns an error otherwise.
 	Tools []string
 
 	// Descriptions overrides the model-facing description of a tool by name.
+	// Every key must be a tool this middleware can provide.
 	Descriptions map[string]string
 
 	// Prompt is the system prompt segment describing the tools. nil uses
@@ -69,21 +79,21 @@ type Config struct {
 	Prompt *string
 
 	// ReadLimit is the default number of lines read_file returns; 0 means
-	// DefaultReadLimit.
+	// DefaultReadLimit. Negative is an error.
 	ReadLimit int
 
 	// MaxLineChars truncates longer lines in read_file and grep output; 0
-	// means DefaultMaxLineChars.
+	// means DefaultMaxLineChars. Negative is an error.
 	MaxLineChars int
 
 	// OffloadChars is the size, counted in characters (runes), above which
 	// the output of other middleware's tools is saved to the backend and
-	// replaced by a head and a pointer; 0 means DefaultOffloadChars.
+	// replaced by a head and a pointer; 0 means DefaultOffloadChars. Negative is an error.
 	OffloadChars int
 
 	// ExecTimeout is the timeout execute uses when the model gives none and
 	// MaxExecTimeout is the most it may ask for; 0 means DefaultExecTimeout
-	// and DefaultMaxExecTimeout.
+	// and DefaultMaxExecTimeout. Negative is an error.
 	ExecTimeout, MaxExecTimeout time.Duration
 
 	// Execute registers the execute tool even when Backend is nil. Tools are
@@ -101,68 +111,95 @@ type Config struct {
 	Background bool
 }
 
-// middleware is the filesystem middleware. It is immutable after New, so it
+// Name is the name of the filesystem middleware.
+const Name = "filesystem"
+
+// Middleware is the filesystem middleware. It is immutable after New, so it
 // is safe to share between concurrent runs.
-type middleware struct {
+type Middleware struct {
 	cfg      Config
 	prompt   string
 	excluded []string // known tools left out by the allowlist
 }
 
-// New returns the filesystem middleware. It panics on an invalid Config (an
-// allowlist that omits read_file or names an unknown tool), since that is a
-// programming error.
-func New(cfg Config) agent.Middleware {
-	m := &middleware{cfg: withDefaults(cfg), prompt: DefaultPrompt}
+// New returns the filesystem middleware. It returns an error for an invalid
+// Config: an allowlist that omits read_file or names an unknown tool, a
+// description for an unknown tool, or a negative limit.
+func New(cfg Config) (*Middleware, error) {
+	if err := validate(cfg); err != nil {
+		return nil, err
+	}
+	m := &Middleware{cfg: withDefaults(cfg), prompt: DefaultPrompt}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
 	}
 	if cfg.Tools != nil {
-		validateAllowlist(cfg.Tools)
 		for _, name := range allTools {
 			if !slices.Contains(cfg.Tools, name) {
 				m.excluded = append(m.excluded, name)
 			}
 		}
 	}
-	return m
+	return m, nil
 }
 
 func withDefaults(cfg Config) Config {
-	if cfg.ReadLimit <= 0 {
+	if cfg.ReadLimit == 0 {
 		cfg.ReadLimit = DefaultReadLimit
 	}
-	if cfg.MaxLineChars <= 0 {
+	if cfg.MaxLineChars == 0 {
 		cfg.MaxLineChars = DefaultMaxLineChars
 	}
-	if cfg.OffloadChars <= 0 {
+	if cfg.OffloadChars == 0 {
 		cfg.OffloadChars = DefaultOffloadChars
 	}
-	if cfg.ExecTimeout <= 0 {
+	if cfg.ExecTimeout == 0 {
 		cfg.ExecTimeout = DefaultExecTimeout
 	}
-	if cfg.MaxExecTimeout <= 0 {
+	if cfg.MaxExecTimeout == 0 {
 		cfg.MaxExecTimeout = DefaultMaxExecTimeout
 	}
 	return cfg
 }
 
-func validateAllowlist(names []string) {
-	if !slices.Contains(names, ToolReadFile) {
-		panic("filesystem: Config.Tools must include " + ToolReadFile)
-	}
-	for _, name := range names {
-		if !slices.Contains(allTools, name) {
-			panic(fmt.Sprintf("filesystem: unknown tool %q in Config.Tools", name))
+func validate(cfg Config) error {
+	for _, f := range []struct {
+		name string
+		v    int64
+	}{
+		{"ReadLimit", int64(cfg.ReadLimit)},
+		{"MaxLineChars", int64(cfg.MaxLineChars)},
+		{"OffloadChars", int64(cfg.OffloadChars)},
+		{"ExecTimeout", int64(cfg.ExecTimeout)},
+		{"MaxExecTimeout", int64(cfg.MaxExecTimeout)},
+	} {
+		if f.v < 0 {
+			return fmt.Errorf("filesystem: %s must not be negative", f.name)
 		}
 	}
+	if cfg.Tools != nil {
+		if !slices.Contains(cfg.Tools, ToolReadFile) {
+			return fmt.Errorf("filesystem: Tools must include %s", ToolReadFile)
+		}
+		for _, name := range cfg.Tools {
+			if !slices.Contains(allTools, name) {
+				return fmt.Errorf("filesystem: unknown tool %q in Tools", name)
+			}
+		}
+	}
+	for name := range cfg.Descriptions {
+		if !slices.Contains(allTools, name) {
+			return fmt.Errorf("filesystem: Descriptions names unknown tool %q", name)
+		}
+	}
+	return nil
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "filesystem" }
+func (m *Middleware) Name() string { return Name }
 
 // Tools implements agent.ToolProvider.
-func (m *middleware) Tools() []tool.Tool {
+func (m *Middleware) Tools() []tool.Tool {
 	tools := []tool.Tool{
 		m.lsTool(), m.readFileTool(), m.writeFileTool(), m.editFileTool(),
 		m.multiEditTool(), m.deleteTool(), m.globTool(), m.grepTool(),
@@ -179,7 +216,7 @@ func (m *middleware) Tools() []tool.Tool {
 // the host's system segments, so it stays outside the cached prefix, and
 // drops schemas of tools the allowlist excludes. With a configured backend it
 // also moves oversized user text out of the request (see offloadLargeMessages).
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if m.prompt != "" {
 		req.Request.System = append(slices.Clone(req.Request.System), m.prompt)
 	}
@@ -195,7 +232,7 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 }
 
 // description returns the override for name, or the built-in text.
-func (m *middleware) description(name, builtin string) string {
+func (m *Middleware) description(name, builtin string) string {
 	if d, ok := m.cfg.Descriptions[name]; ok {
 		return d
 	}
@@ -204,7 +241,7 @@ func (m *middleware) description(name, builtin string) string {
 
 // requestBackend picks the configured backend, else the one the run resolved
 // for the model request; nil when there is none.
-func (m *middleware) requestBackend(req *agent.ModelRequest) backend.Backend {
+func (m *Middleware) requestBackend(req *agent.ModelRequest) backend.Backend {
 	if m.cfg.Backend != nil {
 		return m.cfg.Backend
 	}
@@ -212,7 +249,7 @@ func (m *middleware) requestBackend(req *agent.ModelRequest) backend.Backend {
 }
 
 // backendFor picks the configured backend, else the agent's.
-func (m *middleware) backendFor(c *tool.Call) (backend.Backend, error) {
+func (m *Middleware) backendFor(c *tool.Call) (backend.Backend, error) {
 	switch {
 	case m.cfg.Backend != nil:
 		return m.cfg.Backend, nil

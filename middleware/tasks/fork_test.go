@@ -26,7 +26,7 @@ func newForkingAgent(t *testing.T, p llm.Provider, m *Middleware) *agent.Agent {
 	a, err := agent.New(agent.Config{
 		Provider:       p,
 		Backend:        newShell(t),
-		Middleware:     []agent.Middleware{filesystem.New(filesystem.Config{Execute: true, Background: true}), m, sub},
+		Middleware:     []agent.Middleware{mustFS(t, filesystem.Config{Execute: true, Background: true}), m, sub},
 		PermissionMode: permission.ModeBypass,
 	})
 	if err != nil {

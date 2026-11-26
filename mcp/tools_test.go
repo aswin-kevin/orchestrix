@@ -515,3 +515,32 @@ func isConcurrent(t tool.Tool, in json.RawMessage) bool {
 	c, ok := tool.As[tool.ConcurrencySafer](t)
 	return ok && c.ConcurrencySafe(in)
 }
+
+func TestAllowlistPatterns(t *testing.T) {
+	tests := []struct {
+		name  string
+		tools []string
+		tool  string
+		want  bool
+	}{
+		{"empty list admits all", nil, "anything", true},
+		{"prefix", []string{"read_*"}, "read_a", true},
+		{"prefix miss", []string{"read_*"}, "xread_a", false},
+		{"suffix", []string{"*_read"}, "a_read", true},
+		{"question mark", []string{"get_?"}, "get_a", true},
+		{"question mark needs one", []string{"get_?"}, "get_", false},
+		{"literal with dot", []string{"a.b"}, "axb", false},
+		{"star crosses slash", []string{"a*"}, "a/b", true},
+		{"slash is literal", []string{"a/b"}, "a/b", true},
+		{"case sensitive", []string{"read"}, "READ", false},
+		{"any of several", []string{"x", "read_*"}, "read_z", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &serverConn{cfg: ServerConfig{Tools: tt.tools}}
+			if got := s.allowed(tt.tool); got != tt.want {
+				t.Errorf("allowed(%q) with %q = %v, want %v", tt.tool, tt.tools, got, tt.want)
+			}
+		})
+	}
+}

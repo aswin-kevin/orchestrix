@@ -72,8 +72,15 @@ const TruncationMarker = "\n... [plan truncated]"
 // escalates beyond what the host configured.
 var previousKey = state.NewKey[permission.Mode]("planmode.previous", state.RunLocal[permission.Mode]())
 
-// PlanKey holds the last approved plan. It is private to the run.
-var PlanKey = state.NewKey[string]("planmode.plan", state.Private[string]())
+// planKey holds the last approved plan. It is private to the run.
+var planKey = state.NewKey[string]("planmode.plan", state.Private[string]())
+
+// Plan returns the last approved plan of the run, and false when none was
+// approved yet.
+func Plan(s *state.State) (string, bool) { return planKey.Get(s) }
+
+// Name is the name of the planmode middleware.
+const Name = "planmode"
 
 // Config configures the planmode middleware.
 type Config struct {
@@ -103,27 +110,27 @@ type ExitInput struct {
 	Plan string `json:"plan" desc:"The implementation plan in markdown: steps, files to change, how to verify."`
 }
 
-// middleware is the planmode middleware. It is immutable after New, so it is
+// Middleware is the planmode middleware. It is immutable after New, so it is
 // safe to share between concurrent runs.
-type middleware struct {
+type Middleware struct {
 	cfg    Config
 	prompt string
 }
 
 // New returns the planmode middleware.
-func New(cfg Config) agent.Middleware {
-	m := &middleware{cfg: cfg, prompt: DefaultPrompt}
+func New(cfg Config) (*Middleware, error) {
+	m := &Middleware{cfg: cfg, prompt: DefaultPrompt}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
 	}
-	return m
+	return m, nil
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "planmode" }
+func (m *Middleware) Name() string { return Name }
 
 // Tools implements agent.ToolProvider.
-func (m *middleware) Tools() []tool.Tool {
+func (m *Middleware) Tools() []tool.Tool {
 	exit := tool.New(ToolExit,
 		"Submit your plan for the user's approval and leave plan mode. Call it once you have investigated and have a concrete plan.",
 		m.exit,
@@ -194,7 +201,7 @@ func enter(ctx context.Context, _ EnterInput, c *tool.Call) (tool.Result, error)
 	return tool.Text("Plan mode is on. Explore with read-only tools, then call exit_plan_mode with your plan for the user to approve."), nil
 }
 
-func (m *middleware) exit(ctx context.Context, in ExitInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) exit(ctx context.Context, in ExitInput, c *tool.Call) (tool.Result, error) {
 	info, _ := agent.Info(ctx)
 	switch {
 	case info.Depth > 0:
@@ -244,7 +251,7 @@ func checkPlan(plan string) *tool.Result {
 // ask puts the plan to the run's Approver. The request forbids remembering
 // an answer, so an "always allow" can never turn into silent approvals, and
 // an UpdatedInput in the answer replaces the plan, like an Edit decision.
-func (m *middleware) ask(ctx context.Context, a *agent.Agent, approver permission.Approver, in ExitInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) ask(ctx context.Context, a *agent.Agent, approver permission.Approver, in ExitInput, c *tool.Call) (tool.Result, error) {
 	input, err := json.Marshal(in)
 	if err != nil {
 		return tool.Result{}, err
@@ -278,7 +285,7 @@ func approverOf(info agent.RunInfo) permission.Approver {
 
 // approve leaves plan mode for the mode the config and the entry record
 // select, and remembers plan as the approved one.
-func (m *middleware) approve(c *tool.Call, plan string) (tool.Result, error) {
+func (m *Middleware) approve(c *tool.Call, plan string) (tool.Result, error) {
 	mode := m.cfg.ApproveMode
 	if mode == "" {
 		mode, _ = previousKey.Get(c.State)
@@ -289,7 +296,7 @@ func (m *middleware) approve(c *tool.Call, plan string) (tool.Result, error) {
 	if err := agent.SetPermissionMode(c.State, mode); err != nil {
 		return tool.Errorf("cannot leave plan mode: %v", err), nil
 	}
-	PlanKey.Set(c.State, plan)
+	planKey.Set(c.State, plan)
 	previousKey.Delete(c.State)
 	return tool.Text(fmt.Sprintf("The user approved the plan. Permission mode is now %s. Implement it.\n\nApproved plan:\n%s", mode, plan)), nil
 }
@@ -306,7 +313,7 @@ func refuse(msg string) tool.Result {
 // WrapModel implements agent.ModelWrapper. While plan mode is active it
 // appends the prompt after the host's system segments, outside the cached
 // prefix.
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if m.prompt != "" && Active(ctx, req.State) {
 		req.Request.System = append(slices.Clone(req.Request.System), m.prompt)
 	}

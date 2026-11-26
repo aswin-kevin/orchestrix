@@ -38,7 +38,7 @@ const (
 // not own, when larger than Config.OffloadChars, is saved to the backend and
 // replaced by its first lines and the file path, so one noisy tool cannot
 // fill the context. Its own tools are exempt: read_file already pages.
-func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
+func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	res, err := next(ctx, call)
 	if err != nil || m.ownsTool(call.Name) {
 		return res, err
@@ -61,13 +61,13 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 }
 
 // ownsTool reports whether name is one of the tools this middleware provides.
-func (m *middleware) ownsTool(name string) bool {
+func (m *Middleware) ownsTool(name string) bool {
 	return slices.Contains(allTools, name) && !slices.Contains(m.excluded, name)
 }
 
 // head returns the first lines of text, each capped, so that a single huge
 // line cannot keep the replacement large.
-func (m *middleware) head(text string) string {
+func (m *Middleware) head(text string) string {
 	lines := strings.SplitN(text, "\n", headLines+1)
 	if len(lines) > headLines {
 		lines = lines[:headLines]
@@ -94,7 +94,7 @@ func replaceText(res tool.Result, text string) tool.Result {
 // offloadLargeMessages returns messages with oversized user text blocks
 // replaced by a preview and a pointer to the saved original. It copies what it
 // changes: the input, which may be shared with State, is never modified.
-func (m *middleware) offloadLargeMessages(ctx context.Context, b backend.Backend, messages []llm.Message) []llm.Message {
+func (m *Middleware) offloadLargeMessages(ctx context.Context, b backend.Backend, messages []llm.Message) []llm.Message {
 	var out []llm.Message
 	for i, msg := range messages {
 		if msg.Role != llm.RoleUser {
@@ -129,7 +129,7 @@ func (m *middleware) offloadLargeMessages(ctx context.Context, b backend.Backend
 // offloadMessageBlock saves a large text block and returns its replacement.
 // The file name comes from the content hash, so the same text always maps to
 // the same file and is written once. ok is false when the block is left as is.
-func (m *middleware) offloadMessageBlock(ctx context.Context, b backend.Backend, block llm.Block) (llm.Block, bool) {
+func (m *Middleware) offloadMessageBlock(ctx context.Context, b backend.Backend, block llm.Block) (llm.Block, bool) {
 	if block.Type != llm.BlockText || utf8.RuneCountInString(block.Text) <= MessageOffloadChars {
 		return block, false
 	}

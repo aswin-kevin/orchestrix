@@ -80,8 +80,8 @@ type ServerConfig struct {
 	// or by Connect when it fails.
 	Transport Transport
 
-	// Tools are globs (internal/glob syntax) over the server's own tool
-	// names; only matching tools are offered. Empty → all tools.
+	// Tools are name patterns (as in tool.MatchName) over the server's
+	// own tool names; only matching tools are offered. Empty → all tools.
 	Tools []string
 	// Defer marks the server's tools deferred.Deferrer: offered by name
 	// until searched for. false → schemas always shown.

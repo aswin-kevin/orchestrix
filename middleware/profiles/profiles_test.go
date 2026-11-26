@@ -154,7 +154,7 @@ func TestExcludeMiddlewareAtNew(t *testing.T) {
 	for model, want := range map[string]bool{"small-1": false, "big-1": true} {
 		a, err := agent.New(agent.Config{
 			Provider: llmtest.New(), Model: model,
-			Middleware: []agent.Middleware{m, planning.New(planning.Config{})},
+			Middleware: []agent.Middleware{m, mustPlanning(t, planning.Config{})},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -181,7 +181,7 @@ func TestSubagentWithOtherModelRefiltered(t *testing.T) {
 	}
 	final := runAgent(t, agent.Config{
 		Provider: parent, Model: "big-1",
-		Middleware: []agent.Middleware{m, planning.New(planning.Config{}), sub},
+		Middleware: []agent.Middleware{m, mustPlanning(t, planning.Config{}), sub},
 	})
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v)", final.Reason, final.Err)
@@ -211,7 +211,7 @@ func TestParentWithoutPlanningChildHasIt(t *testing.T) {
 	}
 	runAgent(t, agent.Config{
 		Provider: parent, Model: "small-1",
-		Middleware: []agent.Middleware{m, planning.New(planning.Config{}), sub},
+		Middleware: []agent.Middleware{m, mustPlanning(t, planning.Config{}), sub},
 	})
 	if slices.Contains(schemaNames(parent.Requests[0]), planning.ToolWriteTodos) {
 		t.Fatal("parent (small-1) has write_todos")
@@ -285,8 +285,8 @@ func TestNameWildcard(t *testing.T) {
 		{"*", "", true},
 	}
 	for _, tc := range tests {
-		if got := matchName(tc.pattern, tc.name); got != tc.want {
-			t.Errorf("matchName(%q, %q) = %v, want %v", tc.pattern, tc.name, got, tc.want)
+		if got := tool.MatchName(tc.pattern, tc.name); got != tc.want {
+			t.Errorf("tool.MatchName(%q, %q) = %v, want %v", tc.pattern, tc.name, got, tc.want)
 		}
 	}
 }
@@ -405,7 +405,7 @@ func TestExcludingFilesystemLeavesAgentRunnable(t *testing.T) {
 	}
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
 	final := runAgent(t, agent.Config{Provider: p, Model: "small-1",
-		Middleware: []agent.Middleware{m, filesystem.New(filesystem.Config{}), sk}})
+		Middleware: []agent.Middleware{m, mustFS(t, filesystem.Config{}), sk}})
 	if final.Reason != agent.ReasonCompleted {
 		t.Fatalf("reason = %s (%v)", final.Reason, final.Err)
 	}

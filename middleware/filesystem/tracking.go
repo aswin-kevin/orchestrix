@@ -15,7 +15,7 @@ import (
 // The stored map is replaced, never mutated, because state values are shared
 // with snapshots.
 func markRead(c *tool.Call, path string, modTime time.Time) {
-	ReadKey.Update(c.State, func(read map[string]time.Time) map[string]time.Time {
+	readKey.Update(c.State, func(read map[string]time.Time) map[string]time.Time {
 		updated := maps.Clone(read)
 		if updated == nil {
 			updated = map[string]time.Time{}
@@ -28,7 +28,7 @@ func markRead(c *tool.Call, path string, modTime time.Time) {
 // forgetUnder drops the records for a deleted path and, when it was a
 // directory, for everything beneath it.
 func forgetUnder(c *tool.Call, path string) {
-	ReadKey.Update(c.State, func(read map[string]time.Time) map[string]time.Time {
+	readKey.Update(c.State, func(read map[string]time.Time) map[string]time.Time {
 		updated := maps.Clone(read)
 		maps.DeleteFunc(updated, func(p string, _ time.Time) bool {
 			return p == path || strings.HasPrefix(p, strings.TrimSuffix(path, "/")+"/")
@@ -58,7 +58,7 @@ func checkFresh(ctx context.Context, b backend.Backend, c *tool.Call, path strin
 	if err != nil {
 		return false, err
 	}
-	read, _ := ReadKey.Get(c.State)
+	read, _ := readKey.Get(c.State)
 	seen, known := read[path]
 	return known && seen.Equal(res.ModTime), nil
 }

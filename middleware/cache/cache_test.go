@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -10,10 +11,7 @@ import (
 
 func wrap(t *testing.T, cfg Config, caching bool, in llm.Request) llm.Request {
 	t.Helper()
-	m, ok := New(cfg).(agent.ModelWrapper)
-	if !ok {
-		t.Fatal("cache middleware does not wrap model calls")
-	}
+	m := mustNew(t, cfg)
 	var seen llm.Request
 	req := &agent.ModelRequest{Request: in, Profile: llm.Profile{Caching: caching}}
 	_, err := m.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
@@ -27,8 +25,8 @@ func wrap(t *testing.T, cfg Config, caching bool, in llm.Request) llm.Request {
 }
 
 func TestName(t *testing.T) {
-	if got := New(Config{}).Name(); got != "cache" {
-		t.Fatalf("Name() = %q, want cache", got)
+	if got := mustNew(t, Config{}).Name(); Name != "cache" || got != Name {
+		t.Fatalf("Name = %q, Name() = %q, want cache", Name, got)
 	}
 }
 
@@ -53,5 +51,12 @@ func TestCacheMiddlewareSetsRecentOnly(t *testing.T) {
 func TestCacheMiddlewareCustomRecent(t *testing.T) {
 	if got := wrap(t, Config{Recent: 3}, true, llm.Request{}); got.CacheRecent != 3 {
 		t.Fatalf("CacheRecent = %d, want 3", got.CacheRecent)
+	}
+}
+
+func TestNewRejectsNegative(t *testing.T) {
+	m, err := New(Config{Recent: -1})
+	if err == nil || !strings.HasPrefix(err.Error(), "cache: ") {
+		t.Fatalf("New(Recent: -1) = %v, %v; want a cache error", m, err)
 	}
 }

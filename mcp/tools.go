@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/aswin-kevin/orchestrix/internal/glob"
 	"github.com/aswin-kevin/orchestrix/internal/names"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -236,7 +235,7 @@ func (s *serverConn) listTools(ctx context.Context, client *Client) ([]tool.Tool
 
 // allowed reports whether the allowlist admits the server tool name.
 func (s *serverConn) allowed(name string) bool {
-	return len(s.cfg.Tools) == 0 || slices.ContainsFunc(s.cfg.Tools, func(p string) bool { return glob.Match(p, name) })
+	return len(s.cfg.Tools) == 0 || slices.ContainsFunc(s.cfg.Tools, func(p string) bool { return tool.MatchName(p, name) })
 }
 
 // adapter builds the agent tool named name for the server tool info.

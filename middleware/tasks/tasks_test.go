@@ -53,7 +53,7 @@ func newAgent(t *testing.T, p llm.Provider, m *Middleware, b *shell.Backend, ext
 		Provider:       p,
 		Backend:        b,
 		Tools:          extra,
-		Middleware:     []agent.Middleware{filesystem.New(filesystem.Config{Execute: true, Background: true}), m},
+		Middleware:     []agent.Middleware{mustFS(t, filesystem.Config{Execute: true, Background: true}), m},
 		PermissionMode: permission.ModeBypass,
 	})
 	if err != nil {

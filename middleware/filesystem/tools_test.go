@@ -49,7 +49,7 @@ type fixture struct {
 func newFixture(t *testing.T, cfg Config) fixture {
 	t.Helper()
 	tools := map[string]tool.Tool{}
-	for _, tl := range New(cfg).(agent.ToolProvider).Tools() {
+	for _, tl := range mustNew(t, cfg).Tools() {
 		tools[tl.Name()] = tl
 	}
 	return fixture{tools: tools, call: &tool.Call{State: state.New(), Backend: cfg.Backend}}
@@ -247,7 +247,7 @@ func TestDeleteDirectoryForgetsReads(t *testing.T) {
 
 	f.run(t, "delete", obj{"path": "/d"})
 
-	read, _ := ReadKey.Get(f.call.State)
+	read, _ := readKey.Get(f.call.State)
 	if _, ok := read["/d/a.txt"]; ok {
 		t.Fatal("entry under deleted directory kept")
 	}
@@ -454,14 +454,14 @@ func TestToolFlags(t *testing.T) {
 	}
 }
 
-func TestReadKeyUpdatesAreCopies(t *testing.T) {
+func TestReadRecordUpdatesAreCopies(t *testing.T) {
 	b := newClockBackend(t)
 	seed(t, b, "/a.txt", "a")
 	seed(t, b, "/b.txt", "b")
 	f := newFixture(t, Config{Backend: b})
 
 	f.run(t, "read_file", obj{"path": "/a.txt"})
-	before, _ := ReadKey.Get(f.call.State)
+	before, _ := readKey.Get(f.call.State)
 	f.run(t, "read_file", obj{"path": "/b.txt"})
 
 	if len(before) != 1 {
@@ -485,20 +485,8 @@ func TestAllowlist(t *testing.T) {
 		t.Fatalf("tools = %v, want read_file and grep", f.tools)
 	}
 
-	mustPanic := func(name string, cfg Config) {
-		t.Helper()
-		defer func() {
-			if recover() == nil {
-				t.Errorf("%s: New did not panic", name)
-			}
-		}()
-		New(cfg)
-	}
-	mustPanic("missing read_file", Config{Tools: []string{"grep"}})
-	mustPanic("unknown tool", Config{Tools: []string{"read_file", "nope"}})
-
 	// Schemas of excluded tools are removed; other tools are untouched.
-	mw := New(Config{Tools: []string{"read_file", "grep"}}).(agent.ModelWrapper)
+	mw := mustNew(t, Config{Tools: []string{"read_file", "grep"}})
 	req := &agent.ModelRequest{Request: llm.Request{Tools: []llm.ToolSchema{{Name: "read_file"}, {Name: "write_file"}, {Name: "mine"}}}}
 	var seen []llm.ToolSchema
 	_, _ = mw.WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
@@ -514,7 +502,7 @@ func wrapSystem(t *testing.T, cfg Config, system []string, boundary int) ([]stri
 	t.Helper()
 	req := &agent.ModelRequest{Request: llm.Request{System: system, CacheBoundary: boundary}}
 	var got llm.Request
-	_, err := New(cfg).(agent.ModelWrapper).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := mustNew(t, cfg).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		got = r.Request
 		return &llm.Response{}, nil
 	})
@@ -676,4 +664,52 @@ func TestToolsReachCapabilitiesThroughUnwrap(t *testing.T) {
 	f.run(t, "read_file", obj{"path": "/a.txt"})
 	wantText(t, f.run(t, "multi_edit", obj{"path": "/a.txt", "edits": []obj{{"old_string": "x", "new_string": "y"}}}), false,
 		"Applied 1 edit(s) to /a.txt")
+}
+
+func TestNewUnknownToolIsError(t *testing.T) {
+	for name, cfg := range map[string]Config{
+		"nope":      {Tools: []string{"read_file", "nope"}},
+		"read_file": {Tools: []string{"grep"}},
+		"ghost":     {Descriptions: map[string]string{"ghost": "x"}},
+	} {
+		m, err := New(cfg)
+		if err == nil || m != nil || !strings.HasPrefix(err.Error(), "filesystem: ") || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: New = %v, %v; want a filesystem error naming it", name, m, err)
+		}
+	}
+}
+
+func TestNewRejectsNegative(t *testing.T) {
+	for name, cfg := range map[string]Config{
+		"ReadLimit":      {ReadLimit: -1},
+		"MaxLineChars":   {MaxLineChars: -1},
+		"OffloadChars":   {OffloadChars: -1},
+		"ExecTimeout":    {ExecTimeout: -1},
+		"MaxExecTimeout": {MaxExecTimeout: -1},
+	} {
+		_, err := New(cfg)
+		want := "filesystem: " + name + " must not be negative"
+		if err == nil || err.Error() != want {
+			t.Errorf("%s: err = %v, want %q", name, err, want)
+		}
+	}
+}
+
+func TestReadAt(t *testing.T) {
+	b := newClockBackend(t)
+	seed(t, b, "/a.txt", "a")
+	f := newFixture(t, Config{Backend: b})
+	if _, ok := ReadAt(f.call.State, "/a.txt"); ok {
+		t.Fatal("ReadAt reports a read before any")
+	}
+	f.run(t, "read_file", obj{"path": "/a.txt"})
+	if at, ok := ReadAt(f.call.State, "/a.txt"); !ok || at.IsZero() {
+		t.Fatalf("ReadAt = %v, %v; want a non-zero time", at, ok)
+	}
+}
+
+func TestName(t *testing.T) {
+	if Name != "filesystem" || mustNew(t, Config{}).Name() != Name {
+		t.Fatalf("Name = %q", Name)
+	}
 }

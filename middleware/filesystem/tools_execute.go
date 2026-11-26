@@ -11,21 +11,26 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-type executeInput struct {
-	Command        string `json:"command" desc:"Shell command to run."`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty" desc:"Seconds to wait before the command is stopped. Defaults to the configured timeout and is capped at the configured maximum."`
+// ExecuteInput is the input of execute.
+type ExecuteInput struct {
+	// Command is a tool parameter. Shell command to run.
+	Command string `json:"command" desc:"Shell command to run."`
+	// TimeoutSeconds is a tool parameter. Seconds to wait before the command is stopped. Defaults to the configured timeout and is capped at the configured maximum.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty" desc:"Seconds to wait before the command is stopped. Defaults to the configured timeout and is capped at the configured maximum."`
 }
 
-// backgroundExecuteInput is the input of execute when Config.Background is
+// BackgroundExecuteInput is the input of execute when Config.Background is
 // set; a separate type keeps run_in_background out of the schema otherwise.
-type backgroundExecuteInput struct {
-	executeInput
+type BackgroundExecuteInput struct {
+	// ExecuteInput holds the parameters execute has without background support.
+	ExecuteInput
+	// RunInBackground is a tool parameter. Start the command and return immediately; you will be notified when it finishes.
 	RunInBackground bool `json:"run_in_background,omitempty" desc:"Start the command and return immediately; you will be notified when it finishes."`
 }
 
 // registersExecute reports whether the execute tool is offered; see
 // Config.Execute for why a nil Backend needs the explicit opt-in.
-func (m *middleware) registersExecute() bool {
+func (m *Middleware) registersExecute() bool {
 	if m.cfg.Backend == nil {
 		return m.cfg.Execute
 	}
@@ -35,25 +40,25 @@ func (m *middleware) registersExecute() bool {
 
 // executeTool has no permission function of its own, so it falls through to
 // the default "ask" verdict: running commands is never pre-approved here.
-func (m *middleware) executeTool() tool.Tool {
+func (m *Middleware) executeTool() tool.Tool {
 	description := m.description(ToolExecute, "Run a shell command in the workspace and return its combined output followed by the exit code. Each command runs in a fresh shell from the workspace root, so `cd` and `export` do not carry over; chain steps with `&&`. Commands that exceed the timeout are stopped.")
 	subject := tool.WithShellSubject(func(raw json.RawMessage) string {
-		var in executeInput
+		var in ExecuteInput
 		_ = json.Unmarshal(raw, &in) // an unparsable input has no subject
 		return in.Command
 	})
 	if m.cfg.Background {
 		return tool.New(ToolExecute, description, m.execute, subject)
 	}
-	foreground := func(ctx context.Context, in executeInput, c *tool.Call) (tool.Result, error) {
-		return m.execute(ctx, backgroundExecuteInput{executeInput: in}, c)
+	foreground := func(ctx context.Context, in ExecuteInput, c *tool.Call) (tool.Result, error) {
+		return m.execute(ctx, BackgroundExecuteInput{ExecuteInput: in}, c)
 	}
 	return tool.New(ToolExecute, description, foreground, subject)
 }
 
-func (m *middleware) execute(ctx context.Context, in backgroundExecuteInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) execute(ctx context.Context, in BackgroundExecuteInput, c *tool.Call) (tool.Result, error) {
 	if in.RunInBackground {
-		return m.executeInBackground(ctx, in.executeInput, c), nil
+		return m.executeInBackground(ctx, in.ExecuteInput, c), nil
 	}
 	b, err := m.backendFor(c)
 	if err != nil {
@@ -77,7 +82,7 @@ func (m *middleware) execute(ctx context.Context, in backgroundExecuteInput, c *
 // with the backend the foreground command would use. The timeout is passed
 // as asked, zero when none was: the starter applies its own default and cap,
 // which suit long-running jobs better than the foreground ones.
-func (m *middleware) executeInBackground(ctx context.Context, in executeInput, c *tool.Call) tool.Result {
+func (m *Middleware) executeInBackground(ctx context.Context, in ExecuteInput, c *tool.Call) tool.Result {
 	if c == nil || c.Background == nil {
 		return tool.Errorf("background execution is not available")
 	}
@@ -96,7 +101,7 @@ func (m *middleware) executeInBackground(ctx context.Context, in executeInput, c
 }
 
 // execTimeout applies the default and the cap to the model's request.
-func (m *middleware) execTimeout(seconds int) time.Duration {
+func (m *Middleware) execTimeout(seconds int) time.Duration {
 	if seconds <= 0 {
 		return min(m.cfg.ExecTimeout, m.cfg.MaxExecTimeout)
 	}

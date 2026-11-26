@@ -5,10 +5,11 @@
 //
 // # Patterns
 //
-// Models and ExcludeTools hold name patterns, not path globs: * matches any
-// run of characters, including "/" (so "gpt-*" does not match "org/gpt-5" but
-// "*gpt-*" does), ? matches exactly one character, and nothing is cleaned or
-// collapsed. A pattern must not be empty, blank or contain a NUL byte.
+// Models and ExcludeTools hold name patterns as in tool.MatchName, not path
+// globs: * matches any run of characters, including "/" (so "gpt-*" does not
+// match "org/gpt-5" but "*gpt-*" does), ? matches exactly one character, and
+// nothing is cleaned or collapsed. A pattern must not be empty, blank or
+// contain a NUL byte (tool.ValidPattern).
 //
 // # Which model
 //
@@ -35,7 +36,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -108,8 +108,8 @@ func New(cfg Config) (*Middleware, error) {
 			return nil, fmt.Errorf("profiles: adjustment %d has no Models", i)
 		}
 		for _, p := range slices.Concat(a.Models, a.ExcludeTools) {
-			if strings.TrimSpace(p) == "" || strings.ContainsRune(p, 0) {
-				return nil, fmt.Errorf("profiles: adjustment %d has an invalid pattern %q", i, p)
+			if err := tool.ValidPattern(p); err != nil {
+				return nil, fmt.Errorf("profiles: adjustment %d has an invalid pattern %q: %w", i, p, err)
 			}
 		}
 		if slices.Contains(a.ExcludeMiddleware, MiddlewareName) {
@@ -150,37 +150,11 @@ func (m *Middleware) Match(model string) []Adjustment {
 func (m *Middleware) matching(model string) []Adjustment {
 	var out []Adjustment
 	for _, a := range m.adjustments {
-		if slices.ContainsFunc(a.Models, func(p string) bool { return matchName(p, model) }) {
+		if slices.ContainsFunc(a.Models, func(p string) bool { return tool.MatchName(p, model) }) {
 			out = append(out, a)
 		}
 	}
 	return out
-}
-
-// matchName reports whether name matches pattern: * is any run of characters
-// (including "/"), ? is exactly one character, anything else matches itself.
-func matchName(pattern, name string) bool {
-	p, n := []rune(pattern), []rune(name)
-	pi, ni, star, mark := 0, 0, -1, 0
-	for ni < len(n) {
-		switch {
-		case pi < len(p) && p[pi] == '*':
-			star, mark = pi, ni
-			pi++
-		case pi < len(p) && (p[pi] == '?' || p[pi] == n[ni]):
-			pi++
-			ni++
-		case star >= 0:
-			mark++
-			pi, ni = star+1, mark
-		default:
-			return false
-		}
-	}
-	for pi < len(p) && p[pi] == '*' {
-		pi++
-	}
-	return pi == len(p)
 }
 
 // ExcludeMiddleware implements agent.MiddlewareExcluder.
@@ -195,7 +169,7 @@ func (m *Middleware) ExcludeMiddleware(model string) []string {
 // excluded reports whether an adjustment hides the tool name.
 func excluded(adjs []Adjustment, name string) bool {
 	for _, a := range adjs {
-		if slices.ContainsFunc(a.ExcludeTools, func(p string) bool { return matchName(p, name) }) {
+		if slices.ContainsFunc(a.ExcludeTools, func(p string) bool { return tool.MatchName(p, name) }) {
 			return true
 		}
 	}

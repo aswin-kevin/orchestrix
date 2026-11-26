@@ -306,7 +306,7 @@ func newFilesystemAgent(t *testing.T, p llm.Provider, cfg agent.Config) (*agent.
 	be := testutil.Memory(t)
 	cfg.Provider = p
 	cfg.Backend = be
-	cfg.Middleware = []agent.Middleware{filesystem.New(filesystem.Config{}), New(Config{Tools: []string{filesystem.ToolWriteFile}})}
+	cfg.Middleware = []agent.Middleware{mustFS(t, filesystem.Config{}), New(Config{Tools: []string{filesystem.ToolWriteFile}})}
 	return mustNew(t, cfg), be
 }
 
@@ -518,7 +518,7 @@ func TestGateWithoutMiddlewareStaysLocked(t *testing.T) {
 
 func writeFileTool(t *testing.T) tool.Tool {
 	t.Helper()
-	for _, tl := range filesystem.New(filesystem.Config{}).(agent.ToolProvider).Tools() {
+	for _, tl := range mustFS(t, filesystem.Config{}).Tools() {
 		if tl.Name() == filesystem.ToolWriteFile {
 			return tl
 		}
@@ -824,6 +824,16 @@ func TestUnlockGlob(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(restored)
+	edge := state.New()
+	Unlock(edge, "a/*", "get_?", "*_x")
+	for name, want := range map[string]bool{
+		"a/b/c": true, "a": false, "get_1": true, "get_": false, "get_12": false,
+		"y_x": true, "y_xz": false, "ECHO": false,
+	} {
+		if Unlocked(edge, name) != want {
+			t.Errorf("Unlocked(%q) = %v, want %v", name, !want, want)
+		}
+	}
 	if Unlocked(nil, "echo") {
 		t.Fatal("Unlocked(nil) must be false")
 	}

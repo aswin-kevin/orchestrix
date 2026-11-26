@@ -28,7 +28,7 @@ func readAll(t *testing.T, b backend.Backend, path string) string {
 func wrapToolWith(t *testing.T, cfg Config, name, id string, res tool.Result) tool.Result {
 	t.Helper()
 	call := &agent.ToolCall{ID: id, Name: name, State: state.New(), Call: &tool.Call{Backend: cfg.Backend}}
-	out, err := New(cfg).(agent.ToolWrapper).WrapTool(context.Background(), call, func(context.Context, *agent.ToolCall) (tool.Result, error) {
+	out, err := mustNew(t, cfg).WrapTool(context.Background(), call, func(context.Context, *agent.ToolCall) (tool.Result, error) {
 		return res, nil
 	})
 	if err != nil {
@@ -123,7 +123,7 @@ func requestMessages(t *testing.T, cfg Config, msgs []llm.Message) []llm.Message
 	t.Helper()
 	req := &agent.ModelRequest{Request: llm.Request{Messages: msgs}}
 	var got []llm.Message
-	_, err := New(cfg).(agent.ModelWrapper).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := mustNew(t, cfg).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		got = r.Request.Messages
 		return &llm.Response{}, nil
 	})
@@ -181,7 +181,7 @@ func TestLargeUserMessageUsesRequestBackend(t *testing.T) {
 	huge := strings.Repeat("z", MessageOffloadChars+10)
 	req := &agent.ModelRequest{Request: llm.Request{Messages: []llm.Message{llm.UserText(huge)}}, Backend: b}
 	var got []llm.Message
-	_, err := New(Config{}).(agent.ModelWrapper).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
+	_, err := mustNew(t, Config{}).WrapModel(context.Background(), req, func(_ context.Context, r *agent.ModelRequest) (*llm.Response, error) {
 		got = r.Request.Messages
 		return &llm.Response{}, nil
 	})

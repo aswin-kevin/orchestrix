@@ -16,7 +16,7 @@ import (
 func TestPermissionRequestMatchesLoop(t *testing.T) {
 	a, err := agent.New(agent.Config{
 		Provider:   llmtest.New(),
-		Middleware: []agent.Middleware{filesystem.New(filesystem.Config{Backend: testutil.Memory(t)})},
+		Middleware: []agent.Middleware{mustFS(t, filesystem.Config{Backend: testutil.Memory(t)})},
 	})
 	if err != nil {
 		t.Fatal(err)

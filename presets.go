@@ -179,7 +179,7 @@ func (s *settings) baseStack() []agent.Middleware {
 	if s.compress != nil {
 		stack = append(stack, compress.New(*s.compress))
 	}
-	stack = append(stack, cache.New(cache.Config{}))
+	stack = s.appendBuilt(stack, "cache", func() (agent.Middleware, error) { return cache.New(cache.Config{}) })
 	if s.hooks != nil {
 		stack = append(stack, hooks.New(*s.hooks))
 	}
@@ -203,17 +203,17 @@ func (s *settings) baseStack() []agent.Middleware {
 		}
 	}
 	if s.planMode != nil {
-		stack = append(stack, planmode.New(*s.planMode))
+		stack = s.appendBuilt(stack, "WithPlanMode", func() (agent.Middleware, error) { return planmode.New(*s.planMode) })
 	}
 	// A backend given with WithBackend can run commands when it is an
 	// Executor. With a factory the backends are unknown when tools are
 	// collected, so tasks (which needs commands) is the promise that execute
 	// works.
 	_, canExecute := backend.AsExecutor(s.cfg.Backend)
-	stack = append(stack,
-		filesystem.New(filesystem.Config{Execute: s.shell != nil || s.tasks != nil || canExecute, Background: s.tasks != nil}),
-		planning.New(planning.Config{}),
-	)
+	stack = s.appendBuilt(stack, "filesystem", func() (agent.Middleware, error) {
+		return filesystem.New(filesystem.Config{Execute: s.shell != nil || s.tasks != nil || canExecute, Background: s.tasks != nil})
+	})
+	stack = s.appendBuilt(stack, "planning", func() (agent.Middleware, error) { return planning.New(planning.Config{}) })
 	if sub := s.subagentsMiddleware(); sub != nil {
 		stack = append(stack, sub)
 	}

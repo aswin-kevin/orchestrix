@@ -3,13 +3,13 @@ package deferred
 import (
 	"slices"
 
-	"github.com/aswin-kevin/orchestrix/internal/glob"
 	"github.com/aswin-kevin/orchestrix/state"
+	"github.com/aswin-kevin/orchestrix/tool"
 )
 
 // UnlockedKey holds the tool name patterns unlocked in this run, in the
-// order they were unlocked. A pattern is a glob over tool names: "*" matches
-// any run of characters and "?" exactly one. It is private to the run and
+// order they were unlocked. A pattern is a name pattern as in tool.MatchName:
+// "*" matches any run of characters and "?" exactly one. It is private to the run and
 // checkpointed with it; a forked State inherits it.
 var UnlockedKey = state.NewKey[[]string]("deferred.unlocked", state.Private[[]string]())
 
@@ -83,5 +83,5 @@ func Unlocked(s *state.State, name string) bool {
 
 // matchesAny reports whether any of patterns matches the tool name.
 func matchesAny(patterns []string, name string) bool {
-	return slices.ContainsFunc(patterns, func(p string) bool { return glob.Match(p, name) })
+	return slices.ContainsFunc(patterns, func(p string) bool { return tool.MatchName(p, name) })
 }

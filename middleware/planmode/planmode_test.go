@@ -59,7 +59,7 @@ func newAgent(t *testing.T, cfg Config, ac agent.Config, turns ...llmtest.Turn) 
 	t.Helper()
 	p := llmtest.New(turns...)
 	ac.Provider = p
-	ac.Middleware = append(ac.Middleware, New(cfg))
+	ac.Middleware = append(ac.Middleware, mustNew(t, cfg))
 	a, err := agent.New(ac)
 	if err != nil {
 		t.Fatal(err)
@@ -269,8 +269,8 @@ func TestExitInterruptsAndApproveRestores(t *testing.T) {
 	if got := effectiveMode(a, final.State); got != permission.ModeAcceptEdits {
 		t.Fatalf("mode = %s, want acceptEdits", got)
 	}
-	if plan, _ := PlanKey.Get(final.State); plan != "1. write a.txt" {
-		t.Fatalf("PlanKey = %q", plan)
+	if plan, _ := Plan(final.State); plan != "1. write a.txt" {
+		t.Fatalf("planKey = %q", plan)
 	}
 	if _, ok := previousKey.Get(final.State); ok {
 		t.Fatal("previousKey not deleted")
@@ -322,8 +322,8 @@ func TestRespondIsFeedback(t *testing.T) {
 
 func TestEditReplacesPlan(t *testing.T) {
 	a, _, final := resumeWith(t, Config{}, agent.Decision{Type: agent.Edit, Input: []byte(`{"plan":"v2"}`)})
-	if plan, _ := PlanKey.Get(final.State); plan != "v2" {
-		t.Fatalf("PlanKey = %q, want v2", plan)
+	if plan, _ := Plan(final.State); plan != "v2" {
+		t.Fatalf("planKey = %q, want v2", plan)
 	}
 	if got := effectiveMode(a, final.State); got != permission.ModeAcceptEdits {
 		t.Fatalf("mode = %s", got)
@@ -348,7 +348,7 @@ func TestApproveModeOverride(t *testing.T) {
 
 func TestStartedInPlanApprovesToDefault(t *testing.T) {
 	cfg := Config{DisableEnter: true}
-	mw := New(cfg).(agent.ToolProvider)
+	mw := mustNew(t, cfg)
 	for _, tl := range mw.Tools() {
 		if tl.Name() == ToolEnter {
 			t.Fatal("DisableEnter still offers enter_plan_mode")
@@ -519,8 +519,8 @@ func TestApproverUpdatedInputReplacesPlan(t *testing.T) {
 		llmtest.Turn{Text: "done"},
 	)
 	final := runToEnd(t, a)
-	if plan, _ := PlanKey.Get(final.State); plan != "edited plan" {
-		t.Fatalf("PlanKey = %q, want the edited plan", plan)
+	if plan, _ := Plan(final.State); plan != "edited plan" {
+		t.Fatalf("planKey = %q, want the edited plan", plan)
 	}
 	if got := text(resultFor(t, p, "x")); !strings.Contains(got, "edited plan") {
 		t.Fatalf("result = %q", got)
@@ -651,5 +651,28 @@ func TestExitRestoresDontAsk(t *testing.T) {
 	final := runToEnd(t, a)
 	if got := effectiveMode(a, final.State); got != permission.ModeDontAsk {
 		t.Fatalf("mode = %s, want dontAsk", got)
+	}
+}
+
+func TestPlanAccessor(t *testing.T) {
+	if plan, ok := Plan(state.New()); ok || plan != "" {
+		t.Fatalf("Plan on fresh state = %q, %v; want empty, false", plan, ok)
+	}
+	dir := t.TempDir()
+	interruptedExit(t, dir, Config{}, permission.ModeAcceptEdits, "1. write a.txt")
+	a, _ := newCheckpointed(t, dir, Config{}, permission.ModeAcceptEdits, &writes{}, llmtest.Turn{Text: "done"})
+	th, intr := pendingOf(t, a, "t1")
+	if intr == nil {
+		t.Fatal("pending interrupt not restored")
+	}
+	final := drain(t, th.Resume(context.Background(), []agent.Decision{{ToolUseID: "x", Type: agent.Approve}}))
+	if plan, ok := Plan(final.State); !ok || plan != "1. write a.txt" {
+		t.Fatalf("Plan = %q, %v; want the approved plan, true", plan, ok)
+	}
+}
+
+func TestName(t *testing.T) {
+	if Name != "planmode" || mustNew(t, Config{}).Name() != Name {
+		t.Fatalf("Name = %q", Name)
 	}
 }

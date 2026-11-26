@@ -26,20 +26,22 @@ const (
 // attachment would swamp the request.
 const MaxMediaBytes = 5 << 20
 
-type lsInput struct {
+// LsInput is the input of ls.
+type LsInput struct {
+	// Path is a tool parameter. Directory to list, absolute from the workspace root. Defaults to "/".
 	Path string `json:"path,omitempty" desc:"Directory to list, absolute from the workspace root. Defaults to \"/\"."`
 }
 
-func (m *middleware) lsTool() tool.Tool {
+func (m *Middleware) lsTool() tool.Tool {
 	return tool.New(ToolLs,
 		m.description(ToolLs, "List the entries of a directory, one per line. Directories end with \"/\". Lists direct children only; use glob to search recursively."),
 		m.ls,
 		tool.WithReadOnly(), tool.WithConcurrent(),
-		tool.WithPaths(accessFor(permission.OpRead, func(in lsInput) string { return in.Path })),
+		tool.WithPaths(accessFor(permission.OpRead, func(in LsInput) string { return in.Path })),
 	)
 }
 
-func (m *middleware) ls(ctx context.Context, in lsInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) ls(ctx context.Context, in LsInput, c *tool.Call) (tool.Result, error) {
 	b, err := m.backendFor(c)
 	if err != nil {
 		return tool.Errorf("%v", err), nil
@@ -73,22 +75,26 @@ func formatEntries(entries []backend.FileInfo) string {
 	return strings.Join(lines, "\n")
 }
 
-type readFileInput struct {
-	Path   string `json:"path" desc:"File to read, absolute from the workspace root."`
-	Offset int    `json:"offset,omitempty" desc:"1-based line number to start from. Defaults to 1."`
-	Limit  int    `json:"limit,omitempty" desc:"Maximum number of lines to return. Defaults to the configured page size."`
+// ReadFileInput is the input of read_file.
+type ReadFileInput struct {
+	// Path is a tool parameter. File to read, absolute from the workspace root.
+	Path string `json:"path" desc:"File to read, absolute from the workspace root."`
+	// Offset is a tool parameter. 1-based line number to start from. Defaults to 1.
+	Offset int `json:"offset,omitempty" desc:"1-based line number to start from. Defaults to 1."`
+	// Limit is a tool parameter. Maximum number of lines to return. Defaults to the configured page size.
+	Limit int `json:"limit,omitempty" desc:"Maximum number of lines to return. Defaults to the configured page size."`
 }
 
-func (m *middleware) readFileTool() tool.Tool {
+func (m *Middleware) readFileTool() tool.Tool {
 	return tool.New(ToolReadFile,
 		m.description(ToolReadFile, fmt.Sprintf("Read a file with numbered lines. Returns at most %d lines by default and says when more remain; page with offset and limit. Lines longer than %d characters are truncated. Images and PDFs are returned as attachments when the model supports them. A file must be read before it can be edited or overwritten.", m.cfg.ReadLimit, m.cfg.MaxLineChars)),
 		m.readFile,
 		tool.WithReadOnly(), tool.WithConcurrent(),
-		tool.WithPaths(accessFor(permission.OpRead, func(in readFileInput) string { return in.Path })),
+		tool.WithPaths(accessFor(permission.OpRead, func(in ReadFileInput) string { return in.Path })),
 	)
 }
 
-func (m *middleware) readFile(ctx context.Context, in readFileInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) readFile(ctx context.Context, in ReadFileInput, c *tool.Call) (tool.Result, error) {
 	b, err := m.backendFor(c)
 	if err != nil {
 		return tool.Errorf("%v", err), nil
@@ -112,7 +118,7 @@ func (m *middleware) readFile(ctx context.Context, in readFileInput, c *tool.Cal
 
 // formatPage renders a page in `cat -n` style, with a footer saying how to
 // continue when lines remain.
-func (m *middleware) formatPage(res backend.ReadResult) string {
+func (m *Middleware) formatPage(res backend.ReadResult) string {
 	if res.TotalLines == 0 {
 		return emptyFileText
 	}
