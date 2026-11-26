@@ -173,8 +173,9 @@ func TestReleaseOnlyWhenSettled(t *testing.T) {
 	if m.ThreadCount() != 1 {
 		t.Fatal("released a running thread")
 	}
-	f.end()
+	// Take the channel before the job ends: it fires on the next end only.
 	ch, _ := m.Changed("t")
+	f.end()
 	waitFor(t, ch)
 	m.Release("t")
 	if m.ThreadCount() != 1 {
