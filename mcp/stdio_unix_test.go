@@ -100,7 +100,8 @@ func TestCloseKillsGrandchild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) }) // only if the test failed
+	// only if the test failed
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 	if processGone(pid) {
 		t.Fatal("grandchild not running before Close")
 	}
@@ -123,7 +124,8 @@ func TestExitedServerLeftoversKilled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) }) // only if the test failed
+	// only if the test failed
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
 
 	if _, err := c.CallTool(context.Background(), "quit", nil); !errors.Is(err, ErrClosed) {
 		t.Fatalf("quit: err = %v, want ErrClosed", err)

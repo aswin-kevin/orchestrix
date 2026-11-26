@@ -131,7 +131,9 @@ func TestDiskGrepSemantics(t *testing.T) {
 			}
 			want := 0
 			if c.path == "" && c.pattern == "hello" {
-				want = 1 // only ok.txt: binary, invalid UTF-8 and oversized files are skipped
+				// only ok.txt: binary, invalid UTF-8 and oversized files are
+				// skipped
+				want = 1
 			}
 			if len(got) != want {
 				t.Errorf("rg=%v Grep(%q, %q) = %+v, want %d result(s)", rg, c.pattern, c.path, got, want)

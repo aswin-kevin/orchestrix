@@ -19,19 +19,19 @@ const devNull = "/dev/null"
 // The parser is deliberately conservative. ok is false whenever it cannot
 // vouch that the segments are every command the line runs, and are the
 // programs their names suggest: command or process substitution, grouping,
-// heredocs, redirections other than discarding output to /dev/null,
-// unbalanced quotes, shells, script interpreters, editors and other commands
-// that run hidden code (sh, eval, xargs, sudo, fc, awk, python, vim, find -exec,
-// ...), options that make an ordinary command run one (git -c, sed's e, tar
+// heredocs, redirections other than discarding output to /dev/null, unbalanced
+// quotes, shells, script interpreters, editors and other commands that run
+// hidden code (sh, eval, xargs, sudo, fc, awk, python, vim, find -exec, ...),
+// options that make an ordinary command run one (git -c, sed's e, tar
 // --to-command; see commandOptionChecks), arithmetic, which runs commands
 // hidden in array subscripts ($[...], let, ${a[i]}, ${x:offset}, [[ -eq ]],
 // test -v), parameter expansions other than plain ones (${!x}, ${x@P}),
 // compound commands, a command word that depends on expansion, contains
 // whitespace or names a path (./npm), any variable assignment (PATH=... or
 // LD_PRELOAD=... can change which program runs or what it does; ${x:=...}
-// assigns too), and an empty line. Normalization is for deny rules:
-// /bin/rm x still reads as rm x, but never vouches for the line. Even when ok
-// is false the segments are a best effort that deny rules can still match.
+// assigns too), and an empty line. Normalization is for deny rules: /bin/rm x
+// still reads as rm x, but never vouches for the line. Even when ok is false
+// the segments are a best effort that deny rules can still match.
 func SplitCommand(cmd string) (segments []string, ok bool) {
 	p := commandParser{src: cmd, quotedAt: notQuoted}
 	p.parse()

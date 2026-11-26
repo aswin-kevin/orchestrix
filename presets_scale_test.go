@@ -70,7 +70,8 @@ func kvBackend(t *testing.T) *kv.Backend {
 	return b
 }
 
-// dirMemories returns a kv backend over a DirStore in dir, namespace "memories".
+// dirMemories returns a kv backend over a DirStore in dir, namespace
+// "memories".
 func dirMemories(t *testing.T, dir string) *kv.Backend {
 	t.Helper()
 	store, err := kv.NewDirStore(dir, kv.DirStoreConfig{})
@@ -153,7 +154,8 @@ func TestWithMountPersistsMemoriesAcrossThreads(t *testing.T) {
 		t.Error("thread b sees /scratch.txt written in thread a; the rest of the workspace must stay per thread")
 	}
 
-	// A new agent over a fresh DirStore on the same directory, as after a restart.
+	// A new agent over a fresh DirStore on the same directory, as after a
+	// restart.
 	a2, err := orchestrix.NewWithProvider(llmtest.New(recallColor()...), opts(dirMemories(t, dir))...)
 	if err != nil {
 		t.Fatal(err)

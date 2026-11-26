@@ -48,7 +48,8 @@ func (f *threadBackends) get(threadID string) backend.Backend {
 		f.backends = map[string]*memory.Backend{}
 	}
 	if f.backends[threadID] == nil {
-		f.backends[threadID], _ = memory.New(memory.Config{}) // the zero Config is valid
+		// the zero Config is valid
+		f.backends[threadID], _ = memory.New(memory.Config{})
 	}
 	return f.backends[threadID]
 }

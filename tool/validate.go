@@ -15,7 +15,8 @@ import (
 // Validate checks the JSON document in against a JSON schema. It supports the
 // subset tools need: type (object, string, integer, number, boolean, array,
 // null), properties, required, enum, items and additionalProperties:false.
-// Errors name the offending location, for example "edits[1].old_string: required".
+// Errors name the offending location, for example "edits[1].old_string:
+// required".
 //
 // Two leniencies match what models commonly send: null for a property that is
 // not required counts as leaving it out, and a number with an integral value
@@ -236,7 +237,8 @@ func jsonTypeName(v any) string {
 }
 
 // checkEnum compares by printed form so that a number decoded from the input
-// (json.Number) equals the same number in a schema decoded from JSON (float64).
+// (json.Number) equals the same number in a schema decoded from JSON
+// (float64).
 func checkEnum(enum []any, v any, path string) error {
 	got := fmt.Sprint(v)
 	for _, allowed := range enum {

@@ -46,10 +46,11 @@ import (
 // Without WithBackend, WithBackendFactory or WithShell, each thread gets its
 // own in-memory workspace; it lives until Agent.Close and, with
 // WithCheckpointer, is saved with the thread. A run with an empty ThreadID
-// gets a fresh, unshared workspace that is dropped when the run ends. WithMount routes path prefixes
-// to other backends on top of any of these, for example memory.DefaultDir to a
-// kv backend so memories outlive the thread. New never panics on bad
-// options: every problem is returned, joined, as one error.
+// gets a fresh, unshared workspace that is dropped when the run ends.
+// WithMount routes path prefixes to other backends on top of any of these, for
+// example memory.DefaultDir to a kv backend so memories outlive the thread.
+// New never panics on bad options: every problem is returned, joined, as one
+// error.
 func New(spec string, opts ...Option) (*agent.Agent, error) {
 	return newAgent(opts, true, func(s *settings) error { return s.resolveSpec(spec) })
 }

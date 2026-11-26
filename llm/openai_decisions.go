@@ -46,8 +46,9 @@ func newOpenAIDecisions(cfg Config) (*openAIDecisions, error) {
 // Wire types.
 
 type openAIDecisionsRequest struct {
-	Model     string                   `json:"model"`
-	Input     any                      `json:"input"` // string, or []openAIInputMessage
+	Model string `json:"model"`
+	// string, or []openAIInputMessage
+	Input     any                      `json:"input"`
 	Questions []openAIDecisionQuestion `json:"questions"`
 }
 

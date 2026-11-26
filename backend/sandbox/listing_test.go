@@ -222,7 +222,8 @@ func TestSandboxHidesTempFiles(t *testing.T) {
 	mustWriteHost(t, filepath.Join(root, ".orx-tmp-0123456789abcdef"), "needle")
 	mustWriteHost(t, filepath.Join(root, "sub", ".orx-tmp-fedcba9876543210"), "needle")
 	mustWriteHost(t, filepath.Join(root, "sub", "a.txt"), "needle")
-	mustWriteHost(t, filepath.Join(root, ".orx-tmp-notes.md"), "needle") // not a temp name
+	// not a temp name
+	mustWriteHost(t, filepath.Join(root, ".orx-tmp-notes.md"), "needle")
 	b := newSandbox(t, newLocalExec(t), root)
 
 	for _, dir := range []string{"/", "/sub"} {

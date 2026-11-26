@@ -189,9 +189,11 @@ func TestPrunedRecordDropsFallbackThread(t *testing.T) {
 	if _, _, err := fb.Load(context.Background(), "t/async_1"); err != nil {
 		t.Fatalf("fallback thread of async_1: %v", err)
 	}
-	h.run(t, context.Background(), "more", nil) // announces async_1, starts async_2
+	// announces async_1, starts async_2
+	h.run(t, context.Background(), "more", nil)
 	waitEnded(t, h.m, "async_2")
-	h.run(t, context.Background(), "more", nil) // announces async_2: async_1's record is pruned
+	// announces async_2: async_1's record is pruned
+	h.run(t, context.Background(), "more", nil)
 	if hasRecord(h.st, "async_1") {
 		t.Fatalf("async_1 was not pruned: %+v", Tasks(h.st))
 	}
@@ -565,7 +567,8 @@ func TestCustomRunnerResolveRefusedInStricterMode(t *testing.T) {
 	if err := agent.SetPermissionMode(h.st, permission.ModePlan); err != nil {
 		t.Fatal(err)
 	}
-	h.run(t, context.Background(), "plan now", nil) // the middleware sees the parent's mode
+	// the middleware sees the parent's mode
+	h.run(t, context.Background(), "plan now", nil)
 	if err := h.m.Resolve(context.Background(), "t", "async_1", approve); err == nil || !strings.Contains(err.Error(), "plan mode") {
 		t.Fatalf("Resolve in plan mode = %v, want a refusal", err)
 	}

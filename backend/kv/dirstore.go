@@ -162,7 +162,8 @@ func (d *DirStore) Get(ctx context.Context, namespace, key string) (Item, error)
 		return Item{}, err
 	}
 	if checkKey(key) != nil {
-		return Item{}, backend.ErrNotFound // such a key can never have been stored
+		// such a key can never have been stored
+		return Item{}, backend.ErrNotFound
 	}
 	f, err := openKeyFile(ctx, filepath.Join(nsDir, fileName(key)), transientWait)
 	if err != nil {

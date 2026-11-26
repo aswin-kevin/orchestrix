@@ -12,9 +12,10 @@ import (
 // next entry; any other error is returned. After the commit every error ends
 // the stream as is, so text already yielded is never repeated or mixed with
 // another model's; OnFallback is not called then, but a fallback error still
-// starts the entry's cool-down so the next call begins elsewhere. An attempt that ends without content is committed when it
-// ends. The first event of each new block is followed by an EventProviderData
-// event stamping the block with the entry's name.
+// starts the entry's cool-down so the next call begins elsewhere. An attempt
+// that ends without content is committed when it ends. The first event of each
+// new block is followed by an EventProviderData event stamping the block with
+// the entry's name.
 func (f *Fallback) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
 		order := f.order(f.now())

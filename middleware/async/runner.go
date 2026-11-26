@@ -284,7 +284,8 @@ func (l *localRunner) checkpointer(parent *agent.Agent) checkpoint.Checkpointer 
 // one can continue it any more. The parent's Checkpointer is left alone.
 func (l *localRunner) pruned(r TaskRecord) {
 	if r.TaskThreadID != "" {
-		_ = l.fallback.Delete(context.Background(), r.TaskThreadID) // absent when the parent saved it
+		// absent when the parent saved it
+		_ = l.fallback.Delete(context.Background(), r.TaskThreadID)
 	}
 }
 
@@ -669,14 +670,14 @@ func (ls *localSession) backendFor(ctx context.Context) backend.Backend {
 }
 
 // Resolve implements Resolver: the next episode resumes the subagent on the
-// task's thread from the interrupted State this one ended with, answering
-// its pending actions with decisions (see agent.Agent.Resume), in the
-// stricter of the task's permission mode and FollowUpMode's: an approved
-// write is still denied while the parent is in plan mode. The pending actions are read from that State,
-// in full, not from the capped copy a record shows. Decisions that do not
-// answer every pending action exactly once, with a type it allows, are
-// refused and start nothing. Only the first successful call starts an
-// episode; later ones fail with ErrNotWaiting.
+// task's thread from the interrupted State this one ended with, answering its
+// pending actions with decisions (see agent.Agent.Resume), in the stricter of
+// the task's permission mode and FollowUpMode's: an approved write is still
+// denied while the parent is in plan mode. The pending actions are read from
+// that State, in full, not from the capped copy a record shows. Decisions that
+// do not answer every pending action exactly once, with a type it allows, are
+// refused and start nothing. Only the first successful call starts an episode;
+// later ones fail with ErrNotWaiting.
 func (t *localTask) Resolve(ctx context.Context, decisions []agent.Decision) (Handle, error) {
 	if !isClosed(t.done) {
 		return nil, fmt.Errorf("%w: the episode is still running", ErrNotWaiting)

@@ -6,9 +6,10 @@ import "context"
 // a call to an entry that another entry follows.
 type handoffKey struct{}
 
-// withHandoff returns ctx telling the retry loop (Transport.Do) that a fallback
-// provider will move to its next entry on any error for which should reports
-// true, so such an error is returned at once instead of being retried here.
+// withHandoff returns ctx telling the retry loop (Transport.Do) that a
+// fallback provider will move to its next entry on any error for which should
+// reports true, so such an error is returned at once instead of being retried
+// here.
 func withHandoff(ctx context.Context, should func(error) bool) context.Context {
 	return context.WithValue(ctx, handoffKey{}, should)
 }

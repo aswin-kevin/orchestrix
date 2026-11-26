@@ -69,14 +69,14 @@ func (c *Coordinator) Resolve(ctx context.Context, threadID, taskID string, deci
 }
 
 // New builds it with orchestrix.New(spec, …): the system prompt, subagents
-// with Workers only (no general-purpose, no fork), async with the same
-// Workers (MaxRunning = MaxConcurrency, and Runner), then opts (later options win).
-// A worker leaving Middleware nil
-// inherits the coordinator's stack, as with the task tool. Specs given with
-// orchestrix.WithSubagents join the task tool only, not start_task. A host
-// passing its own orchestrix.WithSubagentConfig replaces the coordinator's,
-// so it must re-pass Workers (as Subagents), DisableGeneralPurpose and
-// DisableFork to keep the task tool limited to the workers.
+// with Workers only (no general-purpose, no fork), async with the same Workers
+// (MaxRunning = MaxConcurrency, and Runner), then opts (later options win). A
+// worker leaving Middleware nil inherits the coordinator's stack, as with the
+// task tool. Specs given with orchestrix.WithSubagents join the task tool
+// only, not start_task. A host passing its own orchestrix.WithSubagentConfig
+// replaces the coordinator's, so it must re-pass Workers (as Subagents),
+// DisableGeneralPurpose and DisableFork to keep the task tool limited to the
+// workers.
 //
 // New fails without Workers, for a negative MaxConcurrency, an invalid
 // worker spec, when opts replace or remove the async middleware (with
@@ -143,7 +143,8 @@ func build(cfg Config, newAgent func([]orchestrix.Option) (*agent.Agent, error),
 		err = errReplacedAsync
 	}
 	if err != nil {
-		_ = tasks.Close(context.Background()) // nothing ran: there is no worker to wait for
+		// nothing ran: there is no worker to wait for
+		_ = tasks.Close(context.Background())
 		return nil, fmt.Errorf("coordinator: %w", err)
 	}
 	return &Coordinator{Agent: a, tasks: tasks}, nil

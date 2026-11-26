@@ -105,8 +105,8 @@ func cleanBase(p string) (string, error) {
 	return backend.Clean(p)
 }
 
-// source returns the mount serving the directory p (a zero mount, with an empty
-// prefix, standing for the default backend) and p in its namespace.
+// source returns the mount serving the directory p (a zero mount, with an
+// empty prefix, standing for the default backend) and p in its namespace.
 func (c *composite) source(p string) (mount, string) {
 	if m, rel, ok := c.resolve(p); ok {
 		return m, rel

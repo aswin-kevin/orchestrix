@@ -155,7 +155,8 @@ func TestHTTPErrorStatus(t *testing.T) {
 }
 
 func TestFetchPaging(t *testing.T) {
-	body := strings.Repeat("é", 120) // multi-byte runes: paging is by character
+	// multi-byte runes: paging is by character
+	body := strings.Repeat("é", 120)
 	srv := serve(t, "text/plain", body)
 	tl := fetchTool(t, local)
 	header := "URL: " + srv.URL + "/\nTitle: \n\n"
@@ -302,7 +303,8 @@ func TestCACertFile(t *testing.T) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprint(w, "secure")
 	}))
-	srv.Config.ErrorLog = log.New(io.Discard, "", 0) // the untrusted handshake is expected
+	// the untrusted handshake is expected
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	srv.StartTLS()
 	defer srv.Close()
 

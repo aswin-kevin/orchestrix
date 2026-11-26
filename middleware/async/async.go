@@ -572,9 +572,9 @@ func (m *Middleware) reattachRunning(ctx context.Context, s *state.State) {
 // WrapModel implements agent.ModelWrapper. While tasks of the run's thread
 // run, it appends a list of them (id, subagent, how long it has run and the
 // start of its description, in a <background_tasks> block) after the host's
-// system segments, then the prompt; both stay outside the cached prefix. The list
-// comes from the records in State, not from the messages, so it survives a
-// compaction that summarized the start_task calls away.
+// system segments, then the prompt; both stay outside the cached prefix. The
+// list comes from the records in State, not from the messages, so it survives
+// a compaction that summarized the start_task calls away.
 func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	var add []string
 	if req.State != nil {

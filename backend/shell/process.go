@@ -144,7 +144,8 @@ func (p *process) stop() error {
 // copyOutput feeds the pipe into the capture until every writer is gone.
 func (p *process) copyOutput() {
 	defer close(p.copied)
-	_, _ = io.Copy(p.out, p.outRead) // capture never fails; EOF or close ends the copy
+	// capture never fails; EOF or close ends the copy
+	_, _ = io.Copy(p.out, p.outRead)
 	_ = p.outRead.Close()
 }
 

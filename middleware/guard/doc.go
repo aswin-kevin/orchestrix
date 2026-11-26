@@ -4,16 +4,16 @@
 //
 // What is checked: Input checks see the joined text of the run's user input,
 // in BeforeAgent, and only in top-level runs (agent.RunInfo.Depth 0) that
-// carry input, so a resumed run is not checked again. A blocked input ends
-// the run with agent.ReasonHookStopped and an error naming the check.
-// ToolCall checks see the tool's name and JSON arguments of every call, at
-// any depth. The arguments are decoded and encoded again first, so string
-// escapes such as \u0072 cannot hide what the tool will receive; arguments
-// that are not valid JSON fail every check. A blocked call is not run and
-// gets an error result naming the check, so the model can adapt. All checks for one target go in one Decide
-// call. Text longer than Config.MaxInputBytes is never sent to the decider,
-// nor checked by a prefix: every check of that target fails, as if the
-// decider had erred, so by default the input or call is blocked. Raise
+// carry input, so a resumed run is not checked again. A blocked input ends the
+// run with agent.ReasonHookStopped and an error naming the check. ToolCall
+// checks see the tool's name and JSON arguments of every call, at any depth.
+// The arguments are decoded and encoded again first, so string escapes such as
+// \u0072 cannot hide what the tool will receive; arguments that are not valid
+// JSON fail every check. A blocked call is not run and gets an error result
+// naming the check, so the model can adapt. All checks for one target go in
+// one Decide call. Text longer than Config.MaxInputBytes is never sent to the
+// decider, nor checked by a prefix: every check of that target fails, as if
+// the decider had erred, so by default the input or call is blocked. Raise
 // MaxInputBytes for tools whose arguments are large. Non-text input blocks
 // (images, documents) are not checked, and input with no text is not checked.
 //

@@ -142,7 +142,8 @@ func (b *Backend) Execute(ctx context.Context, cmd string, opts backend.ExecOpti
 	select {
 	case <-p.Done():
 	case <-ctx.Done():
-		_ = p.Stop(ctx) // a failed signal still ends in Done via the kill escalation
+		// a failed signal still ends in Done via the kill escalation
+		_ = p.Stop(ctx)
 		<-p.Done()
 		res, _ := p.Result()
 		return res, ctx.Err()

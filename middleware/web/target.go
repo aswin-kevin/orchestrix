@@ -122,8 +122,8 @@ func unreserved(c byte) bool {
 		c == '-' || c == '.' || c == '_' || c == '~'
 }
 
-// resolveDots removes the "." and ".." segments of an escaped absolute
-// path after normalizeEscapes, so encoded dots count too. An empty path becomes
+// resolveDots removes the "." and ".." segments of an escaped absolute path
+// after normalizeEscapes, so encoded dots count too. An empty path becomes
 // "/", and a path ending in a dot segment keeps a trailing slash.
 func resolveDots(escaped string) (string, error) {
 	if escaped == "" {

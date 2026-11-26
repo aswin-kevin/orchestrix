@@ -51,7 +51,8 @@ var todosKey = state.NewKey[[]Todo]("planning.todos", state.Private[[]Todo]())
 // was added, so reminders keep their spacing.
 var remindedTurnKey = state.NewKey[int]("planning.reminded_turn", state.Private[int]())
 
-// Todos returns a copy of the current todo list; it is empty when none was set.
+// Todos returns a copy of the current todo list; it is empty when none was
+// set.
 func Todos(s *state.State) []Todo {
 	todos, _ := todosKey.Get(s)
 	return slices.Clone(todos)

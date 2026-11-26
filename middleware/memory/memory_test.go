@@ -238,7 +238,8 @@ func rewriteTool() tool.Tool {
 		func(ctx context.Context, _ noopInput, c *tool.Call) (tool.Result, error) {
 			return tool.Text("ok"), c.Backend.Write(ctx, "/AGENTS.md", []byte("new text"))
 		},
-		tool.WithReadOnly()) // declared read-only only so the run needs no approval
+		// declared read-only only so the run needs no approval
+		tool.WithReadOnly())
 }
 
 func TestLoadedOncePerRun(t *testing.T) {
@@ -344,7 +345,8 @@ func TestTagVariantsNeutralized(t *testing.T) {
 
 func TestFileCappedToNothingIsSkipped(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	// One 4-byte rune does not fit a 3-byte cap, so nothing of the file is left.
+	// One 4-byte rune does not fit a 3-byte cap, so nothing of the file is
+	// left.
 	b := backendWith(t, map[string]string{"/AGENTS.md": "😀 tail"})
 	s := run(t, newAgent(t, p, b, Config{Files: DefaultFiles(), MaxFileBytes: 3}), user("hi"))
 	if files := Files(s); len(files) != 0 {

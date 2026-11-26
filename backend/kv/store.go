@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	// MaxKeyBytes is the longest key (a cleaned backend path) DirStore accepts.
+	// MaxKeyBytes is the longest key (a cleaned backend path) DirStore
+	// accepts.
 	MaxKeyBytes = 180
 	// MaxNamespaceBytes is the longest namespace New and DirStore accept.
 	MaxNamespaceBytes = 128

@@ -125,8 +125,8 @@ func (r Rule) matchesCommand(tool, command string) bool {
 }
 
 // matchesPaths is true when any single access has the rule's Op and a path
-// matching the rule's glob. Paths are virtual absolute paths; a relative one is
-// rooted at "/" before matching so that "secrets/x" cannot slip past a rule
+// matching the rule's glob. Paths are virtual absolute paths; a relative one
+// is rooted at "/" before matching so that "secrets/x" cannot slip past a rule
 // written for "/secrets/**" (fail closed).
 func (r Rule) matchesPaths(accesses []PathAccess) bool {
 	for _, a := range accesses {

@@ -106,7 +106,8 @@ func encode(m message) json.RawMessage {
 	m.JSONRPC = jsonrpcVersion
 	raw, err := json.Marshal(m)
 	if err != nil {
-		panic(fmt.Sprintf("mcp: encode %s: %v", m.Method, err)) // only RawMessage and RPCError fields
+		// only RawMessage and RPCError fields
+		panic(fmt.Sprintf("mcp: encode %s: %v", m.Method, err))
 	}
 	return raw
 }

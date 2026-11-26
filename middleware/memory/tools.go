@@ -107,7 +107,8 @@ func (m *Middleware) recordTool() tool.Tool {
 	if pather != nil {
 		opts = append(opts, tool.WithPaths(func(raw json.RawMessage) []permission.PathAccess {
 			var in RecordInput
-			_ = json.Unmarshal(raw, &in) // a bad input fails the call before it runs
+			// a bad input fails the call before it runs
+			_ = json.Unmarshal(raw, &in)
 			return pather.RecordPaths(in.entry())
 		}))
 	}

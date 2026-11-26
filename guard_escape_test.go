@@ -34,7 +34,8 @@ func TestGuardSeesDecodedToolArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := "{\"path\":\"/clean.sh\",\"content\":\"\\u0072\\u006d -rf /\"}" // JSON escapes for "rm"
+	// JSON escapes for "rm"
+	raw := "{\"path\":\"/clean.sh\",\"content\":\"\\u0072\\u006d -rf /\"}"
 	model := llmtest.New(
 		llmtest.Turn{RawToolInput: true, ToolCalls: []llmtest.Call{{ID: "1", Name: "write_file", Input: raw}}},
 		llmtest.Turn{Text: "done"},

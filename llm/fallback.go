@@ -62,15 +62,15 @@ type FallbackConfig struct {
 }
 
 // DefaultShouldFallback reports whether err means the provider cannot serve
-// right now: a retryable failure (408, 409, 429, 5xx, 529, a
-// network error, or any error whose Retryable() bool method says so; see
-// IsRetryable), ErrStreamIdle, or an error reported inside a stream (an *APIError
-// with Status 0) whose JSON body has a "type" or "code" of overloaded_error,
+// right now: a retryable failure (408, 409, 429, 5xx, 529, a network error, or
+// any error whose Retryable() bool method says so; see IsRetryable),
+// ErrStreamIdle, or an error reported inside a stream (an *APIError with
+// Status 0) whose JSON body has a "type" or "code" of overloaded_error,
 // rate_limit_error, api_error, server_error or rate_limit_exceeded. A context
-// overflow (see IsContextOverflow, which also honours a
-// ContextOverflow() bool method) and a cancelled or expired context never qualify. Like any
-// fallback error, an idle stream starts the entry's cool-down, and it
-// switches entries only before the stream showed content.
+// overflow (see IsContextOverflow, which also honours a ContextOverflow() bool
+// method) and a cancelled or expired context never qualify. Like any fallback
+// error, an idle stream starts the entry's cool-down, and it switches entries
+// only before the stream showed content.
 func DefaultShouldFallback(err error) bool {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || IsContextOverflow(err) {
 		return false
@@ -78,15 +78,15 @@ func DefaultShouldFallback(err error) bool {
 	return IsRetryable(err) || isTransientStreamError(err)
 }
 
-// NewFallback returns a *Fallback, a Provider that tries cfg.Entries in order, moving to
-// the next entry only when ShouldFallback accepts the error. An entry that
-// failed that way is skipped for the cool-down period unless every entry is
-// cooling down. Backups get the request with Model cleared, so they answer
-// with the model they were built with; Request.Extra is passed unchanged to
-// every entry (see FallbackEntry). When the call's context is done, the
-// error is returned as is: no switch, no OnFallback and no cool-down. When
-// every entry fails, the last entry's error is returned wrapped (errors.Is
-// and errors.As still reach it).
+// NewFallback returns a *Fallback, a Provider that tries cfg.Entries in order,
+// moving to the next entry only when ShouldFallback accepts the error. An
+// entry that failed that way is skipped for the cool-down period unless every
+// entry is cooling down. Backups get the request with Model cleared, so they
+// answer with the model they were built with; Request.Extra is passed
+// unchanged to every entry (see FallbackEntry). When the call's context is
+// done, the error is returned as is: no switch, no OnFallback and no
+// cool-down. When every entry fails, the last entry's error is returned
+// wrapped (errors.Is and errors.As still reach it).
 //
 // Every block of a reply is stamped with ProviderData["orchestrix.source"]
 // set to the answering entry's name. Before a request goes to an entry,

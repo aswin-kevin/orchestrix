@@ -233,9 +233,9 @@ func (m *Manager[H]) thread(threadID string) *thread[H] {
 }
 
 // Start registers the handle start returns as the next job of threadID.
-// recordedIDs lists the ids the caller already recorded, so a thread resumed in
-// a new process never reuses one: numbering continues after the highest number
-// among them.
+// recordedIDs lists the ids the caller already recorded, so a thread resumed
+// in a new process never reuses one: numbering continues after the highest
+// number among them.
 //
 // Start first reserves the job under the Manager's lock: the reservation
 // takes the job's number and holds a slot of the thread's running limit. It
@@ -272,7 +272,8 @@ func (m *Manager[H]) Start(threadID string, recordedIDs []string, start func() (
 			m.mu.Lock()
 			t.starting--
 			if t.next == n {
-				t.next-- // nothing took a later number: hand this one out again
+				// nothing took a later number: hand this one out again
+				t.next--
 			}
 			m.mu.Unlock()
 		}
@@ -295,7 +296,8 @@ func (m *Manager[H]) Start(threadID string, recordedIDs []string, start func() (
 	m.mu.Unlock()
 	if closed {
 		ctx, cancel := detachedStop(context.Background())
-		_, _ = requestStop(ctx, j) // a failed signal still ends in Done via the handle's own escalation
+		// a failed signal still ends in Done via the handle's own escalation
+		_, _ = requestStop(ctx, j)
 		cancel()
 	}
 	return j, nil
@@ -383,7 +385,8 @@ func (m *Manager[H]) Restart(threadID, id string, start func() error) (*Job[H], 
 		}
 		m.mu.Unlock()
 		ctx, cancel := detachedStop(context.Background())
-		_, _ = requestStop(ctx, j) // a failed signal still ends in Done via the handle's own escalation
+		// a failed signal still ends in Done via the handle's own escalation
+		_, _ = requestStop(ctx, j)
 		cancel()
 		return nil, fmt.Errorf("%w: %s was forgotten while it restarted", ErrUnknownJob, id)
 	}
@@ -395,7 +398,8 @@ func (m *Manager[H]) Restart(threadID, id string, start func() error) (*Job[H], 
 	m.mu.Unlock()
 	if closed {
 		ctx, cancel := detachedStop(context.Background())
-		_, _ = requestStop(ctx, j) // a failed signal still ends in Done via the handle's own escalation
+		// a failed signal still ends in Done via the handle's own escalation
+		_, _ = requestStop(ctx, j)
 		cancel()
 	}
 	return j, nil
@@ -519,7 +523,8 @@ func (m *Manager[H]) AdoptStarting(threadID, id string, started time.Time, start
 	m.mu.Unlock()
 	if closed {
 		ctx, cancel := detachedStop(context.Background())
-		_, _ = requestStop(ctx, j) // a failed signal still ends in Done via the handle's own escalation
+		// a failed signal still ends in Done via the handle's own escalation
+		_, _ = requestStop(ctx, j)
 		cancel()
 	}
 	return j, nil
@@ -562,7 +567,8 @@ func (m *Manager[H]) recordEnd(t *thread[H], j *Job[H]) {
 	t.changed = make(chan struct{})
 }
 
-// Get returns the job id of threadID, or nil when the Manager does not know it.
+// Get returns the job id of threadID, or nil when the Manager does not know
+// it.
 func (m *Manager[H]) Get(threadID, id string) *Job[H] {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -671,7 +677,9 @@ func stopAll[H Handle](ctx context.Context, list []*Job[H], wait time.Duration) 
 		sent.Go(func() {
 			stopCtx, cancel := detachedStop(ctx)
 			defer cancel()
-			_, _ = requestStop(stopCtx, j) // a failed signal still ends in Done via the handle's own escalation
+			// a failed signal still ends in Done via the handle's own
+			// escalation
+			_, _ = requestStop(stopCtx, j)
 		})
 	}
 	sent.Wait()
@@ -692,8 +700,8 @@ func stopAll[H Handle](ctx context.Context, list []*Job[H], wait time.Duration) 
 	return true
 }
 
-// StopAndForget stops the jobs with ids in threadID, waits for them up to wait,
-// and then drops them, and the thread once it has no jobs left and none
+// StopAndForget stops the jobs with ids in threadID, waits for them up to
+// wait, and then drops them, and the thread once it has no jobs left and none
 // starting. refresh runs after the jobs ended (or wait passed) but before they
 // are dropped, so it can still read their outcome. The stop requests keep
 // ctx's values but not its cancellation, so they go out even when ctx ended.
@@ -704,7 +712,8 @@ func (m *Manager[H]) StopAndForget(ctx context.Context, threadID string, ids []s
 			list = append(list, j)
 		}
 	}
-	_ = stopAll(ctx, list, wait) // a job that outlives wait is still dropped: its run is over
+	// a job that outlives wait is still dropped: its run is over
+	_ = stopAll(ctx, list, wait)
 	refresh()
 	m.mu.Lock()
 	defer m.mu.Unlock()

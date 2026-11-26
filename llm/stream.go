@@ -26,10 +26,11 @@ const (
 // assign Index to identify the content block an event belongs to.
 //
 // Field use by type: text and thinking deltas and tool input deltas use Text;
-// EventSignature uses Value; EventToolStart uses ToolID and ToolName; EventProviderData
-// uses Key and Value; EventMessageStart and EventMessageDelta use Usage, and the
-// latter may also set StopReason. Either may carry Model and ResponseID, the
-// model and reply id the provider reported, once they are known.
+// EventSignature uses Value; EventToolStart uses ToolID and ToolName;
+// EventProviderData uses Key and Value; EventMessageStart and
+// EventMessageDelta use Usage, and the latter may also set StopReason. Either
+// may carry Model and ResponseID, the model and reply id the provider
+// reported, once they are known.
 type StreamEvent struct {
 	// Type is the kind of the event.
 	Type EventType

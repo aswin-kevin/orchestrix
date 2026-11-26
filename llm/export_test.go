@@ -2,7 +2,8 @@ package llm
 
 import "time"
 
-// SetFallbackClock replaces the cool-down clock of a Fallback, so tests can move time forward.
+// SetFallbackClock replaces the cool-down clock of a Fallback, so tests can
+// move time forward.
 func SetFallbackClock(f *Fallback, now func() time.Time) {
 	f.now = now
 }

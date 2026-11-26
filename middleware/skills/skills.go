@@ -175,7 +175,8 @@ type Scope struct {
 var (
 	// ScopeKey holds the run's Scope; absent means the zero Scope.
 	ScopeKey = state.NewKey[Scope]("skills.scope", state.Private[Scope]())
-	// loadedKey holds the names of the skills loaded in the run, in load order.
+	// loadedKey holds the names of the skills loaded in the run, in load
+	// order.
 	loadedKey = state.NewKey[[]string]("skills.loaded", state.Private[[]string]())
 	// pinnedUnlocksKey records the unlock patterns BeforeAgent granted for
 	// pinned skills, so a later run can take back those of pins that are gone.

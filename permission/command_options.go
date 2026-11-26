@@ -182,7 +182,8 @@ func gitRunsCommand(args []word) bool {
 			i++
 		case gitValueOptions[optionName(arg)] || gitFlagOptions[optionName(arg)]:
 		case strings.HasPrefix(arg, "-"):
-			return true // unknown global: it may take the subcommand as its value
+			// unknown global: it may take the subcommand as its value
+			return true
 		default:
 			return gitSubcommandRunsCommand(arg, args[i+1:])
 		}
@@ -198,7 +199,8 @@ func optionName(arg string) string {
 
 func gitSubcommandRunsCommand(subcommand string, args []word) bool {
 	if subcommand == "filter-branch" || gitRefusedSubcommands[subcommand] {
-		return true // every filter is a shell command; see gitRefusedSubcommands
+		// every filter is a shell command; see gitRefusedSubcommands
+		return true
 	}
 	if subcommand == "config" {
 		return !hasAnyWord(args, gitConfigReads)

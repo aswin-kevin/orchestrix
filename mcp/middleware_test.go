@@ -258,7 +258,8 @@ func TestReadResourceImagesFollowProfile(t *testing.T) {
 
 func TestConnectFailsFast(t *testing.T) {
 	stuck := newFakeTransport(func(map[string]any) []string { return nil })
-	stuck.hold = func(map[string]any) bool { return true } // initialize never completes
+	// initialize never completes
+	stuck.hold = func(map[string]any) bool { return true }
 	start := time.Now()
 	_, err := Connect(context.Background(), []ServerConfig{
 		{Name: "stuck", Transport: stuck},

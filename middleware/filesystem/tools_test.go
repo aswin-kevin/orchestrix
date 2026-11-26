@@ -533,7 +533,8 @@ func TestPromptInjectedAndDisable(t *testing.T) {
 }
 
 func TestWrapModelDoesNotAliasHostSystem(t *testing.T) {
-	host := make([]string, 1, 4) // spare capacity would let append write into it
+	// spare capacity would let append write into it
+	host := make([]string, 1, 4)
 	wrapSystem(t, Config{}, host, 0)
 	if host[:2][1] != "" {
 		t.Fatal("WrapModel wrote into the host's system slice")

@@ -47,12 +47,12 @@ type HTTPConfig struct {
 	// BearerToken, when non-empty, is sent as "Authorization: Bearer
 	// <token>" unless Headers sets Authorization; empty sends none.
 	BearerToken string
-	// Client makes the requests; nil means a client of the transport's own with
-	// no overall timeout (streams are long-lived), whose idle connections
-	// are closed on Close. Either way redirects are never followed (a
-	// given client is copied with its CheckRedirect replaced), so Headers,
-	// the bearer token and the request body never reach another URL; a 3xx
-	// reply is an error naming the status.
+	// Client makes the requests; nil means a client of the transport's own
+	// with no overall timeout (streams are long-lived), whose idle connections
+	// are closed on Close. Either way redirects are never followed (a given
+	// client is copied with its CheckRedirect replaced), so Headers, the
+	// bearer token and the request body never reach another URL; a 3xx reply
+	// is an error naming the status.
 	Client *http.Client
 	// MaxMessageBytes caps one incoming message (a JSON body or an SSE
 	// event); 0 means DefaultMaxMessageBytes; negative is an error.
@@ -64,11 +64,13 @@ type httpTransport struct {
 	url    string
 	header http.Header // static headers of every request
 	client *http.Client
-	own    *http.Transport // the client's transport when it is ours; nil otherwise
-	max    int
-	retry  time.Duration // delay before reopening the GET stream
+	// the client's transport when it is ours; nil otherwise
+	own   *http.Transport
+	max   int
+	retry time.Duration // delay before reopening the GET stream
 
-	ctx    context.Context // ends every request and stream when the transport ends
+	// ends every request and stream when the transport ends
+	ctx    context.Context
 	cancel context.CancelFunc
 
 	msgs     chan json.RawMessage

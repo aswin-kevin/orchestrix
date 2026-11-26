@@ -662,7 +662,8 @@ func TestSearchGrantUnderRemovedGlobPinStays(t *testing.T) {
 
 func TestLegacyStateRelocksNothing(t *testing.T) {
 	m, s := relockMiddleware(t), state.New()
-	deferred.Unlock(s, "only_a", "mcp__x__*") // saved before pinned_unlocks existed
+	// saved before pinned_unlocks existed
+	deferred.Unlock(s, "only_a", "mcp__x__*")
 	beginRun(t, m, s)
 	if !deferred.Unlocked(s, "only_a") || !deferred.Unlocked(s, "mcp__x__q") {
 		t.Fatal("a State without the pinned_unlocks key must keep its unlocks")

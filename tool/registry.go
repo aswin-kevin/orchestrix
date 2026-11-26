@@ -9,8 +9,8 @@ import (
 )
 
 // Registry holds tools in registration order, which is also the order they are
-// presented to the model. It is populated before the agent runs and is not safe
-// for concurrent Add.
+// presented to the model. It is populated before the agent runs and is not
+// safe for concurrent Add.
 type Registry struct {
 	tools  []Tool
 	byName map[string]Tool

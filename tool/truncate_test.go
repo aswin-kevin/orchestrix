@@ -14,7 +14,8 @@ func TestTruncateUTF8Boundary(t *testing.T) {
 			t.Errorf("max=%d: invalid UTF-8 %q", max, got)
 		}
 	}
-	// Cutting at byte 3 lands inside the first multibyte rune, so only "ab" is kept.
+	// Cutting at byte 3 lands inside the first multibyte rune, so only "ab" is
+	// kept.
 	if got, want := Truncate(s, 3), "ab\n…[truncated 5 chars]"; got != want {
 		t.Errorf("Truncate(s, 3) = %q, want %q", got, want)
 	}

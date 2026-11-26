@@ -85,11 +85,13 @@ func Events(r io.Reader, max int) iter.Seq2[Event, error] {
 				data.WriteString(value)
 				hasData = true
 			case "id":
-				if !strings.ContainsRune(value, 0) { // the spec ignores ids holding NUL
+				// the spec ignores ids holding NUL
+				if !strings.ContainsRune(value, 0) {
 					lastID = value
 				}
 			default:
-				continue // comments and unknown fields do not count toward the event
+				// comments and unknown fields do not count toward the event
+				continue
 			}
 			size += len(line)
 		}

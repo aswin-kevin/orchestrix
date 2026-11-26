@@ -40,7 +40,8 @@ func schemaHook(t reflect.Type) (map[string]any, bool) {
 
 // SchemaFor generates the JSON schema of the struct type T from its fields:
 //
-//   - the property name comes from the `json` tag (`json:"-"` skips the field);
+//   - the property name comes from the `json` tag (`json:"-"` skips the
+//     field);
 //   - `desc:"..."` becomes the description and `enum:"a,b"` the enum list;
 //   - a field is required unless it is a pointer or tagged omitempty;
 //   - embedded structs without a json name are flattened into their parent.
@@ -54,8 +55,8 @@ func schemaHook(t reflect.Type) (map[string]any, bool) {
 //
 // It panics when T declares a schema whose "type" is not "object" (tool input
 // is always an object), when T declares none and is not a struct, or when T
-// contains a kind JSON cannot express (chan, func, complex), naming the offending
-// field path, because that is a programming error.
+// contains a kind JSON cannot express (chan, func, complex), naming the
+// offending field path, because that is a programming error.
 func SchemaFor[T any]() map[string]any {
 	t := reflect.TypeFor[T]()
 	if s, ok := schemaHook(t); ok {

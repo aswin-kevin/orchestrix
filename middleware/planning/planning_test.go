@@ -110,7 +110,8 @@ func TestTodosReturnsCopy(t *testing.T) {
 	}
 }
 
-// noopInput is the input of the no-op tool that fills turns in the cadence test.
+// noopInput is the input of the no-op tool that fills turns in the cadence
+// test.
 type noopInput struct{}
 
 func noopTool() tool.Tool {

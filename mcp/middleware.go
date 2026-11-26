@@ -63,8 +63,8 @@ type ServerConfig struct {
 	Env map[string]string
 	// Dir is the command's working directory; empty means the current one.
 	Dir string
-	// InheritEnv passes the whole host environment to the command instead
-	// of the safe allowlist; false means allowlist only. It may expose secrets.
+	// InheritEnv passes the whole host environment to the command instead of
+	// the safe allowlist; false means allowlist only. It may expose secrets.
 	InheritEnv bool
 
 	// URL is the server's streamable HTTP endpoint; empty means not HTTP.
@@ -75,8 +75,8 @@ type ServerConfig struct {
 	// unless Headers sets Authorization; empty means none.
 	BearerToken string
 
-	// Transport is a custom transport (such as InProcess), used as is;
-	// nil means none. Connect takes ownership: it is closed with the middleware,
+	// Transport is a custom transport (such as InProcess), used as is; nil
+	// means none. Connect takes ownership: it is closed with the middleware,
 	// or by Connect when it fails.
 	Transport Transport
 

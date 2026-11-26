@@ -316,9 +316,9 @@ func (b *Backend) load(op, p string) (clean, rel string, content []byte, info fs
 
 // readRegular reads the regular file at rel (relative to the root), refusing
 // directories (ErrIsDir), other non-regular files and files over limit bytes
-// (a *backend.TooLargeError) before reading them. The file is checked before it is opened, because
-// opening a FIFO can block forever, and checked again once open, in case it
-// was replaced in between.
+// (a *backend.TooLargeError) before reading them. The file is checked before
+// it is opened, because opening a FIFO can block forever, and checked again
+// once open, in case it was replaced in between.
 func (b *Backend) readRegular(rel string, limit int64) ([]byte, fs.FileInfo, error) {
 	info, err := b.fsRoot.Stat(rel)
 	if err != nil {
@@ -418,10 +418,10 @@ var tempCreated func(*os.File)
 
 // replaceFile atomically replaces the file at rel (relative to the root) with
 // content: it writes a temporary file next to it and renames that over the
-// target, so readers never see a partial file. An existing file keeps its mode.
-// The temporary file is created with that mode, so the new content is never
-// readable more widely than the file it replaces; the umask may narrow it at
-// creation, and the Chmod before the rename restores the exact bits.
+// target, so readers never see a partial file. An existing file keeps its
+// mode. The temporary file is created with that mode, so the new content is
+// never readable more widely than the file it replaces; the umask may narrow
+// it at creation, and the Chmod before the rename restores the exact bits.
 func (b *Backend) replaceFile(rel string, content []byte) error {
 	mode := newFileMode
 	info, err := b.fsRoot.Stat(rel)
@@ -485,7 +485,8 @@ func (b *Backend) Delete(_ context.Context, p string) error {
 	if err != nil {
 		return err
 	}
-	// Resolve only the parent so that a final symlink is deleted, not followed.
+	// Resolve only the parent so that a final symlink is deleted, not
+	// followed.
 	_, parent, err := b.resolveRel("delete", path.Dir(clean))
 	if err != nil {
 		return err
@@ -561,8 +562,9 @@ func (b *Backend) walkFiles(ctx context.Context, dir string, skip map[string]boo
 	})
 }
 
-// relativeTo returns the slash-separated path p, which lies below dir, relative
-// to dir; both are paths as an fs.FS names them, where "." is the root.
+// relativeTo returns the slash-separated path p, which lies below dir,
+// relative to dir; both are paths as an fs.FS names them, where "." is the
+// root.
 func relativeTo(dir, p string) string {
 	if dir == "." {
 		return p

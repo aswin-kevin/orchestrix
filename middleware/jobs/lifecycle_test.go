@@ -49,7 +49,8 @@ func TestSettledThreadIsDropped(t *testing.T) {
 	p := llmtest.New(
 		turn(bgExecute("e1", "echo hi")),
 		turn(call("s1", ToolSleep, obj{"seconds": 5})),
-		turn(call("o1", ToolCheck, obj{"job_id": "bg_1"})), // the notification turn
+		// the notification turn
+		turn(call("o1", ToolCheck, obj{"job_id": "bg_1"})),
 		turn(call("o2", ToolCheck, obj{"job_id": "bg_1"})),
 		llmtest.Turn{Text: "ok"},
 	)

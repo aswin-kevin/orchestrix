@@ -531,7 +531,8 @@ func TestPanickingStartRollsBack(t *testing.T) {
 	if j, _ := startFake(t, m, "t"); j.ID != "x_1" {
 		t.Fatalf("id = %s", j.ID)
 	}
-	_ = m.Close(context.Background(), time.Second) // returns at once: no start is left in flight
+	// returns at once: no start is left in flight
+	_ = m.Close(context.Background(), time.Second)
 }
 
 // TestStartCommittingAfterShutdownTimedOut commits a start after Shutdown

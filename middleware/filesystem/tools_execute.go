@@ -23,7 +23,8 @@ type ExecuteInput struct {
 // BackgroundExecuteInput is the input of execute when Config.Background is
 // set; a separate type keeps run_in_background out of the schema otherwise.
 type BackgroundExecuteInput struct {
-	// ExecuteInput holds the parameters execute has without background support.
+	// ExecuteInput holds the parameters execute has without background
+	// support.
 	ExecuteInput
 	// RunInBackground starts the command as a background job and returns
 	// at once; the model is notified when the job ends.

@@ -68,8 +68,9 @@ func (r *run) acquireLease() *Final {
 	return nil
 }
 
-// releaseLease stops renewing and gives the lease up. A failed, timed-out
-// or panicking release is logged and dropped: the lease then expires after its TTL.
+// releaseLease stops renewing and gives the lease up. A failed, timed-out or
+// panicking release is logged and dropped: the lease then expires after its
+// TTL.
 func (r *run) releaseLease() {
 	l := r.lease
 	if l == nil {

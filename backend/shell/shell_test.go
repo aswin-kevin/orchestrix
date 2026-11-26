@@ -77,7 +77,8 @@ func requireGone(t *testing.T, target int) {
 			return
 		}
 		if time.Now().After(deadline) {
-			_ = syscall.Kill(target, syscall.SIGKILL) // never leave the leak running
+			// never leave the leak running
+			_ = syscall.Kill(target, syscall.SIGKILL)
 			t.Fatalf("process (group) %d still exists", target)
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -131,7 +132,8 @@ func TestExecuteRunsInRootAndDir(t *testing.T) {
 	}
 	ctx := context.Background()
 	for dir, want := range map[string]error{
-		"/../x":     backend.ErrNotFound, // cleaned to <root>/x, which does not exist
+		// cleaned to <root>/x, which does not exist
+		"/../x":     backend.ErrNotFound,
 		"/missing":  backend.ErrNotFound,
 		"/file.txt": backend.ErrNotDir,
 		"/link":     backend.ErrOutsideRoot,
@@ -287,7 +289,8 @@ func TestTimeoutKillsGroup(t *testing.T) {
 func TestTimeoutEscalatesToKill(t *testing.T) {
 	b, _ := newShell(t, shell.Config{})
 	start := time.Now()
-	// The ignored SIGTERM is inherited by sleep, so only SIGKILL ends the group.
+	// The ignored SIGTERM is inherited by sleep, so only SIGKILL ends the
+	// group.
 	res := execute(t, b, "trap '' TERM; echo $$; sleep 30", backend.ExecOptions{Timeout: 200 * time.Millisecond})
 	if elapsed := time.Since(start); elapsed > shell.DefaultKillGrace+3*time.Second {
 		t.Errorf("SIGTERM-immune command took %s", elapsed)

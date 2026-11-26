@@ -57,8 +57,10 @@ type threadState struct {
 	seq     int
 	gen     string
 	deltas  int
-	records int   // complete records in the file
-	size    int64 // file size after the last write; a different size on disk means someone else touched the file
+	records int // complete records in the file
+	// file size after the last write; a different size on disk means someone
+	// else touched the file
+	size int64
 }
 
 // Checkpointer stores threads as JSONL files in one directory. Create it with
@@ -141,7 +143,8 @@ func (c *Checkpointer) Save(ctx context.Context, threadID string, s *state.State
 	version, err := c.save(threadID, next, expected)
 	if err != nil {
 		if !errors.Is(err, checkpoint.ErrConflict) {
-			delete(c.threads, threadID) // the file may hold a torn tail; re-prime next time
+			// the file may hold a torn tail; re-prime next time
+			delete(c.threads, threadID)
 		}
 		return "", fmt.Errorf("checkpoint/file: save %q: %w", threadID, err)
 	}
@@ -293,7 +296,8 @@ func (c *Checkpointer) rewriteFile(path string, rec record) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	tmp, err := os.CreateTemp(c.dir, filepath.Base(path)+".tmp-*") // mode 0o600, never matches fileSuffix
+	// mode 0o600, never matches fileSuffix
+	tmp, err := os.CreateTemp(c.dir, filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return 0, err
 	}

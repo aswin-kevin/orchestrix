@@ -298,7 +298,8 @@ func TestGatedServerLockedUntilUnlocked(t *testing.T) {
 		t.Fatalf("locked call = %+v, want %q", res, want)
 	}
 
-	// Through the agent with no approver: refused, not interrupted for approval.
+	// Through the agent with no approver: refused, not interrupted for
+	// approval.
 	p := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "e", Name: "mcp__srv__echo", Input: map[string]any{"text": "x"}}}},
 		llmtest.Turn{Text: "done"},
@@ -480,7 +481,8 @@ func TestListChangedIgnoredWithoutToolsCapability(t *testing.T) {
 	ft := newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) })
 	m := connectMiddleware(t, ServerConfig{Name: "fake", Transport: ft})
 	ft.push(`{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}`)
-	ft.push(`{"jsonrpc":"2.0","method":"ping","id":"sync"}`) // answered after the notice was handled
+	// answered after the notice was handled
+	ft.push(`{"jsonrpc":"2.0","method":"ping","id":"sync"}`)
 	ft.waitSent(t, func(msg map[string]any) bool { return msg["id"] == "sync" })
 	conn := m.servers[0]
 	conn.mu.Lock()

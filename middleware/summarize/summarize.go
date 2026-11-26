@@ -222,8 +222,8 @@ func (m *Middleware) AfterModel(_ context.Context, s *state.State, resp *llm.Res
 // A compaction that fails never fails the turn: State still holds the whole
 // conversation, so the request just goes out uncompacted and the error is
 // recorded in Boundary.LastError. A summarizer error counts towards the
-// breaker on every path, the model's own request included; a model request with
-// nothing to summarize does not. After MaxFailures failures in a row
+// breaker on every path, the model's own request included; a model request
+// with nothing to summarize does not. After MaxFailures failures in a row
 // automatic compaction stops; a successful compaction (one the model
 // requested, or a reactive one) or a new run resets the count.
 func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {

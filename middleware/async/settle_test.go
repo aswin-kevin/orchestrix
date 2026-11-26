@@ -205,7 +205,8 @@ func TestTaskStoppedAsItStartedIsNotReported(t *testing.T) {
 	h.run(t, context.Background(), "go", nil)
 	<-shutdown
 	<-hd.Done()
-	time.Sleep(20 * time.Millisecond) // a report would run on its own goroutine
+	// a report would run on its own goroutine
+	time.Sleep(20 * time.Millisecond)
 	if got := calls.get(); len(got) != 0 {
 		t.Fatalf("OnSettled = %+v for a task the parent never recorded", got)
 	}

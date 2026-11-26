@@ -59,7 +59,7 @@
 //
 // Runnable programs for the main features (a typed tool, human approval,
 // persistent memory, background subagents, the coordinator, self-grading,
-// structured output and model fallback) live in the examples directory of the repository; each
-// runs offline with go run ./examples/<name>, or against a real model when
-// ORX_MODEL is set.
+// structured output and model fallback) live in the examples directory of the
+// repository; each runs offline with go run ./examples/<name>, or against a
+// real model when ORX_MODEL is set.
 package orchestrix

@@ -92,7 +92,8 @@ func TestOffloadKeepsErrorFlagImagesAndSanitizesID(t *testing.T) {
 	if !out.IsError || len(out.Content) != 2 || out.Content[1].Type != llm.BlockImage {
 		t.Fatalf("flag or image lost: %+v", out)
 	}
-	// The hash suffix keeps ids that sanitize alike, such as a/b and a_b, apart.
+	// The hash suffix keeps ids that sanitize alike, such as a/b and a_b,
+	// apart.
 	if !regexp.MustCompile(`/\.orchestrix/large_tool_results/___a_b_c-[0-9a-f]{8}\.txt`).MatchString(out.Flatten()) {
 		t.Fatalf("id not sanitized: %.200s", out.Flatten())
 	}

@@ -159,7 +159,8 @@ func TestCompactToolSummarizesAndOffloads(t *testing.T) {
 func TestIncrementalSummaryIncludesPrevious(t *testing.T) {
 	main := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{compactCall("c1")}},
-		// Alone longer than the kept tail, so the second cut lands right before it.
+		// Alone longer than the kept tail, so the second cut lands right
+		// before it.
 		llmtest.Turn{Text: "B " + strings.Repeat("x", 5000), ToolCalls: []llmtest.Call{compactCall("c2")}},
 		llmtest.Turn{Text: "done"},
 	)

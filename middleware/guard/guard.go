@@ -157,7 +157,8 @@ func (m *Middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 		return nil
 	}
 	info, ok := agent.Info(ctx)
-	// Without run info (a hook called outside a run) there is no input to check.
+	// Without run info (a hook called outside a run) there is no input to
+	// check.
 	if !ok || info.Depth != 0 {
 		return nil
 	}

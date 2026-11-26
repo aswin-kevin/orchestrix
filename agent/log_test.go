@@ -172,8 +172,9 @@ func TestLoggerReportsEndPanicAndSkippedTool(t *testing.T) {
 
 func TestLoggerNeverLogsContent(t *testing.T) {
 	const (
-		userSecret  = "USER-SECRET-7731"
-		inputSecret = "INPUT-SECRET-4410" // tool id and the echo tool's input text
+		userSecret = "USER-SECRET-7731"
+		// tool id and the echo tool's input text
+		inputSecret = "INPUT-SECRET-4410"
 		replySecret = "REPLY-SECRET-9052"
 	)
 	log, records := newCapture()

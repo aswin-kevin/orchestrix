@@ -171,12 +171,12 @@ func sameMiddleware(a, b agent.Middleware) bool {
 }
 
 // Input prepares a run of child, the agent Agent built for spec, on
-// description alone, with the parent's shareable state and backend, under
-// the thread id <parent thread>/<spec.Name>/<id>. ctx must belong to a run
+// description alone, with the parent's shareable state and backend, under the
+// thread id <parent thread>/<spec.Name>/<id>. ctx must belong to a run
 // (agent.Info), else Input returns an error; that run is the parent. c must be
 // the current tool call of that run (a nil c is an error); child and spec
-// should come from Agent and ResolveSpecs. See childMode for the permission mode the
-// child starts in and childScope for the skills it is offered.
+// should come from Agent and ResolveSpecs. See childMode for the permission
+// mode the child starts in and childScope for the skills it is offered.
 func (l *Launcher) Input(ctx context.Context, child *agent.Agent, spec Subagent, description, id string, c *tool.Call) (agent.Input, error) {
 	info, ok := agent.Info(ctx)
 	if !ok {

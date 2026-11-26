@@ -355,7 +355,8 @@ func TestHTTPDefaultAllowedHostsAreLoopback(t *testing.T) {
 		{"LocalHost:1234", "http://localhost:1234", http.StatusOK},
 		{"localhost", "", http.StatusOK},
 		{"[::1]:8080", "", http.StatusOK},
-		{"127.0.0.1:9", "http://evil.example", http.StatusForbidden}, // the Origin check still applies
+		// the Origin check still applies
+		{"127.0.0.1:9", "http://evil.example", http.StatusForbidden},
 	} {
 		if got := hostStatus(t, ts.URL, tt.host, tt.origin); got != tt.want {
 			t.Errorf("Host %q, Origin %q = %d, want %d", tt.host, tt.origin, got, tt.want)
@@ -376,7 +377,8 @@ func TestHTTPAllowedHosts(t *testing.T) {
 		{"MCP.example.test:9000", http.StatusOK},
 		{"pinned.example.test:8443", http.StatusOK},
 		{"pinned.example.test:8444", http.StatusForbidden},
-		{"localhost:8080", http.StatusForbidden}, // a list replaces the loopback default
+		// a list replaces the loopback default
+		{"localhost:8080", http.StatusForbidden},
 		{"evil.example", http.StatusForbidden},
 	} {
 		if got := hostStatus(t, ts.URL, tt.host, ""); got != tt.want {

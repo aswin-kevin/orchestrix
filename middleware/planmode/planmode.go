@@ -197,7 +197,8 @@ func (m *Middleware) exit(ctx context.Context, in ExitInput, c *tool.Call) (tool
 	}
 	if r := c.Resume; r != nil {
 		switch r.Type {
-		case tool.ResumeApprove, tool.ResumeEdit: // the loop already applied an edit to in
+		// the loop already applied an edit to in
+		case tool.ResumeApprove, tool.ResumeEdit:
 			return m.approve(c, in.Plan)
 		default:
 			return refuse(r.Message), nil

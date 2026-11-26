@@ -31,7 +31,8 @@ const (
 	messageDir     = backend.InternalDir + "/large_messages"
 	headLines      = 10   // lines of a large result kept inline
 	messagePreview = 2000 // characters of a large message kept inline
-	hashChars      = 12   // hex characters of the content hash in a message file name
+	// hex characters of the content hash in a message file name
+	hashChars = 12
 )
 
 // WrapTool implements agent.ToolWrapper. Output of tools this middleware does
@@ -135,7 +136,8 @@ func (m *Middleware) offloadMessageBlock(ctx context.Context, b backend.Backend,
 	}
 	sum := sha256.Sum256([]byte(block.Text))
 	path := fmt.Sprintf("%s/%s.txt", messageDir, hex.EncodeToString(sum[:])[:hashChars])
-	// Any Read error is treated as "not saved yet"; a failing Write then ends the offload.
+	// Any Read error is treated as "not saved yet"; a failing Write then ends
+	// the offload.
 	if _, err := b.Read(ctx, path, 0, 1); err != nil {
 		if err := b.Write(ctx, path, []byte(block.Text)); err != nil {
 			return block, false

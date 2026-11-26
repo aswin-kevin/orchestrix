@@ -68,10 +68,12 @@ func isUnsafeRune(r rune) bool {
 	case r < 0x20, r >= 0x7f && r <= 0x9f:
 		return true
 	case r == '\u2028', r == '\u2029', // line and paragraph separators
-		r == '\u061c',                  // arabic letter mark
-		r >= '\u200b' && r <= '\u200f', // zero-width space, non-joiner, joiner; LTR and RTL marks
-		r == '\u2060',                  // word joiner
-		r == '\ufeff',                  // byte order mark (zero-width no-break space)
+		r == '\u061c', // arabic letter mark
+		// zero-width space, non-joiner, joiner; LTR and RTL marks
+		r >= '\u200b' && r <= '\u200f',
+		r == '\u2060', // word joiner
+		// byte order mark (zero-width no-break space)
+		r == '\ufeff',
 		r >= '\u202a' && r <= '\u202e', // bidi embeddings and overrides
 		r >= '\u2066' && r <= '\u2069': // bidi isolates
 		return true

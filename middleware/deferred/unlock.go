@@ -58,11 +58,11 @@ func Unlock(s *state.State, patterns ...string) {
 	})
 }
 
-// Lock removes each exact pattern from the unlock set (no glob matching between
-// patterns); patterns not present are ignored. It is how a middleware takes
-// back an unlock it granted. It removes the pattern whoever granted it: a
-// pattern the host or another middleware also unlocked is removed too. s must
-// not be nil.
+// Lock removes each exact pattern from the unlock set (no glob matching
+// between patterns); patterns not present are ignored. It is how a middleware
+// takes back an unlock it granted. It removes the pattern whoever granted it:
+// a pattern the host or another middleware also unlocked is removed too. s
+// must not be nil.
 func Lock(s *state.State, patterns ...string) {
 	unlockedKey.Update(s, func(current []string) []string {
 		// current is the stored slice itself: never modify it in place.

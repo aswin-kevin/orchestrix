@@ -265,7 +265,8 @@ func TestSubagentSkillsThroughPreset(t *testing.T) {
 
 func TestSubagentPinnedSkillInjectedOnce(t *testing.T) {
 	cfg := testSkills()
-	cfg.Pinned = []string{"pdf"} // pinned for the parent too: still once in the child
+	// pinned for the parent too: still once in the child
+	cfg.Pinned = []string{"pdf"}
 	p := delegate("pdf-helper")
 	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithSkills(cfg),

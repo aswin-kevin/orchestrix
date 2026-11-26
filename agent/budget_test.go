@@ -368,7 +368,8 @@ func TestBeforeStopContinues(t *testing.T) {
 
 func TestBeforeStopCapped(t *testing.T) {
 	var calls int
-	turns := make([]llmtest.Turn, 1+MaxStopContinuations+1) // one spare: it must stay unused
+	// one spare: it must stay unused
+	turns := make([]llmtest.Turn, 1+MaxStopContinuations+1)
 	for i := range turns {
 		turns[i] = llmtest.Turn{Text: fmt.Sprintf("answer %d", i)}
 	}

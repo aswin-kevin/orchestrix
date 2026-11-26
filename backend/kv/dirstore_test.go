@@ -240,7 +240,8 @@ func TestDirStoreFailedWriteLeavesNoTemp(t *testing.T) {
 	dir := t.TempDir()
 	s := newDirStore(t, dir)
 	nsDir := filepath.Join(dir, nsDirName("ns"))
-	// A directory squatting on the key's file name makes the final rename fail.
+	// A directory squatting on the key's file name makes the final rename
+	// fail.
 	if err := os.MkdirAll(filepath.Join(nsDir, keyFile("/k"), "sub"), 0o700); err != nil {
 		t.Fatal(err)
 	}

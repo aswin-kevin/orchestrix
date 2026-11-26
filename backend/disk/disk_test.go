@@ -309,7 +309,8 @@ func TestDiskRefusesFilesOverReadLimit(t *testing.T) {
 
 func TestDiskRealPath(t *testing.T) {
 	b, tempRoot := newDisk(t, disk.Config{})
-	root, err := filepath.EvalSymlinks(tempRoot) // RealPath returns symlink-free paths
+	// RealPath returns symlink-free paths
+	root, err := filepath.EvalSymlinks(tempRoot)
 	if err != nil {
 		t.Fatal(err)
 	}

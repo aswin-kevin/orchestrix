@@ -11,7 +11,8 @@ import (
 )
 
 // Spec describes a tool declaratively. Every optional field defaults to the
-// most restrictive behaviour, so forgetting one never widens what a tool may do.
+// most restrictive behaviour, so forgetting one never widens what a tool may
+// do.
 type Spec struct {
 	// Name must be non-empty and use only [A-Za-z0-9_.:-].
 	Name string
@@ -55,10 +56,10 @@ type Spec struct {
 	Available func(s *state.State) error
 }
 
-// Build turns a Spec into a Tool. It panics on an invalid name or a missing Run,
-// which are programming errors best caught at start-up. The tool implements
-// every optional capability interface of this package, except Dispatcher,
-// which it implements only when Spec.Dispatch is set.
+// Build turns a Spec into a Tool. It panics on an invalid name or a missing
+// Run, which are programming errors best caught at start-up. The tool
+// implements every optional capability interface of this package, except
+// Dispatcher, which it implements only when Spec.Dispatch is set.
 func Build(s Spec) Tool {
 	if err := ValidName(s.Name); err != nil {
 		panic(fmt.Sprintf("tool: Build: %v", err))

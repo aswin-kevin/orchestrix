@@ -10,11 +10,11 @@ import (
 )
 
 // ErrStopRun ends a run on purpose. When a BeforeAgent, BeforeModel,
-// AfterModel or BeforeStop hook, or a ToolWrapper (or the tool itself), returns an error
-// wrapping it, the run ends with ReasonHookStopped and Final.Err is that
-// error. A tool call that stops the run is answered with an error result, and
-// the calls of its turn that had not started are answered as skipped, so
-// every tool_use keeps its tool_result. AfterAgent still runs.
+// AfterModel or BeforeStop hook, or a ToolWrapper (or the tool itself),
+// returns an error wrapping it, the run ends with ReasonHookStopped and
+// Final.Err is that error. A tool call that stops the run is answered with an
+// error result, and the calls of its turn that had not started are answered as
+// skipped, so every tool_use keeps its tool_result. AfterAgent still runs.
 var ErrStopRun = errors.New("agent: run stopped on purpose")
 
 // Hook runners. Before* hooks run in stack order and After* hooks in reverse

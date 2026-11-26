@@ -214,7 +214,8 @@ func TestRunParallelOnEventSerialized(t *testing.T) {
 	const n = 8
 	a := newAgent(t, newEcho())
 	var (
-		counter  int // deliberately unsynchronized: -race flags overlapping calls
+		// deliberately unsynchronized: -race flags overlapping calls
+		counter  int
 		received atomic.Int64
 		inside   atomic.Bool
 		overlap  atomic.Bool

@@ -16,12 +16,12 @@
 //
 // Hooks run in this order: WrapRun once as a run starts, giving the run its
 // context; ResolveOrphan for each unanswered tool call, before BeforeAgent, on
-// runs that are not a Resume; BeforeAgent once at the start of a run; per turn,
-// BeforeModel, the model call (through every ModelWrapper), then AfterModel;
-// each tool call goes through every ToolWrapper; BeforeStop when a reply
-// without tool calls would complete the run; AfterAgent once at the end;
-// then the end functions WrapRun returned, before the final event.
-// Before* hooks (BeforeAgent, BeforeModel) run in stack order; After* hooks
+// runs that are not a Resume; BeforeAgent once at the start of a run; per
+// turn, BeforeModel, the model call (through every ModelWrapper), then
+// AfterModel; each tool call goes through every ToolWrapper; BeforeStop when a
+// reply without tool calls would complete the run; AfterAgent once at the end;
+// then the end functions WrapRun returned, before the final event. Before*
+// hooks (BeforeAgent, BeforeModel) run in stack order; After* hooks
 // (AfterModel, AfterAgent) and BeforeStop run in reverse stack order,
 // mirroring how wrappers unwind.
 //

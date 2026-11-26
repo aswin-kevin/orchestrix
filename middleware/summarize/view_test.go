@@ -64,8 +64,8 @@ func holdsToolResult(m llm.Message) bool {
 	return m.Role == llm.RoleUser && slices.ContainsFunc(m.Content, func(b llm.Block) bool { return b.Type == llm.BlockToolResult })
 }
 
-// validateView fails the test unless view starts with a user message and
-// every tool_result answers a tool_use of the assistant message right before it.
+// validateView fails the test unless view starts with a user message and every
+// tool_result answers a tool_use of the assistant message right before it.
 func validateView(t *testing.T, view []llm.Message) {
 	t.Helper()
 	if len(view) == 0 || view[0].Role != llm.RoleUser {

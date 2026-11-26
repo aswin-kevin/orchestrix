@@ -401,7 +401,8 @@ func TestFileLegacyRecordsWithoutGeneration(t *testing.T) {
 	s.AppendMessages(llm.UserText("a"))
 	save(t, c, "t", s)
 	path := onlyFile(t, dir)
-	// Strip the generation, as a file written before versions existed has none.
+	// Strip the generation, as a file written before versions existed has
+	// none.
 	lines := readLines(t, path)
 	var rec map[string]any
 	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {

@@ -42,9 +42,10 @@ type Adjustment struct {
 	// names matching nothing are ignored. "profiles" is rejected by New.
 	// Naming a middleware that is agent.Required (guard, hitl, hooks,
 	// planmode) makes agent.New fail for a matching model: removing it would
-	// silently drop its checks, approvals, hooks or plan mode. No dependency check is made:
-	// excluding a middleware that others rely on (filesystem, for instance)
-	// leaves them configured and the agent still runs. Nil removes none.
+	// silently drop its checks, approvals, hooks or plan mode. No dependency
+	// check is made: excluding a middleware that others rely on (filesystem,
+	// for instance) leaves them configured and the agent still runs. Nil
+	// removes none.
 	ExcludeMiddleware []string
 }
 

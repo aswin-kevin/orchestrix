@@ -26,7 +26,8 @@ type Source struct {
 // DirSource returns a Source for the directory at path on disk.
 func DirSource(path string) Source { return Source{FS: os.DirFS(path), Dir: "."} }
 
-// frontmatterFields are the SKILL.md keys Orchestrix reads; others are ignored.
+// frontmatterFields are the SKILL.md keys Orchestrix reads; others are
+// ignored.
 type frontmatterFields struct {
 	Name          string                 `yaml:"name"`
 	Description   string                 `yaml:"description"`

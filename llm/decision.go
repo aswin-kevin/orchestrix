@@ -50,10 +50,11 @@ type DecisionRequest struct {
 type Answer struct {
 	// Type is the type of the question this answers; it selects which of the
 	// other fields are set.
-	Type          QuestionType
-	Yes           float64            // QuestionYesNo: probability of yes
-	Choice        string             // Choice: the chosen choice's Value
-	Score         float64            // Score: expected level index, may be fractional
+	Type   QuestionType
+	Yes    float64 // QuestionYesNo: probability of yes
+	Choice string  // Choice: the chosen choice's Value
+	// Score: expected level index, may be fractional
+	Score         float64
 	Probabilities map[string]float64 // Choice/Score: by Choice.Value
 	Confidence    float64            // Choice/Score
 	Refused       bool               // the provider declined this question

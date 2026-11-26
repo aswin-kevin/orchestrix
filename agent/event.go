@@ -32,7 +32,8 @@ const (
 	// with it pending. A call that pauses is announced again when it is
 	// resumed, then with the input it runs with.
 	KindToolUse EventKind = "tool_use"
-	// KindToolResult reports a finished tool call (ToolID, ToolName, ToolResult).
+	// KindToolResult reports a finished tool call (ToolID, ToolName,
+	// ToolResult).
 	KindToolResult EventKind = "tool_result"
 	// KindProgress is a progress message from a running tool (Text).
 	KindProgress EventKind = "progress"
@@ -103,8 +104,8 @@ const (
 	// checkpoint.ErrLeaseHeld; Final.State is the input State). Nothing ran.
 	ReasonBusy TerminalReason = "busy"
 	// ReasonInvalidOutput: the final answer failed Config.OutputSchema after
-	// Config.OutputRetries corrections (Final.Err wraps ErrInvalidOutput). Final.Text
-	// is the last reply.
+	// Config.OutputRetries corrections (Final.Err wraps ErrInvalidOutput).
+	// Final.Text is the last reply.
 	ReasonInvalidOutput TerminalReason = "invalid_output"
 	// ReasonRefusal: the model declined to answer (llm.StopRefusal).
 	// Final.Text is its reply; tool calls in that reply did not run. Not a

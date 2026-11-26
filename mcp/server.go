@@ -110,7 +110,8 @@ func (s *Server) ServeStdio(ctx context.Context, r io.Reader, w io.Writer) error
 	write := func(_ context.Context, msg json.RawMessage) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		_, err := w.Write(append(msg[:len(msg):len(msg)], '\n')) // copy: msg is not ours
+		// copy: msg is not ours
+		_, err := w.Write(append(msg[:len(msg):len(msg)], '\n'))
 		return err
 	}
 	sess := s.newSession(ctx, write)

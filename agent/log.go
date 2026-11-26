@@ -21,9 +21,9 @@ func loggerOrDiscard(l *slog.Logger) *slog.Logger {
 	return l
 }
 
-// Logger returns the agent's logger (Config.Logger) with the attributes
-// that identify the run: thread_id, agent and run_id. It never returns nil:
-// without a configured logger it drops every record. Middleware can use it to report
+// Logger returns the agent's logger (Config.Logger) with the attributes that
+// identify the run: thread_id, agent and run_id. It never returns nil: without
+// a configured logger it drops every record. Middleware can use it to report
 // errors it recovers from next to the loop's own. Log no message content or
 // tool inputs: they are the caller's data.
 func (i RunInfo) Logger() *slog.Logger {

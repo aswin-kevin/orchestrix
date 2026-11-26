@@ -76,7 +76,8 @@ func userInput(text string) agent.Input {
 	return agent.Input{ThreadID: "thread", Messages: []llm.Message{llm.UserText(text)}}
 }
 
-// toolResults returns the tool_result blocks of the last message of req, in order.
+// toolResults returns the tool_result blocks of the last message of req, in
+// order.
 func toolResults(req llm.Request) []llm.Block {
 	var out []llm.Block
 	for _, b := range req.Messages[len(req.Messages)-1].Content {
@@ -95,7 +96,8 @@ func blockText(b llm.Block) string {
 	return strings.Join(parts, "\n")
 }
 
-// onlyResult returns the single tool_result the parent sent in its second request.
+// onlyResult returns the single tool_result the parent sent in its second
+// request.
 func onlyResult(t *testing.T, parent *llmtest.Scripted) llm.Block {
 	t.Helper()
 	if len(parent.Requests) < 2 {
@@ -271,7 +273,8 @@ func TestFilesMergeBackViaSharedBackend(t *testing.T) {
 }
 
 func TestDepthGuard(t *testing.T) {
-	// Middleware is nil, so the child inherits the parent's stack, task tool included.
+	// Middleware is nil, so the child inherits the parent's stack, task tool
+	// included.
 	child := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{taskCall("inner", "researcher", "go deeper")}},
 		llmtest.Turn{Text: "could not go deeper"},
@@ -382,7 +385,8 @@ func TestStructuredOutputRetriesThenSucceeds(t *testing.T) {
 		t.Fatalf("child system %q does not describe the output schema", child.Requests[0].System)
 	}
 
-	// Always invalid: one attempt plus DefaultOutputRetries, then an error result.
+	// Always invalid: one attempt plus DefaultOutputRetries, then an error
+	// result.
 	bad := llmtest.New(llmtest.Turn{Text: "nope"}, llmtest.Turn{Text: `{"n":"x"}`}, llmtest.Turn{Text: "still no"})
 	parent = llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{taskCall("t1", "counter", "count")}},

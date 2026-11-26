@@ -32,8 +32,8 @@ type StdioConfig struct {
 	Args []string
 	// Dir is its working directory; empty means the current one.
 	Dir string
-	// Env holds variables added last, overriding inherited ones; nil means none.
-	// A key that is empty or holds '=' or NUL is an error.
+	// Env holds variables added last, overriding inherited ones; nil means
+	// none. A key that is empty or holds '=' or NUL is an error.
 	Env map[string]string
 	// InheritEnv passes the whole host environment instead of only a small
 	// allowlist (PATH, HOME, USER, LOGNAME, SHELL, LANG, LC_ALL, TMPDIR and
@@ -60,11 +60,13 @@ type stdioTransport struct {
 	maxBytes int
 	grace    time.Duration
 
-	msgs       chan json.RawMessage
-	writes     chan writeRequest
-	exited     chan struct{} // closed once the server process has been waited for
-	waitErr    error         // written before exited is closed
-	reaped     chan struct{} // closed once the server's leftovers have been reaped
+	msgs   chan json.RawMessage
+	writes chan writeRequest
+	// closed once the server process has been waited for
+	exited  chan struct{}
+	waitErr error // written before exited is closed
+	// closed once the server's leftovers have been reaped
+	reaped     chan struct{}
 	stderrDone chan struct{}
 	// groupGone is set once the process group has been seen empty after the
 	// server was waited for. From then on its id may belong to unrelated
@@ -265,7 +267,8 @@ func (t *stdioTransport) waitProcess() {
 func (t *stdioTransport) drainStderr() {
 	defer t.wg.Done()
 	defer close(t.stderrDone)
-	_, _ = io.Copy(t.tail, t.stderr) // ring never fails; EOF or Close ends the copy
+	// ring never fails; EOF or Close ends the copy
+	_, _ = io.Copy(t.tail, t.stderr)
 }
 
 func (t *stdioTransport) writeLoop() {

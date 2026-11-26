@@ -51,7 +51,8 @@ func Parse(data []byte, v any) (body string, ok bool, err error) {
 	if yamlEnd > MaxBytes {
 		return "", false, fmt.Errorf("frontmatter: block is %d bytes, over the %d limit", yamlEnd, MaxBytes)
 	}
-	if err := yaml.NewDecoder(strings.NewReader(rest[:yamlEnd])).Decode(v); err != nil && !errors.Is(err, io.EOF) { // io.EOF: an empty block
+	// io.EOF: an empty block
+	if err := yaml.NewDecoder(strings.NewReader(rest[:yamlEnd])).Decode(v); err != nil && !errors.Is(err, io.EOF) {
 		return "", false, fmt.Errorf("frontmatter: %w", err)
 	}
 	return rest[bodyStart:], true, nil

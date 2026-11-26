@@ -20,7 +20,8 @@ type Route struct {
 	Backend backend.Backend
 }
 
-// ErrMountPoint is wrapped by Delete of a mount point or of an ancestor of one.
+// ErrMountPoint is wrapped by Delete of a mount point or of an ancestor of
+// one.
 var ErrMountPoint = errors.New("composite: path contains a mount point")
 
 type composite struct {

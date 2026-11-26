@@ -13,10 +13,10 @@
 //
 // # Asking twice
 //
-// exit_plan_mode asks for its own approval, with DisableRemember set. Do not also
-// put it under an approval elsewhere: an "ask" permission rule on it, or
+// exit_plan_mode asks for its own approval, with DisableRemember set. Do not
+// also put it under an approval elsewhere: an "ask" permission rule on it, or
 // hitl's InterruptOn, adds a second, loop-level prompt before the tool runs,
-// and that request does not carry DisableRemember, so an Approver may answer it
-// from an "always allow" it remembered. That is safe, since the tool's own
+// and that request does not carry DisableRemember, so an Approver may answer
+// it from an "always allow" it remembered. That is safe, since the tool's own
 // prompt still decides, but the human is asked twice for one plan.
 package planmode

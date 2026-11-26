@@ -83,8 +83,8 @@ func Evaluate(req Request, pc Context) Decision {
 	return fallback(req, pc.Mode)
 }
 
-// unanalyzedDecision refuses to pass a command the deny or ask rules could not be
-// checked against: modes that never prompt (and plan mode, which runs
+// unanalyzedDecision refuses to pass a command the deny or ask rules could not
+// be checked against: modes that never prompt (and plan mode, which runs
 // nothing that changes state) deny it, the others ask a human.
 func unanalyzedDecision(tool string, mode Mode) Decision {
 	msg := fmt.Sprintf("command could not be fully analyzed against deny rules for %s", tool)

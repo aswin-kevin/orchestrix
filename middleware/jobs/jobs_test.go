@@ -120,7 +120,8 @@ func resultText(t *testing.T, p *llmtest.Scripted, id string) string {
 	return strings.Join(parts, "\n")
 }
 
-// pidFrom reads the pid a pidMonitor call matched: the last line of its result.
+// pidFrom reads the pid a pidMonitor call matched: the last line of its
+// result.
 func pidFrom(t *testing.T, p *llmtest.Scripted, id string) int {
 	t.Helper()
 	text := resultText(t, p, id)

@@ -77,9 +77,10 @@ type anthropicMessage struct {
 }
 
 type anthropicBlock struct {
-	Type      BlockType        `json:"type"`
-	Text      string           `json:"text,omitempty"`
-	Thinking  *string          `json:"thinking,omitempty"` // set on thinking blocks, even when empty
+	Type BlockType `json:"type"`
+	Text string    `json:"text,omitempty"`
+	// set on thinking blocks, even when empty
+	Thinking  *string          `json:"thinking,omitempty"`
 	Signature string           `json:"signature,omitempty"`
 	Data      string           `json:"data,omitempty"` // redacted thinking
 	ID        string           `json:"id,omitempty"`

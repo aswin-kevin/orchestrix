@@ -197,7 +197,8 @@ func (h *httpHandler) post(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var m message
-	if err := json.Unmarshal(body, &m); err != nil { // a batch (array) fails here too
+	// a batch (array) fails here too
+	if err := json.Unmarshal(body, &m); err != nil {
 		parseErr := &RPCError{Code: codeParseError, Message: "parse error"}
 		w.Header().Set("Content-Type", mediaTypeJSON)
 		w.WriteHeader(http.StatusBadRequest)
@@ -254,7 +255,8 @@ func (h *httpHandler) answer(w http.ResponseWriter, r *http.Request, hs *httpSes
 		case m := <-st.msgs:
 			if !streaming {
 				if m.failed {
-					w.Header().Del(headerSessionID) // a failed initialize names no session
+					// a failed initialize names no session
+					w.Header().Del(headerSessionID)
 				}
 				w.Header().Set("Content-Type", mediaTypeJSON)
 				_, err := w.Write(m.raw)
@@ -324,7 +326,8 @@ func startEventStream(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", mediaTypeEventStream)
 	w.Header().Set("Cache-Control", "no-cache")
 	rc := http.NewResponseController(w)
-	_ = rc.SetWriteDeadline(time.Now().Add(eventWriteTimeout)) // unsupported writers: no deadline
+	// unsupported writers: no deadline
+	_ = rc.SetWriteDeadline(time.Now().Add(eventWriteTimeout))
 	w.WriteHeader(http.StatusOK)
 	return rc.Flush()
 }

@@ -96,7 +96,8 @@ func (m *Middleware) grep(ctx context.Context, in GrepInput, c *tool.Call) (tool
 		Mode:       backend.GrepMode(in.Mode),
 		IgnoreCase: in.IgnoreCase,
 		Literal:    in.Literal,
-		MaxResults: backend.DefaultMaxResults + 1, // one extra reveals truncation
+		// one extra reveals truncation
+		MaxResults: backend.DefaultMaxResults + 1,
 	})
 	if err != nil {
 		return errorResult(err, path), nil

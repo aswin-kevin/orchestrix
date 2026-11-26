@@ -243,7 +243,8 @@ func asked(call *agent.ToolCall) bool {
 // against the permission rules again.
 func resumed(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	resume := call.Call.Resume
-	call.Call.Resume = nil // consumed: the tool must not mistake it for its own
+	// consumed: the tool must not mistake it for its own
+	call.Call.Resume = nil
 	askedKey.Update(call.State, func(ids []string) []string { return without(ids, call.ID) })
 	if resume.Type == tool.ResumeRespond {
 		return tool.Text(resume.Message), nil

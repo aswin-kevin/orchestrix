@@ -79,9 +79,11 @@ func ExampleWithSubagents() {
 func ExampleWithSummarize() {
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithSummarize(summarize.Config{
-			TriggerFraction: 0.7,           // compact earlier than the default 0.85
+			// compact earlier than the default 0.85
+			TriggerFraction: 0.7,
 			Model:           "small-model", // summarize with a cheaper model
-			DisableOffload:  true,          // do not save old messages to the workspace
+			// do not save old messages to the workspace
+			DisableOffload: true,
 		}),
 	)
 	_, _ = a, err
@@ -107,7 +109,8 @@ func ExampleWithHooks() {
 func ExampleWithInterruptOn() {
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
-		orchestrix.WithInterruptOn("delete"), // pause for a human before every delete
+		// pause for a human before every delete
+		orchestrix.WithInterruptOn("delete"),
 		orchestrix.WithInterruptConfig(map[string]hitl.InterruptConfig{
 			"write_file": {
 				Allowed: []agent.DecisionType{agent.Approve, agent.Reject},
@@ -131,7 +134,8 @@ func ExampleWithCheckpointer() {
 		log.Fatal(err)
 	}
 
-	// The same code, in this process or a later one, continues thread "ticket-42".
+	// The same code, in this process or a later one, continues thread
+	// "ticket-42".
 	th, err := a.Thread(ctx, "ticket-42")
 	if err != nil {
 		log.Fatal(err)
@@ -154,7 +158,8 @@ func ExampleWithShell() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func() { _ = tm.Close(context.Background()) }() // stops background jobs still running
+	// stops background jobs still running
+	defer func() { _ = tm.Close(context.Background()) }()
 
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithShell("./workspace", shell.Config{}),
@@ -166,7 +171,8 @@ func ExampleWithShell() {
 }
 
 func ExampleWithMemory() {
-	entries, err := memory.NewFileStore(memory.FileStoreConfig{}) // under memory.DefaultDir
+	// under memory.DefaultDir
+	entries, err := memory.NewFileStore(memory.FileStoreConfig{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -217,8 +223,9 @@ func ExampleWithPlanMode() {
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithPlanMode(planmode.Config{}),
 		orchestrix.WithApprover(func(ctx context.Context, req permission.Request, reason string) permission.Decision {
-			// For exit_plan_mode, req.Input holds the plan and req.DisableRemember
-			// is set: never answer it from an "always allow" cache.
+			// For exit_plan_mode, req.Input holds the plan and
+			// req.DisableRemember is set: never answer it from an "always
+			// allow" cache.
 			fmt.Printf("%s: %s\n%s\napprove? [y/N] ", req.Tool, reason, req.Input)
 			var answer string
 			_, _ = fmt.Scanln(&answer)
@@ -240,7 +247,8 @@ func ExampleWithDeferredTools() {
 			return tool.Text("report for " + in.Quarter), nil
 		})
 	a, err := orchestrix.NewWithProvider(model,
-		orchestrix.WithTools(deferred.Defer(report)), // found with search_tools
+		// found with search_tools
+		orchestrix.WithTools(deferred.Defer(report)),
 		orchestrix.WithDeferredTools(deferred.Config{
 			Tools: []string{"mcp__docs__*"}, // defer by name pattern too
 		}),
@@ -263,7 +271,8 @@ func ExampleWithWeb() {
 
 func ExampleWithWeb_searchProxy() {
 	cfg := web.Config{ProxyURL: "http://proxy.internal:3128"}
-	client, err := web.NewHTTPClient(cfg.ClientConfig()) // web_fetch's proxy and network policy
+	// web_fetch's proxy and network policy
+	client, err := web.NewHTTPClient(cfg.ClientConfig())
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -326,7 +335,8 @@ func ExampleWithAskUser() {
 }
 
 func ExampleWithMount() {
-	store, err := kv.NewDirStore("./memories", kv.DirStoreConfig{}) // survives restarts
+	// survives restarts
+	store, err := kv.NewDirStore("./memories", kv.DirStoreConfig{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -334,13 +344,15 @@ func ExampleWithMount() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	entries, err := memory.NewFileStore(memory.FileStoreConfig{}) // under memory.DefaultDir
+	// under memory.DefaultDir
+	entries, err := memory.NewFileStore(memory.FileStoreConfig{})
 	if err != nil {
 		log.Fatal(err)
 	}
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithMemory(memory.Config{Store: entries}),
-		orchestrix.WithMount(memory.DefaultDir, memories), // shared by every thread
+		// shared by every thread
+		orchestrix.WithMount(memory.DefaultDir, memories),
 	)
 	_, _ = a, err
 }
@@ -362,7 +374,8 @@ func ExampleWithAsync() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func() { _ = tasks.Close(context.Background()) }() // stops background subagents still running
+	// stops background subagents still running
+	defer func() { _ = tasks.Close(context.Background()) }()
 
 	a, err := orchestrix.NewWithProvider(model, orchestrix.WithAsync(tasks))
 	_, _ = a, err
@@ -382,7 +395,8 @@ func Example_coordinator() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer func() { _ = c.Close(context.Background()) }() // stops background workers still running
+	// stops background workers still running
+	defer func() { _ = c.Close(context.Background()) }()
 
 	in := orchestrix.Text("Write a one-page brief on home battery storage.")
 	in.ThreadID = "battery-brief" // start_task needs a thread
@@ -425,19 +439,23 @@ func ExampleWithRubric() {
 				"Answers every part of the question.",
 				"Names a file and line for each claim about the code.",
 			},
-			Grader:        rubric.ModelGrader{Model: "small-model"}, // grade with a cheaper model
-			MaxIterations: 1,                                        // at most one revision
+			// grade with a cheaper model
+			Grader: rubric.ModelGrader{Model: "small-model"},
+			// at most one revision
+			MaxIterations: 1,
 		}),
 	)
 	_, _ = a, err
 }
 
 func ExampleWithProfiles() {
-	llm.RegisterProfile("small-", llm.Profile{ContextWindow: 32_000, MaxOutput: 4_096}) // what it can do
+	// what it can do
+	llm.RegisterProfile("small-", llm.Profile{ContextWindow: 32_000, MaxOutput: 4_096})
 
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithProfiles(profiles.Config{Adjustments: []profiles.Adjustment{{
-			Models:            []string{"small-*", "*-mini"}, // how this agent treats it
+			// how this agent treats it
+			Models:            []string{"small-*", "*-mini"},
 			PromptSuffix:      "Take one small step at a time and call one tool per turn.",
 			ToolDescriptions:  map[string]string{"grep": "Search file contents for a regular expression."},
 			ExcludeTools:      []string{"web_*"},
@@ -450,8 +468,9 @@ func ExampleWithProfiles() {
 func ExampleWithCompress() {
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithCompress(compress.Config{
-			TriggerFraction: 0.5, // propose a range once half the window is used
-			KeepTurns:       4,   // never touch the newest four user turns
+			// propose a range once half the window is used
+			TriggerFraction: 0.5,
+			KeepTurns:       4, // never touch the newest four user turns
 		}),
 	)
 	_, _ = a, err

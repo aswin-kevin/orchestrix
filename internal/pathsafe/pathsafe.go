@@ -33,7 +33,8 @@ func Segment(id string) string {
 		safe = emptyPlaceholder
 	}
 	if len(safe) > maxSafeChars {
-		safe = safe[:maxSafeChars] // ASCII only, so any cut is a character boundary
+		// ASCII only, so any cut is a character boundary
+		safe = safe[:maxSafeChars]
 	}
 	if safe == id {
 		return id

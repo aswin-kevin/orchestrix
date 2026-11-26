@@ -43,13 +43,14 @@ type ConcurrencySafer interface {
 	ConcurrencySafe(in json.RawMessage) bool
 }
 
-// PermissionChecker is implemented by tools with a permission verdict of
-// their own, consulted after the rules (see permission.Evaluate). The zero
-// Decision and Ask mean no opinion: the rules and mode decide, as for a
-// tool without it. Only Allow and Deny are acted on (see permission.Evaluate
-// steps 2 and 7); Deny always is, Allow is honoured unless the mode is
-// dont-ask (permission.ModeDontAsk). Ask has no effect on the verdict; its Message, when set,
-// becomes the approval question when no rule or mode decides the call.
+// PermissionChecker is implemented by tools with a permission verdict of their
+// own, consulted after the rules (see permission.Evaluate). The zero Decision
+// and Ask mean no opinion: the rules and mode decide, as for a tool without
+// it. Only Allow and Deny are acted on (see permission.Evaluate steps 2 and
+// 7); Deny always is, Allow is honoured unless the mode is dont-ask
+// (permission.ModeDontAsk). Ask has no effect on the verdict; its Message,
+// when set, becomes the approval question when no rule or mode decides the
+// call.
 type PermissionChecker interface {
 	// CheckPermission is the tool's own verdict for a call with input in.
 	CheckPermission(ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision

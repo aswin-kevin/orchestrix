@@ -18,7 +18,8 @@ const DefaultMaxIterations = 2
 
 // Record is the outcome of one grading.
 type Record struct {
-	// Iteration is 0 for the first answer, 1 for the first revision, and so on.
+	// Iteration is 0 for the first answer, 1 for the first revision, and so
+	// on.
 	Iteration int `json:"iteration"`
 	// Pass reports that the grader found every criterion met.
 	Pass bool `json:"pass"`

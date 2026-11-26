@@ -188,12 +188,13 @@ type Middleware struct {
 	prompt string
 }
 
-// New returns the web middleware. It fails when MaxBytes, MaxChars, Timeout
-// or MaxRedirects is negative, when Search or Fetcher holds a nil pointer
-// (a typed nil, such as a (*Brave)(nil)), when Fetcher is set together with
-// an HTTP client setting or with DisableFetch, when ProxyURL is not an http or https URL, when a CA file
-// cannot be read or holds no PEM certificate, when the Search backend fails
-// validation, and when nothing is enabled (fetch disabled and no Search).
+// New returns the web middleware. It fails when MaxBytes, MaxChars, Timeout or
+// MaxRedirects is negative, when Search or Fetcher holds a nil pointer (a
+// typed nil, such as a (*Brave)(nil)), when Fetcher is set together with an
+// HTTP client setting or with DisableFetch, when ProxyURL is not an http or
+// https URL, when a CA file cannot be read or holds no PEM certificate, when
+// the Search backend fails validation, and when nothing is enabled (fetch
+// disabled and no Search).
 func New(cfg Config) (*Middleware, error) {
 	switch {
 	case cfg.MaxBytes < 0:

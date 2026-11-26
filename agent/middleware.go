@@ -134,10 +134,10 @@ type AfterModel interface {
 // valid one that a hook continues is checked again on the next reply.
 //
 // A non-empty prompt is appended to State as a user message marked
-// InjectedMetaKey (ContinuationMetaValue) and the run takes another turn; an empty one lets the run complete. Hooks run in reverse
-// stack order, like AfterModel, and the first non-empty prompt wins: the
-// hooks after it are not consulted. A returned error ends the run like an
-// AfterModel error.
+// InjectedMetaKey (ContinuationMetaValue) and the run takes another turn; an
+// empty one lets the run complete. Hooks run in reverse stack order, like
+// AfterModel, and the first non-empty prompt wins: the hooks after it are not
+// consulted. A returned error ends the run like an AfterModel error.
 type BeforeStop interface {
 	BeforeStop(ctx context.Context, s *state.State, resp *llm.Response) (prompt string, err error)
 }

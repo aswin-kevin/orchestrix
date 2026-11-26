@@ -246,7 +246,8 @@ func TestStartStdioErrors(t *testing.T) {
 		{"env key with =", StdioConfig{Env: map[string]string{"A=B": "x"}}, `mcp: env key "A=B" is invalid`},
 		{"env key with NUL", StdioConfig{Env: map[string]string{"A\x00": "x"}}, `mcp: env key "A\x00" is invalid`},
 	} {
-		tt.cfg.Command = t.TempDir() + "/missing" // the check comes before the start
+		// the check comes before the start
+		tt.cfg.Command = t.TempDir() + "/missing"
 		if _, err := StartStdio(tt.cfg); err == nil || err.Error() != tt.want {
 			t.Errorf("%s: err = %v, want %q", tt.name, err, tt.want)
 		}

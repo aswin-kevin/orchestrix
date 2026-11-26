@@ -25,7 +25,8 @@ const rootPath = "/"
 func accessFor[In any](op permission.Op, pathOf func(In) string) func(json.RawMessage) []permission.PathAccess {
 	return func(raw json.RawMessage) []permission.PathAccess {
 		var in In
-		_ = json.Unmarshal(raw, &in) // malformed input falls back to the root, the strictest answer
+		// malformed input falls back to the root, the strictest answer
+		_ = json.Unmarshal(raw, &in)
 		return []permission.PathAccess{{Path: reportedPath(pathOf(in)), Op: op}}
 	}
 }

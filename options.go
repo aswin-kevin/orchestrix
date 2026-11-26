@@ -79,7 +79,8 @@ type Option func(*settings)
 //		orchestrix.WithSystemPrompt("You are a careful code reviewer."),
 //		orchestrix.WithPermissionMode(permission.ModePlan),
 //	)
-//	a, err := orchestrix.New("anthropic:claude-sonnet-4-5", reviewer, orchestrix.WithMaxTurns(20))
+//	a, err := orchestrix.New("anthropic:claude-sonnet-4-5", reviewer,
+//		orchestrix.WithMaxTurns(20))
 func Options(opts ...Option) Option {
 	return func(s *settings) {
 		for _, opt := range opts {

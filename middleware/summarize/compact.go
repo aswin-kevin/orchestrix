@@ -62,8 +62,8 @@ func Estimate(s *state.State, view []llm.Message) int {
 }
 
 // elisionsMark returns the IDs of the elisions recorded in s, quoted and
-// comma-separated in stored order, so that any change to them changes the mark;
-// empty when there are none.
+// comma-separated in stored order, so that any change to them changes the
+// mark; empty when there are none.
 func elisionsMark(s *state.State) string {
 	elisions := elide.All(s)
 	ids := make([]string, len(elisions))

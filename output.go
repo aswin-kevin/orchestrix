@@ -34,7 +34,8 @@ func WithOutputSchema(schema map[string]any) Option {
 //	type Verdict struct {
 //		Severity string `json:"severity" enum:"low,high"`
 //	}
-//	a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithOutputType[Verdict]())
+//	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
+//		orchestrix.WithOutputType[Verdict]())
 //	if err != nil {
 //		return err
 //	}

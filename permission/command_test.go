@@ -471,7 +471,8 @@ func TestSplitCommandHiddenCommandOptions(t *testing.T) {
 		cmd    string
 		wantOK bool
 	}{
-		// sed: the e command, the e flag of s, and scripts the parser cannot see.
+		// sed: the e command, the e flag of s, and scripts the parser cannot
+		// see.
 		{`sed 's/a/rm x/e' file`, false},
 		{`sed 's|a|b|ge' file`, false},
 		{`sed '1e rm x' file`, false},
@@ -480,7 +481,8 @@ func TestSplitCommandHiddenCommandOptions(t *testing.T) {
 		{`sed -e '/re/{e rm x' -e '}' file`, false},
 		{"sed '# note\\\ne rm x' file", false}, // a comment does not continue
 		{"sed 'w out\\\ne rm x' file", false},
-		{`sed -e '/x/a\' -e 'e rm x' file`, true}, // the second script is the text of a
+		// the second script is the text of a
+		{`sed -e '/x/a\' -e 'e rm x' file`, true},
 		{`sed -e 's/a/b/' -e 's/c/d/e' file`, false},
 		{`sed --expression='s/a/b/e' file`, false},
 		{`sed --expr 's/a/b/e' file`, false},
@@ -562,7 +564,8 @@ func TestSplitCommandHiddenCommandOptions(t *testing.T) {
 		{`git config get user.name`, true},
 		{`git fetch origin`, true},
 
-		// The ssh family: local commands from options, settings and config files.
+		// The ssh family: local commands from options, settings and config
+		// files.
 		{`ssh -o ProxyCommand='rm x' host`, false},
 		{`ssh -oProxyCommand=x host`, false},
 		{`ssh -o 'proxycommand rm x' host`, false},

@@ -53,7 +53,8 @@ func groupRSS(pgid int) int64 {
 }
 
 // processGroup reads the pgrp field of <dir>/stat. The command name in field 2
-// may contain spaces and parentheses, so fields are counted after its last ')'.
+// may contain spaces and parentheses, so fields are counted after its last
+// ')'.
 func processGroup(dir string) (int, bool) {
 	data, err := os.ReadFile(dir + "/stat")
 	if err != nil {

@@ -22,7 +22,8 @@ func TestGitConfigCannotRunCommandsWithoutApproval(t *testing.T) {
 		{"/.git", "git status", "execute(git status)"},
 		{"/sub/.git", "git -C sub status", "execute(git:*)"},
 		{"/evil", "git --git-dir=evil status", "execute(git:*)"},
-		{"/evil", "git -C evil st", "execute(git:*)"}, // a bare repository git discovers
+		// a bare repository git discovers
+		{"/evil", "git -C evil st", "execute(git:*)"},
 	} {
 		t.Run(tt.cmd, func(t *testing.T) {
 			dir := t.TempDir()

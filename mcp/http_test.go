@@ -528,7 +528,8 @@ func TestHTTPOversizedResponse(t *testing.T) {
 				}
 				return
 			}
-			// An oversized event leaves the stream unreadable: the transport ends.
+			// An oversized event leaves the stream unreadable: the transport
+			// ends.
 			select {
 			case <-c.Done():
 			case <-time.After(2 * time.Second):
@@ -778,7 +779,8 @@ func TestLaxClientKeepsSessionWhenNotFull(t *testing.T) {
 		t.Fatalf("initialize: status %d, id %q", status, sid)
 	}
 	for i := range 2 {
-		clock.advance(2 * pendingSessionTTL) // 60s after the last use, below the idle timeout
+		// 60s after the last use, below the idle timeout
+		clock.advance(2 * pendingSessionTTL)
 		if got := rawPost(t, ts.URL, sid, `{"jsonrpc":"2.0","id":7,"method":"tools/list"}`, nil); got != http.StatusOK {
 			t.Fatalf("tools/list %d from a session without notifications/initialized = %d, want 200", i, got)
 		}
