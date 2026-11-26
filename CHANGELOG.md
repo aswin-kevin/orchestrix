@@ -2,7 +2,7 @@
 
 Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `orxdocker`, `evals`). The project is pre-1.0, so a minor release may break the API; every break is listed under "Breaking changes".
 
-## Unreleased
+## v0.10.0 — 2026-11-26
 
 The API freeze pass before 1.0: every public contract gets the shape it will keep. Interfaces shrink to what every implementation needs, with capabilities as optional interfaces found through `Unwrap`; constructors take `Config` structs and return errors; numeric settings follow one rule (zero is the default, a negative value is an error unless a field names a `-1` constant); background tasks become stateful. This is a clean break with v0.9: there are no compatibility aliases and no migration guide, and checkpoints saved by v0.9 that hold background task or job records are not readable (records saved under the old keys are ignored).
 
@@ -170,7 +170,7 @@ The API freeze pass before 1.0: every public contract gets the shape it will kee
 
 ### Modules
 
-- The satellite modules (`orxotel`, `orxpg`, `orxdocker`, `evals`) move their core requirement to this release and stay on v0.x after the core reaches 1.0.
+- `orxotel/v0.4.0`, `orxpg/v0.4.0` and `orxdocker/v0.4.0` require core v0.10.0, as does `evals` (not tagged). The satellites stay on v0.x after the core reaches 1.0.
 
 ## v0.9.0 — 2026-11-21
 
