@@ -359,11 +359,12 @@ func (m *Middleware) Bind(a *agent.Agent) error {
 
 // Close implements agent.Closer, so Agent.Close stops the tasks: it stops
 // every task of every thread and waits up to DefaultStopWait for them to
-// end, or until ctx's deadline when that comes sooner. Tasks cannot be
-// started afterwards, and the records of the tasks it stopped show them as
-// cancelled (as the runner reports them). It returns an error when a task
-// had not ended by then (ctx's error when ctx ended). Calling it more than
-// once is safe.
+// end, or until ctx's deadline when that comes sooner; the stop requests,
+// sent before that wait, may add up to backend.DefaultKillGrace. Tasks
+// cannot be started afterwards, and the records of the tasks it stopped
+// show them as cancelled (as the runner reports them). It returns an error
+// when a task had not ended by then (ctx's error when ctx ended). Calling
+// it more than once is safe.
 //
 // Close does not wait for Config.OnSettled: a report in flight, or the
 // cancelled report of a waiting task Close ended, may run after it

@@ -224,7 +224,9 @@ func (m *Middleware) Name() string { return Name }
 
 // Close implements agent.Closer, so Agent.Close stops the jobs: it stops
 // every job of every thread and waits for them to end, for at most twice
-// backend.DefaultKillGrace, or until ctx's deadline when that comes sooner.
+// backend.DefaultKillGrace, or until ctx's deadline when that comes sooner;
+// the stop requests, sent before that wait, may add up to one more
+// backend.DefaultKillGrace.
 // A job still running after that keeps one goroutine waiting for it. Jobs
 // cannot be started afterwards, and the records of the jobs it stopped show
 // them as cancelled. It returns an error when a job had not ended by then

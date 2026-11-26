@@ -742,6 +742,9 @@ var errNotEnded = errors.New("jobs: some jobs did not end in time")
 // wait passes stops its job as it commits, after Close returned. The entries
 // are kept, so records refreshed afterwards show the jobs as stopped rather
 // than lost. The stop requests keep ctx's values but not its cancellation.
+// They are sent, concurrently, before the wait begins, and each may take up
+// to stopRequestTimeout, so Close can return up to that much later than
+// wait (or ctx's deadline).
 //
 // Close returns nil when every job ended in time; otherwise ctx.Err() when
 // ctx is done, context.DeadlineExceeded when ctx's deadline cut the wait

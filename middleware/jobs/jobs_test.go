@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -427,8 +426,8 @@ func TestCheckJobWaitsAndUnknownJob(t *testing.T) {
 	)
 	run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
 
-	if got := resultText(t, p, "o1"); !strings.Contains(got, "late") || !regexp.MustCompile(`exit code 0`).MatchString(got) {
-		t.Fatalf("blocking check_job = %q", got)
+	if got := resultText(t, p, "o1"); !strings.Contains(got, "Job bg_1 (`sleep 0.2; echo late`): completed (exit code 0)") || !strings.Contains(got, "late") {
+		t.Fatalf("check_job with wait = %q, want the ended job with its output", got)
 	}
 	if r := result(t, p, "o2"); !r.IsError {
 		t.Fatalf("unknown job accepted: %q", resultText(t, p, "o2"))
@@ -479,20 +478,5 @@ func TestCancelJobRecordsCancelled(t *testing.T) {
 	records := Records(final.State)
 	if len(records) != 1 || records[0].Status != StatusCancelled || !records[0].Notified {
 		t.Fatalf("records = %+v", records)
-	}
-}
-
-func TestCheckJobWait(t *testing.T) {
-	m := newJobs(t, Config{})
-	p := llmtest.New(
-		turn(bgExecute("e1", "sleep 0.3; echo the-end")),
-		turn(call("c1", ToolCheck, obj{"job_id": "bg_1", "wait": true})),
-		llmtest.Turn{Text: "ok"},
-	)
-	run(t, context.Background(), newAgent(t, p, m, newShell(t)), input("t1"))
-
-	got := resultText(t, p, "c1")
-	if !strings.Contains(got, "Job bg_1 (`sleep 0.3; echo the-end`): completed (exit code 0)") || !strings.Contains(got, "the-end") {
-		t.Fatalf("check_job with wait = %q, want the ended job with its output", got)
 	}
 }

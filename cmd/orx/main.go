@@ -200,7 +200,8 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 
 // buildAgent assembles the agent. It returns a nil agent and an exit code
 // when setup fails; otherwise the returned shutdown func must be called when
-// the agent is no longer used, to stop its background tasks and MCP servers.
+// the agent is no longer used, to stop its background jobs (and, with
+// -async, its background tasks) and MCP servers.
 func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(llm.Config) (llm.Provider, error),
 	stderr io.Writer) (ag *agent.Agent, shutdown func(), code int) {
 	// cleanups release what setup has started, in reverse order.

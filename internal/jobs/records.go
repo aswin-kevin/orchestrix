@@ -17,6 +17,8 @@ type Accessors[R any] struct {
 	// settled record may be pruned (see PruneRecords).
 	Settled func(R) bool
 	// Pruned, when set, is called once for each record PruneRecords drops.
+	// It is called while the State is locked (inside the key's Update), so
+	// it must not use the State.
 	Pruned func(R)
 }
 
