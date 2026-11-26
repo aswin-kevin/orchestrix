@@ -8,8 +8,10 @@
 // asked about again when its InterruptConfig allows Approve; when it does
 // not, the approval does not count: the call is rejected when only Reject is
 // allowed, and otherwise asked about again so that the human gives a decision
-// hitl allows (an Edit or a Respond). The pause itself is the agent's
-// ordinary interrupt: the host answers it with Agent.Resume.
+// hitl allows (an Edit or a Respond). An Approver can only allow, perhaps
+// with a rewrite, or deny, so when the agent has one and Edit is not allowed
+// either, the call is rejected without asking it. The pause itself is the
+// agent's ordinary interrupt: the host answers it with Agent.Resume.
 package hitl
 
 import (
@@ -222,8 +224,12 @@ func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 	}
 	// A call approved in the permission step whose config does not allow a
 	// plain Approve still needs a decision hitl allows (an Edit or a
-	// Respond), so it is asked again below.
+	// Respond), so it is asked again below; an Approver is asked only when
+	// Edit is allowed, the one such decision it can give.
 	if a, approver := approverOf(ctx); approver != nil {
+		if call.Approved && !slices.Contains(allowedOf(cfg), agent.Edit) {
+			return rejected("approval is not an allowed decision for " + call.Name), nil
+		}
 		return ask(ctx, a, approver, cfg, call, next)
 	}
 	askedKey.Update(call.State, func(ids []string) []string { return append(ids, call.ID) })

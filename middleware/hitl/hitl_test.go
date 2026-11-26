@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -1013,5 +1014,52 @@ func TestResumedPermissionApprovalAsksHitl(t *testing.T) {
 	mustComplete(t, final)
 	if !slices.Equal(l.all(), []string{"/b.txt"}) {
 		t.Fatalf("ran %v, want the edited input once", l.all())
+	}
+}
+
+func TestPermissionApprovalRejectedWhenApproverCannotDecide(t *testing.T) {
+	for _, allowed := range [][]agent.DecisionType{
+		{agent.Respond},
+		{agent.Respond, agent.Reject},
+	} {
+		t.Run(fmt.Sprint(allowed), func(t *testing.T) {
+			l := &log{}
+			var asked atomic.Int32
+			ac := askRule(withTools(agent.Config{}, writeFile(l)))
+			ac.Approver = func(context.Context, permission.Request, string) permission.Decision {
+				asked.Add(1)
+				return permission.Allowed()
+			}
+			a := newAgent(t, allowedOn("write_file", allowed...), ac, writeTurns("/a.txt")...)
+			_, final := run(t, a)
+
+			mustComplete(t, final)
+			if len(l.all()) != 0 {
+				t.Fatalf("tool ran %v, want an Approver that can only allow or deny refused", l.all())
+			}
+			text, isErr := result(t, final.State, "w")
+			if want := "Rejected: approval is not an allowed decision for write_file"; !isErr || text != want {
+				t.Fatalf("result = %q (error %v), want %q", text, isErr, want)
+			}
+			if asked.Load() != 1 {
+				t.Fatalf("approver asked %d times, want only the permission step's prompt", asked.Load())
+			}
+		})
+	}
+}
+
+func TestResumedPermissionApprovalAsksHitlForRespond(t *testing.T) {
+	l := &log{}
+	a := newAgent(t, allowedOn("write_file", agent.Respond, agent.Reject), askRule(withTools(agent.Config{}, writeFile(l))), writeTurns("/a.txt")...)
+	events, final := run(t, a)
+	mustInterrupt(t, events, final)
+
+	events, final = resume(t, a, final.State, agent.Decision{ToolUseID: "w", Type: agent.Approve})
+	in := mustInterrupt(t, events, final)
+	if len(in.Requests) != 1 || !slices.Equal(in.Requests[0].Allowed, []agent.DecisionType{agent.Respond, agent.Reject}) {
+		t.Fatalf("second interrupt = %+v, want hitl's own request with Allowed [respond reject]", in.Requests)
+	}
+	if len(l.all()) != 0 {
+		t.Fatalf("tool ran %v, want no run before a human decides", l.all())
 	}
 }
