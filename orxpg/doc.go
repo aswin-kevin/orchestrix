@@ -25,6 +25,13 @@
 // the host's transaction and vanish if it rolls back; a Checkpointer or
 // Store over a *pgx.Conn or a pgx.Tx is not safe for concurrent use.
 //
+// A Checkpointer used by an agent must sit over a pool (*pgxpool.Pool):
+// the agent renews its thread's lease from a background goroutine while
+// saves run, which is concurrent use, and over a pgx.Tx a lease is
+// invisible to other processes until the transaction commits, so it
+// excludes no one. A *pgx.Conn or a pgx.Tx suits only direct,
+// single-goroutine use, such as tools, tests and migrations.
+//
 // # Tenancy
 //
 // The tenant id is fixed when a Checkpointer or Store is built and is part

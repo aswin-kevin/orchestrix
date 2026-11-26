@@ -97,8 +97,10 @@ $$`,
 }
 
 // Schema returns the SQL that Migrate runs for cfg, for use with a
-// migration tool. Every statement is idempotent. It fails for an invalid
-// Config.TablePrefix.
+// migration tool. Every statement is idempotent. The output contains a
+// DO $$ ... $$ block, which must run as a single statement: a migration
+// tool that splits its input on ';' needs that block wrapped in its
+// statement-block markers. It fails for an invalid Config.TablePrefix.
 func Schema(cfg Config) (string, error) {
 	prefix, err := cfg.prefix()
 	if err != nil {

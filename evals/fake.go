@@ -29,12 +29,14 @@ type fakeShell struct {
 
 var _ backend.Executor = (*fakeShell)(nil)
 
-func newFakeShell() (*fakeShell, error) {
+// newFakeShell returns a fakeShell over a new memory backend. The memory
+// backend cannot fail with its zero config, so an error panics.
+func newFakeShell() *fakeShell {
 	mem, err := membackend.New(membackend.Config{})
 	if err != nil {
-		return nil, err
+		panic("evals: memory backend with the zero config: " + err.Error()) // cannot happen
 	}
-	return &fakeShell{Backend: mem}, nil
+	return &fakeShell{Backend: mem}
 }
 
 // Execute implements backend.Executor.

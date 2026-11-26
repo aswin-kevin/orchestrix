@@ -11,7 +11,11 @@ import (
 // DB runs the statements of a Checkpointer or Store. *pgxpool.Pool,
 // *pgx.Conn and pgx.Tx all satisfy it. A pool is safe for concurrent use;
 // a *pgx.Conn or a pgx.Tx is not, so a Checkpointer or Store built over one
-// must not be used by several goroutines at once.
+// must not be used by several goroutines at once. A Checkpointer used by an
+// agent must sit over a pool: the agent renews leases from a background
+// goroutine while saves run, and over a pgx.Tx a lease is invisible to
+// other processes until commit. A *pgx.Conn or a pgx.Tx suits only direct
+// single-goroutine use (tools, tests, migrations).
 type DB interface {
 	// Exec runs a statement that returns no rows.
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)

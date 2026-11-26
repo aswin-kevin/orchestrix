@@ -34,9 +34,13 @@ var (
 
 // NewCheckpointer returns a Checkpointer for tenantID over db, usually a
 // *pgxpool.Pool; over a pgx.Tx its reads and writes are the
-// transaction's. The tables must exist (see Migrate). It fails for a nil
-// db, an invalid tenant id (wrapping ErrInvalidTenantID) or an invalid
-// Config.TablePrefix.
+// transaction's. A Checkpointer given to an agent must sit over a pool:
+// the agent renews leases from a background goroutine while saves run
+// (concurrent use), and over a pgx.Tx a lease is invisible to other
+// processes until commit. A *pgx.Conn or a pgx.Tx suits only direct
+// single-goroutine use (tools, tests, migrations). The tables must exist
+// (see Migrate). It fails for a nil db, an invalid tenant id (wrapping
+// ErrInvalidTenantID) or an invalid Config.TablePrefix.
 func NewCheckpointer(db DB, tenantID string, cfg Config) (*Checkpointer, error) {
 	if db == nil {
 		return nil, errNilDB

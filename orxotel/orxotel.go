@@ -53,8 +53,8 @@ type Config struct {
 	// every model and tool span of the run. It is called once per run, in
 	// WrapRun, synchronously and before the run's span starts, with the
 	// run's context and RunInfo; it must not block or panic. It only adds:
-	// an attribute whose key is one this package sets on any span (the
-	// gen_ai.* and orchestrix.* keys) is ignored.
+	// an attribute whose key is one of the keys this package sets on spans
+	// is ignored.
 	Attributes func(ctx context.Context, info agent.RunInfo) []attribute.KeyValue
 }
 
