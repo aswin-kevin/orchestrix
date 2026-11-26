@@ -37,12 +37,12 @@ func signalGroup(proc *os.Process, sig syscall.Signal) error {
 	return nil
 }
 
-// Alive reports whether any process of proc's group still exists. EPERM
+// alive reports whether any process of proc's group still exists. EPERM
 // means a member exists that we may not signal, which still counts as alive.
 //
-// Once the leader has been waited for and Alive has returned false, the group
+// Once the leader has been waited for and alive has returned false, the group
 // id may be handed out again, so callers must stop signalling it.
-func Alive(proc *os.Process) bool {
+func alive(proc *os.Process) bool {
 	err := syscall.Kill(-proc.Pid, 0)
 	return err == nil || errors.Is(err, syscall.EPERM)
 }

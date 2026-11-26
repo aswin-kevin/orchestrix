@@ -57,8 +57,8 @@ func parseImage(data []byte) (*image, error) {
 }
 
 // encode returns the image as state JSON.
-func (img *image) encode() ([]byte, error) {
-	out := *img
+func (im *image) encode() ([]byte, error) {
+	out := *im
 	if out.Messages == nil {
 		out.Messages = []json.RawMessage{}
 	}
@@ -111,36 +111,36 @@ func commonPrefix(a, b []json.RawMessage) int {
 // apply returns the image that results from replaying rec onto img. For a
 // snapshot img is ignored; for a delta img must not be nil. The result does
 // not alias img's maps or message slice header.
-func (rec record) apply(img *image) (*image, error) {
-	switch rec.Kind {
+func (r record) apply(img *image) (*image, error) {
+	switch r.Kind {
 	case kindSnapshot:
-		return parseImage(rec.State)
+		return parseImage(r.State)
 	case kindDelta:
-		return rec.applyDelta(img)
+		return r.applyDelta(img)
 	default:
-		return nil, fmt.Errorf("unknown record kind %q", rec.Kind)
+		return nil, fmt.Errorf("unknown record kind %q", r.Kind)
 	}
 }
 
-func (rec record) applyDelta(prev *image) (*image, error) {
+func (r record) applyDelta(prev *image) (*image, error) {
 	if prev == nil {
-		return nil, fmt.Errorf("delta seq %d has no snapshot before it", rec.Seq)
+		return nil, fmt.Errorf("delta seq %d has no snapshot before it", r.Seq)
 	}
-	if rec.Keep < 0 || rec.Keep > len(prev.Messages) {
-		return nil, fmt.Errorf("delta seq %d keeps %d of %d messages", rec.Seq, rec.Keep, len(prev.Messages))
+	if r.Keep < 0 || r.Keep > len(prev.Messages) {
+		return nil, fmt.Errorf("delta seq %d keeps %d of %d messages", r.Seq, r.Keep, len(prev.Messages))
 	}
 	next := &image{
 		Version:  prev.Version,
-		Messages: append(slices.Clone(prev.Messages[:rec.Keep]), rec.Messages...),
-		Values:   make(map[string]json.RawMessage, len(prev.Values)+len(rec.Values)),
+		Messages: append(slices.Clone(prev.Messages[:r.Keep]), r.Messages...),
+		Values:   make(map[string]json.RawMessage, len(prev.Values)+len(r.Values)),
 	}
 	for name, raw := range prev.Values {
 		next.Values[name] = raw
 	}
-	for name, raw := range rec.Values {
+	for name, raw := range r.Values {
 		next.Values[name] = raw
 	}
-	for _, name := range rec.Deleted {
+	for _, name := range r.Deleted {
 		delete(next.Values, name)
 	}
 	return next, nil

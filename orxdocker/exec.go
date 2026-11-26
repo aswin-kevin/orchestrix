@@ -107,12 +107,12 @@ exit 0
 // reached it.
 var errEnded = errors.New("orxdocker: the command ended before it was signalled")
 
-// exitNoPid is signalScript's status when no pid file exists.
-const exitNoPid = 3
+// exitNoPID is signalScript's status when no pid file exists.
+const exitNoPID = 3
 
-// errNoPid reports that a command's pid file never appeared or was removed
+// errNoPID reports that a command's pid file never appeared or was removed
 // (by the command itself, which runs as the same user).
-var errNoPid = errors.New("orxdocker: the command's pid file is missing")
+var errNoPID = errors.New("orxdocker: the command's pid file is missing")
 
 // Executor runs commands in one thread's container; it implements
 // backend.Executor and backend.Starter. The container is created on the
@@ -470,7 +470,7 @@ func (e *Executor) inspectExec(ctx context.Context, execID string) (execState, e
 // signal sends sig ("TERM" or "KILL") to the process group of the command
 // recorded under token in container id, through a short exec. It retries
 // while the pid is not recorded and done is open, for up to about a second,
-// then returns errNoPid; it returns errEnded when done closes first. ctx,
+// then returns errNoPID; it returns errEnded when done closes first. ctx,
 // further bounded by signalTimeout, bounds the whole request; once it ends
 // signal returns at once.
 func (e *Executor) signal(ctx context.Context, id, token, sig string, done <-chan struct{}) error {
@@ -483,8 +483,8 @@ func (e *Executor) signal(ctx context.Context, id, token, sig string, done <-cha
 		switch {
 		case err == nil && code == 0:
 			return nil
-		case err == nil && code == exitNoPid:
-			err = errNoPid
+		case err == nil && code == exitNoPID:
+			err = errNoPID
 		case err == nil:
 			err = fmt.Errorf("orxdocker: signal exec exited with status %d", code)
 		}
@@ -649,7 +649,7 @@ func (p *process) stop(ctx context.Context) error {
 		p.stopping.Store(true)
 		defer close(p.termSent)
 		grace := p.e.m.killGrace
-		notSent := func(err error) bool { return errors.Is(err, errNoPid) || errors.Is(err, errEnded) }
+		notSent := func(err error) bool { return errors.Is(err, errNoPID) || errors.Is(err, errEnded) }
 		err := p.e.signal(ctx, p.container, p.token, "TERM", p.exited)
 		switch {
 		case err == nil:

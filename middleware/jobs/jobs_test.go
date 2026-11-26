@@ -403,17 +403,17 @@ func TestNestedRunStopsOwnJobs(t *testing.T) {
 	if got := resultText(t, parentP, "sp1"); got != "child done" {
 		t.Fatalf("spawn = %q", got)
 	}
-	childPid, parentPid := pidFrom(t, childP, "cm1"), pidFrom(t, parentP, "pm1")
-	if alive(childPid) {
-		t.Fatalf("nested run's job %d outlived the run", childPid)
+	childPID, parentPID := pidFrom(t, childP, "cm1"), pidFrom(t, parentP, "pm1")
+	if alive(childPID) {
+		t.Fatalf("nested run's job %d outlived the run", childPID)
 	}
-	if !alive(parentPid) {
-		t.Fatalf("top-level run's job %d was stopped", parentPid)
+	if !alive(parentPID) {
+		t.Fatalf("top-level run's job %d was stopped", parentPID)
 	}
 	if err := m.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	waitGone(t, parentPid)
+	waitGone(t, parentPID)
 }
 
 func TestCheckJobWaitsAndUnknownJob(t *testing.T) {

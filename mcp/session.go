@@ -58,49 +58,49 @@ func (s *Server) newSession(ctx context.Context, write func(context.Context, jso
 
 // close ends the session: it cancels every request and waits for their
 // goroutines.
-func (sess *session) close() {
-	sess.mu.Lock()
-	sess.closed = true
-	sess.mu.Unlock()
-	sess.srv.mu.Lock()
-	delete(sess.srv.sessions, sess)
-	sess.srv.mu.Unlock()
-	sess.cancel()
-	sess.wg.Wait()
+func (s *session) close() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.srv.mu.Lock()
+	delete(s.srv.sessions, s)
+	s.srv.mu.Unlock()
+	s.cancel()
+	s.wg.Wait()
 }
 
 // spawn runs f on a tracked goroutine unless the session is closed.
-func (sess *session) spawn(f func()) bool {
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	if sess.closed {
+func (s *session) spawn(f func()) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
 		return false
 	}
-	sess.wg.Add(1)
+	s.wg.Add(1)
 	go func() {
-		defer sess.wg.Done()
+		defer s.wg.Done()
 		f()
 	}()
 	return true
 }
 
 // handle processes one incoming message.
-func (sess *session) handle(raw json.RawMessage) error {
+func (s *session) handle(raw json.RawMessage) error {
 	var m message
 	if err := json.Unmarshal(raw, &m); err != nil {
 		reply := message{ID: json.RawMessage("null"), Error: &RPCError{Code: codeParseError, Message: "parse error"}}
-		if !sess.spawn(func() { _ = sess.send(sess.ctx, encode(reply)) }) {
+		if !s.spawn(func() { _ = s.send(s.ctx, encode(reply)) }) {
 			return ErrClosed
 		}
 		return nil
 	}
 	switch {
 	case m.isRequest():
-		return sess.start(m)
+		return s.start(m)
 	case m.Method == notifyCancelled:
 		var p cancelledParams
 		if json.Unmarshal(m.Params, &p) == nil {
-			sess.cancelRequest(string(p.RequestID))
+			s.cancelRequest(string(p.RequestID))
 		}
 	}
 	return nil // other notifications and stray responses need nothing
@@ -109,41 +109,41 @@ func (sess *session) handle(raw json.RawMessage) error {
 // start registers a request and runs it on its own goroutine. Registering
 // before handle returns means a notifications/cancelled that follows the
 // request always finds it.
-func (sess *session) start(m message) error {
+func (s *session) start(m message) error {
 	id := string(m.ID)
-	ctx := context.WithValue(context.WithValue(sess.ctx, sessionKey{}, sess), requestIDKey{}, id)
+	ctx := context.WithValue(context.WithValue(s.ctx, sessionKey{}, s), requestIDKey{}, id)
 	ctx, cancel := context.WithCancel(ctx)
 	req := &request{cancel: cancel}
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	if sess.closed {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
 		cancel()
 		return ErrClosed
 	}
-	sess.inflight[id] = req
-	sess.wg.Add(1)
+	s.inflight[id] = req
+	s.wg.Add(1)
 	go func() {
-		defer sess.wg.Done()
+		defer s.wg.Done()
 		defer cancel()
-		defer sess.finish(id, req)
-		sess.run(ctx, m)
+		defer s.finish(id, req)
+		s.run(ctx, m)
 	}()
 	return nil
 }
 
 // finish forgets req unless a newer request has taken over its id.
-func (sess *session) finish(id string, req *request) {
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	if sess.inflight[id] == req {
-		delete(sess.inflight, id)
+func (s *session) finish(id string, req *request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inflight[id] == req {
+		delete(s.inflight, id)
 	}
 }
 
 // run answers one request unless it was cancelled first; a cancelled request
 // gets no response.
-func (sess *session) run(ctx context.Context, m message) {
-	result, rpcErr := sess.dispatch(ctx, m)
+func (s *session) run(ctx context.Context, m message) {
+	result, rpcErr := s.dispatch(ctx, m)
 	if ctx.Err() != nil {
 		return
 	}
@@ -155,47 +155,47 @@ func (sess *session) run(ctx context.Context, m message) {
 		}
 		reply.Result = raw
 	}
-	_ = sess.send(sess.ctx, encode(reply))
+	_ = s.send(s.ctx, encode(reply))
 }
 
 // send writes msg unless the session has ended.
-func (sess *session) send(ctx context.Context, msg json.RawMessage) error {
-	sess.mu.Lock()
-	closed := sess.closed
-	sess.mu.Unlock()
+func (s *session) send(ctx context.Context, msg json.RawMessage) error {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
 	if closed {
 		return ErrClosed
 	}
-	return sess.write(ctx, msg)
+	return s.write(ctx, msg)
 }
 
 // dispatch runs the request, turning a handler panic into an internal error.
-func (sess *session) dispatch(ctx context.Context, m message) (result any, rpcErr *RPCError) {
+func (s *session) dispatch(ctx context.Context, m message) (result any, rpcErr *RPCError) {
 	defer func() {
 		if r := recover(); r != nil {
 			result, rpcErr = nil, &RPCError{Code: codeInternalError, Message: fmt.Sprintf("panic: %v", r)}
 		}
 	}()
-	result, rpcErr = sess.srv.dispatch(ctx, m.Method, m.Params)
+	result, rpcErr = s.srv.dispatch(ctx, m.Method, m.Params)
 	if m.Method == methodInitialize && rpcErr == nil {
-		sess.mu.Lock()
-		sess.initialized = true
-		sess.mu.Unlock()
+		s.mu.Lock()
+		s.initialized = true
+		s.mu.Unlock()
 	}
 	return result, rpcErr
 }
 
 // running reports whether a request with raw id is in flight.
-func (sess *session) running(id string) bool {
-	sess.mu.Lock()
-	defer sess.mu.Unlock()
-	return sess.inflight[id] != nil
+func (s *session) running(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inflight[id] != nil
 }
 
-func (sess *session) cancelRequest(id string) {
-	sess.mu.Lock()
-	req := sess.inflight[id]
-	sess.mu.Unlock()
+func (s *session) cancelRequest(id string) {
+	s.mu.Lock()
+	req := s.inflight[id]
+	s.mu.Unlock()
 	if req != nil {
 		req.cancel()
 	}
@@ -203,12 +203,12 @@ func (sess *session) cancelRequest(id string) {
 
 // notifyAsync sends a parameterless notification to an initialized session
 // without blocking the caller.
-func (sess *session) notifyAsync(method string) {
-	sess.mu.Lock()
-	ready := sess.initialized
-	sess.mu.Unlock()
+func (s *session) notifyAsync(method string) {
+	s.mu.Lock()
+	ready := s.initialized
+	s.mu.Unlock()
 	if ready {
-		sess.spawn(func() { _ = sess.send(sess.ctx, encode(message{Method: method})) })
+		s.spawn(func() { _ = s.send(s.ctx, encode(message{Method: method})) })
 	}
 }
 

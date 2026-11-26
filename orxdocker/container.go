@@ -70,58 +70,58 @@ type hostConfig struct {
 // containerSpec builds the creation request for a thread's container from
 // a validated Config. Labels other than the thread's and the creation time
 // are part of the configuration hash.
-func (o *Config) containerSpec() containerConfig {
-	uid, gid, _ := strings.Cut(o.User, ":")
+func (c *Config) containerSpec() containerConfig {
+	uid, gid, _ := strings.Cut(c.User, ":")
 	if gid == "" {
 		gid = uid
 	}
 	var secOpt []string
-	if !o.AllowNewPrivileges {
+	if !c.AllowNewPrivileges {
 		secOpt = append(secOpt, "no-new-privileges")
 	}
-	secOpt = append(secOpt, o.SecurityOpt...)
-	workspaceOpts := "rw,nosuid,nodev,size=" + strconv.FormatInt(o.WorkspaceBytes, 10) + ",mode=0755"
+	secOpt = append(secOpt, c.SecurityOpt...)
+	workspaceOpts := "rw,nosuid,nodev,size=" + strconv.FormatInt(c.WorkspaceBytes, 10) + ",mode=0755"
 	if isNumeric(uid) && isNumeric(gid) {
 		workspaceOpts += ",uid=" + uid + ",gid=" + gid
 	}
-	labels := map[string]string{LabelManaged: "true", LabelScope: o.Scope}
-	for k, v := range o.Labels {
+	labels := map[string]string{LabelManaged: "true", LabelScope: c.Scope}
+	for k, v := range c.Labels {
 		labels[k] = v
 	}
 	cfg := containerConfig{
-		Image:      o.Image,
+		Image:      c.Image,
 		Entrypoint: []string{"/bin/sh", "-c"},
 		Cmd:        []string{keepAlive},
-		User:       o.User,
-		WorkingDir: o.WorkDir,
+		User:       c.User,
+		WorkingDir: c.WorkDir,
 		Env:        []string{},
 		Labels:     labels,
 		HostConfig: hostConfig{
-			Init:           !o.DisableInit,
-			ReadonlyRootfs: !o.WritableRootfs,
+			Init:           !c.DisableInit,
+			ReadonlyRootfs: !c.WritableRootfs,
 			CapDrop:        []string{"ALL"},
-			CapAdd:         o.CapAdd,
+			CapAdd:         c.CapAdd,
 			SecurityOpt:    secOpt,
-			PidsLimit:      o.PidsLimit,
-			Memory:         o.MemoryBytes,
-			MemorySwap:     o.MemoryBytes,
-			NanoCPUs:       o.NanoCPUs,
-			NetworkMode:    o.network(),
+			PidsLimit:      c.PidsLimit,
+			Memory:         c.MemoryBytes,
+			MemorySwap:     c.MemoryBytes,
+			NanoCPUs:       c.NanoCPUs,
+			NetworkMode:    c.network(),
 			Tmpfs: map[string]string{
-				"/tmp":    "rw,nosuid,nodev,size=" + strconv.FormatInt(o.TmpBytes, 10) + ",mode=1777",
-				o.WorkDir: workspaceOpts,
+				"/tmp":    "rw,nosuid,nodev,size=" + strconv.FormatInt(c.TmpBytes, 10) + ",mode=1777",
+				c.WorkDir: workspaceOpts,
 			},
 			IpcMode:       "private",
 			RestartPolicy: map[string]string{"Name": "no"},
 		},
 	}
-	if o.PidsLimit == Unlimited {
+	if c.PidsLimit == Unlimited {
 		cfg.HostConfig.PidsLimit = -1 // the Engine API's "no limit"
 	}
-	if o.MemoryBytes == Unlimited {
+	if c.MemoryBytes == Unlimited {
 		cfg.HostConfig.Memory, cfg.HostConfig.MemorySwap = 0, 0
 	}
-	if o.NanoCPUs == Unlimited {
+	if c.NanoCPUs == Unlimited {
 		cfg.HostConfig.NanoCPUs = 0
 	}
 	data, _ := json.Marshal(cfg) // plain strings and maps: cannot fail

@@ -63,18 +63,18 @@ func TestSetupMakesGroupLeader(t *testing.T) {
 
 func TestTerminateEmptiesGroup(t *testing.T) {
 	cmd := startSleeper(t)
-	if !Alive(cmd.Process) {
+	if !alive(cmd.Process) {
 		t.Fatal("group of a running leader is not alive")
 	}
 	if err := Terminate(cmd.Process); err != nil {
 		t.Fatalf("Terminate: %v", err)
 	}
 	_ = cmd.Wait() // reap the leader, or it lingers as a group member
-	if !WaitGone(cmd.Process, 2*time.Second) {
+	if !waitGone(cmd.Process, 2*time.Second) {
 		t.Fatal("group still alive after SIGTERM")
 	}
-	if Alive(cmd.Process) {
-		t.Fatal("Alive reports an empty group")
+	if alive(cmd.Process) {
+		t.Fatal("alive reports an empty group")
 	}
 }
 
@@ -84,7 +84,7 @@ func TestSignalsToGoneGroupAreNotErrors(t *testing.T) {
 		t.Fatalf("Kill: %v", err)
 	}
 	_ = cmd.Wait()
-	if !WaitGone(cmd.Process, 2*time.Second) {
+	if !waitGone(cmd.Process, 2*time.Second) {
 		t.Fatal("group still alive after SIGKILL")
 	}
 	if err := Terminate(cmd.Process); err != nil {
@@ -98,11 +98,11 @@ func TestSignalsToGoneGroupAreNotErrors(t *testing.T) {
 func TestWaitGoneTimesOut(t *testing.T) {
 	cmd := startSleeper(t)
 	start := time.Now()
-	if WaitGone(cmd.Process, 100*time.Millisecond) {
-		t.Fatal("WaitGone reported a live group gone")
+	if waitGone(cmd.Process, 100*time.Millisecond) {
+		t.Fatal("waitGone reported a live group gone")
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("WaitGone took %v for a 100ms bound", elapsed)
+		t.Fatalf("waitGone took %v for a 100ms bound", elapsed)
 	}
 }
 

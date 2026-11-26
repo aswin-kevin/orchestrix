@@ -85,49 +85,49 @@ var (
 func newInboxes() *inboxes { return &inboxes{byThread: make(map[string]*inbox)} }
 
 // Name implements agent.Middleware.
-func (x *inboxes) Name() string { return inboxName }
+func (b *inboxes) Name() string { return inboxName }
 
 // open registers a new inbox for the task run on threadID.
-func (x *inboxes) open(threadID string) (*inbox, error) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	if _, ok := x.byThread[threadID]; ok {
+func (b *inboxes) open(threadID string) (*inbox, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, ok := b.byThread[threadID]; ok {
 		return nil, fmt.Errorf("a task already runs on thread %q", threadID)
 	}
-	b := &inbox{}
-	x.byThread[threadID] = b
-	return b, nil
+	ib := &inbox{}
+	b.byThread[threadID] = ib
+	return ib, nil
 }
 
 // remove closes and forgets the inbox of threadID, returning how many of its
 // messages were never read.
-func (x *inboxes) remove(threadID string) int {
-	x.mu.Lock()
-	b := x.byThread[threadID]
-	delete(x.byThread, threadID)
-	x.mu.Unlock()
-	if b == nil {
+func (b *inboxes) remove(threadID string) int {
+	b.mu.Lock()
+	ib := b.byThread[threadID]
+	delete(b.byThread, threadID)
+	b.mu.Unlock()
+	if ib == nil {
 		return 0
 	}
-	return b.close()
+	return ib.close()
 }
 
 // take drains the inbox of the run ctx belongs to; nil when it has none.
-func (x *inboxes) take(ctx context.Context) []string {
+func (b *inboxes) take(ctx context.Context) []string {
 	threadID, _ := agent.ThreadID(ctx)
-	x.mu.Lock()
-	b := x.byThread[threadID]
-	x.mu.Unlock()
-	if b == nil {
+	b.mu.Lock()
+	ib := b.byThread[threadID]
+	b.mu.Unlock()
+	if ib == nil {
 		return nil
 	}
-	return b.drain()
+	return ib.drain()
 }
 
 // BeforeModel implements agent.BeforeModel: each message sent to the task
 // since its last turn becomes an injected user message.
-func (x *inboxes) BeforeModel(ctx context.Context, s *state.State) error {
-	for _, msg := range x.take(ctx) {
+func (b *inboxes) BeforeModel(ctx context.Context, s *state.State) error {
+	for _, msg := range b.take(ctx) {
 		m := llm.UserText(updateText(msg))
 		m.Meta = map[string]string{agent.InjectedMetaKey: "async"}
 		s.AppendMessages(m)
@@ -137,8 +137,8 @@ func (x *inboxes) BeforeModel(ctx context.Context, s *state.State) error {
 
 // BeforeStop implements agent.BeforeStop: a task about to end with unread
 // messages takes another turn, with them as the prompt.
-func (x *inboxes) BeforeStop(ctx context.Context, _ *state.State, _ *llm.Response) (string, error) {
-	msgs := x.take(ctx)
+func (b *inboxes) BeforeStop(ctx context.Context, _ *state.State, _ *llm.Response) (string, error) {
+	msgs := b.take(ctx)
 	texts := make([]string, len(msgs))
 	for i, msg := range msgs {
 		texts[i] = updateText(msg)

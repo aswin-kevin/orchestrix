@@ -24,6 +24,6 @@ func kill(proc *os.Process) error {
 	return nil
 }
 
-// Alive is false: without a group there is nothing left to reap once the
+// alive is false: without a group there is nothing left to reap once the
 // process has exited.
-func Alive(*os.Process) bool { return false }
+func alive(*os.Process) bool { return false }

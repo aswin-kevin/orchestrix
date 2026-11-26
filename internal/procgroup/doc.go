@@ -4,5 +4,5 @@
 //
 // On platforms without POSIX process groups (Windows) it is best-effort: only
 // the started process itself is killed, so processes it spawned may outlive
-// it, and Alive is always false.
+// it, and alive is always false.
 package procgroup

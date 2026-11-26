@@ -349,7 +349,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 func TestFollowHardDeadline(t *testing.T) {
 	f := newFakeEngine(t)
 	f.stream, f.state = hang, runningUntilGone
-	f.signalStatus = exitNoPid // the pid file is gone
+	f.signalStatus = exitNoPID // the pid file is gone
 	m := f.manager(Config{})
 	m.hardGrace = 200 * time.Millisecond
 	e := m.Executor("t1")
@@ -385,7 +385,7 @@ func TestFollowHardDeadline(t *testing.T) {
 func TestStopFallsBackToRemove(t *testing.T) {
 	f := newFakeEngine(t)
 	f.stream, f.state = hang, runningUntilGone
-	f.signalStatus = exitNoPid
+	f.signalStatus = exitNoPID
 	m := f.manager(Config{})
 	m.hardGrace = time.Hour
 	p, err := m.Executor("t1").Start(t.Context(), "evade", execOpts(time.Hour))
@@ -656,14 +656,14 @@ func TestTimeoutUnconfirmedKillRemovesContainer(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		holdStream bool // the stream stays open after the exec exits
-		pidStatus  int  // the signal exec's status: 0 or exitNoPid
+		pidStatus  int  // the signal exec's status: 0 or exitNoPID
 		exit       int
 		wantRemove bool
 	}{
-		{"no pid, wrapper killed", false, exitNoPid, 137, true},
-		{"no pid, output still held", true, exitNoPid, 137, true},
+		{"no pid, wrapper killed", false, exitNoPID, 137, true},
+		{"no pid, output still held", true, exitNoPID, 137, true},
 		{"signalled, output still held", true, 0, 143, true},
-		{"no pid, finished at the timeout", false, exitNoPid, 0, false},
+		{"no pid, finished at the timeout", false, exitNoPID, 0, false},
 		{"signalled and ended", false, 0, 143, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

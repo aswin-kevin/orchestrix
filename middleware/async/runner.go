@@ -499,9 +499,9 @@ type localSession struct {
 // input is the Input of an episode that continues the task from last (saved
 // at version) with msgs: on a copy of last in the stricter of the task's
 // permission mode and FollowUpMode's, nested, on the task's backend.
-func (sess *localSession) input(ctx context.Context, last *state.State, version checkpoint.Version, msgs ...llm.Message) (agent.Input, error) {
+func (ls *localSession) input(ctx context.Context, last *state.State, version checkpoint.Version, msgs ...llm.Message) (agent.Input, error) {
 	s := last.Clone()
-	mode := sess.child.PermissionMode(s)
+	mode := ls.child.PermissionMode(s)
 	if f, ok := followUpOf(ctx); ok && f.mode != "" {
 		mode = permission.Stricter(f.mode, mode)
 	}
@@ -509,30 +509,30 @@ func (sess *localSession) input(ctx context.Context, last *state.State, version 
 		return agent.Input{}, err
 	}
 	return agent.Input{
-		ThreadID:  sess.threadID,
+		ThreadID:  ls.threadID,
 		State:     s,
 		Version:   version,
 		Messages:  msgs,
-		Backend:   sess.backendFor(ctx),
-		AgentName: sess.agentName,
-		Depth:     sess.depth,
+		Backend:   ls.backendFor(ctx),
+		AgentName: ls.agentName,
+		Depth:     ls.depth,
 	}, nil
 }
 
 // start runs one episode of the task with in, on a context detached from
 // ctx: it keeps ctx's values but not its cancellation. With decisions it
 // resumes the interrupted State in.State holds (agent.Agent.ResumeWith).
-func (sess *localSession) start(ctx context.Context, in agent.Input, decisions []agent.Decision) (*localTask, error) {
-	box, err := sess.l.inboxes.open(sess.threadID)
+func (ls *localSession) start(ctx context.Context, in agent.Input, decisions []agent.Decision) (*localTask, error) {
+	box, err := ls.l.inboxes.open(ls.threadID)
 	if err != nil {
 		return nil, err
 	}
 	stopCtx, stop := context.WithCancelCause(context.WithoutCancel(ctx))
-	runCtx, cancelTimeout := context.WithTimeout(stopCtx, sess.l.timeout)
-	t := &localTask{sess: sess, stop: stop, done: make(chan struct{}), inbox: box}
+	runCtx, cancelTimeout := context.WithTimeout(stopCtx, ls.l.timeout)
+	t := &localTask{sess: ls, stop: stop, done: make(chan struct{}), inbox: box}
 	go func() {
 		defer cancelTimeout()
-		t.run(runCtx, in, decisions, func() int { return sess.l.inboxes.remove(sess.threadID) })
+		t.run(runCtx, in, decisions, func() int { return ls.l.inboxes.remove(ls.threadID) })
 	}()
 	return t, nil
 }
@@ -597,12 +597,12 @@ func (t *localTask) run(ctx context.Context, in agent.Input, decisions []agent.D
 }
 
 // emit passes ev to Config.OnEvent, recovering a panic.
-func (sess *localSession) emit(ctx context.Context, ev agent.Event) {
-	if sess.l.onEvent == nil {
+func (ls *localSession) emit(ctx context.Context, ev agent.Event) {
+	if ls.l.onEvent == nil {
 		return
 	}
 	defer recoverHook(ctx, "async: OnEvent panicked")
-	sess.l.onEvent(sess.parentThread, sess.taskID, ev)
+	ls.l.onEvent(ls.parentThread, ls.taskID, ev)
 }
 
 // Continue implements Continuer: the next episode runs the subagent on the
@@ -660,9 +660,9 @@ func (t *localTask) next(ctx context.Context, last *state.State, version checkpo
 
 // backendFor is the backend an episode runs on: the task's own, or for a
 // reattached task the one the middleware passed with ctx.
-func (sess *localSession) backendFor(ctx context.Context) backend.Backend {
-	if sess.backend != nil {
-		return sess.backend
+func (ls *localSession) backendFor(ctx context.Context) backend.Backend {
+	if ls.backend != nil {
+		return ls.backend
 	}
 	f, _ := followUpOf(ctx)
 	return f.backend
