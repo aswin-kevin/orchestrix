@@ -11,10 +11,10 @@ import (
 
 // Job is one run for RunParallel: Agent runs Input. Several jobs may share
 // an agent; give each its own Input.ThreadID so their threads stay apart.
-// Jobs without one all run on the agent's thread-less workspace (with the
-// preset's per-thread default backend, one shared in-memory workspace, so
-// their files mix), and they cannot start background tasks (start_task
-// needs a thread).
+// A job without one runs without a thread: with the preset's per-thread
+// default backend it gets a fresh in-memory workspace of its own, dropped
+// when it ends, and it cannot start background tasks (start_task needs a
+// thread).
 type Job struct {
 	// Agent runs the job; nil fails the job.
 	Agent *agent.Agent

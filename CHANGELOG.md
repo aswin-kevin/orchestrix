@@ -6,6 +6,7 @@ Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `or
 
 ### Fixed
 
+- The MCP client info and the web fetch User-Agent report the release number again (they said 0.8.0 since v0.8.0); a test now ties `internal/version` to the newest release in this file.
 - `openai-responses`: each output item the server announces becomes its own content block, even when a server reuses an `output_index` for a later item (such as a reasoning item after the message) or streams another kind of delta at an index without announcing an item; events are matched to their item by `item_id` where the server sends one. Such streams used to fail with "llm: block N is text, got thinking event".
 
 ## v0.10.0 — 2026-11-26

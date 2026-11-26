@@ -1,6 +1,8 @@
 package version_test
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -18,5 +20,21 @@ func TestVersionIsSemver(t *testing.T) {
 func TestVersionUsed(t *testing.T) {
 	if !strings.Contains(web.DefaultUserAgent, "/"+version.Version+")") {
 		t.Errorf("DefaultUserAgent = %q, want it to carry version %q", web.DefaultUserAgent, version.Version)
+	}
+}
+
+// TestVersionMatchesChangelog keeps Version in step with the newest release
+// heading in CHANGELOG.md, so a release cannot ship an old number.
+func TestVersionMatchesChangelog(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "CHANGELOG.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^## v(\d+\.\d+\.\d+) `).FindSubmatch(b)
+	if m == nil {
+		t.Fatal("CHANGELOG.md has no release heading")
+	}
+	if got := string(m[1]); got != version.Version {
+		t.Errorf("newest CHANGELOG release = %s, want Version %s", got, version.Version)
 	}
 }
