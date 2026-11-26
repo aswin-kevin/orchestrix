@@ -104,6 +104,7 @@ func (p *responsesProvider) setHeaders(r *http.Request) {
 type responsesEvent struct {
 	Type        string `json:"type"`
 	OutputIndex int    `json:"output_index"`
+	ItemID      string `json:"item_id"`
 	Delta       string `json:"delta"`
 	Item        struct {
 		Type             string `json:"type"`
@@ -141,6 +142,7 @@ func streamResponsesEvents(t *Transport, events iter.Seq2[SSEEvent, error], emit
 		argumentsSeen: make(map[int]bool),
 		startedTools:  make(map[int]bool),
 		blocks:        make(map[int]int),
+		byID:          make(map[string]int),
 		items:         make(map[int]responsesItem),
 	}
 	started := false
@@ -181,13 +183,14 @@ type responsesStreamState struct {
 	// the full text on the finished item is not applied twice.
 	argumentsSeen map[int]bool
 	startedTools  map[int]bool
-	// blocks maps an output_index to the block index of the item it last
-	// announced, and items records each block's item. The spec gives every
-	// output item its own output_index, but some servers reuse one for a
-	// later item (a reasoning item after the message), so blocks are
-	// numbered by item, not by output_index. argumentsSeen and startedTools
-	// are keyed by block index.
+	// Blocks are numbered by output item, not by output_index: the spec
+	// gives every item its own output_index, but some servers reuse one for
+	// a later item (a reasoning item after the message). blocks maps an
+	// output_index to the block of the item last seen there, byID maps an
+	// item id to its block, and items records each block's item.
+	// argumentsSeen and startedTools are keyed by block index.
 	blocks      map[int]int
+	byID        map[string]int
 	items       map[int]responsesItem
 	next        int
 	sawToolCall bool
@@ -208,11 +211,11 @@ func (s *responsesStreamState) translate(data string) (events []StreamEvent, don
 	s.id = firstNonEmpty(s.id, ev.Response.ID)
 	switch ev.Type {
 	case respEvTextDelta:
-		return []StreamEvent{{Type: EventTextDelta, Index: s.blockFor(ev.OutputIndex, BlockText), Text: ev.Delta}}, false, nil
+		return []StreamEvent{{Type: EventTextDelta, Index: s.blockFor(ev.OutputIndex, ev.ItemID, BlockText), Text: ev.Delta}}, false, nil
 	case respEvReasoningDelta, respEvReasoningText:
-		return []StreamEvent{{Type: EventThinkingDelta, Index: s.blockFor(ev.OutputIndex, BlockThinking), Text: ev.Delta}}, false, nil
+		return []StreamEvent{{Type: EventThinkingDelta, Index: s.blockFor(ev.OutputIndex, ev.ItemID, BlockThinking), Text: ev.Delta}}, false, nil
 	case respEvArgumentsDelta:
-		index := s.blockFor(ev.OutputIndex, BlockToolUse)
+		index := s.blockFor(ev.OutputIndex, ev.ItemID, BlockToolUse)
 		s.argumentsSeen[index] = true
 		return []StreamEvent{{Type: EventToolInputDelta, Index: index, Text: ev.Delta}}, false, nil
 	case respEvOutputItemAdded:
@@ -228,6 +231,7 @@ func (s *responsesStreamState) translate(data string) (events []StreamEvent, don
 	return nil, false, nil
 }
 
+// itemAdded opens the block of an announced item and starts a tool call.
 func (s *responsesStreamState) itemAdded(ev responsesEvent) []StreamEvent {
 	index := s.announce(ev)
 	if ev.Item.Type != responsesFunctionCallType {
@@ -237,39 +241,69 @@ func (s *responsesStreamState) itemAdded(ev responsesEvent) []StreamEvent {
 }
 
 // responsesItem identifies the output item a block holds: its id (empty when
-// the server sent none) and the block type its events fill ("" until known).
+// the server sent none) and the block type its events fill ("" for an item
+// type the adapter does not read, until an event of a known type claims it).
 type responsesItem struct {
 	id   string
 	kind BlockType
 }
 
-// announce returns the block index for an output_item.added event, opening a
-// new block unless the output_index already holds the same item.
+// announce returns the block for an output_item.added event: the block of an
+// item already seen under the same id, else a new block at the event's
+// output_index.
 func (s *responsesStreamState) announce(ev responsesEvent) int {
-	item := responsesItem{id: ev.Item.ID, kind: responsesItemKind(ev.Item.Type)}
-	if b, ok := s.blocks[ev.OutputIndex]; ok {
-		if cur := s.items[b]; cur.id == item.id && (cur.kind == "" || item.kind == "" || cur.kind == item.kind) {
-			return b
-		}
+	kind := responsesItemKind(ev.Item.Type)
+	if b, ok := s.known(ev.Item.ID, kind); ok {
+		s.blocks[ev.OutputIndex] = b
+		return b
 	}
-	return s.open(ev.OutputIndex, item)
+	return s.open(ev.OutputIndex, responsesItem{id: ev.Item.ID, kind: kind})
 }
 
-// blockFor returns the block index for an event of type kind at output
-// index out: the block of the item announced there, or a new block when none
-// was announced or the announced item holds another type.
-func (s *responsesStreamState) blockFor(out int, kind BlockType) int {
+// blockFor returns the block for an event of type kind about the item with
+// id at output index out. It finds the item by id when the server sent one,
+// else takes the item last seen at out when it holds kind (or no type yet,
+// or carries no id while the event names one), and otherwise opens a new
+// block, so an event never lands in a block of another type.
+func (s *responsesStreamState) blockFor(out int, id string, kind BlockType) int {
+	if b, ok := s.known(id, kind); ok {
+		return b
+	}
 	if b, ok := s.blocks[out]; ok {
-		switch cur := s.items[b]; cur.kind {
-		case kind:
-			return b
-		case "":
+		cur := s.items[b]
+		if (cur.kind == kind || cur.kind == "") && (id == "" || cur.id == "") {
 			cur.kind = kind
+			if id != "" {
+				cur.id = id
+				s.byID[id] = b
+			}
 			s.items[b] = cur
 			return b
 		}
 	}
-	return s.open(out, responsesItem{kind: kind})
+	return s.open(out, responsesItem{id: id, kind: kind})
+}
+
+// known returns the block of the item with id when one was seen and holds
+// kind (or no type yet, or kind is ""), filling in its type.
+func (s *responsesStreamState) known(id string, kind BlockType) (int, bool) {
+	if id == "" {
+		return 0, false
+	}
+	b, ok := s.byID[id]
+	if !ok {
+		return 0, false
+	}
+	cur := s.items[b]
+	switch {
+	case kind == "" || cur.kind == kind:
+	case cur.kind == "":
+		cur.kind = kind
+		s.items[b] = cur
+	default:
+		return 0, false
+	}
+	return b, true
 }
 
 // open numbers a new block for out and records its item.
@@ -278,6 +312,9 @@ func (s *responsesStreamState) open(out int, item responsesItem) int {
 	s.next++
 	s.blocks[out] = b
 	s.items[b] = item
+	if item.id != "" {
+		s.byID[item.id] = b
+	}
 	return b
 }
 
@@ -305,12 +342,14 @@ func (s *responsesStreamState) startTool(index int, ev responsesEvent) []StreamE
 	return []StreamEvent{{Type: EventToolStart, Index: index, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}
 }
 
+// itemDone emits what only a finished item carries: a reasoning item's
+// signature and id, and a tool call sent whole on its finished item. A
+// finished message carries nothing its deltas did not.
 func (s *responsesStreamState) itemDone(ev responsesEvent) []StreamEvent {
-	kind := responsesItemKind(ev.Item.Type)
-	if kind == "" {
+	if ev.Item.Type != responsesReasoningType && ev.Item.Type != responsesFunctionCallType {
 		return nil
 	}
-	index := s.blockFor(ev.OutputIndex, kind)
+	index := s.blockFor(ev.OutputIndex, ev.Item.ID, responsesItemKind(ev.Item.Type))
 	switch ev.Item.Type {
 	case responsesReasoningType:
 		return []StreamEvent{

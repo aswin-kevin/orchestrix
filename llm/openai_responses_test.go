@@ -492,3 +492,65 @@ func TestResponsesRepeatedItemAnnouncementKeepsBlock(t *testing.T) {
 		t.Errorf("content = %+v, want one text block %q", content, "one block")
 	}
 }
+
+// A finished item that arrives after its output_index was reused still
+// completes its own block: the call is not started twice.
+func TestResponsesLateDoneAfterReusedIndexKeepsOneCall(t *testing.T) {
+	stream := responsesBody(
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"c1","name":"ls"}}`,
+		`{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"fc_1","delta":"{}"}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_2"}}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"c1","name":"ls","arguments":"{}"}}`,
+		responsesCompleted,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectResponses(t, newTestResponses(t, srv.URL), Request{})
+
+	if tu := resp.Message.ToolUses(); len(tu) != 1 || tu[0].ID != "c1" || string(tu[0].Input) != "{}" {
+		t.Errorf("tool uses = %+v, want one call c1 with input {}", tu)
+	}
+}
+
+// A reasoning item's signature joins its own text even when a finished
+// message for the reused output_index arrives in between.
+func TestResponsesLateDoneKeepsReasoningWithItsSignature(t *testing.T) {
+	stream := responsesBody(
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1"}}`,
+		`{"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","delta":"done"}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_2"}}`,
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"rs_2","delta":"why"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_1"}}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_2","encrypted_content":"ENC"}}`,
+		responsesCompleted,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectResponses(t, newTestResponses(t, srv.URL), Request{})
+
+	content := resp.Message.Content
+	if len(content) != 2 || content[0].Text != "done" {
+		t.Fatalf("content = %+v, want text %q then one thinking block", content, "done")
+	}
+	if th := content[1]; th.Thinking != "why" || th.Signature != "ENC" || th.ProviderData[responsesReasoningIDKey] != "rs_2" {
+		t.Errorf("thinking = %+v, want %q signed ENC from rs_2", th, "why")
+	}
+}
+
+// Deltas naming their item land in that item's block even when two items
+// share an output_index and their events interleave.
+func TestResponsesDeltasFollowItemID(t *testing.T) {
+	stream := responsesBody(
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1"}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_2"}}`,
+		`{"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","delta":"first"}`,
+		`{"type":"response.output_text.delta","output_index":0,"item_id":"msg_2","delta":"second"}`,
+		`{"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","delta":" one"}`,
+		responsesCompleted,
+	)
+	srv := newSSEServer(t, 200, "text/event-stream", stream)
+	resp := collectResponses(t, newTestResponses(t, srv.URL), Request{})
+
+	content := resp.Message.Content
+	if len(content) != 2 || content[0].Text != "first one" || content[1].Text != "second" {
+		t.Errorf("content = %+v, want texts %q and %q", content, "first one", "second")
+	}
+}
