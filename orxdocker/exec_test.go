@@ -834,3 +834,32 @@ func TestStopCancelledCtxNotSticky(t *testing.T) {
 		t.Fatalf("Stop(live ctx) after a cancelled Stop = %v, want nil", err)
 	}
 }
+
+// A command ended by Stop reports exit code -1, as backend.ExecResult
+// requires for a command killed by a signal, though its wrapper exits with
+// 128+n.
+func TestStopReportsKilledExitCode(t *testing.T) {
+	f := newFakeEngine(t)
+	endOnSignal(f, "TERM")
+	m := f.manager(Config{})
+	m.hardGrace = time.Hour
+	p, err := m.Executor("t1").Start(t.Context(), "cmd", execOpts(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("command still running after Stop")
+	}
+	res, _ := p.Result()
+	if res.ExitCode != -1 || res.TimedOut {
+		t.Fatalf("result = %+v, want exit code -1, not timed out", res)
+	}
+	if got := f.removedIDs(); len(got) != 0 {
+		t.Fatalf("TERM worked but containers were removed: %v", got)
+	}
+}

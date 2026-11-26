@@ -143,6 +143,11 @@ var errNoPid = errors.New("orxdocker: the command's pid file is missing")
 // timeout or Stop without any signal having reached its group and with its
 // wrapper dead of a signal (status 128 or more, or lost).
 //
+// A command ended by Stop, its timeout or a cancelled Execute reports
+// ExitCode -1. A command killed by a signal from anything else (itself, or
+// another process in the container) reports 128+n, the shell's status for
+// signal n: orxdocker cannot tell that apart from a real exit status.
+//
 // Processes can still outlive their command inside the thread's container:
 // a command can detach them (setsid, a double fork), or kill its own
 // wrapper before its timeout, after which the exec ends and the command's
@@ -768,6 +773,11 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 	}
 
 	res := backend.ExecResult{Output: p.out.String(), Truncated: p.out.Truncated(), ExitCode: exitCode}
+	if p.stopping.Load() && exitCode > 128 {
+		// The wrapper reports a signal death as 128+n; after Stop or the
+		// timeout that is the kill, which backend.ExecResult reports as -1.
+		res.ExitCode = -1
+	}
 	if err != nil {
 		res.ExitCode = -1
 		res.Output += "\n[orxdocker: " + err.Error() + "]"

@@ -187,6 +187,9 @@ func TestConfigValidation(t *testing.T) {
 		"negative MaxOutputBytes": {MaxOutputBytes: -1},
 		"negative MaxThreads":     {MaxThreads: -1},
 		"negative OpTimeout":      {OpTimeout: -time.Second},
+		"managed label":           {Labels: map[string]string{LabelManaged: "false"}},
+		"scope label":             {Labels: map[string]string{LabelScope: "other"}},
+		"reserved label":          {Labels: map[string]string{"dev.orchestrix.orxdocker.x": "y"}},
 	} {
 		c.Socket = "/s"
 		if _, err := NewManager(c); err == nil {
@@ -210,6 +213,17 @@ func TestConfigValidation(t *testing.T) {
 		if want := "orxdocker: " + field + " is negative"; err == nil || err.Error() != want {
 			t.Errorf("%s: err = %v, want %q", field, err, want)
 		}
+	}
+
+	_, err := NewManager(Config{Socket: "/s", Labels: map[string]string{LabelScope: "x"}})
+	if want := `orxdocker: label "` + LabelScope + `" is reserved`; err == nil || err.Error() != want {
+		t.Errorf("reserved label: err = %v, want %q", err, want)
+	}
+	m0, err := NewManager(Config{Socket: "/s", Labels: map[string]string{"dev.orchestrix.other": "ok", "team": "a"}})
+	if err != nil {
+		t.Errorf("unreserved labels rejected: %v", err)
+	} else {
+		m0.Close(t.Context())
 	}
 
 	c, err := Config{

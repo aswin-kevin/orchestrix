@@ -140,7 +140,9 @@ type Config struct {
 	// OpTimeout bounds each command a sandbox file operation sends; 0 means
 	// sandbox.DefaultOpTimeout.
 	OpTimeout time.Duration
-	// Labels are added to every container.
+	// Labels are added to every container. Keys starting with LabelManaged
+	// ("dev.orchestrix.orxdocker") are reserved for orxdocker's own labels
+	// and rejected.
 	Labels map[string]string
 
 	// WritableRootfs leaves the root file system writable (opt-out).
@@ -234,6 +236,11 @@ func (c Config) withDefaults() (Config, error) {
 	}
 	if _, err := mergeEnv(c.Env); err != nil {
 		return c, err
+	}
+	for k := range c.Labels {
+		if strings.HasPrefix(k, LabelManaged) {
+			return c, fmt.Errorf("orxdocker: label %q is reserved", k)
+		}
 	}
 	return c, nil
 }
