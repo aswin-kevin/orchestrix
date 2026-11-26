@@ -27,7 +27,7 @@ func TestLiveDecide(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 	resp, err := d.Decide(ctx, llm.DecisionRequest{
 		Input: []llm.Block{llm.TextBlock("My card was charged twice for the same order. Please refund the duplicate payment today, it is blocking my rent.")},

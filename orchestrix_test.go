@@ -27,7 +27,7 @@ import (
 func finalOf(t *testing.T, a *agent.Agent, in agent.Input) *agent.Final {
 	t.Helper()
 	var last agent.Event
-	for ev := range a.Run(context.Background(), in) {
+	for ev := range a.Run(t.Context(), in) {
 		last = ev
 	}
 	if last.Kind != agent.KindFinal || last.Final == nil {
@@ -71,7 +71,7 @@ func TestNewWithScriptedProviderWritesFile(t *testing.T) {
 	if final.Reason != agent.ReasonCompleted || final.Text != "done" {
 		t.Fatalf("final = %s %q (err %v), want completed %q", final.Reason, final.Text, final.Err, "done")
 	}
-	got, err := mem.Read(context.Background(), "/hello.txt", 0, 10)
+	got, err := mem.Read(t.Context(), "/hello.txt", 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +428,7 @@ func TestOrchestrixCloseStopsMCPAndTasks(t *testing.T) {
 		t.Fatal("MCP server offers no tools before Close")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	if err := a.Close(ctx); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -453,7 +453,7 @@ func TestOrchestrixCloseDropsThreadWorkspaces(t *testing.T) {
 	}
 	factory := a.Config().BackendFactory
 	before := factory("t1")
-	if err := a.Close(context.Background()); err != nil {
+	if err := a.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if factory("t1") == before {

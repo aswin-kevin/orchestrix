@@ -56,7 +56,7 @@ func TestGlobalGitConfigInWorkspaceNeedsApproval(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, err := range a.Run(context.Background(), orchestrix.Text("go")) {
+			for _, err := range a.Run(t.Context(), orchestrix.Text("go")) {
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -105,7 +105,7 @@ func TestIncludedGitConfigNeedsApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, err := range a.Run(context.Background(), orchestrix.Text("go")) {
+	for _, err := range a.Run(t.Context(), orchestrix.Text("go")) {
 		if err != nil {
 			t.Fatal(err)
 		}

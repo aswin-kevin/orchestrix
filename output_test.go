@@ -1,7 +1,6 @@
 package orchestrix_test
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -27,7 +26,7 @@ func runVerdict(t *testing.T, p llm.Provider, opts ...orchestrix.Option) (verdic
 	if err != nil {
 		t.Fatal(err)
 	}
-	return orchestrix.RunTyped[verdict](context.Background(), a,
+	return orchestrix.RunTyped[verdict](t.Context(), a,
 		agent.Input{Messages: []llm.Message{llm.UserText("assess")}})
 }
 

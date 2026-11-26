@@ -126,7 +126,7 @@ type unwrapper struct{ tool.Tool }
 func (u unwrapper) Unwrap() tool.Tool { return u.Tool }
 
 func TestHiddenWithToolsAddsDeferred(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		tool tool.Tool
 	}{
@@ -134,15 +134,15 @@ func TestHiddenWithToolsAddsDeferred(t *testing.T) {
 		{"deferred", deferred.Defer(noopTool("secret"))},
 		{"wrapped", unwrapper{deferred.Defer(noopTool("secret"))}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			p := llmtest.New(llmtest.Turn{Text: "ok"})
-			a, err := orchestrix.NewWithProvider(p, orchestrix.WithTools(tc.tool))
+			a, err := orchestrix.NewWithProvider(p, orchestrix.WithTools(tt.tool))
 			if err != nil {
 				t.Fatal(err)
 			}
 			finalOf(t, a, orchestrix.Text("hi"))
 			if names := toolNames(p); slices.Contains(names, "secret") {
-				t.Errorf("tools %v show the %s tool's schema", names, tc.name)
+				t.Errorf("tools %v show the %s tool's schema", names, tt.name)
 			}
 			if !slices.Contains(stackNames(a), "deferred") {
 				t.Errorf("stack %v lacks deferred", stackNames(a))

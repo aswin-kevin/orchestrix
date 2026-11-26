@@ -145,7 +145,7 @@ func TestWithMountPersistsMemoriesAcrossThreads(t *testing.T) {
 		t.Errorf("thread b recalled %q, want the memory recorded in thread a", got)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	factory := a.Config().BackendFactory
 	if _, err := factory("a").Read(ctx, "/scratch.txt", 0, 0); err != nil {
 		t.Errorf("thread a lost its own /scratch.txt: %v", err)
@@ -193,7 +193,7 @@ func TestWithMountKeepsShellExecute(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(root, "out.txt")); err != nil || string(got) != "hi\n" {
 		t.Errorf("out.txt = %q, %v; want the command to have run in the shell root", got, err)
 	}
-	if _, err := kvb.Read(context.Background(), "/note.txt", 0, 0); err != nil {
+	if _, err := kvb.Read(t.Context(), "/note.txt", 0, 0); err != nil {
 		t.Errorf("/kv/note.txt did not reach the mounted backend: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "kv")); !os.IsNotExist(err) {
@@ -202,7 +202,7 @@ func TestWithMountKeepsShellExecute(t *testing.T) {
 }
 
 func TestWithMountWrapsBackendAndFactory(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	for name, opt := range map[string]orchestrix.Option{
 		"backend": orchestrix.WithBackend(testutil.Memory(t)),
 		"factory": orchestrix.WithBackendFactory(func(string) backend.Backend { return testutil.Memory(t) }),
@@ -246,7 +246,7 @@ func TestWithMountClosesEachBackendOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Close(context.Background()); err != nil {
+	if err := a.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if inner.closed != 1 || mounted.closed != 1 {

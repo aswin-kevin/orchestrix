@@ -1,7 +1,6 @@
 package orchestrix_test
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,7 +27,7 @@ func TestNewDeciderFromSpec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := d.Decide(context.Background(), llm.DecisionRequest{
+	resp, err := d.Decide(t.Context(), llm.DecisionRequest{
 		Input:     []llm.Block{llm.TextBlock("I want my money back")},
 		Questions: []llm.Question{{Name: "refund", Type: llm.QuestionYesNo, Instructions: "Is this a refund request?"}},
 	})

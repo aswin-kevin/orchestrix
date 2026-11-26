@@ -73,7 +73,7 @@ func liveModel(t *testing.T) string {
 
 func TestLiveAgentWritesAndReadsFile(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	ws := testutil.Memory(t)
@@ -119,7 +119,7 @@ func TestLiveAgentWritesAndReadsFile(t *testing.T) {
 
 func TestLiveStreamingText(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	a, err := orchestrix.New(spec, orchestrix.WithMaxTurns(2))
@@ -191,7 +191,7 @@ func readTrimmed(ctx context.Context, t *testing.T, ws backend.Backend, path str
 
 func TestLiveSubagentDelegation(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	ws := testutil.Memory(t)
@@ -270,7 +270,7 @@ func minimalSummarizingAgent(t *testing.T, spec string, window int) *agent.Agent
 
 func TestLiveSummarizationTinyWindow(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	// Measure the fixed cost (system prompt and tools) with a first request
@@ -314,7 +314,7 @@ func TestLiveSummarizationTinyWindow(t *testing.T) {
 
 func TestLiveCheckpointResumeAcrossAgents(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	dir := t.TempDir()
@@ -400,7 +400,7 @@ func requireTextContains(t *testing.T, text, want string) {
 
 func TestLiveSkillLoadAndUse(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	dir := t.TempDir()
@@ -436,7 +436,7 @@ func TestLiveSkillLoadAndUse(t *testing.T) {
 
 func TestLiveMemoryRecall(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	ws := testutil.Memory(t)
@@ -469,7 +469,7 @@ func TestLiveMemoryRecall(t *testing.T) {
 
 func TestLiveMCPInProcess(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	srv := mcp.NewServer(mcp.Implementation{Name: "test", Version: "1"}, "")
@@ -507,7 +507,7 @@ func TestLiveMCPInProcess(t *testing.T) {
 
 func TestLiveWebFetch(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -535,7 +535,7 @@ func TestLiveWebFetch(t *testing.T) {
 
 func TestLivePlanModeApproval(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	cp, err := checkpointfile.New(t.TempDir(), checkpointfile.Config{})
@@ -588,7 +588,7 @@ func TestLivePlanModeApproval(t *testing.T) {
 
 func TestLiveAsyncBackgroundTask(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	m, err := async.New(async.Config{})
@@ -621,7 +621,7 @@ func TestLiveAsyncBackgroundTask(t *testing.T) {
 
 func TestLiveCoordinatorFanOut(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	c, err := coordinator.New(spec, coordinator.Config{Workers: []subagents.Subagent{{
@@ -660,7 +660,7 @@ func TestLiveCoordinatorFanOut(t *testing.T) {
 
 func TestLiveRubricRevision(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	a, err := orchestrix.New(spec,
@@ -693,7 +693,7 @@ const compressFillerChars = 2000
 
 func TestLiveCompressContext(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	mc, err := llm.ParseModel(spec)
@@ -748,7 +748,7 @@ func TestLiveCompressContext(t *testing.T) {
 
 func TestLiveMountedMemoryAcrossThreads(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	store, err := kv.NewDirStore(t.TempDir(), kv.DirStoreConfig{})
@@ -789,7 +789,7 @@ func TestLiveMountedMemoryAcrossThreads(t *testing.T) {
 
 func TestLiveProfilesPromptSuffix(t *testing.T) {
 	spec := liveModel(t)
-	ctx, cancel := context.WithTimeout(context.Background(), liveTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), liveTimeout)
 	defer cancel()
 
 	a, err := orchestrix.New(spec,

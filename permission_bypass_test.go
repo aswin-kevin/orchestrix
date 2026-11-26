@@ -25,7 +25,7 @@ import (
 func secretWorkspace(t *testing.T) *memory.Backend {
 	t.Helper()
 	mem := testutil.Memory(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for path, content := range map[string]string{
 		"/secrets/key.txt": "TOKEN=hidden\n",
 		"/notes/a.txt":     "TOKEN=public\n",
@@ -116,7 +116,7 @@ func TestResumeEditIsCheckedAgainstDenyRules(t *testing.T) {
 
 	edit := agent.Decision{ToolUseID: "w", Type: agent.Edit, Input: []byte(`{"path":"/secrets/k","content":"leak"}`)}
 	var resumed *agent.Final
-	for ev := range a.Resume(context.Background(), "", final.State, []agent.Decision{edit}) {
+	for ev := range a.Resume(t.Context(), "", final.State, []agent.Decision{edit}) {
 		resumed = ev.Final
 	}
 	if resumed == nil || resumed.Reason != agent.ReasonCompleted {
@@ -125,7 +125,7 @@ func TestResumeEditIsCheckedAgainstDenyRules(t *testing.T) {
 	if got := resultOf(t, resumed.State, "w"); !strings.HasPrefix(got, "Permission denied") {
 		t.Fatalf("edited call result = %q, want a permission denial", got)
 	}
-	if _, err := mem.Read(context.Background(), "/secrets/k", 0, 1); !errors.Is(err, backend.ErrNotFound) {
+	if _, err := mem.Read(t.Context(), "/secrets/k", 0, 1); !errors.Is(err, backend.ErrNotFound) {
 		t.Fatalf("denied file was written (read err = %v)", err)
 	}
 }

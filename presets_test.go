@@ -69,7 +69,7 @@ func TestFullStackOrder(t *testing.T) {
 // TestStackOrder pins the order New's doc gives, by the middleware's Name
 // constants: the default stack, then the optional middleware in two groups.
 func TestStackOrder(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
 		name string
 		opts func(t *testing.T) []orchestrix.Option
 		want []string
@@ -132,18 +132,18 @@ func TestStackOrder(t *testing.T) {
 				async.Name, deferred.Name, mcp.Name, web.Name, askuser.Name, jobs.Name, profiles.Name},
 		},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			a, err := orchestrix.NewWithProvider(llmtest.New(), tc.opts(t)...)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, err := orchestrix.NewWithProvider(llmtest.New(), tt.opts(t)...)
 			if err != nil {
 				t.Fatal(err)
 			}
 			closeAtEnd(t, a)
 			got := stackNames(a)
-			if !slices.Equal(got, tc.want) {
-				t.Errorf("stack = %v, want %v", got, tc.want)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("stack = %v, want %v", got, tt.want)
 			}
-			if tc.name != "scale" {
+			if tt.name != "scale" {
 				return
 			}
 			// Every slot is on here, so each built middleware's Name must
@@ -191,7 +191,7 @@ func TestDefaultWorkspaceSurvivesCheckpoint(t *testing.T) {
 		return a
 	}
 	drain := func(th *agent.Thread, text string) {
-		for _, err := range th.Prompt(context.Background(), text) {
+		for _, err := range th.Prompt(t.Context(), text) {
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -199,7 +199,7 @@ func TestDefaultWorkspaceSurvivesCheckpoint(t *testing.T) {
 	}
 
 	first := newAgent(writeThenAnswer("/notes.txt", "kept"))
-	th, err := first.Thread(context.Background(), "t1")
+	th, err := first.Thread(t.Context(), "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestDefaultWorkspaceSurvivesCheckpoint(t *testing.T) {
 		llmtest.Turn{Text: "read"},
 	)
 	second := newAgent(reader)
-	th2, err := second.Thread(context.Background(), "t1")
+	th2, err := second.Thread(t.Context(), "t1")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -23,7 +23,7 @@ func runText(t *testing.T, model llm.Provider, opts ...orchestrix.Option) string
 		t.Fatal(err)
 	}
 	var final *agent.Final
-	for ev, err := range a.Run(context.Background(), orchestrix.Text("hello")) {
+	for ev, err := range a.Run(t.Context(), orchestrix.Text("hello")) {
 		if err != nil {
 			t.Fatal(err)
 		}

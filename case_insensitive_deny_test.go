@@ -49,7 +49,7 @@ func TestDenyRulesHoldOnCaseInsensitiveFileSystems(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close(context.Background())
-	for ev, err := range a.Run(context.Background(), orchestrix.Text("go")) {
+	for ev, err := range a.Run(t.Context(), orchestrix.Text("go")) {
 		if err != nil {
 			t.Fatal(err)
 		}
