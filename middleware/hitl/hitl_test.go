@@ -795,3 +795,102 @@ func TestRequired(t *testing.T) {
 		t.Fatal("Required() = false, want true")
 	}
 }
+
+// allowAll is an Approver that allows every call, with an optional rewrite.
+func allowAll(rewrite string) permission.Approver {
+	return func(context.Context, permission.Request, string) permission.Decision {
+		d := permission.Decision{Behavior: permission.Allow}
+		if rewrite != "" {
+			d.UpdatedInput = json.RawMessage(rewrite)
+		}
+		return d
+	}
+}
+
+// approverRun runs one call of name under cfg with approver and returns what
+// the tool ran with and the call's result.
+func approverRun(t *testing.T, cfg Config, name string, approver permission.Approver) ([]string, string, bool) {
+	t.Helper()
+	l := &log{}
+	ac := withTools(bypass, named(l, name))
+	ac.Approver = approver
+	a := newAgent(t, cfg, ac, callTurns(name)...)
+	_, final := run(t, a)
+	mustComplete(t, final)
+	text, isErr := result(t, final.State, "c")
+	return l.all(), text, isErr
+}
+
+func TestApproverAllowHonoursAllowed(t *testing.T) {
+	rejectOnly := []agent.DecisionType{agent.Reject}
+	for _, tc := range []struct {
+		name    string
+		cfg     Config
+		rewrite string
+		ran     []string
+	}{
+		{"exact reject only", Config{InterruptOn: map[string]InterruptConfig{"mcp__a__x": {Allowed: rejectOnly}}}, "", nil},
+		{"pattern reject only", Config{InterruptOn: map[string]InterruptConfig{"mcp__*": {Allowed: rejectOnly}}}, "", nil},
+		{"empty intersection", Config{InterruptOn: map[string]InterruptConfig{
+			"mcp__*":    {Allowed: []agent.DecisionType{agent.Approve}},
+			"mcp__a__*": {Allowed: []agent.DecisionType{agent.Respond}},
+		}}, "", nil},
+		{"edit without approve, no rewrite", Config{InterruptOn: map[string]InterruptConfig{
+			"mcp__a__x": {Allowed: []agent.DecisionType{agent.Edit, agent.Reject}},
+		}}, "", nil},
+		{"edit without approve, rewrite", Config{InterruptOn: map[string]InterruptConfig{
+			"mcp__a__x": {Allowed: []agent.DecisionType{agent.Edit, agent.Reject}},
+		}}, `{"path":"/edited"}`, []string{"/edited"}},
+		{"approve without edit ignores rewrite", Config{InterruptOn: map[string]InterruptConfig{
+			"mcp__a__x": {Allowed: []agent.DecisionType{agent.Approve, agent.Reject}},
+		}}, `{"path":"/edited"}`, []string{"/a"}},
+		{"default", on("mcp__a__x"), "", []string{"/a"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ran, text, isErr := approverRun(t, tc.cfg, "mcp__a__x", allowAll(tc.rewrite))
+			if !slices.Equal(ran, tc.ran) {
+				t.Fatalf("ran %v, want %v (result %q)", ran, tc.ran, text)
+			}
+			if tc.ran == nil && (!isErr || !strings.HasPrefix(text, "Rejected")) {
+				t.Fatalf("result = %q (error %v), want a rejection", text, isErr)
+			}
+		})
+	}
+}
+
+func TestEmptyAllowedMeansRejectOnly(t *testing.T) {
+	empty := []agent.DecisionType{}
+	for _, tc := range []struct {
+		name string
+		cfg  Config
+	}{
+		{"exact key", Config{InterruptOn: map[string]InterruptConfig{"mcp__a__x": {Allowed: empty}, "mcp__*": {}}}},
+		{"single pattern", Config{InterruptOn: map[string]InterruptConfig{"mcp__a__*": {Allowed: empty}}}},
+	} {
+		t.Run(tc.name+"/interrupt", func(t *testing.T) {
+			req := interruptRequest(t, tc.cfg, "mcp__a__x")
+			if req == nil || !slices.Equal(req.Allowed, []agent.DecisionType{agent.Reject}) {
+				t.Fatalf("request = %+v, want Allowed [reject]", req)
+			}
+		})
+		t.Run(tc.name+"/approver", func(t *testing.T) {
+			if ran, text, _ := approverRun(t, tc.cfg, "mcp__a__x", allowAll("")); len(ran) != 0 {
+				t.Fatalf("ran %v (result %q), want the Allow refused", ran, text)
+			}
+		})
+	}
+}
+
+func TestExactKeyCanBeLessStrictThanPattern(t *testing.T) {
+	never := func(context.Context, *agent.ToolCall) bool { return false }
+	cfg := Config{InterruptOn: map[string]InterruptConfig{
+		"mcp__*":    {}, // always pauses
+		"mcp__a__x": {When: never},
+	}}
+	if req := interruptRequest(t, cfg, "mcp__a__x"); req != nil {
+		t.Fatalf("paused with %+v, want the exact key's When to win", req)
+	}
+	if req := interruptRequest(t, cfg, "mcp__a__y"); req == nil {
+		t.Fatal("mcp__a__y ran without approval, want the pattern to pause it")
+	}
+}

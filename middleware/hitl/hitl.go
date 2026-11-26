@@ -46,7 +46,10 @@ var askedKey = state.NewKey[[]string]("hitl.asked", state.Private[[]string]())
 // they are combined (see Config.InterruptOn).
 type InterruptConfig struct {
 	// Allowed lists the decisions the host may answer with: Approve, Edit,
-	// Reject or Respond. Nil means DefaultAllowed.
+	// Reject or Respond. Nil means DefaultAllowed(); an empty, non-nil list
+	// means only Reject. An Approver is held to it too: its Allow runs the
+	// call only when Approve is allowed, or when Edit is and it rewrites
+	// the input; otherwise the call is rejected.
 	Allowed []agent.DecisionType
 	// When reports whether a call needs a decision, judging by its Input. Nil
 	// means every call does.
@@ -67,8 +70,9 @@ type Config struct {
 	// intersection of their Allowed sets (an unset one counts as
 	// DefaultAllowed; an empty intersection allows only Reject), and the
 	// Reason is the most specific key's (the most non-wildcard characters,
-	// ties going to the key first in sorted order). A tool no key matches
-	// is left alone; nil lists none.
+	// ties going to the key first in sorted order). An exact key replaces
+	// the patterns, so it can be less strict than a pattern matching the
+	// same tool. A tool no key matches is left alone; nil lists none.
 	InterruptOn map[string]InterruptConfig
 }
 
@@ -96,7 +100,11 @@ func New(cfg Config) (*Middleware, error) {
 				return nil, fmt.Errorf("hitl: InterruptOn[%q] allows the unknown decision %q", key, d)
 			}
 		}
-		if ic.Allowed != nil {
+		switch {
+		case ic.Allowed == nil:
+		case len(ic.Allowed) == 0:
+			ic.Allowed = []agent.DecisionType{agent.Reject}
+		default:
 			ic.Allowed = slices.Clone(ic.Allowed)
 		}
 		on[key] = ic
@@ -248,13 +256,21 @@ func without(ids []string, id string) []string {
 // permission step does (paths, subject, edit); building it runs the tool's
 // own CheckPermission once more, for SelfCheck. A rewrite of the input is
 // honored only where the host may edit, and is checked against the
-// permission rules like any edited call.
+// permission rules like any edited call. An Allow runs the call only when
+// Approve is allowed, or Edit is and the Approver rewrote the input.
 func ask(ctx context.Context, a *agent.Agent, approver permission.Approver, cfg InterruptConfig, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
 	decision := approver(ctx, a.PermissionRequest(ctx, call), reasonFor(cfg, call.Name))
 	if decision.Behavior != permission.Allow {
 		return rejected(decision.Message), nil
 	}
-	if len(decision.UpdatedInput) > 0 && slices.Contains(allowedOf(cfg), agent.Edit) {
+	allowed := allowedOf(cfg)
+	edit := len(decision.UpdatedInput) > 0 && slices.Contains(allowed, agent.Edit)
+	if !edit && !slices.Contains(allowed, agent.Approve) {
+		// The Approver is not told Allowed: an Allow it may not give is
+		// a refusal.
+		return rejected("approval is not an allowed decision for " + call.Name), nil
+	}
+	if edit {
 		if res := applyRewrite(ctx, a, call, decision.UpdatedInput); res != nil {
 			return *res, nil
 		}
