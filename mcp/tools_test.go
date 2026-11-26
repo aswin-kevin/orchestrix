@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"slices"
@@ -230,6 +231,25 @@ func TestRefreshCollisionKeepsOldSet(t *testing.T) {
 	if st := m.Status()[0]; !st.Connected || !strings.Contains(st.Err.Error(), "a.b") {
 		t.Fatalf("status = %+v, want connected with the collision error", st)
 	}
+}
+
+func TestRefreshFailureLogged(t *testing.T) {
+	var buf syncBuffer
+	s := newTestServer(nil)
+	s.AddTool(ToolInfo{Name: "a_b"}, nil)
+	m, err := Connect(context.Background(), []ServerConfig{inProcessServer("srv", s)},
+		ConnectConfig{Logger: slog.New(slog.NewJSONHandler(&buf, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close(context.Background()) })
+	s.AddTool(ToolInfo{Name: "a.b"}, nil) // sanitizes to a_b's name
+	waitFor(t, "refresh failure logged", func() bool {
+		out := buf.String()
+		return strings.Contains(out, `"msg":"mcp: tool list refresh failed"`) &&
+			strings.Contains(out, `"server":"srv"`) && strings.Contains(out, `"level":"WARN"`) &&
+			strings.Contains(out, "a.b")
+	})
 }
 
 func TestAllowlist(t *testing.T) {

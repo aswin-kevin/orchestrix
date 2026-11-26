@@ -532,6 +532,10 @@ func TestConnectLogsConnectionEnd(t *testing.T) {
 		out := buf.String()
 		return strings.Contains(out, `"msg":"mcp: server connection ended"`) && strings.Contains(out, `"server":"srv"`) && strings.Contains(out, `"level":"WARN"`)
 	})
+	// A clean end gives no transport reason, yet err is ErrClosed, not nil.
+	if out := buf.String(); !strings.Contains(out, `"err":"mcp: connection closed"`) {
+		t.Fatalf("connection end err not ErrClosed: %s", out)
+	}
 	before := buf.String()
 	_ = m.Close(context.Background())
 	if after := buf.String(); after != before {

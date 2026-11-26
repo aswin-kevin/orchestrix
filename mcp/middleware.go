@@ -161,13 +161,17 @@ type ConnectConfig struct {
 	// OnNotification, when non-nil, receives every notification a server
 	// sends, with the server's name, after the middleware has handled it
 	// itself (tools/list_changed). It is called on the server client's
-	// reader goroutine and must not block.
+	// reader goroutine and must not block or panic. Each server has its own
+	// reader goroutine, so calls for different servers may run concurrently:
+	// it must be safe for concurrent use.
 	OnNotification func(server, method string, params json.RawMessage)
 	// Logger receives the middleware's diagnostics, at Warn level: "mcp:
 	// server connection ended" (attributes "server" and "err") when a
 	// connected server's client ends before Close, and "mcp: tool list
-	// refresh failed" (attributes "server" and "err"). Close logs nothing.
-	// nil → discarded.
+	// refresh failed" (attributes "server" and "err"). The connection-ended
+	// err is never nil: it is ErrClosed, wrapping the transport's reason
+	// when it gave one (a clean end of stream gives none). Close logs
+	// nothing. nil → discarded.
 	Logger *slog.Logger
 }
 
@@ -180,9 +184,9 @@ func Connect(ctx context.Context, servers []ServerConfig, cfg ConnectConfig) (*M
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
 	if err := validateServers(servers); err != nil {
-		for _, cfg := range servers {
-			if cfg.Transport != nil {
-				_ = cfg.Transport.Close(context.WithoutCancel(ctx))
+		for _, sc := range servers {
+			if sc.Transport != nil {
+				_ = sc.Transport.Close(context.WithoutCancel(ctx))
 			}
 		}
 		return nil, err
