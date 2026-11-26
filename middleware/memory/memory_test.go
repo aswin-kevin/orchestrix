@@ -473,15 +473,20 @@ func TestCustomStore(t *testing.T) {
 	}
 }
 
-// patherStore is a fakeStore that reports its entries under /fake.
-type patherStore struct{ fakeStore }
+// patherStore is a fakeStore that reports its entries under /fake. seen is
+// the last entry RecordPaths was given.
+type patherStore struct {
+	fakeStore
+	seen Entry
+}
 
 func (*patherStore) RecallPaths() []permission.PathAccess {
 	return []permission.PathAccess{{Path: "/fake", Op: permission.OpRead}}
 }
 
-func (*patherStore) RecordPaths(name string) []permission.PathAccess {
-	return []permission.PathAccess{{Path: "/fake/" + name, Op: permission.OpWrite}}
+func (p *patherStore) RecordPaths(e Entry) []permission.PathAccess {
+	p.seen = e
+	return []permission.PathAccess{{Path: "/fake/" + e.Name, Op: permission.OpWrite}}
 }
 
 func (*patherStore) EntryPath(e Entry) string { return "/fake/" + e.Name }
@@ -533,5 +538,24 @@ func TestCustomPatherRecallHidesDenied(t *testing.T) {
 	}
 	if got := toolResult(run(t, a, user("go")), 2); !strings.Contains(got, "## public") || strings.Contains(got, "secret") {
 		t.Fatalf("recall = %q, want the denied entry hidden", got)
+	}
+}
+
+func TestRecordPathsSeesTheEntry(t *testing.T) {
+	ps := &patherStore{}
+	in := RecordInput{Name: "A", Description: "d", Type: TypeProject, Content: "c"}
+	a, err := agent.New(agent.Config{
+		Provider:       llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "r", Name: ToolRecord, Input: in}}}, llmtest.Turn{Text: "done"}),
+		Backend:        backendWith(t, nil),
+		PermissionMode: permission.ModeAcceptEdits,
+		Middleware:     []agent.Middleware{mustNew(t, Config{Store: ps})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run(t, a, user("go"))
+	want := Entry{Name: "A", Description: "d", Type: TypeProject, Body: "c"}
+	if ps.seen != want {
+		t.Fatalf("RecordPaths saw %+v, want %+v", ps.seen, want)
 	}
 }

@@ -101,12 +101,19 @@ type Store interface {
 // Store is not path-checked: record_memory is still an edit (it needs an
 // allow rule, an approval or acceptEdits) and recall_memory is read-only,
 // but no path rule, deny rules included, reaches either tool.
+//
+// Every path it returns must be an absolute, clean backend path (as
+// path.Clean leaves it), since the permission rules match those; a path that
+// can be steered outside the store's directory by an entry's fields lets the
+// rules check the wrong file.
 type Pather interface {
 	// RecallPaths returns what recall_memory reads, for permission rules,
 	// typically the directory holding the entries.
 	RecallPaths() []permission.PathAccess
-	// RecordPaths returns what recording an entry named name writes.
-	RecordPaths(name string) []permission.PathAccess
+	// RecordPaths returns what recording e writes. e is the entry as the
+	// model gave it (Name, Description, Type and Body set; File, Created
+	// and Updated not yet).
+	RecordPaths(e Entry) []permission.PathAccess
 	// EntryPath returns the backend path of an entry Recall returned;
 	// recall_memory leaves out an entry whose path the run may not read.
 	EntryPath(e Entry) string
@@ -212,17 +219,19 @@ func (s *FileStore) RecallPaths() []permission.PathAccess {
 }
 
 // RecordPaths implements Pather: recording writes MEMORY.md and the entry's
-// file, which is left out when name has no slug (Record then fails).
-func (s *FileStore) RecordPaths(name string) []permission.PathAccess {
+// file, which is left out when e.Name has no slug (Record then fails).
+func (s *FileStore) RecordPaths(e Entry) []permission.PathAccess {
 	access := []permission.PathAccess{{Path: s.indexPath(), Op: permission.OpWrite}}
-	if slug, err := Slug(name); err == nil {
+	if slug, err := Slug(e.Name); err == nil {
 		access = append(access, permission.PathAccess{Path: s.entryPath(slug), Op: permission.OpWrite})
 	}
 	return access
 }
 
-// EntryPath implements Pather: the entry's file in the store directory.
-func (s *FileStore) EntryPath(e Entry) string { return path.Join(s.dir, e.File) }
+// EntryPath implements Pather: the entry's file in the store directory. Only
+// the base name of e.File counts, so an entry whose File holds a directory
+// part (such as "../x.md") still maps to a path inside the directory.
+func (s *FileStore) EntryPath(e Entry) string { return path.Join(s.dir, path.Base(e.File)) }
 
 // load reads every entry in the directory, newest first. Files that cannot be
 // read or parsed are returned by base name in unreadable. A missing

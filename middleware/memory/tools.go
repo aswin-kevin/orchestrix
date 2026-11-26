@@ -108,14 +108,13 @@ func (m *Middleware) recordTool() tool.Tool {
 		opts = append(opts, tool.WithPaths(func(raw json.RawMessage) []permission.PathAccess {
 			var in RecordInput
 			_ = json.Unmarshal(raw, &in) // a bad input fails the call before it runs
-			return pather.RecordPaths(in.Name)
+			return pather.RecordPaths(in.entry())
 		}))
 	}
 	return tool.New(ToolRecord,
 		"Save a durable fact to long-term memory, such as a user preference, feedback on how to work, a project fact, or where to find something. Saving a name that exists updates that memory; a different name that maps to the same file, or a file there that is not a readable memory, is not saved. Do not use it for task progress.",
 		func(ctx context.Context, in RecordInput, c *tool.Call) (tool.Result, error) {
-			e := Entry{Name: in.Name, Description: in.Description, Type: in.Type, Body: in.Content}
-			stored, updated, err := m.record(ctx, c, e)
+			stored, updated, err := m.record(ctx, c, in.entry())
 			var collision *collisionError
 			var unreadable *unreadableError
 			switch {
@@ -156,4 +155,9 @@ func (m *Middleware) record(ctx context.Context, c *tool.Call, e Entry) (Entry, 
 	}
 	stored, err := m.store.Record(ctx, c.Backend, e)
 	return stored, err == nil && !stored.Created.Equal(stored.Updated), err
+}
+
+// entry is the Entry in describes, before the store records it.
+func (in RecordInput) entry() Entry {
+	return Entry{Name: in.Name, Description: in.Description, Type: in.Type, Body: in.Content}
 }

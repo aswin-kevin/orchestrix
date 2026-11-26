@@ -364,11 +364,19 @@ func TestFileStoreIsPather(t *testing.T) {
 		t.Errorf("RecallPaths = %+v", got)
 	}
 	want := []permission.PathAccess{{Path: "/m/MEMORY.md", Op: permission.OpWrite}, {Path: "/m/a-b.md", Op: permission.OpWrite}}
-	if got := p.RecordPaths("A b"); !slices.Equal(got, want) {
+	if got := p.RecordPaths(Entry{Name: "A b"}); !slices.Equal(got, want) {
 		t.Errorf("RecordPaths = %+v, want %+v", got, want)
 	}
-	if got := p.EntryPath(Entry{File: "x.md"}); got != "/m/x.md" {
-		t.Errorf("EntryPath = %q", got)
+	for file, want := range map[string]string{
+		"x.md":           "/m/x.md",
+		"../../etc/x.md": "/m/x.md",
+		"/etc/passwd":    "/m/passwd",
+		"sub/../../y.md": "/m/y.md",
+		"":               "/m",
+	} {
+		if got := p.EntryPath(Entry{File: file}); got != want {
+			t.Errorf("EntryPath(%q) = %q, want %q", file, got, want)
+		}
 	}
 }
 
