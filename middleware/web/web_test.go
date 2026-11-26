@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,8 @@ func TestNewWithSearchOnly(t *testing.T) {
 	}
 }
 
+// TestNewErrors checks the Configs New rejects; a want of "" is a Config
+// it must accept.
 func TestNewErrors(t *testing.T) {
 	notPEM := filepath.Join(t.TempDir(), "bad.pem")
 	if err := os.WriteFile(notPEM, []byte("not a certificate"), 0o600); err != nil {
@@ -148,10 +151,21 @@ func TestNewErrors(t *testing.T) {
 		{"non-PEM CA file", Config{CACertFiles: []string{notPEM}}, "no PEM certificates"},
 		{"nothing enabled", Config{DisableFetch: true}, "nothing enabled"},
 		{"invalid search backend", Config{Search: stubSearch{err: invalid}}, "missing key"},
+		{"typed nil search backend", Config{Search: (*Brave)(nil)}, "web: Search is a nil *web.Brave"},
+		{"typed nil search, fetch disabled", Config{DisableFetch: true, Search: (*Tavily)(nil)}, "web: Search is a nil *web.Tavily"},
+		{"typed nil fetcher", Config{Fetcher: (*HTTPFetcher)(nil)}, "web: Fetcher is a nil *web.HTTPFetcher"},
+		{"fetcher with fetch disabled", Config{DisableFetch: true, Search: stubSearch{}, Fetcher: &HTTPFetcher{}}, "web: Fetcher is set but DisableFetch leaves out web_fetch"},
+		{"empty CA list with fetcher", Config{Fetcher: &HTTPFetcher{}, CACertFiles: []string{}}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := New(tt.cfg)
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("err = %v, want none", err)
+				}
+				return
+			}
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err = %v, want mention of %q", err, tt.want)
 			}
@@ -193,5 +207,14 @@ func TestPromptDescribesOfferedTools(t *testing.T) {
 	}
 	if got := systemOf(t, both); !strings.Contains(got, "start_index") || !strings.Contains(got, ToolSearch) {
 		t.Errorf("fetch and search prompt lacks one of them:\n%s", got)
+	}
+}
+
+func TestZeroHTTPFetcherFails(t *testing.T) {
+	u, _ := url.Parse("https://example.com/")
+	for name, f := range map[string]*HTTPFetcher{"zero": {}, "nil": nil} {
+		if _, err := f.Fetch(context.Background(), u, 10); err == nil || !strings.Contains(err.Error(), "NewHTTPFetcher") {
+			t.Errorf("%s HTTPFetcher Fetch = %v, want an error naming NewHTTPFetcher", name, err)
+		}
 	}
 }

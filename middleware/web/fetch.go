@@ -131,7 +131,8 @@ func (f *fetcher) fetch(ctx context.Context, in FetchInput, _ *tool.Call) (tool.
 // from NewHTTPClient, so it enforces that client's network policy, the
 // private-address guard included. HTML is converted to markdown; text, JSON
 // and XML are returned as they are; other content types are an error. It
-// is safe for concurrent use.
+// is safe for concurrent use. The zero value is not usable: its Fetch fails;
+// create one with NewHTTPFetcher.
 type HTTPFetcher struct {
 	client *http.Client
 }
@@ -188,6 +189,9 @@ type response struct {
 // get performs the request and reads at most maxBytes of the body. Closing
 // the body unread stops the transfer.
 func (f *HTTPFetcher) get(ctx context.Context, u *url.URL, maxBytes int64) (*response, error) {
+	if f == nil || f.client == nil {
+		return nil, errors.New("web: HTTPFetcher has no client; create it with NewHTTPFetcher")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err

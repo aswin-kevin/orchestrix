@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"slices"
 	"time"
 
@@ -119,13 +120,15 @@ type Validator interface {
 type Config struct {
 	// DisableFetch leaves out web_fetch. False offers it.
 	DisableFetch bool
-	// Search is the web search backend. Nil offers no search tool.
+	// Search is the web search backend. Nil offers no search tool; a nil
+	// pointer (a typed nil) is an error.
 	Search SearchBackend
 	// Fetcher reads the pages of web_fetch. Nil means an HTTPFetcher built
 	// from the HTTP settings below. A custom Fetcher owns its network
 	// policy (the private-address guard is HTTPFetcher's) and excludes
-	// MaxRedirects, AllowPrivateNetworks, ProxyURL, CACertFiles and
-	// UserAgent; Timeout, MaxBytes and MaxChars still apply.
+	// DisableFetch, MaxRedirects, AllowPrivateNetworks, ProxyURL,
+	// CACertFiles and UserAgent; Timeout, MaxBytes and MaxChars still
+	// apply.
 	Fetcher Fetcher
 
 	// MaxBytes is how much of a response body web_fetch reads; 0 means
@@ -155,7 +158,7 @@ type Config struct {
 	// means no proxy; the proxy environment variables are always ignored.
 	ProxyURL string
 	// CACertFiles are PEM files of extra root certificates web_fetch
-	// trusts, added to the system pool. Nil trusts the system pool only.
+	// trusts, added to the system pool. Empty trusts the system pool only.
 	CACertFiles []string
 	// UserAgent is sent with every web_fetch request that sets none; empty
 	// means DefaultUserAgent.
@@ -195,8 +198,9 @@ type Middleware struct {
 }
 
 // New returns the web middleware. It fails when MaxBytes, MaxChars, Timeout
-// or MaxRedirects is negative, when Fetcher is set together with an HTTP
-// client setting, when ProxyURL is not an http or https URL, when a CA file
+// or MaxRedirects is negative, when Search or Fetcher holds a nil pointer
+// (a typed nil, such as a (*Brave)(nil)), when Fetcher is set together with
+// an HTTP client setting or with DisableFetch, when ProxyURL is not an http or https URL, when a CA file
 // cannot be read or holds no PEM certificate, when the Search backend fails
 // validation, and when nothing is enabled (fetch disabled and no Search).
 func New(cfg Config) (*Middleware, error) {
@@ -209,12 +213,21 @@ func New(cfg Config) (*Middleware, error) {
 	if err := checkClientLimits(cfg.Timeout, cfg.MaxRedirects); err != nil {
 		return nil, err
 	}
+	if isNilPointer(cfg.Search) {
+		return nil, fmt.Errorf("web: Search is a nil %T; set a non-nil backend or leave Search nil", cfg.Search)
+	}
+	if isNilPointer(cfg.Fetcher) {
+		return nil, fmt.Errorf("web: Fetcher is a nil %T; set a non-nil Fetcher or leave Fetcher nil", cfg.Fetcher)
+	}
 	if cfg.DisableFetch && cfg.Search == nil {
 		return nil, errors.New("web: nothing enabled: fetch is disabled and no Search backend is set")
 	}
 	src := cfg.Fetcher
 	if src != nil {
-		if cfg.MaxRedirects != 0 || cfg.AllowPrivateNetworks || cfg.ProxyURL != "" || cfg.CACertFiles != nil || cfg.UserAgent != "" {
+		if cfg.DisableFetch {
+			return nil, errors.New("web: Fetcher is set but DisableFetch leaves out web_fetch")
+		}
+		if cfg.MaxRedirects != 0 || cfg.AllowPrivateNetworks || cfg.ProxyURL != "" || len(cfg.CACertFiles) > 0 || cfg.UserAgent != "" {
 			return nil, errFetcherExcludesClient
 		}
 	}
@@ -262,4 +275,14 @@ func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 		req.Request.System = append(slices.Clone(req.Request.System), m.prompt)
 	}
 	return next(ctx, req)
+}
+
+// isNilPointer reports whether v holds a nil pointer, a typed nil that
+// compares unequal to a nil interface and would panic on first use.
+func isNilPointer(v any) bool {
+	if v == nil {
+		return false
+	}
+	rv := reflect.ValueOf(v)
+	return rv.Kind() == reflect.Pointer && rv.IsNil()
 }
