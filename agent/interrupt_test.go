@@ -98,7 +98,7 @@ func interruptedRun(t *testing.T, cfg Config, calls ...llmtest.Call) (*Agent, []
 	t.Helper()
 	cfg.Provider = llmtest.New(llmtest.Turn{ToolCalls: calls}, llmtest.Turn{Text: "done"})
 	a := mustNew(t, cfg)
-	events, final := collect(t, a.Run(context.Background(), userInput("go")))
+	events, final := collect(t, a.Run(t.Context(), userInput("go")))
 	if final.Reason != ReasonInterrupted || final.Err != nil {
 		t.Fatalf("final = %+v, want interrupted without error", final)
 	}
@@ -137,7 +137,7 @@ func requestIDs(i *Interrupt) []string {
 // tool_result blocks answering the interrupted turn.
 func resumeCompleted(t *testing.T, a *Agent, s *state.State, decisions ...Decision) []llm.Block {
 	t.Helper()
-	_, final := collect(t, a.Resume(context.Background(), "", s, decisions))
+	_, final := collect(t, a.Resume(t.Context(), "", s, decisions))
 	if final.Reason != ReasonCompleted || final.Err != nil || final.Text != "done" {
 		t.Fatalf("resumed final = %+v, want completed with text", final)
 	}
@@ -241,18 +241,18 @@ func TestResumeEditValidates(t *testing.T) {
 }
 
 func TestResumeReject(t *testing.T) {
-	cases := []struct{ message, want string }{
+	tests := []struct{ message, want string }{
 		{"too risky", "User rejected this action: too risky"},
 		{"", "User rejected this action"},
 	}
-	for _, c := range cases {
+	for _, tt := range tests {
 		log := newCallLog()
 		a, _, final := interruptedRun(t, Config{Tools: []tool.Tool{writeTool(log)}}, writeCall("w"))
 
-		results := resumeCompleted(t, a, final.State, Decision{ToolUseID: "w", Type: Reject, Message: c.message})
+		results := resumeCompleted(t, a, final.State, Decision{ToolUseID: "w", Type: Reject, Message: tt.message})
 
-		if r := results[0]; !r.IsError || resultText(r) != c.want {
-			t.Fatalf("result = %+v, want %q", r, c.want)
+		if r := results[0]; !r.IsError || resultText(r) != tt.want {
+			t.Fatalf("result = %+v, want %q", r, tt.want)
 		}
 		if ran := log.ran(); len(ran) != 0 {
 			t.Fatal("rejected tool ran")
@@ -393,7 +393,7 @@ func TestToolWrapperInterrupt(t *testing.T) {
 		t.Fatalf("request = %+v, want the wrapper's reason and allowed list", req)
 	}
 
-	_, invalid := collect(t, a.Resume(context.Background(), "", final.State,
+	_, invalid := collect(t, a.Resume(t.Context(), "", final.State,
 		[]Decision{{ToolUseID: "r", Type: Respond}}))
 	if invalid.Reason != ReasonInvalidResume || !errors.Is(invalid.Err, ErrInvalidDecision) {
 		t.Fatalf("final = %+v, want invalid_resume with ErrInvalidDecision", invalid)
@@ -416,7 +416,7 @@ func TestResumeMissingDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cases := []struct {
+	tests := []struct {
 		name      string
 		state     *state.State
 		decisions []Decision
@@ -428,14 +428,14 @@ func TestResumeMissingDecision(t *testing.T) {
 			{ToolUseID: "w1", Type: Approve}, {ToolUseID: "w2", Type: Approve}, {ToolUseID: "nope", Type: Approve},
 		}, nil},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			events, got := collect(t, a.Resume(context.Background(), "", c.state, c.decisions))
-			if len(events) != 1 || got.Reason != ReasonInvalidResume || got.Err == nil || got.State != c.state {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events, got := collect(t, a.Resume(t.Context(), "", tt.state, tt.decisions))
+			if len(events) != 1 || got.Reason != ReasonInvalidResume || got.Err == nil || got.State != tt.state {
 				t.Fatalf("events = %+v, final = %+v; want a single invalid_resume final carrying the State", events, got)
 			}
-			if c.want != nil && !errors.Is(got.Err, c.want) {
-				t.Fatalf("err = %v, want %v", got.Err, c.want)
+			if tt.want != nil && !errors.Is(got.Err, tt.want) {
+				t.Fatalf("err = %v, want %v", got.Err, tt.want)
 			}
 		})
 	}
@@ -514,7 +514,7 @@ func TestRunClearsPendingInterrupt(t *testing.T) {
 	log := newCallLog()
 	a, _, final := interruptedRun(t, Config{Tools: []tool.Tool{writeTool(log)}}, writeCall("w"))
 
-	_, next := collect(t, a.Run(context.Background(), Input{
+	_, next := collect(t, a.Run(t.Context(), Input{
 		State:    final.State,
 		Messages: []llm.Message{llm.UserText("never mind")},
 	}))
@@ -525,7 +525,7 @@ func TestRunClearsPendingInterrupt(t *testing.T) {
 	if _, ok := pendingKey.Get(next.State); ok {
 		t.Fatal("Run kept the pending record")
 	}
-	_, resumed := collect(t, a.Resume(context.Background(), "", next.State, nil))
+	_, resumed := collect(t, a.Resume(t.Context(), "", next.State, nil))
 	if !errors.Is(resumed.Err, ErrNoPendingInterrupt) {
 		t.Fatalf("Resume after Run: err = %v, want ErrNoPendingInterrupt", resumed.Err)
 	}
@@ -539,7 +539,7 @@ func TestDecidedCallsRunBeforeNeverStartedOnes(t *testing.T) {
 		t.Fatalf("first interrupt = %v, want [w1 w2]", ids)
 	}
 
-	events, again := collect(t, a.Resume(context.Background(), "", final.State, []Decision{
+	events, again := collect(t, a.Resume(t.Context(), "", final.State, []Decision{
 		{ToolUseID: "w1", Type: Approve},
 		{ToolUseID: "w2", Type: Edit, Input: json.RawMessage(`{"text":"edited"}`)},
 	}))
@@ -629,7 +629,7 @@ func TestResumeInsertsResultsBeforeHookMessages(t *testing.T) {
 	var on atomic.Bool
 	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{writeCall("w")}}, llmtest.Turn{Text: "done"})
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{writeTool(log)}, Middleware: []Middleware{noteOnResume{&on}}})
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 	if final.Reason != ReasonInterrupted {
 		t.Fatalf("final = %+v, want interrupted", final)
 	}
@@ -683,7 +683,7 @@ func TestPendingRecordUsesSnakeCaseFields(t *testing.T) {
 }
 
 func TestPublicTypesJSONFieldNames(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
 		value any
 		want  string
 	}{
@@ -692,10 +692,10 @@ func TestPublicTypesJSONFieldNames(t *testing.T) {
 		{Interrupt{Requests: []ActionRequest{{ToolUseID: "t", Tool: "x", Input: json.RawMessage(`{}`), Reason: "r", Allowed: []DecisionType{Approve}}}},
 			`{"requests":[{"tool_use_id":"t","tool":"x","input":{},"reason":"r","allowed":["approve"]}]}`},
 	}
-	for _, c := range cases {
-		got, err := json.Marshal(c.value)
-		if err != nil || string(got) != c.want {
-			t.Errorf("json.Marshal(%T) = %s, %v; want %s", c.value, got, err, c.want)
+	for _, tt := range tests {
+		got, err := json.Marshal(tt.value)
+		if err != nil || string(got) != tt.want {
+			t.Errorf("json.Marshal(%T) = %s, %v; want %s", tt.value, got, err, tt.want)
 		}
 	}
 }
@@ -714,13 +714,13 @@ func TestResumeAgainAfterHookAppendedAndCallReinterrupted(t *testing.T) {
 	var on atomic.Bool
 	p := llmtest.New(llmtest.Turn{ToolCalls: askTwice()}, llmtest.Turn{Text: "done"})
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{askUserTool(log)}, Middleware: []Middleware{noteOnResume{&on}}})
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 	if final.Reason != ReasonInterrupted {
 		t.Fatalf("final = %+v, want interrupted", final)
 	}
 
 	on.Store(true)
-	_, second := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "q1", Type: Respond, Message: "a"}}))
+	_, second := collect(t, a.Resume(t.Context(), "", final.State, []Decision{{ToolUseID: "q1", Type: Respond, Message: "a"}}))
 	if second.Reason != ReasonInterrupted || second.Err != nil {
 		t.Fatalf("first resume = %+v, want interrupted again by q2", second)
 	}
@@ -751,10 +751,10 @@ func TestResumeAfterHookDroppedEarlierMessages(t *testing.T) {
 	var on atomic.Bool
 	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{writeCall("w")}}, llmtest.Turn{Text: "done"})
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{writeTool(log)}, Middleware: []Middleware{dropFirstOnResume{&on}}})
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	on.Store(true)
-	_, resumed := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "w", Type: Approve}}))
+	_, resumed := collect(t, a.Resume(t.Context(), "", final.State, []Decision{{ToolUseID: "w", Type: Approve}}))
 	if resumed.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", resumed)
 	}
@@ -769,7 +769,7 @@ func TestResumeWithoutTheInterruptedMessageIsInvalid(t *testing.T) {
 	a, _, final := interruptedRun(t, Config{Tools: []tool.Tool{writeTool(log)}}, writeCall("w"))
 	final.State.SetMessages([]llm.Message{llm.UserText("something else")})
 
-	_, invalid := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "w", Type: Approve}}))
+	_, invalid := collect(t, a.Resume(t.Context(), "", final.State, []Decision{{ToolUseID: "w", Type: Approve}}))
 	if invalid.Reason != ReasonInvalidResume || invalid.Err == nil {
 		t.Fatalf("final = %+v, want invalid_resume", invalid)
 	}
@@ -781,7 +781,7 @@ func TestResumeWithoutTheInterruptedMessageIsInvalid(t *testing.T) {
 func TestResumedRunEventsTurnAndInvalidResumeTime(t *testing.T) {
 	log := newCallLog()
 	a, _, final := interruptedRun(t, Config{Tools: []tool.Tool{writeTool(log)}}, writeCall("w"))
-	events, _ := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "w", Type: Approve}}))
+	events, _ := collect(t, a.Resume(t.Context(), "", final.State, []Decision{{ToolUseID: "w", Type: Approve}}))
 	var sawResult bool
 	for _, ev := range events {
 		if ev.RunID == "" || ev.Time.IsZero() {
@@ -798,7 +798,7 @@ func TestResumedRunEventsTurnAndInvalidResumeTime(t *testing.T) {
 		t.Fatal("no tool result from the resumed run")
 	}
 
-	events, bad := collect(t, a.Resume(context.Background(), "", state.New(), nil))
+	events, bad := collect(t, a.Resume(t.Context(), "", state.New(), nil))
 	if bad.Reason != ReasonInvalidResume || events[0].Time.IsZero() {
 		t.Fatalf("invalid resume: final %+v, Time %v; want invalid_resume with a Time", bad, events[0].Time)
 	}
@@ -807,7 +807,7 @@ func TestResumedRunEventsTurnAndInvalidResumeTime(t *testing.T) {
 func TestCheckDecisions(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "p1", Name: "pause_once"}}})
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{pauseOnceTool(newInfoLog())}})
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 	if final.Reason != ReasonInterrupted {
 		t.Fatalf("final = %+v, want interrupted", final)
 	}

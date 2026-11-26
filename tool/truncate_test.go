@@ -22,12 +22,12 @@ func TestTruncateUTF8Boundary(t *testing.T) {
 }
 
 func TestTruncateUnchangedCases(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		s   string
 		max int
 	}{{"hello", 5}, {"hello", 10}, {"hello", 0}, {"hello", -1}, {"", 3}} {
-		if got := Truncate(tc.s, tc.max); got != tc.s {
-			t.Errorf("Truncate(%q, %d) = %q, want unchanged", tc.s, tc.max, got)
+		if got := Truncate(tt.s, tt.max); got != tt.s {
+			t.Errorf("Truncate(%q, %d) = %q, want unchanged", tt.s, tt.max, got)
 		}
 	}
 }

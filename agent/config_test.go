@@ -8,7 +8,7 @@ import (
 )
 
 func TestNewRejectsBadLimits(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		cfg  Config
 		want string
@@ -21,11 +21,11 @@ func TestNewRejectsBadLimits(t *testing.T) {
 		{"invalid output unknown verb", Config{InvalidOutputPrompt: "bad: %z"}, "agent: Config.InvalidOutputPrompt has bad format verbs"},
 		{"nudge unknown verb", Config{BudgetNudge: "left: %z"}, "agent: Config.BudgetNudge has bad format verbs"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.cfg.Provider = llmtest.New()
-			_, err := New(tc.cfg)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("err = %v, want %q", err, tc.want)
+		t.Run(tt.name, func(t *testing.T) {
+			tt.cfg.Provider = llmtest.New()
+			_, err := New(tt.cfg)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
 			}
 		})
 	}

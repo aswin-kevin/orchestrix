@@ -120,7 +120,7 @@ func TestRunWrapperContextReachesHooksAndTools(t *testing.T) {
 		Middleware: []Middleware{&runWrapper{name: "wrap", value: "K"}, valueProbe{log}},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", final)
@@ -143,7 +143,7 @@ func TestRunWrapperOrder(t *testing.T) {
 		},
 	})
 
-	for ev := range a.Run(context.Background(), userInput("go")) {
+	for ev := range a.Run(t.Context(), userInput("go")) {
 		if ev.Kind == KindFinal {
 			log.add("final")
 		}
@@ -159,7 +159,7 @@ func TestRunWrapperEndGetsFinal(t *testing.T) {
 	w := &runWrapper{name: "wrap", finals: make(chan *Final, 1)}
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "hi"}), Middleware: []Middleware{w}})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", final)
@@ -178,7 +178,7 @@ func TestRunWrapperEndOnAbandon(t *testing.T) {
 	w := &runWrapper{name: "wrap", finals: make(chan *Final, 4)}
 	a := mustNew(t, Config{Provider: &blockingProvider{}, Middleware: []Middleware{w}})
 
-	for ev := range a.Run(context.Background(), userInput("go")) {
+	for ev := range a.Run(t.Context(), userInput("go")) {
 		if ev.Kind == KindText {
 			break
 		}
@@ -212,7 +212,7 @@ func TestRunWrapperOnResume(t *testing.T) {
 		Middleware: []Middleware{w},
 	})
 
-	_, resumed := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "p1", Type: Approve}}))
+	_, resumed := collect(t, a.Resume(t.Context(), "", final.State, []Decision{{ToolUseID: "p1", Type: Approve}}))
 
 	if resumed.Reason != ReasonCompleted {
 		t.Fatalf("resumed final = %+v, want completed", resumed)
@@ -247,7 +247,7 @@ func TestRunWrapperNestedDepth(t *testing.T) {
 		Middleware: []Middleware{w},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", final)
@@ -283,7 +283,7 @@ func TestRunWrapperBadContextPanics(t *testing.T) {
 			t.Fatalf("panic = %q, want it to name the middleware", msg)
 		}
 	}()
-	for range a.Run(context.Background(), userInput("go")) {
+	for range a.Run(t.Context(), userInput("go")) {
 	}
 }
 
@@ -297,7 +297,7 @@ func TestRunWrapperEndPanicRecovered(t *testing.T) {
 		},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted || final.Err != nil {
 		t.Fatalf("final = %+v, want completed without error", final)

@@ -283,11 +283,9 @@ func TestUpdateConcurrent(t *testing.T) {
 	s := New()
 	var wg sync.WaitGroup
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			counter.Update(s, func(n int) int { return n + 1 })
-		}()
+		})
 	}
 	wg.Wait()
 	if got, _ := counter.Get(s); got != 100 {

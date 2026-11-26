@@ -74,11 +74,11 @@ func TestComposeErrors(t *testing.T) {
 		{"nil user middleware", []Middleware{nil}, nil, "nil"},
 		{"empty user name", []Middleware{named{"", 1}}, nil, "empty name"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := Compose(base, tc.user, tc.exclude)
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Compose(base, tt.user, tt.exclude)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
 			}
 		})
 	}
@@ -210,7 +210,7 @@ func (p *probe) BeforeAgent(ctx context.Context, _ *state.State) error {
 func TestToolHiddenAndRunInfoModel(t *testing.T) {
 	p := &probe{}
 	a := newExcluded(t, "small-1", hider{id: "h", names: []string{"a"}}, p)
-	for _, err := range a.Run(context.Background(), Input{Messages: []llm.Message{llm.UserText("go")}}) {
+	for _, err := range a.Run(t.Context(), Input{Messages: []llm.Message{llm.UserText("go")}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -221,7 +221,7 @@ func TestToolHiddenAndRunInfoModel(t *testing.T) {
 	if p.model != "small-1" {
 		t.Fatalf("model = %q", p.model)
 	}
-	if ToolHidden(context.Background(), "a") {
+	if ToolHidden(t.Context(), "a") {
 		t.Fatal("ToolHidden true outside a run")
 	}
 	if (RunInfo{}).Model() != "" {
@@ -241,7 +241,7 @@ func TestToolHiddenConsultsEveryHiderOfTheComposedStack(t *testing.T) {
 		hider{id: "h2", names: []string{"b"}},
 		hider{id: "h3", names: []string{"c"}},
 		p)
-	for _, err := range a.Run(context.Background(), Input{Messages: []llm.Message{llm.UserText("go")}}) {
+	for _, err := range a.Run(t.Context(), Input{Messages: []llm.Message{llm.UserText("go")}}) {
 		if err != nil {
 			t.Fatal(err)
 		}

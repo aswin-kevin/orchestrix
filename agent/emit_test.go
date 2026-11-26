@@ -139,7 +139,7 @@ func TestEmitRefusesFinalAndForeignCtx(t *testing.T) {
 	if finals != 1 {
 		t.Fatalf("stream has %d KindFinal events, want 1", finals)
 	}
-	if Emit(context.Background(), Event{Kind: KindCustom, Data: note{"x"}}) {
+	if Emit(t.Context(), Event{Kind: KindCustom, Data: note{"x"}}) {
 		t.Fatal("Emit outside a run reported success")
 	}
 }
@@ -215,7 +215,7 @@ func (p threadProbe) BeforeAgent(ctx context.Context, _ *state.State) error {
 }
 
 func TestThreadID(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		thread string
 		wantOK bool
 	}{{"t1", true}, {"", false}} {
@@ -225,15 +225,15 @@ func TestThreadID(t *testing.T) {
 			Provider:   llmtest.New(llmtest.Turn{Text: "done"}),
 			Middleware: []Middleware{threadProbe{&id, &ok}},
 		})
-		_, final := collect(t, a.Run(t.Context(), Input{ThreadID: tc.thread, Messages: []llm.Message{llm.UserText("go")}}))
+		_, final := collect(t, a.Run(t.Context(), Input{ThreadID: tt.thread, Messages: []llm.Message{llm.UserText("go")}}))
 		if final.Reason != ReasonCompleted {
 			t.Fatalf("final = %+v, want completed", final)
 		}
-		if id != tc.thread || ok != tc.wantOK {
-			t.Fatalf("ThreadID in a run of thread %q = (%q, %v), want (%q, %v)", tc.thread, id, ok, tc.thread, tc.wantOK)
+		if id != tt.thread || ok != tt.wantOK {
+			t.Fatalf("ThreadID in a run of thread %q = (%q, %v), want (%q, %v)", tt.thread, id, ok, tt.thread, tt.wantOK)
 		}
 	}
-	if id, ok := ThreadID(context.Background()); id != "" || ok {
+	if id, ok := ThreadID(t.Context()); id != "" || ok {
 		t.Fatalf("ThreadID outside a run = (%q, %v), want (\"\", false)", id, ok)
 	}
 }

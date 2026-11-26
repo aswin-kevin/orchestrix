@@ -69,7 +69,7 @@ func TestCheckpointSavePoints(t *testing.T) {
 		Tools:        []tool.Tool{echoTool()},
 		Checkpointer: cp,
 	})
-	_, final := collect(t, a.Run(context.Background(), threadInput("go")))
+	_, final := collect(t, a.Run(t.Context(), threadInput("go")))
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", final)
 	}
@@ -77,7 +77,7 @@ func TestCheckpointSavePoints(t *testing.T) {
 	if got, want := cp.saves(), []int{1, 2, 3, 4, 4}; !slices.Equal(got, want) {
 		t.Fatalf("saves = %v, want message counts %v", got, want)
 	}
-	saved, _, err := cp.Load(context.Background(), "t1")
+	saved, _, err := cp.Load(t.Context(), "t1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestCheckpointFailureEndsRun(t *testing.T) {
 	provider := llmtest.New(toolTurn("e1"), llmtest.Turn{Text: "done"})
 	a := mustNew(t, Config{Provider: provider, Tools: []tool.Tool{echoTool()}, Checkpointer: cp})
 
-	_, final := collect(t, a.Run(context.Background(), threadInput("go")))
+	_, final := collect(t, a.Run(t.Context(), threadInput("go")))
 	if final.Reason != ReasonCheckpointError {
 		t.Fatalf("reason = %s, want %s", final.Reason, ReasonCheckpointError)
 	}
@@ -113,7 +113,7 @@ func TestCheckpointFinalSaveFailureJoinsError(t *testing.T) {
 	cp.failOn = 3 // input, assistant, end of run
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"}), Checkpointer: cp})
 
-	_, final := collect(t, a.Run(context.Background(), threadInput("go")))
+	_, final := collect(t, a.Run(t.Context(), threadInput("go")))
 	if final.Reason != ReasonCheckpointError || !errors.Is(final.Err, errSaveFailed) {
 		t.Fatalf("final = %+v, want checkpoint_error wrapping the save error", final)
 	}
@@ -130,7 +130,7 @@ func TestCheckpointFirstSaveAfterBeforeAgent(t *testing.T) {
 		Checkpointer: cp,
 		Middleware:   []Middleware{blocker},
 	})
-	_, final := collect(t, a.Run(context.Background(), threadInput("blocked prompt")))
+	_, final := collect(t, a.Run(t.Context(), threadInput("blocked prompt")))
 	if final.Reason != ReasonHookStopped {
 		t.Fatalf("final = %+v, want hook_stopped", final)
 	}
@@ -161,7 +161,7 @@ func TestEphemeralNotSaved(t *testing.T) {
 	})
 	in := threadInput("go")
 	in.Ephemeral = true
-	_, final := collect(t, a.Run(context.Background(), in))
+	_, final := collect(t, a.Run(t.Context(), in))
 	if final.Reason != ReasonInterrupted {
 		t.Fatalf("final = %+v, want interrupted", final)
 	}
@@ -173,7 +173,7 @@ func TestEphemeralNotSaved(t *testing.T) {
 func TestNoSaveWithoutThreadID(t *testing.T) {
 	cp := newRecordingCheckpointer()
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"}), Checkpointer: cp})
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 	if got := cp.saves(); len(got) != 0 {
 		t.Fatalf("saves = %v, want none without a thread id", got)
 	}
@@ -246,7 +246,7 @@ func (b *backends) factory(threadID string) backend.Backend {
 // content returns the file at path in the thread's backend, or fails.
 func (b *backends) content(t *testing.T, threadID, path string) string {
 	t.Helper()
-	res, err := b.factory(threadID).Read(context.Background(), path, 0, 0)
+	res, err := b.factory(threadID).Read(t.Context(), path, 0, 0)
 	if err != nil {
 		t.Fatalf("read %s in thread %s: %v", path, threadID, err)
 	}
@@ -254,12 +254,12 @@ func (b *backends) content(t *testing.T, threadID, path string) string {
 }
 
 func TestWorkspaceNotRestoredIntoNonEmptyBackend(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	old := testutil.Memory(t)
 	if err := old.Write(ctx, "/old.txt", []byte("old")); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := old.Snapshot(context.Background())
+	snap, err := old.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestWorkspaceNotRestoredIntoNonEmptyBackend(t *testing.T) {
 	// The end-of-run snapshot reflects the live backend.
 	restored := testutil.Memory(t)
 	saved, _ := workspaceKey.Get(final.State)
-	if err := restored.Restore(context.Background(), saved); err != nil {
+	if err := restored.Restore(t.Context(), saved); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 	if _, err := restored.Read(ctx, "/live.txt", 0, 0); err != nil {
@@ -303,7 +303,7 @@ func TestWorkspaceNotSyncedForInputBackend(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"}), SyncWorkspace: true})
 	in := threadInput("go")
 	in.Backend = ws
-	_, final := collect(t, a.Run(context.Background(), in))
+	_, final := collect(t, a.Run(t.Context(), in))
 	if _, ok := workspaceKey.Get(final.State); ok {
 		t.Fatal("workspace snapshot stored for a backend the run did not resolve itself")
 	}
@@ -341,7 +341,7 @@ func TestWorkspaceCapturedOnlyAfterTools(t *testing.T) {
 		BackendFactory: func(string) backend.Backend { return be },
 		SyncWorkspace:  true,
 	})
-	_, final := collect(t, a.Run(context.Background(), threadInput("go")))
+	_, final := collect(t, a.Run(t.Context(), threadInput("go")))
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", final)
 	}
@@ -359,7 +359,7 @@ func TestWorkspaceCapturedOnlyAfterTools(t *testing.T) {
 }
 
 func TestThreadBackendRestoresWorkspace(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	old := testutil.Memory(t)
 	if err := old.Write(ctx, "/old.txt", []byte("old")); err != nil {
 		t.Fatal(err)
@@ -411,11 +411,11 @@ func TestRunInfoBackend(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"}), Backend: cfgBe, Middleware: []Middleware{infoBackendProbe{&seen}}})
 	in := userInput("go")
 	in.Backend = runBe
-	collect(t, a.Run(context.Background(), in))
+	collect(t, a.Run(t.Context(), in))
 	if seen != runBe {
 		t.Fatalf("RunInfo.Backend = %v, want Input.Backend", seen)
 	}
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 	if seen != cfgBe {
 		t.Fatalf("RunInfo.Backend = %v, want Config.Backend", seen)
 	}

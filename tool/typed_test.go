@@ -20,13 +20,13 @@ func TestNewTypedDecodesAndValidates(t *testing.T) {
 		return Text("hello " + in.Name), nil
 	}, WithReadOnly(), WithConcurrent())
 
-	res, err := tl.Call(context.Background(), json.RawMessage(`{"name":"bob"}`), &Call{})
+	res, err := tl.Call(t.Context(), json.RawMessage(`{"name":"bob"}`), &Call{})
 	if err != nil || res.IsError || res.Flatten() != "hello bob" {
 		t.Fatalf("valid call = %+v, %v", res, err)
 	}
 
 	for _, bad := range []string{`{}`, `{"name":5}`, `{"name":"x","nope":1}`, `not json`} {
-		res, err := tl.Call(context.Background(), json.RawMessage(bad), &Call{})
+		res, err := tl.Call(t.Context(), json.RawMessage(bad), &Call{})
 		if err != nil {
 			t.Errorf("input %s: Go error %v, want model-facing result", bad, err)
 		}
@@ -49,7 +49,7 @@ func TestNewTypedDecodesAndValidates(t *testing.T) {
 func TestNewTypedTreatsEmptyInputAsEmptyObject(t *testing.T) {
 	type none struct{}
 	tl := New("ping", "pings", func(context.Context, none, *Call) (Result, error) { return Text("pong"), nil })
-	res, err := tl.Call(context.Background(), nil, &Call{})
+	res, err := tl.Call(t.Context(), nil, &Call{})
 	if err != nil || res.IsError {
 		t.Errorf("empty input = %+v, %v", res, err)
 	}
@@ -58,7 +58,7 @@ func TestNewTypedTreatsEmptyInputAsEmptyObject(t *testing.T) {
 func TestNewTypedPropagatesGoError(t *testing.T) {
 	boom := errors.New("boom")
 	tl := New("fail", "fails", func(context.Context, greetIn, *Call) (Result, error) { return Result{}, boom })
-	if _, err := tl.Call(context.Background(), json.RawMessage(`{"name":"x"}`), &Call{}); !errors.Is(err, boom) {
+	if _, err := tl.Call(t.Context(), json.RawMessage(`{"name":"x"}`), &Call{}); !errors.Is(err, boom) {
 		t.Errorf("error = %v, want boom", err)
 	}
 }
@@ -88,14 +88,14 @@ func TestNewTypedToleratesNullOptionalsAndIntegralNumbers(t *testing.T) {
 		got = in
 		return Text("ok"), nil
 	})
-	res, err := tl.Call(context.Background(), json.RawMessage(`{"count":1e2,"limit":null,"label":null,"tags":[2.0,3]}`), &Call{})
+	res, err := tl.Call(t.Context(), json.RawMessage(`{"count":1e2,"limit":null,"label":null,"tags":[2.0,3]}`), &Call{})
 	if err != nil || res.IsError {
 		t.Fatalf("call = %+v, %v; want success", res, err)
 	}
 	if got.Count != 100 || got.Limit != 0 || got.Label != nil || len(got.Tags) != 2 || got.Tags[0] != 2 {
 		t.Fatalf("decoded = %+v, want count 100, limit 0, nil label, tags [2 3]", got)
 	}
-	res, _ = tl.Call(context.Background(), json.RawMessage(`{"count":1.5}`), &Call{})
+	res, _ = tl.Call(t.Context(), json.RawMessage(`{"count":1.5}`), &Call{})
 	if !res.IsError {
 		t.Fatal("a fractional count was accepted")
 	}

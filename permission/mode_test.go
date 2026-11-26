@@ -3,7 +3,7 @@ package permission
 import "testing"
 
 func TestStricter(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		a, b, want Mode
 	}{
 		{ModePlan, ModeBypass, ModePlan},
@@ -22,11 +22,11 @@ func TestStricter(t *testing.T) {
 		{"nope", ModeBypass, ModePlan},
 		{ModeDefault, "nope", ModePlan},
 	} {
-		if got := Stricter(tc.a, tc.b); got != tc.want {
-			t.Errorf("Stricter(%q, %q) = %q, want %q", tc.a, tc.b, got, tc.want)
+		if got := Stricter(tt.a, tt.b); got != tt.want {
+			t.Errorf("Stricter(%q, %q) = %q, want %q", tt.a, tt.b, got, tt.want)
 		}
-		if got := Stricter(tc.b, tc.a); got != tc.want {
-			t.Errorf("Stricter(%q, %q) = %q, want %q", tc.b, tc.a, got, tc.want)
+		if got := Stricter(tt.b, tt.a); got != tt.want {
+			t.Errorf("Stricter(%q, %q) = %q, want %q", tt.b, tt.a, got, tt.want)
 		}
 	}
 }

@@ -139,7 +139,7 @@ func runBounded(t *testing.T, ctx context.Context, jobs []Job, opts ParallelOpti
 func TestRunParallelBoundedConcurrency(t *testing.T) {
 	p := newEcho()
 	p.holdFor = 3
-	res := runBounded(t, context.Background(), jobsFor(newAgent(t, p), 8), ParallelOptions{MaxConcurrency: 3})
+	res := runBounded(t, t.Context(), jobsFor(newAgent(t, p), 8), ParallelOptions{MaxConcurrency: 3})
 	if _, peak := p.stats(); peak != 3 {
 		t.Errorf("peak concurrent model calls = %d, want 3", peak)
 	}
@@ -160,7 +160,7 @@ func TestRunParallelBoundedConcurrency(t *testing.T) {
 func TestRunParallelDefaultConcurrency(t *testing.T) {
 	p := newEcho()
 	p.holdFor = DefaultMaxConcurrency
-	runBounded(t, context.Background(), jobsFor(newAgent(t, p), 2*DefaultMaxConcurrency), ParallelOptions{})
+	runBounded(t, t.Context(), jobsFor(newAgent(t, p), 2*DefaultMaxConcurrency), ParallelOptions{})
 	if _, peak := p.stats(); peak != DefaultMaxConcurrency {
 		t.Errorf("peak concurrent model calls = %d, want %d", peak, DefaultMaxConcurrency)
 	}
@@ -169,7 +169,7 @@ func TestRunParallelDefaultConcurrency(t *testing.T) {
 func TestRunParallelCancel(t *testing.T) {
 	p := newEcho()
 	p.block = true
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go func() {
 		select {
@@ -197,7 +197,7 @@ func TestRunParallelCancel(t *testing.T) {
 
 func TestRunParallelCancelledBeforeStart(t *testing.T) {
 	p := newEcho()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	res := runBounded(t, ctx, jobsFor(newAgent(t, p), 3), ParallelOptions{})
 	for i, r := range res {
@@ -235,7 +235,7 @@ func TestRunParallelOnEventSerialized(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond) // widen the window for an overlap
 	}
-	res := runBounded(t, context.Background(), jobsFor(a, n), ParallelOptions{MaxConcurrency: n, OnEvent: onEvent})
+	res := runBounded(t, t.Context(), jobsFor(a, n), ParallelOptions{MaxConcurrency: n, OnEvent: onEvent})
 	if overlap.Load() {
 		t.Error("OnEvent calls overlapped")
 	}
@@ -255,7 +255,7 @@ func TestRunParallelOnEventSerialized(t *testing.T) {
 func TestRunParallelNilAgent(t *testing.T) {
 	jobs := jobsFor(newAgent(t, newEcho()), 2)
 	jobs[0].Agent = nil
-	res := runBounded(t, context.Background(), jobs, ParallelOptions{})
+	res := runBounded(t, t.Context(), jobs, ParallelOptions{})
 	if res[0].Err == nil || res[0].Final != nil {
 		t.Errorf("nil agent result = %+v, want an error and no Final", res[0])
 	}
@@ -265,7 +265,7 @@ func TestRunParallelNilAgent(t *testing.T) {
 }
 
 func TestRunParallelNoJobs(t *testing.T) {
-	if res := RunParallel(context.Background(), nil, ParallelOptions{}); len(res) != 0 {
+	if res := RunParallel(t.Context(), nil, ParallelOptions{}); len(res) != 0 {
 		t.Errorf("got %d results for no jobs", len(res))
 	}
 }
@@ -279,7 +279,7 @@ func TestRunParallelOnEventPanicSurfaces(t *testing.T) {
 	var recovered any
 	func() {
 		defer func() { recovered = recover() }()
-		RunParallel(context.Background(), jobs, ParallelOptions{OnEvent: func(i int, ev agent.Event) {
+		RunParallel(t.Context(), jobs, ParallelOptions{OnEvent: func(i int, ev agent.Event) {
 			if i == 0 {
 				panic("boom in OnEvent")
 			}
@@ -308,7 +308,7 @@ func TestRunParallelPanicUnwrapsError(t *testing.T) {
 	var recovered any
 	func() {
 		defer func() { recovered = recover() }()
-		RunParallel(context.Background(), jobsFor(newAgent(t, newEcho()), 1), ParallelOptions{OnEvent: func(int, agent.Event) { panic(sentinel) }})
+		RunParallel(t.Context(), jobsFor(newAgent(t, newEcho()), 1), ParallelOptions{OnEvent: func(int, agent.Event) { panic(sentinel) }})
 	}()
 	err, ok := recovered.(error)
 	if !ok || !errors.Is(err, sentinel) {

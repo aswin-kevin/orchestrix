@@ -27,7 +27,7 @@ func interrupted(id string) llm.Block {
 
 func TestRepairHistory(t *testing.T) {
 	ok := llm.ToolResultText("a", "fine", false)
-	cases := []struct {
+	tests := []struct {
 		name string
 		in   []llm.Message
 		want []llm.Message
@@ -58,10 +58,10 @@ func TestRepairHistory(t *testing.T) {
 			want: []llm.Message{assistant(toolUse("a", `{}`)), user(ok)},
 		},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := repairHistory(c.in); !reflect.DeepEqual(got, c.want) {
-				t.Fatalf("repairHistory =\n%+v\nwant\n%+v", got, c.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := repairHistory(tt.in); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("repairHistory =\n%+v\nwant\n%+v", got, tt.want)
 			}
 		})
 	}

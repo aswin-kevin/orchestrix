@@ -36,7 +36,7 @@ func compactSchema(t *testing.T) string {
 
 func TestNewRejectsBadOutputSchema(t *testing.T) {
 	p := llmtest.New()
-	cases := []struct {
+	tests := []struct {
 		name   string
 		schema map[string]any
 		want   string
@@ -45,14 +45,14 @@ func TestNewRejectsBadOutputSchema(t *testing.T) {
 		{"no type", map[string]any{"properties": map[string]any{}}, "object"},
 		{"unmarshalable", map[string]any{"type": "object", "x": func() {}}, "OutputSchema"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := New(Config{Provider: p, OutputSchema: tc.schema})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := New(Config{Provider: p, OutputSchema: tt.schema})
 			if err == nil {
 				t.Fatal("New succeeded")
 			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("error %q does not mention %q", err, tc.want)
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error %q does not mention %q", err, tt.want)
 			}
 		})
 	}
@@ -61,7 +61,7 @@ func TestNewRejectsBadOutputSchema(t *testing.T) {
 func TestOutputPromptSegment(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: `{"n":1}`})
 	a := mustNew(t, Config{Provider: p, System: []string{"base"}, CacheBoundary: 1, OutputSchema: answerSchema})
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 	req := p.Requests[0]
 	want := []string{"base", defaultOutputPrompt + compactSchema(t)}
 	if !slices.Equal(req.System, want) {
@@ -75,7 +75,7 @@ func TestOutputPromptSegment(t *testing.T) {
 func TestOutputPromptKeepsShorterCacheBoundary(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: `{"n":1}`})
 	a := mustNew(t, Config{Provider: p, System: []string{"a", "b"}, CacheBoundary: 1, OutputSchema: answerSchema})
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 	req := p.Requests[0]
 	want := []string{"a", "b", defaultOutputPrompt + compactSchema(t)}
 	if !slices.Equal(req.System, want) {
@@ -90,7 +90,7 @@ func TestNoOutputSchemaNoSegment(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "hi"})
 	system := []string{"a", "b"}
 	a := mustNew(t, Config{Provider: p, System: system, CacheBoundary: 2})
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 	req := p.Requests[0]
 	if !slices.Equal(req.System, system) {
 		t.Errorf("System = %q, want %q", req.System, system)
@@ -105,7 +105,7 @@ func runOutput(t *testing.T, cfg Config, turns ...llmtest.Turn) (*llmtest.Script
 	t.Helper()
 	p := llmtest.New(turns...)
 	cfg.Provider, cfg.OutputSchema = p, answerSchema
-	_, final := collect(t, mustNew(t, cfg).Run(context.Background(), userInput("go")))
+	_, final := collect(t, mustNew(t, cfg).Run(t.Context(), userInput("go")))
 	return p, final
 }
 
@@ -203,7 +203,7 @@ func TestOutputSkippedForNestedRun(t *testing.T) {
 	)
 	a = mustNew(t, Config{Provider: p, OutputSchema: answerSchema, Tools: []tool.Tool{nest}})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if nested == nil || nested.Reason != ReasonCompleted || nested.Output != nil || nested.Text != "free text" {
 		t.Fatalf("nested final = %+v, want completed free text without Output", nested)
@@ -229,12 +229,12 @@ func TestOutputRetriesResetOnResume(t *testing.T) {
 		llmtest.Turn{Text: `{"n":1}`},
 	)
 	a := mustNew(t, Config{Provider: p, OutputSchema: answerSchema, Tools: []tool.Tool{writeTool(log)}})
-	_, interrupted := collect(t, a.Run(context.Background(), userInput("go")))
+	_, interrupted := collect(t, a.Run(t.Context(), userInput("go")))
 	if interrupted.Reason != ReasonInterrupted {
 		t.Fatalf("final = %+v, want interrupted", interrupted)
 	}
 
-	_, final := collect(t, a.Resume(context.Background(), "", interrupted.State, []Decision{{ToolUseID: "w", Type: Approve}}))
+	_, final := collect(t, a.Resume(t.Context(), "", interrupted.State, []Decision{{ToolUseID: "w", Type: Approve}}))
 
 	wantOutput(t, final, `{"n":1}`)
 }
@@ -283,7 +283,7 @@ func TestInvalidOutputPromptVerbs(t *testing.T) {
 }
 
 func TestOutputRetriesConfig(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name    string
 		retries int
 		calls   int
@@ -292,14 +292,14 @@ func TestOutputRetriesConfig(t *testing.T) {
 		{"none", NoOutputRetries, 1},
 		{"default", 0, DefaultOutputRetries + 1},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p, final := runOutput(t, Config{OutputRetries: tc.retries},
+		t.Run(tt.name, func(t *testing.T) {
+			p, final := runOutput(t, Config{OutputRetries: tt.retries},
 				llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"}, llmtest.Turn{Text: "c"}, llmtest.Turn{Text: "d"})
 			if final.Reason != ReasonInvalidOutput {
 				t.Fatalf("reason = %v, want invalid_output", final.Reason)
 			}
-			if p.Calls() != tc.calls {
-				t.Fatalf("calls = %d, want %d", p.Calls(), tc.calls)
+			if p.Calls() != tt.calls {
+				t.Fatalf("calls = %d, want %d", p.Calls(), tt.calls)
 			}
 		})
 	}

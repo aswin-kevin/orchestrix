@@ -46,7 +46,7 @@ func newCoordinator(t *testing.T, model llm.Provider, cfg Config, opts ...orches
 // run runs c on text in thread "t" and returns its events and Final.
 func run(t *testing.T, c *Coordinator, text string) ([]agent.Event, *agent.Final) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), testTimeout)
 	defer cancel()
 	var evs []agent.Event
 	var final *agent.Final
@@ -181,7 +181,7 @@ func requestHas(req llm.Request, text string) bool {
 func closeBounded(t *testing.T, c *Coordinator) {
 	t.Helper()
 	done := make(chan struct{})
-	go func() { _ = c.Close(context.Background()); close(done) }()
+	go func() { _ = c.Close(t.Context()); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(async.DefaultStopWait + testTimeout):
@@ -380,7 +380,7 @@ func TestCoordinatorResolvesWaitingWorker(t *testing.T) {
 	for _, req := range first.rec.Pending.Requests {
 		decisions = append(decisions, agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Approve})
 	}
-	if err := c.Resolve(context.Background(), "t", first.rec.ID, decisions); err != nil {
+	if err := c.Resolve(t.Context(), "t", first.rec.ID, decisions); err != nil {
 		t.Fatalf("Resolve = %v", err)
 	}
 	if second := next(); second.rec.Status != async.StatusCompleted || second.rec.Result != "wrote it" {

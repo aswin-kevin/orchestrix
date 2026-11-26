@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -21,7 +20,7 @@ func TestViewMatchesRequest(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
 	a := mustNew(t, Config{Provider: p})
 
-	_, final := collect(t, a.Run(context.Background(), Input{Messages: []llm.Message{note, dangling, llm.UserText("again")}}))
+	_, final := collect(t, a.Run(t.Context(), Input{Messages: []llm.Message{note, dangling, llm.UserText("again")}}))
 
 	history := final.State.Messages()
 	sent := history[:len(history)-1] // the reply came after the request

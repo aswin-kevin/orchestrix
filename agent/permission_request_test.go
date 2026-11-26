@@ -1,7 +1,6 @@
 package agent_test
 
 import (
-	"context"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -23,7 +22,7 @@ func TestPermissionRequestMatchesLoop(t *testing.T) {
 	}
 	in := json.RawMessage(`{"path":"/a.txt","content":"x"}`)
 
-	req := a.PermissionRequest(context.Background(), &agent.ToolCall{Name: filesystem.ToolWriteFile, Input: in})
+	req := a.PermissionRequest(t.Context(), &agent.ToolCall{Name: filesystem.ToolWriteFile, Input: in})
 
 	want := []permission.PathAccess{{Path: "/a.txt", Op: permission.OpWrite}}
 	if req.Tool != filesystem.ToolWriteFile || string(req.Input) != string(in) {
@@ -41,7 +40,7 @@ func TestPermissionRequestUnknownTool(t *testing.T) {
 	}
 	in := json.RawMessage(`{}`)
 
-	req := a.PermissionRequest(context.Background(), &agent.ToolCall{Name: "nope", Input: in})
+	req := a.PermissionRequest(t.Context(), &agent.ToolCall{Name: "nope", Input: in})
 
 	if req.Tool != "nope" || string(req.Input) != "{}" || req.ReadOnly || req.Paths != nil {
 		t.Fatalf("request = %+v, want only Tool and Input", req)

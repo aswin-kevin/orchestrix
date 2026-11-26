@@ -89,7 +89,7 @@ func TestRunTextOnly(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "hello there"})
 	a := mustNew(t, Config{Provider: p})
 
-	events, final := collect(t, a.Run(context.Background(), userInput("hi")))
+	events, final := collect(t, a.Run(t.Context(), userInput("hi")))
 
 	if final.Reason != ReasonCompleted || final.Text != "hello there" || final.Err != nil {
 		t.Fatalf("final = %+v, want completed with text", final)
@@ -115,7 +115,7 @@ func TestRunToolThenAnswer(t *testing.T) {
 	)
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}})
 
-	events, final := collect(t, a.Run(context.Background(), userInput("go")))
+	events, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted || final.Turns != 2 || final.Text != "done" {
 		t.Fatalf("final = %+v, want completed after 2 turns", final)
@@ -158,7 +158,7 @@ func TestRunUsageAndInputState(t *testing.T) {
 	s := state.New()
 	s.AppendMessages(llm.UserText("earlier"))
 
-	events, final := collect(t, a.Run(context.Background(), Input{State: s, Messages: []llm.Message{llm.UserText("now")}}))
+	events, final := collect(t, a.Run(t.Context(), Input{State: s, Messages: []llm.Message{llm.UserText("now")}}))
 
 	if final.State != s {
 		t.Fatal("Final.State is not the state passed in")
@@ -187,7 +187,7 @@ func TestRunStripsMetaFromRequestView(t *testing.T) {
 	msg := llm.UserText("hi")
 	msg.Meta = map[string]string{"source": "test"}
 
-	_, final := collect(t, a.Run(context.Background(), Input{Messages: []llm.Message{msg}}))
+	_, final := collect(t, a.Run(t.Context(), Input{Messages: []llm.Message{msg}}))
 
 	if p.Requests[0].Messages[0].Meta != nil {
 		t.Fatal("request view still carries Meta")
@@ -244,7 +244,7 @@ func TestParallelReadOnlyBatch(t *testing.T) {
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{slow, serial}})
 
 	start := time.Now()
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if elapsed := lastEnd.Sub(start); elapsed >= 250*time.Millisecond {
 		t.Fatalf("batch of 3 x %v took %v, want < 250ms", sleep, elapsed)
@@ -289,7 +289,7 @@ func TestMaxConcurrencyBoundsBatch(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{ToolCalls: calls}, llmtest.Turn{Text: "done"})
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{slow}, MaxConcurrency: 2})
 
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 
 	if peak != 2 {
 		t.Fatalf("peak concurrency = %d, want 2", peak)
@@ -318,7 +318,7 @@ func TestCancelDuringToolsPairsResults(t *testing.T) {
 	}})
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{blocking, serial}})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go func() {
 		<-started
@@ -386,7 +386,7 @@ func TestConsumerBreakStopsRun(t *testing.T) {
 	afterAgent := &hookRecorder{name: "rec", trace: &[]string{}}
 	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{afterAgent}})
 
-	for range a.Run(context.Background(), userInput("hi")) {
+	for range a.Run(t.Context(), userInput("hi")) {
 		break
 	}
 
@@ -406,7 +406,7 @@ func TestConsumerBreakStopsRun(t *testing.T) {
 func TestCancelDuringStreaming(t *testing.T) {
 	p := &blockingProvider{}
 	a := mustNew(t, Config{Provider: p})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var final *Final
@@ -433,7 +433,7 @@ func TestModelTimeoutEndsTurn(t *testing.T) {
 
 	start := time.Now()
 	var final *Final
-	for ev := range a.Run(context.Background(), userInput("hi")) {
+	for ev := range a.Run(t.Context(), userInput("hi")) {
 		if ev.Kind == KindFinal {
 			final = ev.Final
 		}
@@ -455,7 +455,7 @@ func TestOverflowReason(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Err: overflow})
 	a := mustNew(t, Config{Provider: p})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("hi")))
+	_, final := collect(t, a.Run(t.Context(), userInput("hi")))
 
 	if final.Reason != ReasonPromptTooLong || !errors.Is(final.Err, overflow) {
 		t.Fatalf("final = %+v, want prompt_too_long wrapping the API error", final)
@@ -471,7 +471,7 @@ func TestCustomOverflowErrorEndsPromptTooLong(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Err: customOverflow{}})
 	a := mustNew(t, Config{Provider: p})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("hi")))
+	_, final := collect(t, a.Run(t.Context(), userInput("hi")))
 
 	if final.Reason != ReasonPromptTooLong {
 		t.Fatalf("final = %+v, want prompt_too_long", final)
@@ -485,7 +485,7 @@ func TestModelErrorReason(t *testing.T) {
 
 	var lastErr error
 	var final *Final
-	for ev, err := range a.Run(context.Background(), userInput("hi")) {
+	for ev, err := range a.Run(t.Context(), userInput("hi")) {
 		lastErr = err
 		final = ev.Final
 	}
@@ -515,7 +515,7 @@ func TestRetryEventWhenModelCalledTwice(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "first"}, llmtest.Turn{Text: "second"})
 	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{retryTwice{}}})
 
-	events, final := collect(t, a.Run(context.Background(), userInput("hi")))
+	events, final := collect(t, a.Run(t.Context(), userInput("hi")))
 
 	var kinds []EventKind
 	for _, ev := range events {
@@ -576,7 +576,7 @@ func TestHooksOrder(t *testing.T) {
 		Middleware: []Middleware{&hookRecorder{name: "a", trace: &trace}, &hookRecorder{name: "b", trace: &trace}},
 	})
 
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 
 	want := []string{
 		"BeforeAgent:a", "BeforeAgent:b",
@@ -597,7 +597,7 @@ func TestHookErrorEndsRun(t *testing.T) {
 		Middleware: []Middleware{&hookRecorder{name: "a", trace: &trace, fail: "BeforeModel"}},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonMiddlewareError || final.Err == nil {
 		t.Fatalf("final = %+v, want middleware_error", final)
@@ -623,7 +623,7 @@ func TestToolProviderMiddlewareToolsRegistered(t *testing.T) {
 	)
 	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{toolOwner{tool: echoTool()}}})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if got := p.Requests[0].Tools; len(got) != 1 || got[0].Name != "echo" {
 		t.Fatalf("request tools = %+v, want the middleware's echo", got)
@@ -636,7 +636,7 @@ func TestToolProviderMiddlewareToolsRegistered(t *testing.T) {
 
 func TestNewValidation(t *testing.T) {
 	p := llmtest.New()
-	cases := map[string]Config{
+	tests := map[string]Config{
 		"nil provider":             {},
 		"duplicate tool":           {Provider: p, Tools: []tool.Tool{echoTool(), echoTool()}},
 		"duplicate across sources": {Provider: p, Tools: []tool.Tool{echoTool()}, Middleware: []Middleware{toolOwner{tool: echoTool()}}},
@@ -644,7 +644,7 @@ func TestNewValidation(t *testing.T) {
 		"duplicate middleware":     {Provider: p, Middleware: []Middleware{retryTwice{}, retryTwice{}}},
 		"unknown permission mode":  {Provider: p, PermissionMode: "acceptEdit"},
 	}
-	for name, cfg := range cases {
+	for name, cfg := range tests {
 		t.Run(name, func(t *testing.T) {
 			if _, err := New(cfg); err == nil {
 				t.Fatal("New succeeded, want an error")
@@ -678,7 +678,7 @@ func TestRunEventsCarryAgentName(t *testing.T) {
 	)
 	a := mustNew(t, Config{Name: "worker", Provider: p, Tools: []tool.Tool{echoTool()}, PermissionMode: permission.ModeDefault})
 
-	events, _ := collect(t, a.Run(context.Background(), userInput("go")))
+	events, _ := collect(t, a.Run(t.Context(), userInput("go")))
 
 	for _, ev := range events {
 		if ev.Agent != "worker" {
@@ -694,7 +694,7 @@ func TestConsumerPanicStopsRun(t *testing.T) {
 
 	func() {
 		defer func() { _ = recover() }()
-		for range a.Run(context.Background(), userInput("hi")) {
+		for range a.Run(t.Context(), userInput("hi")) {
 			panic("consumer failed")
 		}
 	}()
@@ -726,7 +726,7 @@ func TestModelRequestCarriesThreadBackend(t *testing.T) {
 		BackendFactory: func(id string) backend.Backend { return byThread[id] },
 	})
 
-	collect(t, a.Run(context.Background(), Input{ThreadID: "t2", Messages: []llm.Message{llm.UserText("hi")}}))
+	collect(t, a.Run(t.Context(), Input{ThreadID: "t2", Messages: []llm.Message{llm.UserText("hi")}}))
 
 	if len(seen) != 1 || seen[0] != byThread["t2"] {
 		t.Fatalf("request backend = %v, want the t2 backend", seen)
@@ -776,7 +776,7 @@ func TestRequestViewEditsDoNotReachState(t *testing.T) {
 		ProviderData: map[string]string{"token": "keep"},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), Input{Messages: []llm.Message{msg}}))
+	_, final := collect(t, a.Run(t.Context(), Input{Messages: []llm.Message{msg}}))
 
 	msgs := final.State.Messages()
 	if got := msgs[0].Content; got[0].Text != "hi" || got[1].Source.Data != "AAAA" || got[1].ProviderData["token"] != "keep" {
@@ -821,7 +821,7 @@ func TestHookCanStopRun(t *testing.T) {
 			p := llmtest.New(llmtest.Turn{Text: "never recorded"})
 			a := mustNew(t, Config{Provider: p, Middleware: []Middleware{stopper{hook: hook, trace: &trace}}})
 
-			_, final := collect(t, a.Run(context.Background(), userInput("go")))
+			_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 			if final.Reason != ReasonHookStopped || !errors.Is(final.Err, ErrStopRun) {
 				t.Fatalf("final = %s (err %v), want hook_stopped wrapping ErrStopRun", final.Reason, final.Err)
@@ -867,7 +867,7 @@ func TestToolWrapperCanStopRun(t *testing.T) {
 		Middleware: []Middleware{stopper{trace: &trace}, stopOn{id: "b"}},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonHookStopped || !errors.Is(final.Err, ErrStopRun) {
 		t.Fatalf("final = %s (err %v), want hook_stopped wrapping ErrStopRun", final.Reason, final.Err)
@@ -906,7 +906,7 @@ func TestAfterAgentContextOutlivesCancellation(t *testing.T) {
 	var gotErr error
 	var gotValue any
 	a := mustNew(t, Config{Provider: &blockingProvider{}, Middleware: []Middleware{afterAgentCtx{&gotErr, &gotValue}}})
-	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "kept"))
+	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), ctxKey{}, "kept"))
 	defer cancel()
 
 	var final *Final
@@ -965,7 +965,7 @@ func requirePanicFinal(t *testing.T, final *Final) *PanicError {
 
 func TestProviderPanicEndsRun(t *testing.T) {
 	a := mustNew(t, Config{Provider: &panickingProvider{Provider: llmtest.New()}})
-	_, final := collect(t, a.Run(context.Background(), userInput("hi")))
+	_, final := collect(t, a.Run(t.Context(), userInput("hi")))
 	pe := requirePanicFinal(t, final)
 	if pe.Value != "provider exploded" || pe.Error() != "agent: panic: provider exploded" {
 		t.Fatalf("PanicError = %v (value %v)", pe, pe.Value)
@@ -984,7 +984,7 @@ func (panickingWrapper) WrapModel(context.Context, *ModelRequest, ModelHandler) 
 func TestWrapModelPanicEndsRun(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "never"})
 	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{panickingWrapper{}}})
-	_, final := collect(t, a.Run(context.Background(), userInput("hi")))
+	_, final := collect(t, a.Run(t.Context(), userInput("hi")))
 	requirePanicFinal(t, final)
 	if p.Calls() != 0 {
 		t.Fatalf("provider called %d times", p.Calls())
@@ -1003,7 +1003,7 @@ func TestCheckpointerPanicEndsRun(t *testing.T) {
 		Provider:     llmtest.New(llmtest.Turn{Text: "done"}),
 		Checkpointer: panickingSaver{cpmemory.New()},
 	})
-	_, final := collect(t, a.Run(context.Background(), threadInput("hi")))
+	_, final := collect(t, a.Run(t.Context(), threadInput("hi")))
 	requirePanicFinal(t, final)
 }
 
@@ -1025,7 +1025,7 @@ func (l *countingLeaser) Acquire(ctx context.Context, threadID, owner string, tt
 }
 
 func TestPanicReleasesLeaseAndKeepsVersion(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cp := &countingLeaser{Checkpointer: cpmemory.New()}
 	ends := 0
 	a := mustNew(t, Config{
@@ -1099,7 +1099,7 @@ func TestLeaseRenewPanicIsAFailedRenewal(t *testing.T) {
 	})
 	done := make(chan *Final)
 	go func() {
-		_, final := collect(t, a.Run(context.Background(), threadInput("go")))
+		_, final := collect(t, a.Run(t.Context(), threadInput("go")))
 		done <- final
 	}()
 	<-started
@@ -1122,7 +1122,7 @@ func TestEventsCarryTurnTimeRunID(t *testing.T) {
 		llmtest.Turn{Text: "done"},
 	)
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}})
-	events, final := collect(t, a.Run(context.Background(), userInput("go")))
+	events, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	runID := events[0].RunID
 	if len(runID) != 16 {
@@ -1172,7 +1172,7 @@ func TestNestedRunHasOwnRunID(t *testing.T) {
 		Provider: llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "d1", Name: "delegate"}}}, llmtest.Turn{Text: "done"}),
 		Tools:    []tool.Tool{delegateTool(child, &out)},
 	})
-	events, _ := collect(t, parent.Run(context.Background(), userInput("go")))
+	events, _ := collect(t, parent.Run(t.Context(), userInput("go")))
 
 	parentID := events[len(events)-1].RunID
 	childID := childInfo.only(t, "BeforeAgent").RunID

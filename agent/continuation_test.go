@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -23,7 +22,7 @@ func continuationsIn(msgs []llm.Message) []llm.Message {
 }
 
 func TestContinuationsAreMarkedInjected(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name string
 		cfg  func(p *llmtest.Scripted) Config
 		turn []llmtest.Turn
@@ -54,11 +53,11 @@ func TestContinuationsAreMarkedInjected(t *testing.T) {
 			turn: []llmtest.Turn{toolTurn("t1"), {Text: "summary"}},
 		},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := llmtest.New(tc.turn...)
-			a := mustNew(t, tc.cfg(p))
+		t.Run(tt.name, func(t *testing.T) {
+			p := llmtest.New(tt.turn...)
+			a := mustNew(t, tt.cfg(p))
 
-			_, final := collect(t, a.Run(context.Background(), userInput("go")))
+			_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 			msgs := final.State.Messages()
 			if msgs[0].Meta[InjectedMetaKey] != "" {

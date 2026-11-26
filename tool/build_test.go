@@ -30,7 +30,7 @@ func TestBuildNilPermissionNoOpinion(t *testing.T) {
 	if !ok {
 		t.Fatal("a built tool does not implement PermissionChecker")
 	}
-	d := pc.CheckPermission(context.Background(), json.RawMessage(`{}`), permission.Context{})
+	d := pc.CheckPermission(t.Context(), json.RawMessage(`{}`), permission.Context{})
 	if d.Behavior != "" || d.Message != "" || d.UpdatedInput != nil {
 		t.Fatalf("CheckPermission = %+v, want the zero Decision", d)
 	}
@@ -120,13 +120,13 @@ func TestSpecOfRoundTrip(t *testing.T) {
 		t.Error("Paths not preserved")
 	}
 	pc, _ := As[PermissionChecker](tl)
-	if d := pc.CheckPermission(context.Background(), in, permission.Context{}); d.Behavior != permission.Deny || d.Message != "never" {
+	if d := pc.CheckPermission(t.Context(), in, permission.Context{}); d.Behavior != permission.Deny || d.Message != "never" {
 		t.Errorf("CheckPermission = %+v, want the Deny", d)
 	}
 	if a, _ := As[Availability](tl); a.Available(state.New()) == nil || a.Available(state.New()).Error() != "hand is locked" {
 		t.Error("Available not preserved")
 	}
-	if res, err := tl.Call(context.Background(), in, &Call{}); err != nil || res.Flatten() != "hand ran" {
+	if res, err := tl.Call(t.Context(), in, &Call{}); err != nil || res.Flatten() != "hand ran" {
 		t.Errorf("Call = %+v, %v", res, err)
 	}
 	if _, ok := As[Dispatcher](tl); ok {

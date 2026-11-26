@@ -20,7 +20,7 @@ import (
 func runOneTurn(t *testing.T, cfg Config, first llmtest.Turn) []llm.Block {
 	t.Helper()
 	cfg.Provider = llmtest.New(first, llmtest.Turn{Text: "done"})
-	_, final := collect(t, mustNew(t, cfg).Run(context.Background(), userInput("go")))
+	_, final := collect(t, mustNew(t, cfg).Run(t.Context(), userInput("go")))
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", final)
 	}
@@ -280,7 +280,7 @@ func TestExtraMessagesFollowToolResults(t *testing.T) {
 	)
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{withExtra("one"), withExtra("two")}})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	msgs := final.State.Messages()
 	if len(msgs) != 6 {
@@ -304,7 +304,7 @@ func TestProgressEvents(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "c", Name: "chatty"}}}, llmtest.Turn{Text: "done"})
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{chatty}})
 
-	events, _ := collect(t, a.Run(context.Background(), userInput("go")))
+	events, _ := collect(t, a.Run(t.Context(), userInput("go")))
 
 	for _, ev := range events {
 		if ev.Kind == KindProgress && ev.Text == "halfway" && ev.ToolID == "c" && ev.ToolName == "chatty" {
@@ -337,7 +337,7 @@ func TestBatches(t *testing.T) {
 }
 
 func TestParseToolInput(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
 		raw, want string
 		ok        bool
 	}{
@@ -348,10 +348,10 @@ func TestParseToolInput(t *testing.T) {
 		{"```json\n{\"a\":\n```", "", false},
 		{"```{\"x\":1}```", "", false},
 	}
-	for _, c := range cases {
-		got, err := parseToolInput(json.RawMessage(c.raw))
-		if (err == nil) != c.ok || string(got) != c.want {
-			t.Errorf("parseToolInput(%q) = %q, %v; want %q, ok=%v", c.raw, got, err, c.want, c.ok)
+	for _, tt := range tests {
+		got, err := parseToolInput(json.RawMessage(tt.raw))
+		if (err == nil) != tt.ok || string(got) != tt.want {
+			t.Errorf("parseToolInput(%q) = %q, %v; want %q, ok=%v", tt.raw, got, err, tt.want, tt.ok)
 		}
 	}
 }
@@ -365,7 +365,7 @@ func TestToolShrinkingHistoryMidTurnDoesNotPanic(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "t1", Name: "truncate", Input: map[string]any{}}}}, llmtest.Turn{Text: "done"})
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{truncate}})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %s (err %v), want completed", final.Reason, final.Err)
@@ -434,7 +434,7 @@ func TestStopRunPairsEveryToolUseEvent(t *testing.T) {
 		p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{stopperCall("s"), stopperCall("a"), stopperCall("b")}})
 		a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{stopperTool("s", nil)}, MaxConcurrency: 1})
 
-		events, final := collect(t, a.Run(context.Background(), userInput("go")))
+		events, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 		if final.Reason != ReasonHookStopped {
 			t.Fatalf("final = %+v, want hook_stopped", final)
@@ -459,7 +459,7 @@ func TestStopRunPairsEveryToolUseEvent(t *testing.T) {
 		}})
 		a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{stopperTool("s", asked), asker}})
 
-		events, final := collect(t, a.Run(context.Background(), userInput("go")))
+		events, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 		if final.Reason != ReasonHookStopped {
 			t.Fatalf("final = %+v, want hook_stopped", final)
@@ -520,7 +520,7 @@ func TestHeldCallNotAnnounced(t *testing.T) {
 		if toolUseInput(events, "r") != "" || log.count("r") != 0 {
 			t.Fatal("the read held while waiting for its slot was announced or ran before the interrupt")
 		}
-		resumed, _ := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "p", Type: Approve}}))
+		resumed, _ := collect(t, a.Resume(t.Context(), "", final.State, []Decision{{ToolUseID: "p", Type: Approve}}))
 		if toolUseInput(resumed, "r") == "" || log.count("r") != 1 {
 			t.Fatal("the held read was not announced and run once on resume")
 		}
@@ -602,7 +602,7 @@ func TestCheckPermissionDenyRule(t *testing.T) {
 	write, _ := a.registry.Get("write_file")
 	call := &ToolCall{ID: "w", Name: "write_file", Input: json.RawMessage(`{"text":"x"}`), Tool: write}
 
-	if got := a.CheckPermission(context.Background(), call); got.Behavior != permission.Deny {
+	if got := a.CheckPermission(t.Context(), call); got.Behavior != permission.Deny {
 		t.Fatalf("CheckPermission = %+v, want deny", got)
 	}
 }
@@ -619,7 +619,7 @@ func TestCheckPermissionAsksWithoutConsultingApprover(t *testing.T) {
 	write, _ := a.registry.Get("write_file")
 	call := &ToolCall{ID: "w", Name: "write_file", Input: json.RawMessage(`{"text":"x"}`), Tool: write}
 
-	if got := a.CheckPermission(context.Background(), call); got.Behavior != permission.Ask {
+	if got := a.CheckPermission(t.Context(), call); got.Behavior != permission.Ask {
 		t.Fatalf("CheckPermission = %+v, want ask in the default mode", got)
 	}
 }

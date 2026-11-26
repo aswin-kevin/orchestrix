@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"errors"
 	"iter"
 	"slices"
@@ -21,7 +20,7 @@ import (
 // mustThread opens thread id of a or fails the test.
 func mustThread(t *testing.T, a *Agent, id string) *Thread {
 	t.Helper()
-	th, err := a.Thread(context.Background(), id)
+	th, err := a.Thread(t.Context(), id)
 	if err != nil {
 		t.Fatalf("Thread(%q): %v", id, err)
 	}
@@ -53,13 +52,13 @@ func toolResultText(t *testing.T, events []Event, id string) string {
 
 func TestThreadRejectsInvalidID(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New()})
-	if _, err := a.Thread(context.Background(), ""); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
+	if _, err := a.Thread(t.Context(), ""); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
 		t.Fatalf("err = %v, want ErrInvalidThreadID", err)
 	}
 }
 
 func TestResumeAcrossAgents(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	var reads atomic.Int32
 
@@ -111,7 +110,7 @@ func TestResumeAcrossAgents(t *testing.T) {
 }
 
 func TestWorkspaceSurvivesNewProcess(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	var reads atomic.Int32
 	cfg := func(provider *llmtest.Scripted, ws *backends) Config {
@@ -147,7 +146,7 @@ func TestWorkspaceSurvivesNewProcess(t *testing.T) {
 }
 
 func TestThreadForkIndependent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cp := cpmemory.New()
 	ws := newBackends()
 	var reads atomic.Int32
@@ -205,7 +204,7 @@ func TestThreadForkIndependent(t *testing.T) {
 func TestThreadStateIsACopy(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"})})
 	th := mustThread(t, a, "t1")
-	collect(t, th.Prompt(context.Background(), "hi"))
+	collect(t, th.Prompt(t.Context(), "hi"))
 	th.State().SetMessages(nil)
 	if n := len(th.Messages()); n != 2 {
 		t.Fatalf("thread holds %d messages, want 2: State must return a copy", n)
@@ -213,7 +212,7 @@ func TestThreadStateIsACopy(t *testing.T) {
 }
 
 func TestThreadBusy(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	a := mustNew(t, Config{Provider: llmtest.New(
 		llmtest.Turn{Text: "first"},
 		llmtest.Turn{Text: "abandoned"},
@@ -260,7 +259,7 @@ func assertBusy(t *testing.T, seq iter.Seq2[Event, error]) {
 }
 
 func TestForkRefusesExistingThread(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cp := cpmemory.New()
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"}), Checkpointer: cp})
 	t1 := mustThread(t, a, "t1")
@@ -284,7 +283,7 @@ func TestForkRefusesExistingThread(t *testing.T) {
 
 func TestForkOwnIDWithoutCheckpointer(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New()})
-	if _, err := mustThread(t, a, "t1").Fork(context.Background(), "t1"); !errors.Is(err, ErrThreadExists) {
+	if _, err := mustThread(t, a, "t1").Fork(t.Context(), "t1"); !errors.Is(err, ErrThreadExists) {
 		t.Fatalf("err = %v, want ErrThreadExists", err)
 	}
 }
@@ -292,7 +291,7 @@ func TestForkOwnIDWithoutCheckpointer(t *testing.T) {
 func TestThreadIgnoresChangesToFinalState(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"})})
 	th := mustThread(t, a, "t1")
-	_, final := collect(t, th.Prompt(context.Background(), "hi"))
+	_, final := collect(t, th.Prompt(t.Context(), "hi"))
 	final.State.SetMessages(nil)
 	if n := len(th.Messages()); n != 2 {
 		t.Fatalf("thread holds %d messages, want 2: it must adopt a copy of Final.State", n)
@@ -302,7 +301,7 @@ func TestThreadIgnoresChangesToFinalState(t *testing.T) {
 func TestThreadMessagesIsACopy(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"})})
 	th := mustThread(t, a, "t1")
-	collect(t, th.Prompt(context.Background(), "hi"))
+	collect(t, th.Prompt(t.Context(), "hi"))
 	msgs := th.Messages()
 	msgs[0].Content[0].Text = "changed"
 	if got := th.Messages()[0].Content[0].Text; got != "hi" {
@@ -314,7 +313,7 @@ func TestThreadMessagesIsACopy(t *testing.T) {
 // with a tool call was saved but before its results were: the stored thread
 // has a tool_use without a tool_result and no pending record.
 func TestCrashBetweenSaves(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	crashing := &recordingCheckpointer{Checkpointer: mustFileCheckpointer(t, dir), failFrom: 3}
 	a := mustNew(t, Config{
@@ -364,7 +363,7 @@ func answersToolUse(msgs []llm.Message, id string) bool {
 // KindToolResult, as a consumer breaking out of the loop does.
 func breakAtToolResult(t *testing.T, th *Thread, text string) {
 	t.Helper()
-	for ev := range th.Prompt(context.Background(), text) {
+	for ev := range th.Prompt(t.Context(), text) {
 		if ev.Kind == KindFinal {
 			t.Fatalf("run ended before its tool result: %+v", ev.Final)
 		}
@@ -381,7 +380,7 @@ func hasMessage(msgs []llm.Message, role llm.Role, want func(llm.Message) bool) 
 }
 
 func TestThreadBreakEarlyKeepsProgress(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cp := cpmemory.New()
 	a := mustNew(t, Config{
 		// The spare text turn covers a model call the abandoned run may

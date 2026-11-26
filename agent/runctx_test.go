@@ -87,7 +87,7 @@ func TestInfoInHooksAndTools(t *testing.T) {
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{pauseOnceTool(first)}, Middleware: []Middleware{infoProbe{first}}})
 	input := []llm.Message{llm.UserText("go")}
 
-	_, final := collect(t, a.Run(context.Background(), Input{ThreadID: "t", Messages: input}))
+	_, final := collect(t, a.Run(t.Context(), Input{ThreadID: "t", Messages: input}))
 
 	if final.Reason != ReasonInterrupted {
 		t.Fatalf("final = %+v, want interrupted", final)
@@ -102,7 +102,7 @@ func TestInfoInHooksAndTools(t *testing.T) {
 
 	resumed := newInfoLog()
 	a = mustNew(t, Config{Provider: p, Tools: []tool.Tool{pauseOnceTool(resumed)}, Middleware: []Middleware{infoProbe{resumed}}})
-	_, final = collect(t, a.Resume(context.Background(), "t", final.State, []Decision{{ToolUseID: "p1", Type: Approve}}))
+	_, final = collect(t, a.Resume(t.Context(), "t", final.State, []Decision{{ToolUseID: "p1", Type: Approve}}))
 
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("resumed final = %+v, want completed", final)
@@ -116,10 +116,10 @@ func TestInfoInHooksAndTools(t *testing.T) {
 }
 
 func TestInfoOutsideRun(t *testing.T) {
-	if info, ok := Info(context.Background()); ok {
+	if info, ok := Info(t.Context()); ok {
 		t.Fatalf("Info outside a run = %+v, true; want false", info)
 	}
-	if Forward(context.Background(), Event{Kind: KindText, Text: "x"}) {
+	if Forward(t.Context(), Event{Kind: KindText, Text: "x"}) {
 		t.Fatal("Forward outside a tool call reported success")
 	}
 }
@@ -174,7 +174,7 @@ func TestNestedRunDepthAndForward(t *testing.T) {
 		Tools:    []tool.Tool{delegateTool(child, &out)},
 	})
 
-	events, final := collect(t, parent.Run(context.Background(), userInput("go")))
+	events, final := collect(t, parent.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", final)
@@ -253,7 +253,7 @@ func TestInputBackendOverrides(t *testing.T) {
 		BackendFactory: func(string) backend.Backend { return testutil.Memory(t) },
 	})
 
-	_, final := collect(t, a.Run(context.Background(), Input{ThreadID: "t", Backend: override, Messages: []llm.Message{llm.UserText("go")}}))
+	_, final := collect(t, a.Run(t.Context(), Input{ThreadID: "t", Backend: override, Messages: []llm.Message{llm.UserText("go")}}))
 
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", final)
@@ -283,7 +283,7 @@ func TestInputAgentName(t *testing.T) {
 
 	in := userInput("go")
 	in.AgentName = "alias"
-	events, _ := collect(t, a.Run(context.Background(), in))
+	events, _ := collect(t, a.Run(t.Context(), in))
 
 	for _, ev := range events {
 		if ev.Agent != "alias" {
@@ -313,14 +313,14 @@ func TestResumeWithInputOverrides(t *testing.T) {
 		Middleware:     []Middleware{requestProbe{&backends, &threads}},
 		BackendFactory: func(string) backend.Backend { return testutil.Memory(t) },
 	})
-	_, interrupted := collect(t, a.Run(context.Background(), Input{ThreadID: "t", Messages: []llm.Message{llm.UserText("go")}}))
+	_, interrupted := collect(t, a.Run(t.Context(), Input{ThreadID: "t", Messages: []llm.Message{llm.UserText("go")}}))
 	if interrupted.Reason != ReasonInterrupted {
 		t.Fatalf("final = %+v, want interrupted", interrupted)
 	}
 	backends, threads = nil, nil
 
 	in := Input{ThreadID: "t", State: interrupted.State, Backend: override, AgentName: "resumer"}
-	events, final := collect(t, a.ResumeWith(context.Background(), in, []Decision{{ToolUseID: "p1", Type: Approve}}))
+	events, final := collect(t, a.ResumeWith(t.Context(), in, []Decision{{ToolUseID: "p1", Type: Approve}}))
 
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("resumed final = %+v, want completed", final)
@@ -341,7 +341,7 @@ func TestResumeWithInputOverrides(t *testing.T) {
 func TestResumeWithInvalidKeepsAgentName(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New()})
 
-	events, final := collect(t, a.ResumeWith(context.Background(), Input{AgentName: "resumer"}, nil))
+	events, final := collect(t, a.ResumeWith(t.Context(), Input{AgentName: "resumer"}, nil))
 
 	if final.Reason != ReasonInvalidResume || events[0].Agent != "resumer" {
 		t.Fatalf("event = %+v, want invalid resume from agent resumer", events[0])
@@ -353,7 +353,7 @@ func TestResumeWithRejectsMessages(t *testing.T) {
 	before := len(interrupted.State.Messages())
 
 	in := Input{State: interrupted.State, Messages: []llm.Message{llm.UserText("more")}}
-	_, final := collect(t, a.ResumeWith(context.Background(), in, []Decision{{ToolUseID: "w", Type: Approve}}))
+	_, final := collect(t, a.ResumeWith(t.Context(), in, []Decision{{ToolUseID: "w", Type: Approve}}))
 
 	if final.Reason != ReasonInvalidResume || final.Err == nil {
 		t.Fatalf("final = %+v, want invalid resume", final)
@@ -399,7 +399,7 @@ func TestForwardRefusedAfterToolCallReturned(t *testing.T) {
 		Middleware: []Middleware{staleForward{saved: &saved, forwarded: &forwarded, tried: &tried}},
 	})
 
-	events, final := collect(t, a.Run(context.Background(), userInput("go")))
+	events, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted || !tried {
 		t.Fatalf("final = %+v, tried = %v; want completed after a stale Forward attempt", final, tried)

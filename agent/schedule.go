@@ -224,12 +224,10 @@ func (r *run) runBatch(batch []*toolCall, halted *atomic.Bool) {
 				continue
 			}
 			r.announce(c)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				defer func() { <-slots }()
 				r.execute(c, halted)
-			}()
+			})
 		}
 	}
 	wg.Wait()

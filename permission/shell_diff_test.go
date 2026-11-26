@@ -184,7 +184,7 @@ func runTraced(t testing.TB, shell, bin, cmd string) []string {
 	}
 	log := filepath.Join(tmp, "log")
 
-	ctx, cancel := context.WithTimeout(context.Background(), shellDiffTimeout)
+	ctx, cancel := context.WithTimeout(t.Context(), shellDiffTimeout)
 	defer cancel()
 	c := exec.CommandContext(ctx, shell, "-c", "--", cmd)
 	c.Dir = work

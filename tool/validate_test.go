@@ -39,14 +39,14 @@ func TestValidatePaths(t *testing.T) {
 		{"array expected", `{"path":"/a","edits":"no"}`, "edits: expected array, got string"},
 		{"null edits", `{"path":"/a","edits":null}`, "edits: expected array, got null"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := Validate(schema, json.RawMessage(tc.in))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Validate(schema, json.RawMessage(tt.in))
 			switch {
-			case tc.wantErr == "" && err != nil:
+			case tt.wantErr == "" && err != nil:
 				t.Fatalf("unexpected error: %v", err)
-			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
-				t.Fatalf("error = %v, want containing %q", err, tc.wantErr)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
 			}
 		})
 	}

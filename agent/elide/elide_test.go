@@ -171,7 +171,7 @@ func TestViewReplacesRange(t *testing.T) {
 	var lens []int
 	a := mustNew(t, agent.Config{Provider: p, Middleware: []agent.Middleware{requestLen{&lens}}})
 
-	final := collect(t, a.Run(context.Background(), agent.Input{State: s, Messages: userTexts("u3")}))
+	final := collect(t, a.Run(t.Context(), agent.Input{State: s, Messages: userTexts("u3")}))
 
 	want := []llm.Message{llm.UserText("S")}
 	want = append(want, userTexts("u2", "a2", "u3")...)
@@ -201,7 +201,7 @@ func toolLoop() []llm.Message {
 
 func TestAddValidation(t *testing.T) {
 	existing := elide.Elision{ID: "c1", From: 1, To: 3, Text: "S1"}
-	cases := []struct {
+	tests := []struct {
 		name string
 		e    elide.Elision
 	}{
@@ -217,13 +217,13 @@ func TestAddValidation(t *testing.T) {
 		{"ends between tool_use and tool_result", elide.Elision{ID: "c2", From: 3, To: 4, Text: "S"}},
 		{"starts at a tool_result", elide.Elision{ID: "c2", From: 4, To: 6, Text: "S"}},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := stateWith(toolLoop())
 			mustElide(t, s, existing)
-			err := elide.Add(s, tc.e)
+			err := elide.Add(s, tt.e)
 			if !errors.Is(err, elide.ErrInvalid) {
-				t.Fatalf("Add(%+v) = %v, want ErrInvalid", tc.e, err)
+				t.Fatalf("Add(%+v) = %v, want ErrInvalid", tt.e, err)
 			}
 			if got := elide.All(s); !reflect.DeepEqual(got, []elide.Elision{existing}) {
 				t.Fatalf("key = %+v after a refused elision, want only %+v", got, existing)
@@ -481,13 +481,13 @@ func TestElisionShiftedWhenResumeInserts(t *testing.T) {
 	var on atomic.Bool
 	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "w", Name: "write_file", Input: map[string]any{"text": "w"}}}}, llmtest.Turn{Text: "done"})
 	a := mustNew(t, agent.Config{Provider: p, Tools: []tool.Tool{writeTool()}, Middleware: []agent.Middleware{elideNoteOnResume{&on}}})
-	final := collect(t, a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}))
+	final := collect(t, a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("go")}}))
 	if final.Reason != agent.ReasonInterrupted {
 		t.Fatalf("final = %+v, want interrupted", final)
 	}
 
 	on.Store(true)
-	resumed := collect(t, a.Resume(context.Background(), "", final.State, []agent.Decision{{ToolUseID: "w", Type: agent.Approve}}))
+	resumed := collect(t, a.Resume(t.Context(), "", final.State, []agent.Decision{{ToolUseID: "w", Type: agent.Approve}}))
 	if resumed.Reason != agent.ReasonCompleted || resumed.Err != nil || resumed.Text != "done" {
 		t.Fatalf("resumed final = %+v, want completed with text", resumed)
 	}

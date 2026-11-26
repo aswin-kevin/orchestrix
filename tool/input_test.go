@@ -30,7 +30,7 @@ func TestCheckInput(t *testing.T) {
 }
 
 func TestStripCodeFence(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
 		in, want string
 		ok       bool
 	}{
@@ -41,9 +41,9 @@ func TestStripCodeFence(t *testing.T) {
 		{"```{\"x\":1}```", "", false}, // the opening fence must end its line
 		{"```", "", false},
 	}
-	for _, c := range cases {
-		if got, ok := StripCodeFence(c.in); got != c.want || ok != c.ok {
-			t.Errorf("StripCodeFence(%q) = %q, %v; want %q, %v", c.in, got, ok, c.want, c.ok)
+	for _, tt := range tests {
+		if got, ok := StripCodeFence(tt.in); got != tt.want || ok != tt.ok {
+			t.Errorf("StripCodeFence(%q) = %q, %v; want %q, %v", tt.in, got, ok, tt.want, tt.ok)
 		}
 	}
 }

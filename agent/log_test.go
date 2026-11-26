@@ -88,7 +88,7 @@ func TestLoggerReceivesSwallowedErrors(t *testing.T) {
 		Checkpointer: failingRelease{cpmemory.New()},
 		Logger:       log,
 	})
-	_, final := collect(t, a.Run(context.Background(), threadInput("hi")))
+	_, final := collect(t, a.Run(t.Context(), threadInput("hi")))
 	if final.Err != nil {
 		t.Fatalf("run failed: %v", final.Err)
 	}
@@ -112,11 +112,11 @@ func TestNilLoggerIsSilent(t *testing.T) {
 		Provider:     llmtest.New(llmtest.Turn{Text: "done"}),
 		Checkpointer: failingRelease{cpmemory.New()},
 	})
-	collect(t, a.Run(context.Background(), threadInput("hi")))
+	collect(t, a.Run(t.Context(), threadInput("hi")))
 	if (RunInfo{}).Logger() == nil {
 		t.Fatal("zero RunInfo.Logger() is nil")
 	}
-	if a.logger.Enabled(context.Background(), slog.LevelError) {
+	if a.logger.Enabled(t.Context(), slog.LevelError) {
 		t.Fatal("nil Config.Logger must drop every record")
 	}
 }
@@ -145,7 +145,7 @@ func TestLoggerReportsEndPanicAndSkippedTool(t *testing.T) {
 		Middleware: []Middleware{panicEnd{}, dupTools{}},
 		Logger:     log,
 	})
-	collect(t, a.Run(context.Background(), threadInput("hi")))
+	collect(t, a.Run(t.Context(), threadInput("hi")))
 	var end, skipped bool
 	for _, r := range records() {
 		switch r.msg {
@@ -185,7 +185,7 @@ func TestLoggerNeverLogsContent(t *testing.T) {
 		Middleware:   []Middleware{panicEnd{}, dupTools{}},
 		Logger:       log,
 	})
-	collect(t, a.Run(context.Background(), threadInput(userSecret)))
+	collect(t, a.Run(t.Context(), threadInput(userSecret)))
 	recs := records()
 	if len(recs) < 3 {
 		t.Fatalf("captured %d records; the test would prove little", len(recs))
@@ -206,7 +206,7 @@ func TestLoggerGuardedPanicIsErrorWithoutValue(t *testing.T) {
 		Checkpointer: panickingSaver{cpmemory.New()},
 		Logger:       log,
 	})
-	_, final := collect(t, a.Run(context.Background(), threadInput("hi")))
+	_, final := collect(t, a.Run(t.Context(), threadInput("hi")))
 	pe := requirePanicFinal(t, final)
 	value := pe.Value.(string) // "save exploded"
 	var found bool
@@ -243,7 +243,7 @@ func TestLoggerReportsCheckpointSaveFailure(t *testing.T) {
 		Checkpointer: failingSaver{cpmemory.New()},
 		Logger:       log,
 	})
-	_, final := collect(t, a.Run(context.Background(), threadInput("hi")))
+	_, final := collect(t, a.Run(t.Context(), threadInput("hi")))
 	if final.Reason != ReasonCheckpointError {
 		t.Fatalf("reason = %v", final.Reason)
 	}
@@ -265,7 +265,7 @@ func TestRunLoggerCarriesRunID(t *testing.T) {
 		Checkpointer: failingRelease{cpmemory.New()},
 		Logger:       log,
 	})
-	events, _ := collect(t, a.Run(context.Background(), threadInput("hi")))
+	events, _ := collect(t, a.Run(t.Context(), threadInput("hi")))
 	for _, r := range records() {
 		if r.level == slog.LevelWarn {
 			if r.attrs["run_id"] != events[0].RunID || r.attrs["run_id"] == "" {

@@ -74,7 +74,7 @@ func TestDynamicToolsAppearNextTurn(t *testing.T) {
 		t.Fatal("Tool(echo) found before the provider offered it")
 	}
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v, want completed", final)
@@ -120,7 +120,7 @@ func TestDynamicNameClashSkipped(t *testing.T) {
 		Rules:      permission.Rules{Allow: []permission.Rule{{Tool: "write_file"}}},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if got := schemaNames(p.Requests[0]); !slices.Equal(got, []string{"write_file", "echo"}) {
 		t.Fatalf("tools = %v, want write_file once and the first echo", got)
@@ -396,7 +396,7 @@ func TestDispatchWrappersSeeTarget(t *testing.T) {
 		Middleware: []Middleware{rec},
 	})
 
-	events, final := collect(t, a.Run(context.Background(), userInput("go")))
+	events, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted || log.count("d") != 1 {
 		t.Fatalf("final = %+v, runs = %d; want the target run once", final, log.count("d"))
@@ -460,7 +460,7 @@ func TestDispatchErrors(t *testing.T) {
 			},
 		})
 
-		_, final := collect(t, a.Run(context.Background(), userInput("go")))
+		_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 		if log.count("d") != 0 {
 			t.Fatal("a target disabled during settlement ran")
@@ -505,7 +505,7 @@ func TestCheckPermissionFindsDynamicTool(t *testing.T) {
 	})
 	call := &ToolCall{Name: "write_file", Input: json.RawMessage(`{"path":"/secret/k","text":"x"}`)}
 
-	if got := a.CheckPermission(context.Background(), call); got.Message != "denied by rule write(/secret/**)" {
+	if got := a.CheckPermission(t.Context(), call); got.Message != "denied by rule write(/secret/**)" {
 		t.Fatalf("CheckPermission = %+v, want the path rule applied to the dynamic tool", got)
 	}
 }
@@ -519,7 +519,7 @@ func (panickingTools) DynamicTools() []tool.Tool { panic("boom") }
 func TestPanickingDynamicToolsFailsRun(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "hi"}), Middleware: []Middleware{panickingTools{}}})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonMiddlewareError || final.Err == nil || !strings.Contains(final.Err.Error(), "boom") {
 		t.Fatalf("final = %+v, want a middleware error naming the panic", final)
@@ -573,7 +573,7 @@ func TestUnavailableToolRefusedBeforeApproval(t *testing.T) {
 		unlockedKey.Set(s, true)
 		in := userInput("go")
 		in.State = s
-		_, final := collect(t, mustNew(t, cfg).Run(context.Background(), in))
+		_, final := collect(t, mustNew(t, cfg).Run(t.Context(), in))
 		if final.Reason != ReasonCompleted || asked != 2 || !slices.Equal(log.ran(), []string{"w", "d"}) {
 			t.Fatalf("final = %+v, asked = %d, ran = %v; want both approved and run", final, asked, log.ran())
 		}

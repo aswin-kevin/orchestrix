@@ -63,7 +63,7 @@ func TestSetPermissionModeTakesEffectSameTurn(t *testing.T) {
 		PermissionMode: permission.ModeBypass,
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if text, isErr := toolResult(t, final.State, "w"); !isErr || text != planDenied {
 		t.Fatalf("write_file result = %q (error %v), want %q", text, isErr, planDenied)
@@ -132,7 +132,7 @@ func TestToolSelfCheckSeesRunMode(t *testing.T) {
 	)
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{setModeTool(), probe}})
 
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -149,16 +149,16 @@ func TestCheckPermissionUsesStateMode(t *testing.T) {
 	}
 	in := json.RawMessage(`{"text":"x"}`)
 
-	if d := a.CheckPermission(context.Background(), &ToolCall{Name: "write_file", Input: in, State: s}); d.Behavior != permission.Deny {
+	if d := a.CheckPermission(t.Context(), &ToolCall{Name: "write_file", Input: in, State: s}); d.Behavior != permission.Deny {
 		t.Fatalf("decision in plan mode = %+v, want deny", d)
 	}
-	if d := a.CheckPermission(context.Background(), &ToolCall{Name: "write_file", Input: in}); d.Behavior != permission.Ask {
+	if d := a.CheckPermission(t.Context(), &ToolCall{Name: "write_file", Input: in}); d.Behavior != permission.Ask {
 		t.Fatalf("decision without State = %+v, want ask (the config's default mode)", d)
 	}
 }
 
 func TestPermissionModeSurvivesCheckpoint(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	open := func(turns ...llmtest.Turn) *Agent {
 		cp, err := file.New(dir, file.Config{})

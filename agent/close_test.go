@@ -96,7 +96,7 @@ func TestAgentCloseClosesMiddleware(t *testing.T) {
 		},
 		Logger: slog.New(slog.NewTextHandler(&buf, nil)),
 	})
-	err := a.Close(context.Background())
+	err := a.Close(t.Context())
 	if !errors.Is(err, errB) {
 		t.Fatalf("Close = %v, want it to wrap %v", err, errB)
 	}
@@ -119,7 +119,7 @@ func TestAgentCloseIdempotent(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 3)
 	for i := range errs {
-		wg.Go(func() { errs[i] = a.Close(context.Background()) })
+		wg.Go(func() { errs[i] = a.Close(t.Context()) })
 	}
 	wg.Wait()
 	for i, err := range errs {
@@ -135,10 +135,10 @@ func TestAgentCloseIdempotent(t *testing.T) {
 func TestRunAfterClose(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "never"})
 	a := mustNew(t, Config{Provider: p})
-	if err := a.Close(context.Background()); err != nil {
+	if err := a.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	events, final := collect(t, a.Run(context.Background(), userInput("hi")))
+	events, final := collect(t, a.Run(t.Context(), userInput("hi")))
 	if len(events) != 1 {
 		t.Errorf("events = %+v, want only KindFinal", events)
 	}
@@ -156,11 +156,11 @@ func TestRunAfterClose(t *testing.T) {
 	}
 
 	th := mustThread(t, a, "t1")
-	_, final = collect(t, th.Prompt(context.Background(), "hi"))
+	_, final = collect(t, th.Prompt(t.Context(), "hi"))
 	if !errors.Is(final.Err, ErrClosed) {
 		t.Errorf("thread run after Close: err = %v, want ErrClosed", final.Err)
 	}
-	_, final = collect(t, a.Resume(context.Background(), "t1", th.State(), nil))
+	_, final = collect(t, a.Resume(t.Context(), "t1", th.State(), nil))
 	if !errors.Is(final.Err, ErrClosed) {
 		t.Errorf("Resume after Close: err = %v, want ErrClosed", final.Err)
 	}
@@ -186,7 +186,7 @@ func TestAgentCloseDrainsBeforeClosing(t *testing.T) {
 			&drainingMiddleware{closingMiddleware{name: "bg2", log: log}},
 		},
 	})
-	if err := a.Close(context.Background()); err != nil {
+	if err := a.Close(t.Context()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	want := []string{"drain bg", "drain bg2", "bg2", "res", "bg"}
@@ -208,14 +208,14 @@ func TestCloseConcurrentWithRun(t *testing.T) {
 	var wg sync.WaitGroup
 	for range len(turns) {
 		wg.Go(func() {
-			_, final := collect(t, a.Run(context.Background(), userInput("hi")))
+			_, final := collect(t, a.Run(t.Context(), userInput("hi")))
 			if final.Err != nil && !errors.Is(final.Err, ErrClosed) {
 				t.Errorf("run: %s / %v, want success or ErrClosed", final.Reason, final.Err)
 			}
 		})
 	}
 	wg.Go(func() {
-		if err := a.Close(context.Background()); err != nil {
+		if err := a.Close(t.Context()); err != nil {
 			t.Errorf("Close: %v", err)
 		}
 	})
@@ -261,7 +261,7 @@ func TestAgentCloseRecoversPanics(t *testing.T) {
 		},
 		Logger: slog.New(slog.NewTextHandler(&buf, nil)),
 	})
-	err := a.Close(context.Background())
+	err := a.Close(t.Context())
 	var perr *PanicError
 	if !errors.As(err, &perr) {
 		t.Fatalf("Close = %v, want a *PanicError joined in", err)
@@ -313,7 +313,7 @@ func TestAgentCloseClosesIOClosers(t *testing.T) {
 		Backend:      ioClosingBackend{Backend: testutil.Memory(t), log: log},
 		Checkpointer: ioClosingCheckpointer{Checkpointer: cpmemory.New(), log: log, err: errCP},
 	})
-	if err := a.Close(context.Background()); !errors.Is(err, errCP) {
+	if err := a.Close(t.Context()); !errors.Is(err, errCP) {
 		t.Fatalf("Close = %v, want it to wrap %v", err, errCP)
 	}
 	if got, want := log.list(), []string{"io backend", "io checkpointer"}; !slices.Equal(got, want) {
@@ -337,7 +337,7 @@ func TestCloseClosesWrappedBackend(t *testing.T) {
 		Provider: llmtest.New(),
 		Backend:  unwrappingBackend{Backend: inner, inner: inner},
 	})
-	if err := a.Close(context.Background()); err != nil {
+	if err := a.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := log.list(), []string{"io backend"}; !slices.Equal(got, want) {

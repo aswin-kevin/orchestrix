@@ -82,13 +82,11 @@ func RunParallel(ctx context.Context, jobs []Job, opts ParallelOptions) []Result
 			results[i].Err = ctx.Err()
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-slots }()
 			defer crash.capture(cancel)
 			results[i] = runJob(ctx, i, job, emit)
-		}()
+		})
 	}
 	wg.Wait()
 	crash.rethrow()

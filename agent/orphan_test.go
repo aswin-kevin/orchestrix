@@ -222,7 +222,7 @@ func runOnce(t *testing.T, cfg Config, s *state.State) (*llmtest.Scripted, *Fina
 	a := mustNew(t, cfg)
 	in := userInput("next")
 	in.State = s
-	_, final := collect(t, a.Run(context.Background(), in))
+	_, final := collect(t, a.Run(t.Context(), in))
 	return p, final
 }
 
@@ -326,7 +326,7 @@ func TestResumeSkipsResolver(t *testing.T) {
 		Tools:      []tool.Tool{readTool(newCallLog()), writeTool(newCallLog())},
 		Middleware: []Middleware{res},
 	}, writeCall("w1"))
-	_, resumed := collect(t, a.Resume(context.Background(), "", final.State, []Decision{{ToolUseID: "w1", Type: Approve}}))
+	_, resumed := collect(t, a.Resume(t.Context(), "", final.State, []Decision{{ToolUseID: "w1", Type: Approve}}))
 	if resumed.Reason != ReasonCompleted {
 		t.Fatalf("resumed = %+v", resumed)
 	}
@@ -350,7 +350,7 @@ func TestTokenLimitOrphanResolved(t *testing.T) {
 	res := &fakeResolver{name: "ledger", all: answering("settled")}
 	p := llmtest.New(toolTurns(10, usage, false)...)
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTotalTokens: 2500, Middleware: []Middleware{res}})
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 	if final.Reason != ReasonTokenLimit {
 		t.Fatalf("reason = %s", final.Reason)
 	}
@@ -359,7 +359,7 @@ func TestTokenLimitOrphanResolved(t *testing.T) {
 	}
 	in := userInput("again")
 	in.State = final.State
-	collect(t, a.Run(context.Background(), in))
+	collect(t, a.Run(t.Context(), in))
 	if ids := res.askedIDs(); len(ids) != 1 || ids[0] != "t2" {
 		t.Fatalf("asked = %v, want [t2]", ids)
 	}
@@ -416,7 +416,7 @@ func TestResolverSeesCancellation(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "ok"}), Middleware: []Middleware{res}})
 	in := userInput("next")
 	in.State = crashState("t1")
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	var final *Final
 	go func() {
@@ -491,12 +491,12 @@ func TestResolverSavedIsACopy(t *testing.T) {
 // A resolver failure ends the run before the loop; the workspace restored
 // from State must survive into the final snapshot.
 func TestResolverErrorKeepsWorkspace(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	old := testutil.Memory(t)
 	if err := old.Write(ctx, "/old.txt", []byte("old")); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := old.Snapshot(context.Background())
+	snap, err := old.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +522,7 @@ func TestResolverErrorKeepsWorkspace(t *testing.T) {
 		t.Fatal("final State lost the workspace snapshot")
 	}
 	restored := testutil.Memory(t)
-	if err := restored.Restore(context.Background(), saved); err != nil {
+	if err := restored.Restore(t.Context(), saved); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
 	if _, err := restored.Read(ctx, "/old.txt", 0, 0); err != nil {

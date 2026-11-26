@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -56,7 +55,7 @@ func TestInputDepthMarksRunNested(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "x"}), Middleware: []Middleware{infoProbe{log}}})
 	in := userInput("go")
 	in.Depth = 2
-	if _, final := collect(t, a.Run(context.Background(), in)); final.Reason != ReasonCompleted {
+	if _, final := collect(t, a.Run(t.Context(), in)); final.Reason != ReasonCompleted {
 		t.Fatalf("final = %+v", final)
 	}
 	if info := log.only(t, "BeforeAgent"); info.Depth != 2 || info.ParentToolID != "" {

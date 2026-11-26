@@ -30,7 +30,7 @@ func countingEcho(n *atomic.Int32) tool.Tool {
 }
 
 func TestStaleThreadHandleConflictsBeforeAnyTool(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cp := noLease{cpmemory.New()}
 	var calls atomic.Int32
 	provider := llmtest.New(
@@ -72,7 +72,7 @@ func TestStaleThreadHandleConflictsBeforeAnyTool(t *testing.T) {
 }
 
 func TestRunVersionChain(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cp := cpmemory.New()
 	a := mustNew(t, Config{
 		Provider:     llmtest.New(llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"}),
@@ -105,7 +105,7 @@ func TestEphemeralAndUnsavedRunsKeepInputVersion(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "a"}), Checkpointer: cpmemory.New()})
 	in := threadInput("x")
 	in.Ephemeral, in.Version = true, "keep:1"
-	if _, final := collect(t, a.Run(context.Background(), in)); final.Version != "keep:1" {
+	if _, final := collect(t, a.Run(t.Context(), in)); final.Version != "keep:1" {
 		t.Fatalf("Final.Version = %q, want the input version", final.Version)
 	}
 }
@@ -121,7 +121,7 @@ func blockingTool(started chan<- struct{}, release <-chan struct{}) tool.Tool {
 }
 
 func TestLeaseKeepsRunsOfAThreadApart(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cp := cpmemory.New()
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	provider := llmtest.New(toolTurn("e1"), llmtest.Turn{Text: "done"}, llmtest.Turn{Text: "later"})
@@ -130,11 +130,9 @@ func TestLeaseKeepsRunsOfAThreadApart(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var first *Final
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		_, first = collect(t, h1.Prompt(ctx, "one"))
-	}()
+	})
 	<-started
 
 	events, busy := collect(t, h2.Prompt(ctx, "two"))
@@ -185,7 +183,7 @@ func (l *stealableLeaser) steal() {
 }
 
 func TestLostLeaseFailsTheNextSave(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cp := &stealableLeaser{Checkpointer: cpmemory.New()}
 	started, release := make(chan struct{}, 1), make(chan struct{})
 	a := mustNew(t, Config{
@@ -214,7 +212,7 @@ func TestLostLeaseFailsTheNextSave(t *testing.T) {
 }
 
 func TestForkIsCreateOnly(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cp := cpmemory.New()
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"}), Checkpointer: cp})
 	t1 := mustThread(t, a, "t1")
@@ -276,13 +274,13 @@ func shortLeaseCalls(t *testing.T, d time.Duration) {
 }
 
 func TestLeaseCallTimeout(t *testing.T) {
-	for _, tc := range []struct{ ttl, want time.Duration }{
+	for _, tt := range []struct{ ttl, want time.Duration }{
 		{time.Second, 5 * time.Second},
 		{10 * time.Second, 5 * time.Second},
 		{30 * time.Second, 15 * time.Second},
 	} {
-		if got := leaseCallTimeout(tc.ttl); got != tc.want {
-			t.Errorf("leaseCallTimeout(%v) = %v, want %v", tc.ttl, got, tc.want)
+		if got := leaseCallTimeout(tt.ttl); got != tt.want {
+			t.Errorf("leaseCallTimeout(%v) = %v, want %v", tt.ttl, got, tt.want)
 		}
 	}
 }
@@ -293,7 +291,7 @@ func TestLeaseAcquireHangBounded(t *testing.T) {
 	a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "done"}), Checkpointer: cp, LeaseTTL: time.Second})
 	done := make(chan *Final, 1)
 	go func() {
-		_, final := collect(t, a.Run(context.Background(), threadInput("go")))
+		_, final := collect(t, a.Run(t.Context(), threadInput("go")))
 		done <- final
 	}()
 	select {
@@ -318,7 +316,7 @@ func TestLeaseRenewAndReleaseHangBounded(t *testing.T) {
 	})
 	done := make(chan *Final, 1)
 	go func() {
-		_, final := collect(t, a.Run(context.Background(), threadInput("go")))
+		_, final := collect(t, a.Run(t.Context(), threadInput("go")))
 		done <- final
 	}()
 	<-started
@@ -355,7 +353,7 @@ func TestNilLeaseIsAnError(t *testing.T) {
 		Provider:     llmtest.New(llmtest.Turn{Text: "done"}),
 		Checkpointer: nilLeaser{cpmemory.New()},
 	})
-	_, final := collect(t, a.Run(context.Background(), threadInput("hi")))
+	_, final := collect(t, a.Run(t.Context(), threadInput("hi")))
 	if final.Reason != ReasonCheckpointError || final.Err == nil || !strings.Contains(final.Err.Error(), "Leaser returned a nil lease") {
 		t.Fatalf("final = %v, %v; want a checkpoint error naming the nil lease", final.Reason, final.Err)
 	}

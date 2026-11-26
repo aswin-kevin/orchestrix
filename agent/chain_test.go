@@ -48,7 +48,7 @@ func TestChainModelOrder(t *testing.T) {
 		return &llm.Response{}, nil
 	})
 
-	if _, err := h(context.Background(), &ModelRequest{}); err != nil {
+	if _, err := h(t.Context(), &ModelRequest{}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"a", "b", "c", "inner", "c", "b", "a"}
@@ -69,7 +69,7 @@ func TestChainModelShortCircuit(t *testing.T) {
 		return nil, nil
 	})
 
-	if _, err := h(context.Background(), &ModelRequest{}); err != nil {
+	if _, err := h(t.Context(), &ModelRequest{}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"a", "b", "a"}
@@ -84,7 +84,7 @@ func TestChainModelWithoutWrappersCallsInner(t *testing.T) {
 		called = true
 		return &llm.Response{}, nil
 	})
-	if _, err := h(context.Background(), &ModelRequest{}); err != nil || !called {
+	if _, err := h(t.Context(), &ModelRequest{}); err != nil || !called {
 		t.Fatalf("called=%v err=%v", called, err)
 	}
 }
@@ -106,7 +106,7 @@ func TestChainToolRewriteInput(t *testing.T) {
 		return tool.Text("ok"), nil
 	})
 
-	res, err := h(context.Background(), &ToolCall{Input: json.RawMessage(`{"x":1}`)})
+	res, err := h(t.Context(), &ToolCall{Input: json.RawMessage(`{"x":1}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestChainToolOrder(t *testing.T) {
 		trace = append(trace, "inner")
 		return tool.Text("ok"), nil
 	})
-	if _, err := h(context.Background(), &ToolCall{}); err != nil {
+	if _, err := h(t.Context(), &ToolCall{}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"a", "b", "inner", "b", "a"}
@@ -168,7 +168,7 @@ func TestChainToolShortCircuit(t *testing.T) {
 		t.Fatal("inner must not run when a wrapper short-circuits")
 		return tool.Result{}, nil
 	})
-	res, err := h(context.Background(), &ToolCall{})
+	res, err := h(t.Context(), &ToolCall{})
 	if err != nil || res.Flatten() != "short" {
 		t.Fatalf("res=%q err=%v", res.Flatten(), err)
 	}

@@ -44,7 +44,7 @@ func TestMaxTurnsWithoutSettlement(t *testing.T) {
 	p := llmtest.New(toolTurn("t1"), toolTurn("t2"), toolTurn("t3"))
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTurns: 2})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonMaxTurns || final.Err != nil || final.Turns != 2 {
 		t.Fatalf("final = %+v, want max_turns after 2 turns", final)
@@ -82,7 +82,7 @@ func TestMaxTurnsSettlementHidesToolsAndKeepsReason(t *testing.T) {
 		},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonMaxTurns || final.Err != nil {
 		t.Fatalf("final = %+v, want max_turns", final)
@@ -123,7 +123,7 @@ func TestSettlementNaturalStopUsesPromptByReason(t *testing.T) {
 		},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonMaxTurns || final.Text != "summary" {
 		t.Fatalf("final = %+v, want max_turns with the summary", final)
@@ -158,7 +158,7 @@ func TestMaxDurationInterruptsHungTool(t *testing.T) {
 	})
 
 	start := time.Now()
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("run took %v, want it interrupted near the 50ms budget", elapsed)
@@ -184,7 +184,7 @@ func TestTimeoutSettlementRunsOnParentContext(t *testing.T) {
 		Settlement:  &Settlement{Prompt: settlementPrompt},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	// The settlement model call would fail if it ran on the expired deadline.
 	if final.Reason != ReasonTimeout || final.Text != "summary" || final.Err != nil {
@@ -203,7 +203,7 @@ func TestTokenBudgetNudgesThenStops(t *testing.T) {
 	p := llmtest.New(textTurn("a", 100), textTurn("b", 100), textTurn("c", 100), textTurn("never", 1))
 	a := mustNew(t, Config{Provider: p, TokenBudget: 10_000})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	// Both nudged turns produced fewer than 500 tokens, so the third reply
 	// ends the run.
@@ -222,7 +222,7 @@ func TestTokenBudgetStopsNearBudget(t *testing.T) {
 	p := llmtest.New(textTurn("a", 950), textTurn("never", 1))
 	a := mustNew(t, Config{Provider: p, TokenBudget: 1_000})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted || p.Calls() != 1 {
 		t.Fatalf("final = %+v after %d calls, want completed without a nudge", final, p.Calls())
@@ -234,7 +234,7 @@ func truncatedTurn(text string) llmtest.Turn {
 }
 
 func TestMaxTokensEscalateThenResume(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name      string
 		maxOutput int
 		want      int
@@ -242,23 +242,23 @@ func TestMaxTokensEscalateThenResume(t *testing.T) {
 		{"escalates to the cap", 100_000, DefaultEscalatedMaxTokens},
 		{"capped at the profile", 32_000, 32_000},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			p := llmtest.New(truncatedTurn("cut"), truncatedTurn("longer cut"), llmtest.Turn{Text: "done"})
 			a := mustNew(t, Config{
 				Provider:          p,
 				MaxTokens:         1_000,
-				Profile:           &llm.Profile{ContextWindow: 200_000, MaxOutput: tc.maxOutput},
+				Profile:           &llm.Profile{ContextWindow: 200_000, MaxOutput: tt.maxOutput},
 				EscalateMaxTokens: DefaultEscalatedMaxTokens,
 			})
 
-			events, final := collect(t, a.Run(context.Background(), userInput("go")))
+			events, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 			if final.Reason != ReasonCompleted || final.Text != "done" || p.Calls() != 3 {
 				t.Fatalf("final = %+v after %d calls, want completed after 3", final, p.Calls())
 			}
 			retry := p.Requests[1]
-			if retry.MaxTokens != tc.want {
-				t.Fatalf("retry MaxTokens = %d, want %d", retry.MaxTokens, tc.want)
+			if retry.MaxTokens != tt.want {
+				t.Fatalf("retry MaxTokens = %d, want %d", retry.MaxTokens, tt.want)
 			}
 			if len(retry.Messages) != len(p.Requests[0].Messages) {
 				t.Fatal("the escalated retry added messages; it must repeat the same turn")
@@ -279,7 +279,7 @@ func TestMaxTokensResumeGivesUp(t *testing.T) {
 	p := llmtest.New(truncatedTurn("1"), truncatedTurn("2"), truncatedTurn("3"), truncatedTurn("4"), truncatedTurn("never"))
 	a := mustNew(t, Config{Provider: p})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted || final.Text != "4" || p.Calls() != 4 {
 		t.Fatalf("final = %+v after %d calls, want completed with the 4th reply", final, p.Calls())
@@ -311,7 +311,7 @@ func TestNonStreamingEmitsOnce(t *testing.T) {
 	}}
 	a := mustNew(t, Config{Provider: p, NonStreaming: true})
 
-	events, final := collect(t, a.Run(context.Background(), userInput("hi")))
+	events, final := collect(t, a.Run(t.Context(), userInput("hi")))
 
 	if final.Reason != ReasonCompleted || final.Text != "hello world" {
 		t.Fatalf("final = %+v, want completed with the full text", final)
@@ -349,7 +349,7 @@ func TestBeforeStopContinues(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "first answer"}, llmtest.Turn{Text: "verified"})
 	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{stopHook{prompts: []string{"verify the file", ""}, calls: &calls}}})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted || final.Err != nil || final.Turns != 2 || final.Text != "verified" {
 		t.Fatalf("final = %+v, want completed after 2 turns", final)
@@ -376,7 +376,7 @@ func TestBeforeStopCapped(t *testing.T) {
 	p := llmtest.New(turns...)
 	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{stopHook{prompts: []string{"again"}, calls: &calls}}})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted || final.Err != nil {
 		t.Fatalf("final = %+v, want completed", final)
@@ -398,7 +398,7 @@ func TestBeforeStopNotOnSettlement(t *testing.T) {
 		Middleware: []Middleware{stopHook{prompts: []string{"keep going"}, calls: &calls}},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonMaxTurns || final.Text != "summary" || p.Calls() != 2 {
 		t.Fatalf("final = %+v after %d model calls, want max_turns after 2", final, p.Calls())
@@ -418,19 +418,19 @@ func (h failingStop) BeforeStop(context.Context, *state.State, *llm.Response) (s
 }
 
 func TestBeforeStopErrorEndsRun(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		err  error
 		want TerminalReason
 	}{
 		{errors.New("boom"), ReasonMiddlewareError},
 		{fmt.Errorf("enough: %w", ErrStopRun), ReasonHookStopped},
 	} {
-		a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "answer"}), Middleware: []Middleware{failingStop{tc.err}}})
+		a := mustNew(t, Config{Provider: llmtest.New(llmtest.Turn{Text: "answer"}), Middleware: []Middleware{failingStop{tt.err}}})
 
-		_, final := collect(t, a.Run(context.Background(), userInput("go")))
+		_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
-		if final.Reason != tc.want || !errors.Is(final.Err, tc.err) {
-			t.Fatalf("final = %+v, want %s wrapping %v", final, tc.want, tc.err)
+		if final.Reason != tt.want || !errors.Is(final.Err, tt.err) {
+			t.Fatalf("final = %+v, want %s wrapping %v", final, tt.want, tt.err)
 		}
 	}
 }
@@ -461,7 +461,7 @@ func TestBeforeStopReverseOrderFirstPromptWins(t *testing.T) {
 		namedStop{name: "innermost", log: &log},
 	}})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted || p.Calls() != 1+MaxStopContinuations {
 		t.Fatalf("final = %+v after %d model calls, want completed after %d", final, p.Calls(), 1+MaxStopContinuations)
@@ -493,7 +493,7 @@ func TestDefaultMaxTurns(t *testing.T) {
 	p := llmtest.New(toolTurns(DefaultMaxTurns+50, llm.Usage{}, false)...)
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonMaxTurns || final.Turns != DefaultMaxTurns || p.Calls() != DefaultMaxTurns {
 		t.Fatalf("final = %+v after %d calls, want max_turns at %d turns", final, p.Calls(), DefaultMaxTurns)
@@ -507,7 +507,7 @@ func TestNegativeMaxTurnsUnbounded(t *testing.T) {
 	p := llmtest.New(toolTurns(150, llm.Usage{}, true)...)
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTurns: -1})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonCompleted || final.Turns != 151 {
 		t.Fatalf("final = reason %s turns %d, want completed after 151", final.Reason, final.Turns)
@@ -520,7 +520,7 @@ func TestMaxTotalTokens(t *testing.T) {
 	p := llmtest.New(toolTurns(10, usage, false)...)
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTotalTokens: 2500})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonTokenLimit || final.Err != nil || final.Turns != 3 || p.Calls() != 3 {
 		t.Fatalf("final = %+v after %d calls, want token_limit after 3 turns", final, p.Calls())
@@ -537,7 +537,7 @@ func TestTokenLimitBeatsMaxTurnsOnSameTurn(t *testing.T) {
 	p := llmtest.New(toolTurns(5, llm.Usage{Input: 1000}, false)...)
 	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTurns: 2, MaxTotalTokens: 2000})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonTokenLimit || final.Turns != 2 {
 		t.Fatalf("final = reason %s turns %d, want token_limit at turn 2", final.Reason, final.Turns)
@@ -550,7 +550,7 @@ func TestTokenLimitSkipsEscalation(t *testing.T) {
 	p := llmtest.New(cut, llmtest.Turn{Text: "never reached"})
 	a := mustNew(t, Config{Provider: p, MaxTokens: 1_000, EscalateMaxTokens: DefaultEscalatedMaxTokens, MaxTotalTokens: 1000})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonTokenLimit || p.Calls() != 1 {
 		t.Fatalf("final = %+v after %d calls, want token_limit after 1 (no escalated retry)", final, p.Calls())
@@ -566,7 +566,7 @@ func TestTokenLimitOnBeforeStopContinuation(t *testing.T) {
 		Middleware: []Middleware{stopHook{prompts: []string{"verify"}, calls: &calls}},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonTokenLimit || final.Output != nil || p.Calls() != 1 {
 		t.Fatalf("final = %+v after %d calls, want token_limit, no output, 1 call", final, p.Calls())
@@ -585,7 +585,7 @@ func TestSettlementPastTokenCapStillEndsMaxTurns(t *testing.T) {
 		Settlement: &Settlement{Prompt: settlementPrompt},
 	})
 
-	_, final := collect(t, a.Run(context.Background(), userInput("go")))
+	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 
 	if final.Reason != ReasonMaxTurns || final.Text != "summary" || p.Calls() != 2 {
 		t.Fatalf("final = %+v after %d calls, want max_turns with the settlement summary", final, p.Calls())
@@ -595,7 +595,7 @@ func TestSettlementPastTokenCapStillEndsMaxTurns(t *testing.T) {
 func TestCustomBudgetNudge(t *testing.T) {
 	p := llmtest.New(textTurn("a", 100), textTurn("b", 100))
 	a := mustNew(t, Config{Provider: p, TokenBudget: 10_000, BudgetNudge: "go on, %d left"})
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 	if got := lastText(p.Requests[1]); got != "go on, 9900 left" {
 		t.Fatalf("nudge = %q, want custom text", got)
 	}
@@ -604,7 +604,7 @@ func TestCustomBudgetNudge(t *testing.T) {
 func TestBudgetNudgeWithoutVerb(t *testing.T) {
 	p := llmtest.New(textTurn("a", 100), textTurn("b", 100))
 	a := mustNew(t, Config{Provider: p, TokenBudget: 10_000, BudgetNudge: "keep going"})
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 	if got := lastText(p.Requests[1]); got != "keep going" {
 		t.Fatalf("nudge = %q, want %q", got, "keep going")
 	}
@@ -613,14 +613,14 @@ func TestBudgetNudgeWithoutVerb(t *testing.T) {
 func TestCustomResumePrompt(t *testing.T) {
 	p := llmtest.New(truncatedTurn("cut"), llmtest.Turn{Text: "done"})
 	a := mustNew(t, Config{Provider: p, ResumePrompt: "continue"})
-	collect(t, a.Run(context.Background(), userInput("go")))
+	collect(t, a.Run(t.Context(), userInput("go")))
 	if got := lastText(p.Requests[1]); got != "continue" {
 		t.Fatalf("resume prompt = %q, want %q", got, "continue")
 	}
 }
 
 func TestEscalateMaxTokensInt(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name      string
 		escalate  int
 		wantCalls int
@@ -630,20 +630,20 @@ func TestEscalateMaxTokensInt(t *testing.T) {
 		{"capped at the profile", 100_000, 3, 64_000},
 		{"off", 0, 3, 1_000},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			p := llmtest.New(truncatedTurn("cut"), truncatedTurn("longer cut"), llmtest.Turn{Text: "done"})
 			a := mustNew(t, Config{
 				Provider:          p,
 				MaxTokens:         1_000,
 				Profile:           &llm.Profile{ContextWindow: 200_000, MaxOutput: 64_000},
-				EscalateMaxTokens: tc.escalate,
+				EscalateMaxTokens: tt.escalate,
 			})
-			collect(t, a.Run(context.Background(), userInput("go")))
-			if p.Calls() != tc.wantCalls {
-				t.Fatalf("calls = %d, want %d", p.Calls(), tc.wantCalls)
+			collect(t, a.Run(t.Context(), userInput("go")))
+			if p.Calls() != tt.wantCalls {
+				t.Fatalf("calls = %d, want %d", p.Calls(), tt.wantCalls)
 			}
-			if got := p.Requests[1].MaxTokens; got != tc.want {
-				t.Fatalf("second request MaxTokens = %d, want %d", got, tc.want)
+			if got := p.Requests[1].MaxTokens; got != tt.want {
+				t.Fatalf("second request MaxTokens = %d, want %d", got, tt.want)
 			}
 		})
 	}
