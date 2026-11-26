@@ -1,16 +1,16 @@
-package orxdocker
+package backend
 
 import (
 	"fmt"
 	"sync"
 )
 
-// capture is an io.Writer that keeps a bounded view of a command's output: the
-// first half of its budget verbatim and a ring buffer holding the most recent
-// bytes. Memory stays bounded however much the command prints, and the start
-// (usually the command's intent) and the end (usually the error) survive. It is
-// safe for concurrent Write and String.
-type capture struct {
+// OutputCapture is an io.Writer that keeps a bounded view of a command's
+// output: the first half of its budget verbatim and a ring buffer holding the
+// most recent bytes. Memory stays bounded however much the command prints, and
+// the start (usually the command's intent) and the end (usually the error)
+// survive. It is safe for concurrent Write and String.
+type OutputCapture struct {
 	mu      sync.Mutex
 	headCap int
 	head    []byte
@@ -23,13 +23,17 @@ type capture struct {
 	total     int64 // bytes written, including dropped ones
 }
 
-func newCapture(maxBytes int) *capture {
+// NewOutputCapture returns an OutputCapture that keeps at most maxBytes of
+// output; a maxBytes of zero or less keeps nothing, and only counts what was
+// dropped.
+func NewOutputCapture(maxBytes int) *OutputCapture {
+	maxBytes = max(maxBytes, 0)
 	headCap := maxBytes / 2
-	return &capture{headCap: headCap, ringCap: maxBytes - headCap}
+	return &OutputCapture{headCap: headCap, ringCap: maxBytes - headCap}
 }
 
 // Write records p; it never fails.
-func (c *capture) Write(p []byte) (int, error) {
+func (c *OutputCapture) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.total += int64(len(p))
@@ -44,7 +48,7 @@ func (c *capture) Write(p []byte) (int, error) {
 }
 
 // writeRing appends p to the ring, overwriting the oldest bytes when full.
-func (c *capture) writeRing(p []byte) {
+func (c *OutputCapture) writeRing(p []byte) {
 	if len(p) == 0 || c.ringCap == 0 {
 		return
 	}
@@ -68,7 +72,7 @@ func (c *capture) writeRing(p []byte) {
 
 // String returns the kept output, with a marker naming the dropped byte count
 // between head and tail when anything was dropped.
-func (c *capture) String() string {
+func (c *OutputCapture) String() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]byte, 0, len(c.head)+c.ringLen+64)
@@ -82,13 +86,18 @@ func (c *capture) String() string {
 	return string(out)
 }
 
-// truncated reports whether any output was dropped.
-func (c *capture) truncated() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.omitted() > 0
+// Truncated reports whether any output was dropped.
+func (c *OutputCapture) Truncated() bool {
+	return c.Omitted() > 0
 }
 
-func (c *capture) omitted() int64 {
+// Omitted returns the number of bytes dropped between the head and the tail.
+func (c *OutputCapture) Omitted() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.omitted()
+}
+
+func (c *OutputCapture) omitted() int64 {
 	return c.total - int64(len(c.head)) - int64(c.ringLen)
 }

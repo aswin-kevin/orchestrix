@@ -397,7 +397,7 @@ func (e *Executor) start(ctx context.Context, token string, argv, env []string, 
 		container: id,
 		token:     token,
 		execID:    execID,
-		out:       newCapture(maxOutput),
+		out:       backend.NewOutputCapture(maxOutput),
 		done:      make(chan struct{}),
 		termSent:  make(chan struct{}),
 		exited:    make(chan struct{}),
@@ -571,7 +571,7 @@ type process struct {
 	container string // the container the command runs in
 	token     string
 	execID    string
-	out       *capture
+	out       *backend.OutputCapture
 
 	timedOut atomic.Bool
 	stopOnce sync.Once
@@ -760,7 +760,7 @@ func (p *process) follow(body io.ReadCloser, timeout time.Duration) {
 		}
 	}
 
-	res := backend.ExecResult{Output: p.out.String(), Truncated: p.out.truncated(), ExitCode: exitCode}
+	res := backend.ExecResult{Output: p.out.String(), Truncated: p.out.Truncated(), ExitCode: exitCode}
 	if err != nil {
 		res.ExitCode = -1
 		res.Output += "\n[orxdocker: " + err.Error() + "]"

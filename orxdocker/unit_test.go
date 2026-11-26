@@ -53,12 +53,12 @@ func TestDemuxCapturesBounded(t *testing.T) {
 	for range 100 {
 		in.Write(frame(streamStdout, strings.Repeat("x", 1000)))
 	}
-	c := newCapture(1000)
+	c := backend.NewOutputCapture(1000)
 	if err := demux(&in, c); err != nil {
 		t.Fatal(err)
 	}
-	if !c.truncated() || len(c.String()) > 1100 {
-		t.Fatalf("capture kept %d bytes, truncated %v", len(c.String()), c.truncated())
+	if !c.Truncated() || len(c.String()) > 1100 {
+		t.Fatalf("capture kept %d bytes, truncated %v", len(c.String()), c.Truncated())
 	}
 }
 

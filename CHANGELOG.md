@@ -2,6 +2,12 @@
 
 Notable changes to Orchestrix and its satellite modules (`orxotel`, `orxpg`, `orxdocker`, `evals`). The project is pre-1.0, so a minor release may break the API; every break is listed under "Breaking changes".
 
+## Unreleased
+
+### Added
+
+- `backend.OutputCapture` and `backend.NewOutputCapture`: the bounded head-and-tail output capture that `backend/shell` and `orxdocker` each carried a private copy of is now one exported type, with `Truncated` and `Omitted`. A `maxBytes` of zero or less keeps nothing.
+
 ## v0.9.0 — 2026-11-21
 
 Crash recovery for side-effecting tools: middleware can now tell the model what really happened to a tool call whose result a crash, a token limit or an abandoned interrupt left out of State.

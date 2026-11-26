@@ -21,7 +21,7 @@ const memoryNotice = "\n[killed: memory limit of %d bytes exceeded]"
 // process is a started command; it implements backend.Process.
 type process struct {
 	cmd      *exec.Cmd
-	out      *capture
+	out      *backend.OutputCapture
 	outRead  *os.File      // read end of the pipe shared by stdout and stderr
 	copied   chan struct{} // closed when the output copier has returned
 	memLimit int64
@@ -67,7 +67,7 @@ func startProcess(cmd *exec.Cmd, maxOutput int, timeout time.Duration, memLimit 
 	}
 	p := &process{
 		cmd:      cmd,
-		out:      newCapture(maxOutput),
+		out:      backend.NewOutputCapture(maxOutput),
 		outRead:  outRead,
 		copied:   make(chan struct{}),
 		memLimit: memLimit,
@@ -183,7 +183,7 @@ func (p *process) drainOutput() {
 func (p *process) buildResult() backend.ExecResult {
 	res := backend.ExecResult{
 		Output:    p.out.String(),
-		Truncated: p.out.truncated(),
+		Truncated: p.out.Truncated(),
 		ExitCode:  -1,
 	}
 	if state := p.cmd.ProcessState; state != nil {
