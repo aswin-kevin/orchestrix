@@ -786,3 +786,34 @@ func TestAdoptContinuesNumbering(t *testing.T) {
 		t.Fatalf("last ended = %q, want %q", last(), ja.ID)
 	}
 }
+
+func TestPinnedJobIsNotEvicted(t *testing.T) {
+	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 1})
+	j1, f1 := startFake(t, m, "t")
+	var unpinned atomic.Bool
+	m.SetPinned(func(f *fake) bool { return f == f1 && !unpinned.Load() })
+	endAndWait(t, m, j1, f1)
+	// The pinned job does not count against MaxFinished: the next ended
+	// job is kept beside it, and the one after that evicts it, not j1.
+	j2, f2 := startFake(t, m, "t")
+	endAndWait(t, m, j2, f2)
+	if m.Get("t", j1.ID) == nil || m.Get("t", j2.ID) == nil {
+		t.Fatal("a job was evicted while only one unpinned job had ended")
+	}
+	j3, f3 := startFake(t, m, "t")
+	endAndWait(t, m, j3, f3)
+	if m.Get("t", j1.ID) == nil {
+		t.Fatal("the pinned job was evicted")
+	}
+	if m.Get("t", j2.ID) != nil || m.Get("t", j3.ID) == nil {
+		t.Fatal("wrong job evicted")
+	}
+	// Unpinned, it is an ordinary ended job again: the next end evicts the
+	// oldest.
+	unpinned.Store(true)
+	j4, f4 := startFake(t, m, "t")
+	endAndWait(t, m, j4, f4)
+	if m.Get("t", j1.ID) != nil || m.Get("t", j3.ID) != nil || m.Get("t", j4.ID) == nil {
+		t.Fatal("the unpinned jobs were not trimmed to MaxFinished")
+	}
+}

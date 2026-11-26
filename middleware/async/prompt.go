@@ -8,6 +8,7 @@ const DefaultPrompt = `You can run subagents in the background with start_task a
 - A background subagent knows nothing of this conversation: put every detail it needs in the description, and say what it should return.
 - You are notified with a message when a task finishes. Use check_task to see a task's progress, or with wait set to wait for it; use list_tasks to see every task and cancel_task to stop one you no longer need.
 - Use update_task to send a running task new instructions or information; it reads them before its next step. Sent to a task that finished, it continues that task with everything it did so far, which is cheaper than starting a new one for a follow-up.
+- A task may stop waiting for a decision, such as an approval to run a tool. Only the user can make it, not you: carry on with other work or tell the user what the task waits for. You can still cancel it.
 - Do not give your final answer while a task whose result you need is still running.`
 
 // startDescription is start_task's description; the list of available

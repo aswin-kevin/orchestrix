@@ -222,7 +222,7 @@ func TestWaitingTaskTools(t *testing.T) {
 	if res := result(t, evs, ToolCheck).Flatten(); !strings.Contains(res, "waiting for a decision on: write_file") {
 		t.Fatalf("check = %q", res)
 	}
-	if res := result(t, evs, ToolUpdate); !res.IsError || !strings.Contains(res.Flatten(), ErrWaiting.Error()) {
+	if res := result(t, evs, ToolUpdate); !res.IsError || !strings.Contains(res.Flatten(), "only the user can make") {
 		t.Fatalf("update = %+v", res)
 	}
 	if res := result(t, evs, ToolCancel); res.IsError || res.Flatten() != "Cancelled task async_1." {

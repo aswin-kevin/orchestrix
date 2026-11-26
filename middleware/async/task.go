@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/aswin-kevin/orchestrix/agent"
 )
 
 // episodeState is where a task entry is between its episodes. Every change
@@ -20,8 +22,8 @@ const (
 	episodeRunning
 	// episodeStopped: the current episode stopped (ended or waiting).
 	episodeStopped
-	// episodeClaimed: a Continue holds the task while it starts the next
-	// episode.
+	// episodeClaimed: a follow-up or a decision holds the task while it
+	// starts the next episode.
 	episodeClaimed
 	// episodeCancelled: the task waited and was cancelled; no episode
 	// follows.
@@ -62,10 +64,37 @@ type task struct {
 	stopCtx context.Context // set when Stop came before attach
 	out     Outcome
 	ended   time.Time
+	// meta is the identity of the task's record (ID, ThreadID,
+	// TaskThreadID, SubagentType, Description, Started); settled, when set,
+	// is told whenever an episode stops (see bind). epCtx is the context
+	// the current episode was started from, without its cancellation.
+	meta    TaskRecord
+	settled settledFunc
+	epCtx   context.Context
 }
 
+// settledFunc is told that an episode of t stopped with out (ended is when),
+// on ctx, the context the episode was started from.
+type settledFunc func(ctx context.Context, t *task, out Outcome, ended time.Time)
+
 func newTask(base context.Context) *task {
-	return &task{base: context.WithoutCancel(base), done: make(chan struct{})}
+	base = context.WithoutCancel(base)
+	return &task{base: base, epCtx: base, done: make(chan struct{})}
+}
+
+// bind gives t the identity of its record and the function told when an
+// episode stops; called before attach.
+func (t *task) bind(meta TaskRecord, settled settledFunc) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.meta, t.settled = meta, settled
+}
+
+// identity returns the identity of the task's record (see bind).
+func (t *task) identity() TaskRecord {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.meta
 }
 
 // Done implements jobs.Handle: the current episode's channel.
@@ -104,7 +133,7 @@ func (t *task) Stop(ctx context.Context) error {
 func (t *task) attach(h Handle) {
 	t.mu.Lock()
 	t.h, t.state = h, episodeRunning
-	stopCtx := t.stopCtx
+	stopCtx, epCtx := t.stopCtx, t.epCtx
 	done := t.done
 	t.mu.Unlock()
 	if stopCtx != nil {
@@ -113,20 +142,38 @@ func (t *task) attach(h Handle) {
 		cancel()
 	}
 	if isClosed(h.Done()) {
-		t.follow(h, done)
+		t.follow(h, done, epCtx)
 		return
 	}
-	go t.follow(h, done)
+	go t.follow(h, done, epCtx)
 }
 
-// follow waits for h's episode to stop and publishes its outcome on done.
-func (t *task) follow(h Handle, done chan struct{}) {
+// follow waits for h's episode to stop, publishes its outcome on done and
+// then tells the settled function, on ctx, the episode's context.
+func (t *task) follow(h Handle, done chan struct{}, ctx context.Context) {
 	<-h.Done()
 	out, ok := h.Outcome()
 	if !ok {
 		out = Outcome{Status: StatusFailed, Error: "the runner reported no outcome"}
 	}
-	t.finish(out, done)
+	out, ended := t.finish(out, done)
+	t.mu.Lock()
+	settled := t.settled
+	t.mu.Unlock()
+	if settled != nil {
+		settled(ctx, t, out, ended)
+	}
+}
+
+// settledCancelled tells the settled function that the waiting task was
+// cancelled (see cancelWaiting), on the context of its last episode.
+func (t *task) settledCancelled() {
+	t.mu.Lock()
+	settled, ctx, out, ended := t.settled, t.epCtx, t.out, t.ended
+	t.mu.Unlock()
+	if settled != nil {
+		settled(ctx, t, out, ended)
+	}
 }
 
 // fail ends a task whose Runner could not start it.
@@ -134,14 +181,15 @@ func (t *task) fail(err error) {
 	t.mu.Lock()
 	done := t.done
 	t.mu.Unlock()
-	t.finish(Outcome{Status: StatusFailed, Error: err.Error()}, done)
+	_, _ = t.finish(Outcome{Status: StatusFailed, Error: err.Error()}, done)
 }
 
 // finish publishes out, normalized, as the outcome of the episode of done
 // and then closes done: a status other than waiting or terminal (lost
 // included: only the middleware decides a task is lost), or waiting without
 // a pending action, is failed, and Pending is kept only for a waiting task.
-func (t *task) finish(out Outcome, done chan struct{}) {
+// It returns the published outcome and its time.
+func (t *task) finish(out Outcome, done chan struct{}) (Outcome, time.Time) {
 	switch out.Status {
 	case StatusCompleted, StatusFailed, StatusCancelled, StatusTimedOut:
 		out.Pending = nil
@@ -155,44 +203,83 @@ func (t *task) finish(out Outcome, done chan struct{}) {
 		out.Status, out.Pending = StatusFailed, nil
 	}
 	t.mu.Lock()
-	t.out, t.ended = out, time.Now()
+	ended := time.Now()
+	t.out, t.ended = out, ended
 	if t.state != episodeClaimed {
 		t.state = episodeStopped
 	}
 	t.mu.Unlock()
 	close(done)
+	return out, ended
 }
 
 // continueWith starts the next episode of the ended task with message
-// through its Handle's Continuer, on ctx's values (normally t.base's), and
-// swaps the new Handle in. Only one caller wins: the task is claimed under
-// its mutex first, and a caller that finds it running or claimed fails with
-// errStillRunning. It fails with ErrWaiting for a waiting task, with
-// errCancelledWaiting for one cancelled while it waited, and with
+// through its Handle's Continuer, on ctx's values, and swaps the new Handle
+// in; caller is the context of the call that asked for it (see advance). It
+// fails with ErrWaiting for a waiting task, with errCancelledWaiting for one
+// cancelled while it waited, with errStillRunning for one whose episode
+// runs or whose next episode another caller is starting, and with
 // ErrFinished when the Handle is no Continuer. jobs.Manager.Restart calls it
 // as its start function.
-func (t *task) continueWith(ctx context.Context, message string) error {
+func (t *task) continueWith(ctx, caller context.Context, message string) error {
+	return t.advance(caller, func() (func() (Handle, error), error) {
+		switch {
+		case t.state == episodeCancelled:
+			return nil, errCancelledWaiting
+		case t.state != episodeStopped:
+			return nil, errStillRunning
+		case t.out.Status == StatusWaiting:
+			return nil, ErrWaiting
+		}
+		c, ok := t.h.(Continuer)
+		if !ok {
+			return nil, ErrFinished
+		}
+		return func() (Handle, error) { return c.Continue(ctx, message) }, nil
+	})
+}
+
+// errNoResolver is the error of a decision for a waiting task whose Handle
+// is no Resolver.
+var errNoResolver = errors.New("async: the runner cannot resume a waiting task")
+
+// resolveWith answers the waiting task's pending actions with decisions
+// through its Handle's Resolver, starting the next episode on ctx's values,
+// and swaps the new Handle in; caller is the context of the call that asked
+// for it (see advance). It fails with ErrNotWaiting unless the task waits
+// and no other caller is starting its next episode, and with errNoResolver
+// when the Handle is no Resolver. jobs.Manager.Restart calls it as its start
+// function.
+func (t *task) resolveWith(ctx, caller context.Context, decisions []agent.Decision) error {
+	return t.advance(caller, func() (func() (Handle, error), error) {
+		if t.state != episodeStopped || t.out.Status != StatusWaiting {
+			return nil, ErrNotWaiting
+		}
+		r, ok := t.h.(Resolver)
+		if !ok {
+			return nil, errNoResolver
+		}
+		return func() (Handle, error) { return r.Resolve(ctx, decisions) }, nil
+	})
+}
+
+// advance starts the task's next episode. Only one caller wins: claim runs
+// under the task's mutex and either refuses or returns the start function,
+// and the task is then claimed until start returns, so a racing caller (a
+// follow-up, a decision or a cancel) fails. On success the new Handle is
+// swapped in and followed; its settled call gets caller without its
+// cancellation.
+func (t *task) advance(caller context.Context, claim func() (func() (Handle, error), error)) error {
 	t.mu.Lock()
-	switch {
-	case t.state == episodeCancelled:
+	start, err := claim()
+	if err != nil {
 		t.mu.Unlock()
-		return errCancelledWaiting
-	case t.state != episodeStopped:
-		t.mu.Unlock()
-		return errStillRunning
-	case t.out.Status == StatusWaiting:
-		t.mu.Unlock()
-		return ErrWaiting
-	}
-	c, ok := t.h.(Continuer)
-	if !ok {
-		t.mu.Unlock()
-		return ErrFinished
+		return err
 	}
 	t.state = episodeClaimed
 	t.mu.Unlock()
 
-	h, err := c.Continue(ctx, message)
+	h, err := start()
 	if err == nil && h == nil {
 		err = errNoHandle
 	}
@@ -202,13 +289,22 @@ func (t *task) continueWith(ctx context.Context, message string) error {
 		t.mu.Unlock()
 		return err
 	}
+	epCtx := context.WithoutCancel(caller)
 	t.mu.Lock()
 	done := make(chan struct{})
-	t.h, t.done, t.state = h, done, episodeRunning
+	t.h, t.done, t.state, t.epCtx = h, done, episodeRunning, epCtx
 	t.out, t.ended = Outcome{}, time.Time{}
 	t.mu.Unlock()
-	go t.follow(h, done)
+	go t.follow(h, done, epCtx)
 	return nil
+}
+
+// waiting reports whether the task's episode stopped waiting for a
+// decision that nobody gave or is giving yet.
+func (t *task) waiting() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.state == episodeStopped && t.out.Status == StatusWaiting
 }
 
 // cancelWaiting ends a waiting task: it claims it (so no follow-up starts

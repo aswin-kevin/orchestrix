@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -96,6 +97,8 @@ type harness struct {
 	// version is the parent thread's checkpoint version after the last
 	// run; it matters only with a Checkpointer.
 	version checkpoint.Version
+	// be is the backend of every run; nil gives each run a new one.
+	be backend.Backend
 }
 
 func newHarness(t *testing.T, cfg Config, turns ...llmtest.Turn) *harness {
@@ -134,7 +137,11 @@ func (h *harness) run(t *testing.T, ctx context.Context, text string, onEvent fu
 	t.Helper()
 	var evs []agent.Event
 	var final *agent.Final
-	in := agent.Input{ThreadID: h.thread, State: h.st, Version: h.version, Backend: testutil.Memory(t), Messages: []llm.Message{llm.UserText(text)}}
+	be := h.be
+	if be == nil {
+		be = testutil.Memory(t)
+	}
+	in := agent.Input{ThreadID: h.thread, State: h.st, Version: h.version, Backend: be, Messages: []llm.Message{llm.UserText(text)}}
 	for ev := range h.a.Run(ctx, in) {
 		evs = append(evs, ev)
 		if onEvent != nil {

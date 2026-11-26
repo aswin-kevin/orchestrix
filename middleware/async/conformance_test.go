@@ -64,7 +64,8 @@ func startLocal(t *testing.T, sc asynctest.Scenario) async.Handle {
 	case asynctest.ScenarioWait:
 		// write_file needs approval in the default mode, and nobody can
 		// give it in-band: the task stops waiting.
-		spec.Provider = llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "w1", Name: "write_file", Input: map[string]any{}}}})
+		// The second answer is the resolved episode's.
+		spec.Provider = llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "w1", Name: "write_file", Input: map[string]any{}}}}, llmtest.Turn{Text: "written"})
 		spec.Tools = []tool.Tool{tool.New("write_file", "Writes.", func(context.Context, struct{}, *tool.Call) (tool.Result, error) {
 			return tool.Text("written"), nil
 		})}

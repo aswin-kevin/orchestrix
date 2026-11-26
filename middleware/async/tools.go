@@ -146,6 +146,9 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 		m.jobs.MarkNotified(c.ThreadID, j.ID)
 		return tool.Errorf("cannot start background task %s: %v", in.SubagentType, err), nil
 	}
+	t.bind(TaskRecord{
+		ID: j.ID, ThreadID: c.ThreadID, TaskThreadID: taskThread, SubagentType: in.SubagentType, Description: in.Description, Started: j.Started,
+	}, m.settled)
 	t.attach(h)
 	if j.Stopped() {
 		// Close came while the Runner started the task, and attach
@@ -227,12 +230,18 @@ func (m *Middleware) cancelTask(ctx context.Context, in CancelInput, c *tool.Cal
 		return tool.Errorf("unknown task %q", in.TaskID), nil
 	case r.Status == StatusWaiting:
 		var cancelled []*jobs.Job[*task]
+		claimed := true
 		m.updateRecords(c.State, c.ThreadID, func(r *TaskRecord) {
 			if r.ID == in.TaskID && r.Status == StatusWaiting {
-				cancelled = append(cancelled, m.cancelWaiting(r)...)
+				var list []*jobs.Job[*task]
+				list, claimed = m.cancelWaiting(r)
+				cancelled = append(cancelled, list...)
 			}
 		})
 		stopWaiting(ctx, cancelled)
+		if !claimed {
+			return tool.Errorf("cannot cancel task %s: it is being resumed with a decision; check it and cancel it again if needed", in.TaskID), nil
+		}
 		return tool.Text(fmt.Sprintf("Cancelled task %s.", in.TaskID)), nil
 	case r.terminal():
 		return tool.Text(fmt.Sprintf("Task %s already ended: %s.", r.ID, r.Status)), nil
@@ -265,7 +274,7 @@ func (m *Middleware) updateTask(ctx context.Context, in UpdateInput, c *tool.Cal
 	var err error
 	switch {
 	case r.Status == StatusWaiting:
-		err = ErrWaiting
+		return tool.Errorf("cannot update task %s: it is waiting for a decision only the user can make", in.TaskID), nil
 	case r.Status == StatusRunning && j != nil:
 		err = j.Handle.send(ctx, in.Message)
 	case r.terminal():
@@ -302,7 +311,7 @@ func (m *Middleware) continueTask(ctx context.Context, c *tool.Call, r TaskRecor
 		return tool.Errorf("cannot update task %s: %v", r.ID, ErrFinished)
 	}
 	_, err := m.jobs.Restart(r.ThreadID, r.ID, func() error {
-		return j.Handle.continueWith(withFollowUp(j.Handle.base, f), message)
+		return j.Handle.continueWith(withFollowUp(j.Handle.base, f), ctx, message)
 	})
 	var limit *jobs.LimitError
 	switch {
@@ -346,6 +355,11 @@ func (m *Middleware) reattach(ctx context.Context, r TaskRecord) (*jobs.Job[*tas
 	}
 	t := newTask(ctx)
 	t.attach(h)
+	// Bound after attach: the attached episode stopped before, and was
+	// reported then; only later episodes are.
+	t.bind(TaskRecord{
+		ID: r.ID, ThreadID: r.ThreadID, TaskThreadID: r.TaskThreadID, SubagentType: r.SubagentType, Description: r.Description, Started: r.Started,
+	}, m.settled)
 	j, err := m.jobs.Adopt(r.ThreadID, r.ID, r.Started, t)
 	if err != nil {
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DefaultStopWait)

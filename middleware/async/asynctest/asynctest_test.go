@@ -296,6 +296,10 @@ var mutants = map[string]func(t *testing.T){
 	"ContinueOnce": mutant(func(o *override, _ Scenario) {
 		o.cont = func(context.Context, string) (async.Handle, error) { return nextEpisode(), nil }
 	}),
+	// Resolve returns the receiver instead of a new Handle.
+	"ResolveReturnsNewHandle": mutant(func(o *override, _ Scenario) {
+		o.resolve = func(context.Context, []agent.Decision) (async.Handle, error) { return o, nil }
+	}),
 	// Every Resolve starts an episode.
 	"ResolveOnce": mutant(func(o *override, _ Scenario) {
 		o.resolve = func(context.Context, []agent.Decision) (async.Handle, error) { return nextEpisode(), nil }

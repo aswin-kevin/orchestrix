@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
+	"slices"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -31,8 +33,8 @@ const (
 	StatusRunning Status = "running"
 	// StatusWaiting marks a task that stopped to wait for a decision on the
 	// actions in its Outcome.Pending (a tool call that needs approval when
-	// nobody can be asked in-band). It has not ended: the decision starts
-	// its next episode (see Resolver).
+	// nobody can be asked in-band). It has not ended: the host's decision
+	// (Middleware.Resolve) starts its next episode (see Resolver).
 	StatusWaiting Status = "waiting"
 	// StatusCompleted marks a task that finished its work.
 	StatusCompleted Status = "completed"
@@ -229,17 +231,19 @@ type localRunner struct {
 	inboxes  *inboxes
 	timeout  time.Duration
 	fallback *cpmemory.Checkpointer
+	// onEvent is Config.OnEvent.
+	onEvent func(taskID string, ev agent.Event)
 }
 
 var _ Reattacher = (*localRunner)(nil)
 
 // newLocalRunner returns the local runner of specs; New builds it when
 // Config.Runner is nil.
-func newLocalRunner(specs map[string]subagents.Subagent, timeout time.Duration) *localRunner {
+func newLocalRunner(specs map[string]subagents.Subagent, timeout time.Duration, onEvent func(string, agent.Event)) *localRunner {
 	// The inbox middleware is one pointer: every child, and their children,
 	// share it, and the Launcher dedupes it by identity.
 	boxes := newInboxes()
-	l := &localRunner{specs: specs, inboxes: boxes, timeout: timeout, fallback: cpmemory.New()}
+	l := &localRunner{specs: specs, inboxes: boxes, timeout: timeout, fallback: cpmemory.New(), onEvent: onEvent}
 	l.launcher = subagents.NewLauncher(subagents.LauncherConfig{Extra: []agent.Middleware{boxes}, Checkpointer: l.checkpointer})
 	return l
 }
@@ -308,8 +312,8 @@ func (l *localRunner) Start(ctx context.Context, req Request) (Handle, error) {
 	}
 	in.ThreadID = req.TaskThreadID
 	in.Ephemeral = false
-	sess := &localSession{l: l, child: child, threadID: in.ThreadID, backend: in.Backend, agentName: in.AgentName}
-	return sess.start(ctx, in)
+	sess := &localSession{l: l, taskID: req.TaskID, child: child, threadID: in.ThreadID, backend: in.Backend, agentName: in.AgentName}
+	return sess.start(ctx, in, nil)
 }
 
 // Attach implements Reattacher for a task that is not running: it loads the
@@ -347,7 +351,7 @@ func (l *localRunner) Attach(ctx context.Context, rec TaskRecord) (Handle, error
 	if err != nil {
 		return nil, err
 	}
-	sess := &localSession{l: l, child: child, threadID: rec.TaskThreadID, backend: f.backend, agentName: spec.Name}
+	sess := &localSession{l: l, taskID: rec.ID, child: child, threadID: rec.TaskThreadID, backend: f.backend, agentName: spec.Name}
 	done := make(chan struct{})
 	close(done)
 	return &localTask{
@@ -360,6 +364,7 @@ func (l *localRunner) Attach(ctx context.Context, rec TaskRecord) (Handle, error
 // localSession is what every episode of one local task shares.
 type localSession struct {
 	l         *localRunner
+	taskID    string
 	child     *agent.Agent
 	threadID  string
 	backend   backend.Backend
@@ -367,8 +372,9 @@ type localSession struct {
 }
 
 // start runs one episode of the task with in, on a context detached from
-// ctx: it keeps ctx's values but not its cancellation.
-func (sess *localSession) start(ctx context.Context, in agent.Input) (*localTask, error) {
+// ctx: it keeps ctx's values but not its cancellation. With decisions it
+// resumes the interrupted State in.State holds (agent.Agent.ResumeWith).
+func (sess *localSession) start(ctx context.Context, in agent.Input, decisions []agent.Decision) (*localTask, error) {
 	box, err := sess.l.inboxes.open(sess.threadID)
 	if err != nil {
 		return nil, err
@@ -378,7 +384,7 @@ func (sess *localSession) start(ctx context.Context, in agent.Input) (*localTask
 	t := &localTask{sess: sess, stop: stop, done: make(chan struct{}), inbox: box}
 	go func() {
 		defer cancelTimeout()
-		t.run(runCtx, in, func() int { return sess.l.inboxes.remove(sess.threadID) })
+		t.run(runCtx, in, decisions, func() int { return sess.l.inboxes.remove(sess.threadID) })
 	}()
 	return t, nil
 }
@@ -398,19 +404,31 @@ type localTask struct {
 	// checkpoint version, which the next episode starts from.
 	last    *state.State
 	version checkpoint.Version
-	// continued is set once a Continue of this episode succeeded or is
-	// under way.
+	// continued is set once a Continue or Resolve of this episode
+	// succeeded or is under way.
 	continued bool
 }
 
-var _ Continuer = (*localTask)(nil)
+var (
+	_ Continuer = (*localTask)(nil)
+	_ Resolver  = (*localTask)(nil)
+)
 
-// run consumes the subagent's stream to its end, keeping its recent text as
-// progress, then closes the inbox (closeInbox returns how many messages were
-// never read), publishes the outcome and closes done, in that order.
-func (t *localTask) run(ctx context.Context, in agent.Input, closeInbox func() int) {
+// run consumes the subagent's stream to its end (of a resumption when
+// decisions is not nil), passing every event to Config.OnEvent and keeping
+// its recent text as progress, then closes the inbox (closeInbox returns how
+// many messages were never read), publishes the outcome and closes done, in
+// that order.
+func (t *localTask) run(ctx context.Context, in agent.Input, decisions []agent.Decision, closeInbox func() int) {
+	stream := t.sess.child.Run
+	if decisions != nil {
+		stream = func(ctx context.Context, in agent.Input) iter.Seq2[agent.Event, error] {
+			return t.sess.child.ResumeWith(ctx, in, decisions)
+		}
+	}
 	var final *agent.Final
-	for ev := range t.sess.child.Run(ctx, in) {
+	for ev := range stream(ctx, in) {
+		t.sess.emit(ctx, ev)
 		switch {
 		case ev.Kind == agent.KindFinal:
 			final = ev.Final
@@ -428,6 +446,15 @@ func (t *localTask) run(ctx context.Context, in agent.Input, closeInbox func() i
 	t.mu.Unlock()
 	t.stop(nil) // releases the context
 	close(t.done)
+}
+
+// emit passes ev to Config.OnEvent, recovering a panic.
+func (sess *localSession) emit(ctx context.Context, ev agent.Event) {
+	if sess.l.onEvent == nil {
+		return
+	}
+	defer recoverHook(ctx, "async: OnEvent panicked")
+	sess.l.onEvent(sess.taskID, ev)
 }
 
 // Continue implements Continuer: the next episode runs the subagent on the
@@ -485,18 +512,103 @@ func (t *localTask) next(ctx context.Context, last *state.State, version checkpo
 	if err := agent.SetPermissionMode(s, mode); err != nil {
 		return nil, err
 	}
-	be := sess.backend
-	if be == nil {
-		be = f.backend
-	}
 	return sess.start(ctx, agent.Input{
 		ThreadID:  sess.threadID,
 		State:     s,
 		Version:   version,
 		Messages:  []llm.Message{llm.UserText(updateText(message))},
-		Backend:   be,
+		Backend:   sess.backendFor(ctx),
 		AgentName: sess.agentName,
-	})
+	}, nil)
+}
+
+// backendFor is the backend an episode runs on: the task's own, or for a
+// reattached task the one the middleware passed with ctx.
+func (sess *localSession) backendFor(ctx context.Context) backend.Backend {
+	if sess.backend != nil {
+		return sess.backend
+	}
+	f, _ := followUpOf(ctx)
+	return f.backend
+}
+
+// Resolve implements Resolver: the next episode resumes the subagent on the
+// task's thread from the interrupted State this one ended with, answering
+// its pending actions with decisions (see agent.Agent.Resume), in the
+// task's own permission mode. The pending actions are read from that State,
+// in full, not from the capped copy a record shows. Decisions that do not
+// answer every pending action exactly once, with a type it allows, are
+// refused and start nothing. Only the first successful call starts an
+// episode; later ones fail with ErrNotWaiting.
+func (t *localTask) Resolve(ctx context.Context, decisions []agent.Decision) (Handle, error) {
+	if !isClosed(t.done) {
+		return nil, fmt.Errorf("%w: the episode is still running", ErrNotWaiting)
+	}
+	t.mu.Lock()
+	switch {
+	case t.continued:
+		t.mu.Unlock()
+		return nil, fmt.Errorf("%w: this episode was already resumed", ErrNotWaiting)
+	case t.out.Status != StatusWaiting || t.last == nil:
+		t.mu.Unlock()
+		return nil, ErrNotWaiting
+	}
+	intr, ok := agent.Pending(t.last)
+	if !ok {
+		t.mu.Unlock()
+		return nil, fmt.Errorf("%w: the task's thread holds no pending action", ErrNotWaiting)
+	}
+	if err := checkDecisions(intr, decisions); err != nil {
+		t.mu.Unlock()
+		return nil, err
+	}
+	t.continued = true
+	last, version := t.last, t.version
+	t.mu.Unlock()
+	sess := t.sess
+	h, err := sess.start(ctx, agent.Input{
+		ThreadID:  sess.threadID,
+		State:     last.Clone(),
+		Version:   version,
+		Backend:   sess.backendFor(ctx),
+		AgentName: sess.agentName,
+	}, slices.Clone(decisions))
+	if err != nil {
+		t.mu.Lock()
+		t.continued = false
+		t.mu.Unlock()
+		return nil, err
+	}
+	return h, nil
+}
+
+// checkDecisions reports an error unless decisions answer every request of
+// intr exactly once, each with a type the request allows, as
+// agent.Agent.Resume requires.
+func checkDecisions(intr *agent.Interrupt, decisions []agent.Decision) error {
+	requests := make(map[string]agent.ActionRequest, len(intr.Requests))
+	for _, req := range intr.Requests {
+		requests[req.ToolUseID] = req
+	}
+	seen := make(map[string]bool, len(decisions))
+	for _, d := range decisions {
+		req, ok := requests[d.ToolUseID]
+		switch {
+		case !ok:
+			return fmt.Errorf("async: no pending action for tool call %q", d.ToolUseID)
+		case seen[d.ToolUseID]:
+			return fmt.Errorf("async: more than one decision for tool call %q", d.ToolUseID)
+		case !slices.Contains(req.Allowed, d.Type):
+			return fmt.Errorf("async: %w: %q for tool call %q (allowed: %v)", agent.ErrInvalidDecision, d.Type, d.ToolUseID, req.Allowed)
+		}
+		seen[d.ToolUseID] = true
+	}
+	for id := range requests {
+		if !seen[id] {
+			return fmt.Errorf("async: %w: tool call %q", agent.ErrMissingDecision, id)
+		}
+	}
+	return nil
 }
 
 // localOutcome maps a subagent's Final to the task's outcome. A run that

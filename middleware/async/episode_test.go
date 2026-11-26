@@ -318,7 +318,7 @@ func TestContinueClaimsTaskOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i := range errs {
-		wg.Go(func() { errs[i] = tk.continueWith(context.Background(), "more") })
+		wg.Go(func() { errs[i] = tk.continueWith(context.Background(), context.Background(), "more") })
 	}
 	wg.Wait()
 	wins := 0

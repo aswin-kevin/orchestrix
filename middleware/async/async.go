@@ -24,13 +24,17 @@
 // again through the Runner's Reattacher when a follow-up names it.
 //
 // A background run has nobody to ask for approval in-band: with an Approver
-// on the parent agent the subagent inherits it and keeps asking it.
-// Otherwise a subagent that needs a decision stops as StatusWaiting, with the
-// actions it waits for in Outcome.Pending and TaskRecord.Pending. The parent
-// model is told the task waits and on what, but it cannot answer: no tool
-// approves another run's actions. The host cannot answer it yet either (an
-// API for that is planned); until then cancel_task ends a waiting task. Its
-// permission mode is fixed when an episode starts: the stricter of the
+// on the parent agent the subagent inherits it and asks it, in-band, as a
+// foreground one does. Without one, a subagent that needs a decision stops
+// as StatusWaiting, with the actions it waits for in Outcome.Pending and
+// TaskRecord.Pending. The parent model is told the task waits and on what,
+// but it cannot answer: no tool approves another run's actions, update_task
+// refuses a waiting task, and cancel_task only ends it. The decision belongs
+// to the user, through the host: Config.OnSettled tells the host when a task
+// starts waiting, and Resolve answers its pending actions and resumes it,
+// still nested in the run that started it. A waiting task is never released
+// nor forgotten (it does not count against Config.MaxFinished) until it is
+// resolved or cancelled. A task's permission mode is fixed when an episode starts: the stricter of the
 // parent's mode at that moment and the spec's, and for a follow-up the
 // stricter of the parent's current mode and the task's own. A parent that
 // enters plan mode or a stricter mode does not change the mode of an
@@ -161,6 +165,28 @@ type Config struct {
 	// DisableStopReminder turns off the reminder a run gets, once, when it
 	// is about to end while tasks of its thread still run; false sends it.
 	DisableStopReminder bool
+	// OnSettled is called when an episode of a task stops: it ended, or it
+	// now waits for a decision (rec.Pending set; see Resolve). A waiting
+	// task that is cancelled (by cancel_task, Close or the end of the
+	// nested run that started it) is reported once more, cancelled.
+	// threadID is the thread of the run that started the task, and rec is
+	// built from the task (its identity and the episode's outcome, capped
+	// as records are) with Notified false; it is not the record in any
+	// State. It runs on the goroutine that watched the episode, after the
+	// outcome is published (for a cancel, on the canceller's), so it must
+	// not block; it may call Resolve. ctx is the context the episode was
+	// started from, without its cancellation: the start_task or update_task
+	// call's, carrying the parent run's agent.Info, or the ctx given to
+	// Resolve, which may carry none. A panic is recovered and logged with
+	// the logger of agent.Info(ctx), when ctx has one. nil calls nothing.
+	OnSettled func(ctx context.Context, threadID string, rec TaskRecord)
+	// OnEvent receives every event of every episode of a task the built-in
+	// runner runs, KindFinal included, synchronously and in order, on the
+	// goroutine running the episode: a slow OnEvent slows the task. taskID
+	// is the task's id; ids repeat across threads. A custom Runner does not
+	// feed it. A panic is recovered and logged as for OnSettled. nil calls
+	// nothing.
+	OnEvent func(taskID string, ev agent.Event)
 }
 
 // Name is the name of the async middleware.
@@ -183,6 +209,8 @@ type Middleware struct {
 	acc jobs.Accessors[TaskRecord]
 	// attachMu serializes Reattacher.Attach calls.
 	attachMu sync.Mutex
+	// onSettled is Config.OnSettled.
+	onSettled func(ctx context.Context, threadID string, rec TaskRecord)
 }
 
 var (
@@ -213,12 +241,13 @@ func New(cfg Config) (*Middleware, error) {
 		return nil, fmt.Errorf("async: %w", err)
 	}
 	m := &Middleware{
-		specs:    make(map[string]subagents.Subagent, len(list)),
-		order:    make([]string, len(list)),
-		runner:   cfg.Runner,
-		maxDepth: positiveOr(cfg.MaxDepth, subagents.DefaultMaxDepth),
-		prompt:   DefaultPrompt,
-		remind:   !cfg.DisableStopReminder,
+		specs:     make(map[string]subagents.Subagent, len(list)),
+		order:     make([]string, len(list)),
+		runner:    cfg.Runner,
+		maxDepth:  positiveOr(cfg.MaxDepth, subagents.DefaultMaxDepth),
+		prompt:    DefaultPrompt,
+		remind:    !cfg.DisableStopReminder,
+		onSettled: cfg.OnSettled,
 		jobs: jobs.NewManager[*task](IDPrefix, jobs.Limits{
 			MaxRunning:  positiveOr(cfg.MaxRunning, DefaultMaxRunning),
 			MaxFinished: positiveOr(cfg.MaxFinished, DefaultMaxFinished),
@@ -228,7 +257,7 @@ func New(cfg Config) (*Middleware, error) {
 		m.specs[s.Name], m.order[i] = s, s.Name
 	}
 	if m.runner == nil {
-		m.runner = newLocalRunner(m.specs, positiveOr(cfg.TaskTimeout, DefaultTaskTimeout))
+		m.runner = newLocalRunner(m.specs, positiveOr(cfg.TaskTimeout, DefaultTaskTimeout), cfg.OnEvent)
 	}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
@@ -237,6 +266,8 @@ func New(cfg Config) (*Middleware, error) {
 	if p, ok := m.runner.(interface{ pruned(TaskRecord) }); ok {
 		m.acc.Pruned = p.pruned
 	}
+	// A waiting task is kept until it is resolved or cancelled.
+	m.jobs.SetPinned((*task).waiting)
 	m.tools = m.buildTools()
 	return m, nil
 }
@@ -267,6 +298,83 @@ func (m *Middleware) Close(ctx context.Context) error {
 	}
 	stopWaiting(ctx, waiting)
 	return m.jobs.Close(ctx, DefaultStopWait)
+}
+
+// Resolve answers the pending actions of task taskID of thread threadID,
+// which waits for a decision (StatusWaiting), with decisions, one per
+// action of its TaskRecord.Pending matched by ToolUseID, and starts its next
+// episode through the Runner's Resolver. It is the host's answer, on the
+// user's behalf: the parent model has no tool for it. The episode runs as
+// the task's earlier ones did: nested in the run that started the task, in
+// the task's own permission mode, on the backend of its start; ctx only
+// bounds the call (OnSettled gets it, detached, when the episode stops).
+// The parent's record shows the task running at the parent's next turn, and
+// its end is announced as usual.
+//
+// Only one decision per wait wins: a concurrent or later Resolve, a
+// cancel_task or an update_task fails, so the approved actions run at most
+// once. Resolve fails with ErrUnknownTask when this process does not hold
+// the task, with ErrNotWaiting when it is not waiting (or another decision
+// was taken), with an error when the thread already runs
+// Config.MaxRunning tasks, and with the runner's error, such as a
+// decision that does not answer every pending action exactly once with a
+// type it allows (agent.ErrMissingDecision, agent.ErrInvalidDecision); the
+// task then still waits. A waiting task this process does not hold, such
+// as one recorded before a restart, fails with ErrUnknownTask.
+func (m *Middleware) Resolve(ctx context.Context, threadID, taskID string, decisions []agent.Decision) error {
+	j := m.jobs.Get(threadID, taskID)
+	if j == nil {
+		return fmt.Errorf("%w: %s", ErrUnknownTask, taskID)
+	}
+	if !j.Handle.waiting() {
+		return fmt.Errorf("%w: %s", ErrNotWaiting, taskID)
+	}
+	_, err := m.jobs.Restart(threadID, taskID, func() error {
+		return j.Handle.resolveWith(j.Handle.base, ctx, decisions)
+	})
+	var limit *jobs.LimitError
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrNotWaiting):
+		return err
+	case errors.Is(err, jobs.ErrUnknownJob):
+		// Another decision restarted the task first.
+		return fmt.Errorf("%w: %s", ErrNotWaiting, taskID)
+	case errors.Is(err, jobs.ErrShutdown):
+		return errors.New("async: background tasks are shut down")
+	case errors.As(err, &limit):
+		return fmt.Errorf("async: thread %s already runs %d tasks; resolve task %s once one ends", threadID, limit.Limit, taskID)
+	}
+	return fmt.Errorf("async: resolve task %s: %w", taskID, err)
+}
+
+// settled is every task's settledFunc: it reports the episode of t that
+// stopped with out, at ended, to Config.OnSettled.
+func (m *Middleware) settled(ctx context.Context, t *task, out Outcome, ended time.Time) {
+	if m.onSettled == nil {
+		return
+	}
+	rec := t.identity()
+	if rec.ID == "" {
+		return // never recorded: its start failed
+	}
+	if j := m.jobs.Get(rec.ThreadID, rec.ID); j != nil && j.Handle == t {
+		out, ended = m.stoppedOutcome(j, out, ended)
+	}
+	applyOutcome(&rec, out, ended)
+	defer recoverHook(ctx, "async: OnSettled panicked")
+	m.onSettled(ctx, rec.ThreadID, rec)
+}
+
+// recoverHook recovers a panic of a host hook and logs it as msg with the
+// logger of agent.Info(ctx) (a discarding one when ctx has no run). It must
+// be deferred directly.
+func recoverHook(ctx context.Context, msg string) {
+	if v := recover(); v != nil {
+		info, _ := agent.Info(ctx)
+		info.Logger().Error(msg, "err", fmt.Errorf("%v", v))
+	}
 }
 
 // Drain implements agent.Drainer: Agent.Close stops the background tasks
@@ -389,42 +497,77 @@ func (m *Middleware) endNested(ctx context.Context, s *state.State, threadID str
 		})
 	}
 	var waiting []*jobs.Job[*task]
+	var resumed []string
 	m.updateRecords(s, threadID, func(r *TaskRecord) {
 		if r.Status == StatusWaiting {
-			waiting = append(waiting, m.cancelWaiting(r)...)
+			// A task a decision is resuming now runs, and its thread's
+			// runs are over: it is stopped below.
+			list, ok := m.cancelWaiting(r)
+			waiting = append(waiting, list...)
+			if !ok {
+				resumed = append(resumed, r.ID)
+			}
 		}
 		if r.terminal() && !r.Notified {
 			m.markNotified(r)
 		}
 	})
 	stopWaiting(ctx, waiting)
+	if len(resumed) > 0 {
+		m.jobs.StopAndForget(ctx, threadID, resumed, DefaultStopWait, func() {
+			m.updateRecords(s, threadID, func(r *TaskRecord) {
+				if slices.Contains(resumed, r.ID) {
+					m.markNotified(r)
+				}
+			})
+		})
+	}
 }
 
 // cancelWaiting ends the record of a waiting task as cancelled and seen, and
-// marks its job notified. It claims the task entry, so no follow-up starts
-// an episode of it, and returns the job whose Handle the caller must stop
-// (see stopWaiting) once the State is no longer being updated; none when
-// this process does not hold it.
-func (m *Middleware) cancelWaiting(r *TaskRecord) []*jobs.Job[*task] {
+// marks its job notified. It claims the task entry, so no follow-up or
+// decision starts an episode of it, and returns the job whose Handle the
+// caller must stop (see stopWaiting) once the State is no longer being
+// updated; none when this process does not hold it. ok is false, and r is
+// left alone, when the process holds the task but it no longer waits: a
+// decision is resuming it.
+func (m *Middleware) cancelWaiting(r *TaskRecord) (list []*jobs.Job[*task], ok bool) {
+	j := m.jobs.Get(r.ThreadID, r.ID)
+	if j != nil && !j.Handle.cancelWaiting() {
+		return nil, false
+	}
 	r.Status, r.Pending, r.Ended = StatusCancelled, nil, time.Now()
 	m.markNotified(r)
-	if j := m.jobs.Get(r.ThreadID, r.ID); j != nil && j.Handle.cancelWaiting() {
-		return []*jobs.Job[*task]{j}
+	if j != nil {
+		list = append(list, j)
 	}
-	return nil
+	return list, true
 }
 
-// stopWaiting calls Stop on the Handles of cancelled waiting tasks, each
-// bounded by DefaultStopWait: nothing runs, but the runner may release what
-// it holds for the task.
+// stopWaiting calls Stop on the Handles of cancelled waiting tasks, all at
+// once, each bounded by DefaultStopWait or ctx's deadline when that comes
+// sooner: nothing runs, but the runner may release what it holds for the
+// task. Each task is then reported to Config.OnSettled as cancelled.
 func stopWaiting(ctx context.Context, list []*jobs.Job[*task]) {
+	var wg sync.WaitGroup
 	for _, j := range list {
-		if h := j.Handle.handle(); h != nil {
+		wg.Go(func() {
+			defer j.Handle.settledCancelled()
+			h := j.Handle.handle()
+			if h == nil {
+				return
+			}
 			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DefaultStopWait)
+			defer cancel()
+			if deadline, ok := ctx.Deadline(); ok {
+				var cancelAt context.CancelFunc
+				stopCtx, cancelAt = context.WithDeadline(stopCtx, deadline)
+				defer cancelAt()
+			}
 			_ = h.Stop(stopCtx) // the record is cancelled either way
-			cancel()
-		}
+		})
 	}
+	wg.Wait()
 }
 
 // runningIDs returns the ids of the running records.

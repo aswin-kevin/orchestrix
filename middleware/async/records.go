@@ -106,7 +106,11 @@ func (m *Middleware) updateRecords(s *state.State, threadID string, edit func(*T
 
 // refresh updates a running or waiting record from its task. A waiting
 // record whose job the middleware no longer holds stays waiting: it is not
-// lost, as nothing was running.
+// lost, as nothing was running. A waiting record whose task was resumed by a
+// decision (see Resolve) is running again, and once its task stopped anew
+// (it ended, was cancelled, or waits for another decision) it is to be
+// announced again: Notified, which said the model was told it waits, is
+// cleared.
 func (m *Middleware) refresh(r *TaskRecord) {
 	if r.terminal() {
 		return
@@ -120,17 +124,39 @@ func (m *Middleware) refresh(r *TaskRecord) {
 	}
 	out, ended, ok := j.Handle.outcome()
 	if !ok {
+		if r.Status == StatusWaiting {
+			r.Status, r.Pending, r.Notified = StatusRunning, nil, false
+			r.Result, r.Error = "", ""
+		}
 		return
 	}
-	switch {
-	case j.Stopped() && out.Status == StatusFailed:
-		// A runner that fails a stopped task means it was cancelled.
-		out.Status = StatusCancelled
-	case j.Stopped() && out.Status == StatusWaiting && j.Handle.cancelWaiting():
-		// The stop raced an interrupt: the task was cancelled, not left
-		// waiting. Its Handle was already asked to stop.
-		out, ended, _ = j.Handle.outcome()
+	out, ended = m.stoppedOutcome(j, out, ended)
+	if r.Status == StatusWaiting && (out.Status != StatusWaiting || !samePending(r.Pending, out.Pending)) {
+		r.Notified = false
 	}
+	applyOutcome(r, out, ended)
+}
+
+// stoppedOutcome is how the episode of j that stopped with out at ended is
+// recorded: a runner that fails a stopped task means it was cancelled, and a
+// stop that raced an interrupt cancelled the task rather than leaving it
+// waiting (its Handle was already asked to stop).
+func (m *Middleware) stoppedOutcome(j *jobs.Job[*task], out Outcome, ended time.Time) (Outcome, time.Time) {
+	switch {
+	case !j.Stopped():
+	case out.Status == StatusFailed:
+		out.Status = StatusCancelled
+	case out.Status == StatusWaiting && j.Handle.cancelWaiting():
+		if now, at, ok := j.Handle.outcome(); ok {
+			out, ended = now, at
+		}
+	}
+	return out, ended
+}
+
+// applyOutcome sets the outcome fields of r from out, which stopped at
+// ended, capping what a record keeps.
+func applyOutcome(r *TaskRecord, out Outcome, ended time.Time) {
 	r.Status, r.Pending = out.Status, recordedPending(out.Pending)
 	r.Ended = time.Time{}
 	if out.Status.terminal() {
@@ -138,6 +164,14 @@ func (m *Middleware) refresh(r *TaskRecord) {
 	}
 	r.Result, _ = promptsafe.CapBytes(out.Text, MaxRecordedResult)
 	r.Error, _ = promptsafe.CapBytes(out.Error, MaxRecordedResult)
+}
+
+// samePending reports whether a and b wait for the same tool calls.
+func samePending(a, b *agent.Interrupt) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return slices.EqualFunc(a.Requests, b.Requests, func(x, y agent.ActionRequest) bool { return x.ToolUseID == y.ToolUseID })
 }
 
 // recordedPending returns the copy of p a record keeps (see

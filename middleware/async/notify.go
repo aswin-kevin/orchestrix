@@ -70,7 +70,7 @@ func outcomeLine(r TaskRecord) string {
 	case StatusLost:
 		return lostNote
 	case StatusWaiting:
-		return waitingLine(r) + "."
+		return waitingLine(r) + ". Only the user can answer it; carry on with other work or tell the user."
 	}
 	status := strings.ReplaceAll(string(r.Status), "_", " ")
 	switch {

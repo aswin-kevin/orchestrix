@@ -153,14 +153,28 @@ func (t *thread[H]) running() int {
 	return n
 }
 
-// evictOne forgets the oldest ended job the model was told about, or the
-// oldest ended job when it was told about none, so a job whose end has not
-// been announced yet is not reported as lost while others can go first.
-func (t *thread[H]) evictOne() {
-	i := slices.IndexFunc(t.finished, func(id string) bool { return t.jobs[id].Notified() })
-	i = max(i, 0)
-	delete(t.jobs, t.finished[i])
-	t.finished = slices.Delete(t.finished, i, i+1)
+// trim forgets ended jobs until at most limit of them, pinned ones aside,
+// are remembered: first the oldest the model was told about, else the
+// oldest, so a job whose end has not been announced yet is not reported as
+// lost while others can go first. A pinned job (see Manager.SetPinned) is
+// neither forgotten nor counted. The Manager's lock must be held.
+func (t *thread[H]) trim(limit int, pinned func(H) bool) {
+	keep := func(id string) bool { return pinned != nil && pinned(t.jobs[id].Handle) }
+	for {
+		var candidates []string
+		for _, id := range t.finished {
+			if !keep(id) {
+				candidates = append(candidates, id)
+			}
+		}
+		if len(candidates) <= limit {
+			return
+		}
+		i := slices.IndexFunc(candidates, func(id string) bool { return t.jobs[id].Notified() })
+		id := candidates[max(i, 0)]
+		delete(t.jobs, id)
+		t.finished = slices.DeleteFunc(t.finished, func(f string) bool { return f == id })
+	}
 }
 
 // Manager owns the jobs of every thread. It is shared by concurrent runs, so
@@ -169,7 +183,9 @@ type Manager[H Handle] struct {
 	prefix string
 	limits Limits
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// pinned reports the ended jobs never forgotten; nil pins none.
+	pinned   func(H) bool
 	threads  map[string]*thread[H]
 	closed   bool
 	watchers sync.WaitGroup
@@ -185,6 +201,18 @@ func NewManager[H Handle](prefix string, l Limits) *Manager[H] {
 		panic(fmt.Sprintf("jobs: limits must be positive, got %+v", l))
 	}
 	return &Manager[H]{prefix: prefix, limits: l, threads: map[string]*thread[H]{}}
+}
+
+// SetPinned makes the Manager keep every ended job whose handle pinned
+// reports, such as one that waits for a decision: such a job is never
+// forgotten to stay within Limits.MaxFinished, nor counted against it. pinned
+// is called with the Manager's lock held, so it must be quick and must not
+// call the Manager; a job it stops pinning is trimmed when the next job of
+// its thread ends. nil pins none.
+func (m *Manager[H]) SetPinned(pinned func(H) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pinned = pinned
 }
 
 // MaxFinished returns the number of ended jobs remembered per thread.
@@ -328,9 +356,7 @@ func (m *Manager[H]) Restart(threadID, id string, start func() error) (*Job[H], 
 			j.restarting = false
 			if at >= 0 {
 				t.finished = slices.Insert(t.finished, min(at, len(t.finished)), id)
-				for len(t.finished) > m.limits.MaxFinished {
-					t.evictOne()
-				}
+				t.trim(m.limits.MaxFinished, m.pinned)
 			}
 			m.mu.Unlock()
 		}
@@ -384,9 +410,7 @@ func (m *Manager[H]) Adopt(threadID, id string, started time.Time, h H) (*Job[H]
 		t.next = max(t.next, m.highestNumber([]string{id}))
 		t.jobs[id] = j
 		t.finished = append(t.finished, id)
-		for len(t.finished) > m.limits.MaxFinished {
-			t.evictOne()
-		}
+		t.trim(m.limits.MaxFinished, m.pinned)
 		return j, nil
 	}
 	if t.running()+t.starting >= m.limits.MaxRunning {
@@ -425,9 +449,7 @@ func (m *Manager[H]) watch(t *thread[H], j *Job[H]) {
 		return
 	}
 	t.finished = append(t.finished, j.ID)
-	for len(t.finished) > m.limits.MaxFinished {
-		t.evictOne()
-	}
+	t.trim(m.limits.MaxFinished, m.pinned)
 	t.lastFinished = j.ID
 	close(t.changed)
 	t.changed = make(chan struct{})

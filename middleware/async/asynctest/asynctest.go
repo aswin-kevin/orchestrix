@@ -10,7 +10,8 @@
 // cancels a running episode and is a no-op once Done, also on a waiting
 // one; Send fails with async.ErrFinished once Done. Where a Handle
 // implements async.Continuer or async.Resolver, it also checks that the
-// next episode is a new Handle and that only one call per Handle succeeds.
+// next episode is a new Handle that runs to its end (approving every pending
+// request, for a Resolver) and that only one call per Handle succeeds.
 package asynctest
 
 import (
@@ -35,6 +36,8 @@ const (
 	ScenarioRunUntilStopped
 	// ScenarioWait stops waiting for a decision: its Outcome is
 	// async.StatusWaiting with a Pending interrupt of at least one request.
+	// A Handle that is an async.Resolver must, once every request is
+	// approved, run a next episode that ends completed.
 	ScenarioWait
 )
 
@@ -82,6 +85,7 @@ func Run(t *testing.T, start StartFunc) {
 		{"WaitOutcome", ScenarioWait, testWaitOutcome},
 		{"ContinueReturnsNewHandle", ScenarioComplete, testContinueReturnsNewHandle},
 		{"ContinueOnce", ScenarioComplete, testContinueOnce},
+		{"ResolveReturnsNewHandle", ScenarioWait, testResolveReturnsNewHandle},
 		{"ResolveOnce", ScenarioWait, testResolveOnce},
 	}
 	for _, c := range cases {
@@ -312,6 +316,45 @@ func testContinueOnce(t *testing.T, h async.Handle) {
 	ctx, cancel := context.WithTimeout(context.Background(), EpisodeTimeout)
 	defer cancel()
 	once(t, func() (async.Handle, error) { return c.Continue(ctx, "one more thing") }, async.ErrFinished, "Continue")
+}
+
+func testResolveReturnsNewHandle(t *testing.T, h async.Handle) {
+	r, ok := h.(async.Resolver)
+	if !ok {
+		t.Skip("the Handle does not implement async.Resolver")
+	}
+	waitDone(t, h, EpisodeTimeout, "the start")
+	first := outcome(t, h)
+	if first.Pending == nil {
+		t.Fatalf("waiting Outcome without Pending: %+v", first)
+	}
+	decisions := make([]agent.Decision, len(first.Pending.Requests))
+	for i, req := range first.Pending.Requests {
+		decisions[i] = agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Approve}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), EpisodeTimeout)
+	defer cancel()
+	next, err := r.Resolve(ctx, decisions)
+	if err != nil {
+		t.Fatalf("Resolve = %v", err)
+	}
+	if next == nil {
+		t.Fatal("Resolve returned a nil Handle and no error")
+	}
+	stopLater(t, next)
+	if next == h {
+		t.Fatal("Resolve returned the receiver; want a new Handle")
+	}
+	if !isClosed(h.Done()) {
+		t.Fatal("the waiting episode's Done reopened")
+	}
+	if again := outcome(t, h); !sameOutcome(first, again) {
+		t.Fatalf("the waiting episode's Outcome changed: %+v, then %+v", first, again)
+	}
+	waitDone(t, next, EpisodeTimeout, "Resolve")
+	if out := outcome(t, next); out.Status != async.StatusCompleted {
+		t.Fatalf("the resolved episode's Status = %q, want %q (outcome %+v)", out.Status, async.StatusCompleted, out)
+	}
 }
 
 func testResolveOnce(t *testing.T, h async.Handle) {
