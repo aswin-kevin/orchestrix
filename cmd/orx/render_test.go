@@ -23,10 +23,10 @@ func TestTruncate(t *testing.T) {
 		{"long cut with ellipsis", "abcdefgh", 5, "abcd…"},
 		{"counts runes not bytes", "ééééé", 3, "éé…"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := truncate(tc.in, tc.limit); got != tc.want {
-				t.Errorf("truncate(%q, %d) = %q, want %q", tc.in, tc.limit, got, tc.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := truncate(tt.in, tt.limit); got != tt.want {
+				t.Errorf("truncate(%q, %d) = %q, want %q", tt.in, tt.limit, got, tt.want)
 			}
 		})
 	}
@@ -51,10 +51,10 @@ func TestCompactJSON(t *testing.T) {
 		{"invalid json falls back to first line", "not json\nmore", "not json"},
 		{"long input truncated", `"` + strings.Repeat("x", 200) + `"`, `"` + strings.Repeat("x", maxLineRunes-2) + "…"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := compactJSON(json.RawMessage(tc.in)); got != tc.want {
-				t.Errorf("compactJSON = %q, want %q", got, tc.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := compactJSON(json.RawMessage(tt.in)); got != tt.want {
+				t.Errorf("compactJSON = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -134,11 +134,11 @@ func TestSplitIncompleteRune(t *testing.T) {
 		{"empty", "", "", ""},
 		{"ascii", "abc", "abc", ""},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			complete, pending := splitIncompleteRune(tc.in)
-			if complete != tc.complete || pending != tc.pending {
-				t.Errorf("splitIncompleteRune(%q) = (%q, %q), want (%q, %q)", tc.in, complete, pending, tc.complete, tc.pending)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			complete, pending := splitIncompleteRune(tt.in)
+			if complete != tt.complete || pending != tt.pending {
+				t.Errorf("splitIncompleteRune(%q) = (%q, %q), want (%q, %q)", tt.in, complete, pending, tt.complete, tt.pending)
 			}
 		})
 	}

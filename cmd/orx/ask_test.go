@@ -21,7 +21,7 @@ func TestAskSelectsNumberedOptions(t *testing.T) {
 	out := &promptLog{}
 	ap := activeApprover(newLineReader(strings.NewReader("2\n1, 3\n")), out)
 
-	answers, err := ap.Ask(context.Background(), twoQuestions)
+	answers, err := ap.Ask(t.Context(), twoQuestions)
 
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestAskFreeText(t *testing.T) {
 		t.Run(line, func(t *testing.T) {
 			ap := activeApprover(newLineReader(strings.NewReader(line+"\n")), &promptLog{})
 
-			answers, err := ap.Ask(context.Background(), twoQuestions[:1])
+			answers, err := ap.Ask(t.Context(), twoQuestions[:1])
 
 			if err != nil {
 				t.Fatal(err)
@@ -71,7 +71,7 @@ func TestAskFreeText(t *testing.T) {
 func TestAskEndOfInputFails(t *testing.T) {
 	ap := activeApprover(newLineReader(strings.NewReader("1\n")), &promptLog{})
 
-	_, err := ap.Ask(context.Background(), twoQuestions)
+	_, err := ap.Ask(t.Context(), twoQuestions)
 
 	if !errors.Is(err, io.EOF) {
 		t.Errorf("err = %v, want end of input", err)
@@ -82,7 +82,7 @@ func TestAskCancelled(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pw.Close()
 	ap := activeApprover(newLineReader(pr), &promptLog{})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	if _, err := ap.Ask(ctx, twoQuestions); !errors.Is(err, context.Canceled) {
@@ -99,7 +99,7 @@ func TestAskEscapesModelText(t *testing.T) {
 		Options:  []askuser.Choice{{Label: "A\x07", Description: "d\u009b"}, {Label: "B\r"}},
 	}}
 
-	if _, err := ap.Ask(context.Background(), qs); err != nil {
+	if _, err := ap.Ask(t.Context(), qs); err != nil {
 		t.Fatal(err)
 	}
 
@@ -118,7 +118,7 @@ func TestAskPromptMatchesQuestionKind(t *testing.T) {
 	out := &promptLog{}
 	ap := activeApprover(newLineReader(strings.NewReader("1\n1\n")), out)
 
-	if _, err := ap.Ask(context.Background(), twoQuestions); err != nil {
+	if _, err := ap.Ask(t.Context(), twoQuestions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,7 +140,7 @@ func TestQuestionsWhileIdleFailWithoutPrompt(t *testing.T) {
 	// no turn runs
 	ap := newApprover(newLineReader(strings.NewReader("1\n")), out)
 
-	_, err := ap.Ask(context.Background(), []askuser.Question{{Question: "Which?", Options: []askuser.Choice{{Label: "a"}, {Label: "b"}}}})
+	_, err := ap.Ask(t.Context(), []askuser.Question{{Question: "Which?", Options: []askuser.Choice{{Label: "a"}, {Label: "b"}}}})
 
 	if err == nil || err.Error() != deniedNoTerminal {
 		t.Errorf("err = %v, want %q", err, deniedNoTerminal)

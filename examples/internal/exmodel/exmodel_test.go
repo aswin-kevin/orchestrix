@@ -58,22 +58,22 @@ func TestCheckOffline(t *testing.T) {
 
 func TestCheckLiveKeys(t *testing.T) {
 	const secret = "sk-test-not-printed"
-	for _, tc := range []struct{ spec, env string }{
+	for _, tt := range []struct{ spec, env string }{
 		{"anthropic:m", "ANTHROPIC_API_KEY"},
 		{"openai:m", "OPENAI_API_KEY"},
 		{"openai-responses:m", "OPENAI_API_KEY"},
 	} {
-		t.Run(tc.spec, func(t *testing.T) {
-			t.Setenv(ModelEnv, tc.spec)
+		t.Run(tt.spec, func(t *testing.T) {
+			t.Setenv(ModelEnv, tt.spec)
 			t.Setenv("ANTHROPIC_API_KEY", "")
 			t.Setenv("OPENAI_API_KEY", "")
 			err := Check()
-			if err == nil || !strings.Contains(err.Error(), tc.env) {
-				t.Fatalf("Check() without a key = %v, want an error naming %s", err, tc.env)
+			if err == nil || !strings.Contains(err.Error(), tt.env) {
+				t.Fatalf("Check() without a key = %v, want an error naming %s", err, tt.env)
 			}
-			t.Setenv(tc.env, secret)
+			t.Setenv(tt.env, secret)
 			if err := Check(); err != nil {
-				t.Errorf("Check() with %s set = %v, want nil", tc.env, err)
+				t.Errorf("Check() with %s set = %v, want nil", tt.env, err)
 			}
 		})
 	}

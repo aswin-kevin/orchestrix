@@ -49,7 +49,7 @@ func TestCancelAtIdlePromptStopsBackgroundJobs(t *testing.T) {
 	// The pipe stays open, so the REPL ends up waiting at the idle prompt.
 	pr, pw := io.Pipe()
 	defer pw.Close()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	newProvider := func(llm.Config) (llm.Provider, error) { return provider, nil }
 	done := make(chan int, 1)
@@ -152,7 +152,7 @@ func TestInterruptDuringSetupClosesMCPServers(t *testing.T) {
 	newProvider := func(llm.Config) (llm.Provider, error) { return llmtest.New(), nil }
 	done := make(chan int, 1)
 	go func() {
-		done <- run(context.Background(), args, strings.NewReader(""), io.Discard, io.Discard, newProvider)
+		done <- run(t.Context(), args, strings.NewReader(""), io.Discard, io.Discard, newProvider)
 	}()
 	pid := pidOf(t, pidFile)
 

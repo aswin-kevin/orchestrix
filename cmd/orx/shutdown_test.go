@@ -62,16 +62,16 @@ func TestShutdownHint(t *testing.T) {
 		{"after Ctrl-C", true, "orx: shutting down; press Ctrl-C again to force quit\n"},
 		{"after end of input", false, "orx: shutting down; press Ctrl-C to force quit\n"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			setInterrupted(t, tc.interrupted)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setInterrupted(t, tt.interrupted)
 			var stderr bytes.Buffer
 			slow := func() { time.Sleep(shutdownNotice + shutdownNotice/2) }
 
 			shutdownWithForce(slow, make(chan os.Signal), &stderr, func(int) { t.Error("exit called") })
 
-			if got := stderr.String(); got != tc.want {
-				t.Errorf("stderr = %q, want %q", got, tc.want)
+			if got := stderr.String(); got != tt.want {
+				t.Errorf("stderr = %q, want %q", got, tt.want)
 			}
 		})
 	}

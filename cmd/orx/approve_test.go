@@ -27,7 +27,7 @@ func TestApproverCancelledWhileWaitingDenies(t *testing.T) {
 	pr, pw := io.Pipe() // never written to: the prompt would block forever
 	defer pw.Close()
 	ap := activeApprover(newLineReader(pr), &bytes.Buffer{})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	done := make(chan permission.Decision, 1)
@@ -46,7 +46,7 @@ func TestApproverCancelledWhileWaitingDenies(t *testing.T) {
 func TestApproverEndOfInputDenies(t *testing.T) {
 	ap := activeApprover(newLineReader(strings.NewReader("")), &bytes.Buffer{})
 
-	d := ap.decide(context.Background(), permission.Request{Tool: "write_file"}, "")
+	d := ap.decide(t.Context(), permission.Request{Tool: "write_file"}, "")
 
 	if d.Behavior != permission.Deny || d.Message != deniedByUser {
 		t.Errorf("decision = %+v, want deny %q", d, deniedByUser)
@@ -97,7 +97,7 @@ func TestApproverSerializesConcurrentPrompts(t *testing.T) {
 
 	decisions := make(chan permission.Decision, 2)
 	for _, tool := range []string{"write_file", "edit_file"} {
-		go func() { decisions <- ap.decide(context.Background(), permission.Request{Tool: tool}, "") }()
+		go func() { decisions <- ap.decide(t.Context(), permission.Request{Tool: tool}, "") }()
 	}
 	waitPrompts(t, out, 1)
 	time.Sleep(50 * time.Millisecond) // room for a second, unserialized prompt
@@ -130,10 +130,10 @@ func TestPromptNamesSubagent(t *testing.T) {
 		{"top-level run", agent.RunInfo{AgentName: "main"}, true, ""},
 		{"subagent", agent.RunInfo{AgentName: "researcher", Depth: 1}, true, "[researcher] "},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := askerLabel(tc.info, tc.ok); got != tc.want {
-				t.Errorf("askerLabel = %q, want %q", got, tc.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := askerLabel(tt.info, tt.ok); got != tt.want {
+				t.Errorf("askerLabel = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -145,13 +145,13 @@ func TestApproverNeverRemembersDisableRememberRequests(t *testing.T) {
 	// A tool other than exit_plan_mode, which has a prompt of its own.
 	req := permission.Request{Tool: "deploy", DisableRemember: true}
 
-	if d := ap.decide(context.Background(), req, ""); d.Behavior != permission.Allow {
+	if d := ap.decide(t.Context(), req, ""); d.Behavior != permission.Allow {
 		t.Fatalf("first = %+v, want allow", d)
 	}
-	if d := ap.decide(context.Background(), req, ""); d.Behavior != permission.Allow {
+	if d := ap.decide(t.Context(), req, ""); d.Behavior != permission.Allow {
 		t.Fatalf("second = %+v, want allow", d)
 	}
-	if d := ap.decide(context.Background(), req, ""); d.Behavior != permission.Deny {
+	if d := ap.decide(t.Context(), req, ""); d.Behavior != permission.Deny {
 		t.Fatalf("third = %+v, want deny: a is not offered, so it does not allow", d)
 	}
 	if got := out.prompts(); got != 3 {
@@ -169,8 +169,8 @@ func TestApproverAlwaysStillWorksForOrdinaryRequests(t *testing.T) {
 	out := &promptLog{}
 	ap := activeApprover(newLineReader(strings.NewReader("a\n")), out)
 	req := permission.Request{Tool: "write_file"}
-	ap.decide(context.Background(), req, "")
-	ap.decide(context.Background(), req, "")
+	ap.decide(t.Context(), req, "")
+	ap.decide(t.Context(), req, "")
 	if got := out.prompts(); got != 1 {
 		t.Fatalf("prompts = %d, want 1", got)
 	}
@@ -179,7 +179,7 @@ func TestApproverAlwaysStillWorksForOrdinaryRequests(t *testing.T) {
 func TestApproverIgnoresEarlierAlwaysForDisableRemember(t *testing.T) {
 	ap := activeApprover(newLineReader(strings.NewReader("n\n")), &promptLog{})
 	ap.allowAlways("exit_plan_mode")
-	d := ap.decide(context.Background(), permission.Request{Tool: "exit_plan_mode", DisableRemember: true}, "")
+	d := ap.decide(t.Context(), permission.Request{Tool: "exit_plan_mode", DisableRemember: true}, "")
 	if d.Behavior != permission.Deny {
 		t.Fatalf("decision = %+v, want the prompt to run and deny", d)
 	}
@@ -189,7 +189,7 @@ func TestApproverEscapesSubject(t *testing.T) {
 	out := &promptLog{}
 	ap := activeApprover(newLineReader(strings.NewReader("n\n")), out)
 
-	ap.decide(context.Background(), permission.Request{Tool: "execute", Subject: "ls\x1b[2K\rrm -rf /"}, "")
+	ap.decide(t.Context(), permission.Request{Tool: "execute", Subject: "ls\x1b[2K\rrm -rf /"}, "")
 
 	got := out.buf.String()
 	if strings.ContainsAny(got, "\x1b\r") {
@@ -209,7 +209,7 @@ func TestPlanPromptShowsFullPlan(t *testing.T) {
 	out := &promptLog{}
 	ap := activeApprover(newLineReader(strings.NewReader("y\n")), out)
 
-	d := ap.decide(context.Background(), planRequest("1. read\n\t2. write\x1b]0;owned\x07"), "")
+	d := ap.decide(t.Context(), planRequest("1. read\n\t2. write\x1b]0;owned\x07"), "")
 
 	if d.Behavior != permission.Allow {
 		t.Fatalf("decision = %+v, want allow", d)
@@ -235,15 +235,15 @@ func TestPlanPromptRejectionReadsFeedback(t *testing.T) {
 		{"end of input", "n\n", deniedByUser},
 		{"always is not offered", "a\nno\n", "no"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			out := &promptLog{}
-			ap := activeApprover(newLineReader(strings.NewReader(tc.input)), out)
+			ap := activeApprover(newLineReader(strings.NewReader(tt.input)), out)
 
-			d := ap.decide(context.Background(), planRequest("step"), "")
+			d := ap.decide(t.Context(), planRequest("step"), "")
 
-			if d.Behavior != permission.Deny || d.Message != tc.want {
-				t.Errorf("decision = %+v, want deny %q", d, tc.want)
+			if d.Behavior != permission.Deny || d.Message != tt.want {
+				t.Errorf("decision = %+v, want deny %q", d, tt.want)
 			}
 			if !strings.Contains(out.buf.String(), "Feedback") {
 				t.Errorf("output = %q, want a feedback prompt", out.buf.String())
@@ -259,7 +259,7 @@ func TestPlanPromptRefusesCutPlan(t *testing.T) {
 	out := &promptLog{}
 	ap := activeApprover(newLineReader(strings.NewReader("y\n")), out)
 
-	d := ap.decide(context.Background(), planRequest("step one"+planmode.TruncationMarker), "")
+	d := ap.decide(t.Context(), planRequest("step one"+planmode.TruncationMarker), "")
 
 	if d.Behavior != permission.Deny || d.Message != deniedPlanTooLong {
 		t.Errorf("decision = %+v, want deny %q", d, deniedPlanTooLong)
@@ -274,7 +274,7 @@ func TestPlanPromptCancelled(t *testing.T) {
 		pr, pw := io.Pipe()
 		defer pw.Close()
 		ap := activeApprover(newLineReader(pr), &promptLog{})
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
 		if d := ap.decide(ctx, planRequest("step"), ""); d.Behavior != permission.Deny || d.Message != deniedCancelled {
@@ -286,7 +286,7 @@ func TestPlanPromptCancelled(t *testing.T) {
 		defer pw.Close()
 		out := &promptLog{}
 		ap := activeApprover(newLineReader(pr), out)
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		done := make(chan permission.Decision, 1)
 		go func() { done <- ap.decide(ctx, planRequest("step"), "") }()
@@ -317,7 +317,7 @@ func TestApprovalWhileIdleDeniedWithoutPrompt(t *testing.T) {
 	// no turn runs
 	ap := newApprover(newLineReader(strings.NewReader("y\n")), out)
 
-	d := ap.decide(context.Background(), permission.Request{Tool: "write_file", Subject: "/x"}, "")
+	d := ap.decide(t.Context(), permission.Request{Tool: "write_file", Subject: "/x"}, "")
 
 	if d.Behavior != permission.Deny || d.Message != deniedNoTerminal {
 		t.Errorf("decision = %+v, want a denial %q", d, deniedNoTerminal)

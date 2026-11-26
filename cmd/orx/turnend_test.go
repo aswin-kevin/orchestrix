@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -43,7 +42,7 @@ func TestPlanApprovalPendingAtTurnEndIsDenied(t *testing.T) {
 	_, end := ap.beginTurn()
 
 	done := make(chan permission.Decision, 1)
-	go func() { done <- ap.decide(context.Background(), planRequest("1. read"), "") }()
+	go func() { done <- ap.decide(t.Context(), planRequest("1. read"), "") }()
 	waitFor(t, "the plan prompt", func() bool { return out.contains(planPrompt) })
 	end()
 
@@ -73,7 +72,7 @@ func TestMultiQuestionAskCutAtTurnEnd(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		answers, err := ap.Ask(context.Background(), questions)
+		answers, err := ap.Ask(t.Context(), questions)
 		done <- result{answers, err}
 	}()
 	waitFor(t, "the first question", func() bool { return out.contains("First?") })
@@ -89,7 +88,7 @@ func TestMultiQuestionAskCutAtTurnEnd(t *testing.T) {
 		t.Errorf("output = %q, want the open question closed with %q", out.buf.String(), noAnswerTurnEnded)
 	}
 	// The terminal is free again for the next turn.
-	if err := ap.lockPrompt(context.Background()); err != nil {
+	if err := ap.lockPrompt(t.Context()); err != nil {
 		t.Fatalf("terminal still held: %v", err)
 	}
 	ap.unlockPrompt()

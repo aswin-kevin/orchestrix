@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -106,10 +105,10 @@ func TestMemoryLoadedByDefault(t *testing.T) {
 			[]string{"Always run the linter.", "Prefer table tests."}, nil},
 		{"-no-memory", []string{"-no-memory"}, nil, []string{"Always run the linter."}},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			provider := textTurn()
-			args := append([]string{"-model", "openai:test", "-dir", dir, "-p", "hi"}, tc.args...)
+			args := append([]string{"-model", "openai:test", "-dir", dir, "-p", "hi"}, tt.args...)
 
 			code, _, stderr := invoke(t, "", provider, args...)
 
@@ -117,12 +116,12 @@ func TestMemoryLoadedByDefault(t *testing.T) {
 				t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
 			}
 			sys := systemText(provider.Requests[0])
-			for _, w := range tc.want {
+			for _, w := range tt.want {
 				if !strings.Contains(sys, w) {
 					t.Errorf("system prompt lacks %q", w)
 				}
 			}
-			for _, n := range tc.not {
+			for _, n := range tt.not {
 				if strings.Contains(sys, n) {
 					t.Errorf("system prompt contains %q", n)
 				}
@@ -325,15 +324,15 @@ func TestWebSearchNeedsKey(t *testing.T) {
 		{"unknown backend", "", []string{"-web", "-search", "bogus"}},
 		{"search without web", "", []string{"-search", "ddg"}},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			args := append([]string{"-model", "openai:test", "-dir", t.TempDir(), "-p", "hi"}, tc.args...)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append([]string{"-model", "openai:test", "-dir", t.TempDir(), "-p", "hi"}, tt.args...)
 			code, _, stderr := invoke(t, "", textTurn(), args...)
 			if code != exitUsage {
 				t.Errorf("exit code = %d, want %d (stderr %q)", code, exitUsage, stderr)
 			}
-			if tc.env != "" && !strings.Contains(stderr, tc.env) {
-				t.Errorf("stderr = %q, want it to name %s", stderr, tc.env)
+			if tt.env != "" && !strings.Contains(stderr, tt.env) {
+				t.Errorf("stderr = %q, want it to name %s", stderr, tt.env)
 			}
 		})
 	}
@@ -398,7 +397,7 @@ func TestSkillsLoadedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, err := range a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("hi")}}) {
+	for _, err := range a.Run(t.Context(), agent.Input{Messages: []llm.Message{llm.UserText("hi")}}) {
 		if err != nil {
 			t.Fatal(err)
 		}

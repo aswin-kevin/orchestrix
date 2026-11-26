@@ -75,7 +75,7 @@ func invoke(t *testing.T, stdin string, provider llm.Provider, args ...string) (
 	t.Helper()
 	var out, errOut bytes.Buffer
 	newProvider := func(llm.Config) (llm.Provider, error) { return provider, nil }
-	code = run(context.Background(), args, strings.NewReader(stdin), &out, &errOut, newProvider)
+	code = run(t.Context(), args, strings.NewReader(stdin), &out, &errOut, newProvider)
 	return code, out.String(), errOut.String()
 }
 
@@ -118,20 +118,20 @@ func TestApproverPrompt(t *testing.T) {
 		{"yes allows the write", "y\n", true, "Allow write_file /out.txt? [y/N/a] "},
 		{"no denies the write", "n\n", false, "denied by user"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			code, _, stderr := invoke(t, tc.answer, writeTurns(), "-model", "openai:test", "-dir", dir, "-p", "write it")
+			code, _, stderr := invoke(t, tt.answer, writeTurns(), "-model", "openai:test", "-dir", dir, "-p", "write it")
 
 			if code != 0 {
 				t.Fatalf("exit code = %d, want 0 (stderr %q)", code, stderr)
 			}
-			if !strings.Contains(stderr, tc.wantStderr) {
-				t.Errorf("stderr = %q, want it to contain %q", stderr, tc.wantStderr)
+			if !strings.Contains(stderr, tt.wantStderr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr, tt.wantStderr)
 			}
 			_, err := os.Stat(filepath.Join(dir, "out.txt"))
-			if written := err == nil; written != tc.wantWritten {
-				t.Errorf("file written = %v, want %v", written, tc.wantWritten)
+			if written := err == nil; written != tt.wantWritten {
+				t.Errorf("file written = %v, want %v", written, tt.wantWritten)
 			}
 		})
 	}
@@ -226,9 +226,9 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{"unknown flag", []string{"-model", "openai:test", "-bogus"}},
 		{"unknown mode", []string{"-model", "openai:test", "-mode", "nope", "-p", "hi"}},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			code, _, _ := invoke(t, "", llmtest.New(), tc.args...)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, _, _ := invoke(t, "", llmtest.New(), tt.args...)
 			if code != 2 {
 				t.Errorf("exit code = %d, want 2", code)
 			}
@@ -274,7 +274,7 @@ func TestModelFromEnvironment(t *testing.T) {
 		return llmtest.New(llmtest.Turn{Text: "ok"}), nil
 	}
 
-	code := run(context.Background(), []string{"-dir", t.TempDir(), "-p", "hi"},
+	code := run(t.Context(), []string{"-dir", t.TempDir(), "-p", "hi"},
 		strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, newProvider)
 
 	if code != 0 || got.Model != "from-env" {
@@ -372,7 +372,7 @@ func TestErrorPathsAreTerminalSafe(t *testing.T) {
 	t.Run("setup error", func(t *testing.T) {
 		var errOut bytes.Buffer
 		newProvider := func(llm.Config) (llm.Provider, error) { return nil, errors.New("bad key" + evil) }
-		run(context.Background(), []string{"-model", "openai:test", "-dir", t.TempDir(), "-p", "hi"},
+		run(t.Context(), []string{"-model", "openai:test", "-dir", t.TempDir(), "-p", "hi"},
 			strings.NewReader(""), &bytes.Buffer{}, &errOut, newProvider)
 		if stderr := errOut.String(); strings.ContainsAny(stderr, "\x1b\x07") || !strings.Contains(stderr, "bad key") {
 			t.Errorf("stderr = %q, want the error with control characters escaped", stderr)

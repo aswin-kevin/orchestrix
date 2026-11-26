@@ -3,7 +3,6 @@
 package main
 
 import (
-	"context"
 	"io"
 	"os"
 	"os/signal"
@@ -73,7 +72,7 @@ func TestFirstCtrlCAtIdleDoesNotForceExit(t *testing.T) {
 	newProvider := func(llm.Config) (llm.Provider, error) { return llmtest.New(), nil }
 	done := make(chan int, 1)
 	go func() {
-		done <- run(context.Background(), []string{"-model", "openai:test", "-dir", t.TempDir(), "-async"},
+		done <- run(t.Context(), []string{"-model", "openai:test", "-dir", t.TempDir(), "-async"},
 			pr, io.Discard, stderr, newProvider)
 	}()
 	select {
@@ -141,15 +140,15 @@ func TestSIGTERMDuringShutdownForcesExit(t *testing.T) {
 }
 
 func TestCtrlCAtIdleAfterPendingQuestionEndsRun(t *testing.T) {
-	for _, tc := range pendingCases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range pendingTests {
+		t.Run(tt.name, func(t *testing.T) {
 			exited := make(chan int, 1)
 			osExit = func(code int) { exited <- code }
 			t.Cleanup(func() { osExit = os.Exit })
 			stderr := newSyncBuffer()
 			childResult := make(chan string, 1)
-			provider := pendingAtTurnEnd(stderr, tc.call, tc.shown, childResult)
-			s := startREPLWith(t, context.Background(), stderr, provider, "-model", "openai:test", "-dir", t.TempDir(), "-async")
+			provider := pendingAtTurnEnd(stderr, tt.call, tt.shown, childResult)
+			s := startREPLWith(t, t.Context(), stderr, provider, "-model", "openai:test", "-dir", t.TempDir(), "-async")
 
 			s.send("start it")
 			// readIdle watches for Ctrl-C before it prints the prompt.

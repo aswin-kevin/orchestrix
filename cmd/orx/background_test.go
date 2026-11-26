@@ -106,7 +106,7 @@ type replSession struct {
 
 func startREPL(t *testing.T, provider llm.Provider, args ...string) *replSession {
 	t.Helper()
-	return startREPLWith(t, context.Background(), newSyncBuffer(), provider, args...)
+	return startREPLWith(t, t.Context(), newSyncBuffer(), provider, args...)
 }
 
 // startREPLWith is startREPL with run's context and stderr given.
@@ -355,9 +355,9 @@ func askTurn() llmtest.Turn {
 	}}}}
 }
 
-// pendingCases are the questions left open at the end of a turn: an
+// pendingTests are the questions left open at the end of a turn: an
 // approval and an ask_user question.
-var pendingCases = []struct {
+var pendingTests = []struct {
 	name  string
 	call  llmtest.Turn
 	shown string
@@ -367,13 +367,13 @@ var pendingCases = []struct {
 }
 
 func TestQuestionPendingAtTurnEndIsDenied(t *testing.T) {
-	for _, tc := range pendingCases {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+	for _, tt := range pendingTests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			stderr := newSyncBuffer()
 			childResult := make(chan string, 1)
-			provider := pendingAtTurnEnd(stderr, tc.call, tc.shown, childResult)
+			provider := pendingAtTurnEnd(stderr, tt.call, tt.shown, childResult)
 			s := startREPLWith(t, ctx, stderr, provider, "-model", "openai:test", "-dir", t.TempDir(), "-async")
 
 			s.send("start it")
