@@ -48,8 +48,8 @@ type Subagent struct {
 	// Rules replaces the parent's permission rules; nil means the parent's.
 	Rules *permission.Rules
 	// MaxTurns bounds the subagent's run; 0 means the parent's MaxTurns
-	// and a negative value leaves the subagent's run unbounded (see
-	// agent.Config.MaxTurns).
+	// and agent.Unlimited (-1) leaves the subagent's run unbounded (see
+	// agent.Config.MaxTurns); any other negative value is an error.
 	MaxTurns int
 	// Skills limits the skills offered to the subagent (see
 	// skills.Scope) to these names, within those the delegating run is
@@ -125,7 +125,7 @@ func validateSpecs(cfg Config, generalPrompt string) (map[string]Subagent, []str
 	return specs, order, nil
 }
 
-// validateSpec checks the required fields of one subagent.
+// validateSpec checks the required fields and MaxTurns of one subagent.
 func validateSpec(s Subagent) error {
 	if err := names.Validate(s.Name); err != nil {
 		return fmt.Errorf("subagents: subagent %q: %w", s.Name, err)
@@ -137,6 +137,8 @@ func validateSpec(s Subagent) error {
 		return fmt.Errorf("subagents: subagent %q: Description is required", s.Name)
 	case s.SystemPrompt == "":
 		return fmt.Errorf("subagents: subagent %q: SystemPrompt is required", s.Name)
+	case s.MaxTurns < 0 && s.MaxTurns != agent.Unlimited:
+		return fmt.Errorf("subagents: subagent %q: MaxTurns is negative", s.Name)
 	}
 	if _, err := childSystem(s); err != nil {
 		return fmt.Errorf("subagents: subagent %q: %w", s.Name, err)

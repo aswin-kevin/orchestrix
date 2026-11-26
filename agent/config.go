@@ -33,6 +33,10 @@ const (
 	DefaultMaxTurns = 100
 )
 
+// Unlimited is the Config.MaxTurns (and subagents.Subagent.MaxTurns) value
+// that leaves a run's tool-calling turns unbounded.
+const Unlimited = -1
+
 // Settlement configures the wrap-up phase a run enters when it hits a limit
 // (such as max turns): the model gets a few more turns, with DisabledTools
 // withheld, to summarise where it got to. The run still ends with the reason
@@ -41,7 +45,7 @@ type Settlement struct {
 	// Prompt is sent to the model when the settlement starts.
 	Prompt string
 	// MaxTurns bounds the settlement phase; zero means
-	// DefaultSettlementMaxTurns.
+	// DefaultSettlementMaxTurns and a negative value is an error.
 	MaxTurns int
 	// DisabledTools names tools withheld during settlement.
 	DisabledTools []string
@@ -64,7 +68,7 @@ type Config struct {
 	// leading sections that are stable enough to be cached.
 	System []string
 	// CacheBoundary is the number of leading System sections that are stable
-	// enough to be cached; zero marks none.
+	// enough to be cached; zero marks none and a negative value is an error.
 	CacheBoundary int
 
 	// Tools are the tools the model may call, in addition to any contributed
@@ -131,12 +135,12 @@ type Config struct {
 	// implements Closer, or else io.Closer.
 	Checkpointer checkpoint.Checkpointer
 	// LeaseTTL is how long a run's lease lasts without renewal; zero means
-	// DefaultLeaseTTL. It applies only when Checkpointer implements
-	// checkpoint.Leaser. Each Acquire, renew and release call is bounded by
-	// max(LeaseTTL/2, 5s). An Acquire that times out ends the run with
-	// ReasonCheckpointError, but the store may still have granted the lease:
-	// it then holds the thread until LeaseTTL expires, and later runs end
-	// with ReasonBusy until then.
+	// DefaultLeaseTTL and a negative value is an error. It applies only when
+	// Checkpointer implements checkpoint.Leaser. Each Acquire, renew and
+	// release call is bounded by max(LeaseTTL/2, 5s). An Acquire that times
+	// out ends the run with ReasonCheckpointError, but the store may still
+	// have granted the lease: it then holds the thread until LeaseTTL expires,
+	// and later runs end with ReasonBusy until then.
 	LeaseTTL time.Duration
 
 	// OnClose functions release resources the agent does not otherwise own,
@@ -168,48 +172,50 @@ type Config struct {
 
 	// MaxTokens caps the output tokens of each model request; zero means the
 	// profile's MaxOutput (Profile.MaxOutput), and when that is zero too the
-	// provider's own default applies. Temperature is passed through; nil
-	// leaves the provider default.
+	// provider's own default applies. A negative value is an error.
 	MaxTokens int
 	// Temperature is the sampling temperature sent with each request; nil
 	// leaves the provider default.
 	Temperature *float64
 
 	// MaxTurns bounds the model turns of a run that call tools; zero means
-	// DefaultMaxTurns and a negative value means unbounded. A run that
-	// reaches it ends with ReasonMaxTurns after the tools of its last turn
-	// ran. This is not Settlement.MaxTurns.
+	// DefaultMaxTurns and Unlimited (-1) means unbounded; any other
+	// negative value is an error. A run that reaches it ends with
+	// ReasonMaxTurns after the tools of its last turn ran. This is not
+	// Settlement.MaxTurns.
 	MaxTurns int
 	// MaxDuration bounds the wall-clock time of a run; zero means
-	// unbounded.
+	// unbounded and a negative value is an error.
 	MaxDuration time.Duration
-	// MaxTotalTokens is a hard cap on the tokens a run spends; zero means
-	// no cap. The count is the sum of Usage.Input, Output, CacheRead and
-	// CacheWrite over the run's own model calls. Nested subagent runs are NOT
-	// counted: their usage is not part of the parent's Final.Usage. Children
-	// inherit the same cap and count their own usage against it, so total
-	// spend with N subagent runs can reach (N+1) times the cap. Usage resets
-	// per run, so a run resumed after an interrupt starts from zero. Once
-	// the cap is reached the run ends with ReasonTokenLimit instead of taking
-	// another turn or continuation. When the reply that reached it contains
-	// tool calls they do not run; on the next run on the same State an
-	// OrphanResolver answers them, or else history repair answers them as
-	// interrupted. A reply without tool calls that reaches the cap still
-	// completes normally. If the turn limit is reached on the same turn,
-	// ReasonTokenLimit wins, and no settlement phase follows it. Unlike
-	// TokenBudget, which only nudges the model, this ends the run.
+	// MaxTotalTokens is a hard cap on the tokens a run spends; zero means no
+	// cap and a negative value is an error. The count is the sum of
+	// Usage.Input, Output, CacheRead and CacheWrite over the run's own model
+	// calls. Nested subagent runs are NOT counted: their usage is not part of
+	// the parent's Final.Usage. Children inherit the same cap and count their
+	// own usage against it, so total spend with N subagent runs can reach
+	// (N+1) times the cap. Usage resets per run, so a run resumed after an
+	// interrupt starts from zero. Once the cap is reached the run ends with
+	// ReasonTokenLimit instead of taking another turn or continuation. When
+	// the reply that reached it contains tool calls they do not run; on the
+	// next run on the same State an OrphanResolver answers them, or else
+	// history repair answers them as interrupted. A reply without tool calls
+	// that reaches the cap still completes normally. If the turn limit is
+	// reached on the same turn, ReasonTokenLimit wins, and no settlement phase
+	// follows it. Unlike TokenBudget, which only nudges the model, this ends
+	// the run.
 	MaxTotalTokens int
 	// ModelTimeout bounds each model call, including any retries made by the
 	// provider or by model middleware and any extra model calls a middleware
 	// makes within it (such as summarization); zero means no limit beyond the
-	// run's own. A call that runs out ends the run with ReasonModelError and
-	// an error matching context.DeadlineExceeded.
+	// run's own and a negative value is an error. A call that runs out ends
+	// the run with ReasonModelError and an error matching
+	// context.DeadlineExceeded.
 	ModelTimeout time.Duration
 	// MaxConcurrency bounds parallel tool calls; zero means
-	// DefaultMaxConcurrency.
+	// DefaultMaxConcurrency and a negative value is an error.
 	MaxConcurrency int
 	// TokenBudget is the total output-token target for a run; zero disables
-	// budget continuation.
+	// budget continuation and a negative value is an error.
 	TokenBudget int
 	// EscalateMaxTokens, when positive, retries a response cut off at
 	// MaxTokens once with this larger limit, capped at the profile's
@@ -260,6 +266,6 @@ type Config struct {
 	// MaxToolOutputChars caps the combined size, in bytes, of the text blocks
 	// of each tool result; text is cut at a rune boundary so no UTF-8
 	// sequence is split (see tool.Truncate). Zero means
-	// DefaultMaxToolOutputChars.
+	// DefaultMaxToolOutputChars and a negative value is an error.
 	MaxToolOutputChars int
 }

@@ -503,9 +503,9 @@ func TestDefaultMaxTurns(t *testing.T) {
 	}
 }
 
-func TestNegativeMaxTurnsUnbounded(t *testing.T) {
+func TestUnlimitedMaxTurns(t *testing.T) {
 	p := llmtest.New(toolTurns(150, llm.Usage{}, true)...)
-	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTurns: -1})
+	a := mustNew(t, Config{Provider: p, Tools: []tool.Tool{echoTool()}, MaxTurns: Unlimited})
 
 	_, final := collect(t, a.Run(t.Context(), userInput("go")))
 

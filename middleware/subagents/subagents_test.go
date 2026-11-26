@@ -509,6 +509,41 @@ func TestNewRejectsInvalidSpecs(t *testing.T) {
 	}
 }
 
+// TestSpecNegatives pins Subagent.MaxTurns: zero inherits, agent.Unlimited
+// is accepted, and any other negative value fails New and Launcher.Agent.
+func TestSpecNegatives(t *testing.T) {
+	for _, tt := range []struct {
+		maxTurns int
+		want     string // "" means accepted
+	}{
+		{0, ""},
+		{agent.Unlimited, ""},
+		{-2, `subagents: subagent "x": MaxTurns is negative`},
+	} {
+		spec := Subagent{Name: "x", Description: "d", SystemPrompt: "p", MaxTurns: tt.maxTurns}
+		_, err := New(Config{Subagents: []Subagent{spec}})
+		if got := errText(err); got != tt.want {
+			t.Errorf("MaxTurns %d: New = %q, want %q", tt.maxTurns, got, tt.want)
+		}
+		parent, perr := agent.New(agent.Config{Provider: llmtest.New()})
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		_, err = mustLauncher(t, LauncherConfig{}).Agent(parent, spec)
+		if got := errText(err); got != tt.want {
+			t.Errorf("MaxTurns %d: Launcher.Agent = %q, want %q", tt.maxTurns, got, tt.want)
+		}
+	}
+}
+
+// errText returns err's text, or "" for nil.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func TestToolIsConcurrentAndAllowed(t *testing.T) {
 	task := newMiddleware(t, Config{}).(agent.ToolProvider).Tools()[0]
 	in := json.RawMessage(`{"description":"x","subagent_type":"general-purpose"}`)

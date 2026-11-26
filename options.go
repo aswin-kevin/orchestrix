@@ -182,7 +182,8 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithMaxTurns limits how many tool-calling model turns one run may take;
-// zero means agent.DefaultMaxTurns and a negative value means unbounded.
+// zero means agent.DefaultMaxTurns and agent.Unlimited (-1) means
+// unbounded; any other negative value makes New fail.
 func WithMaxTurns(n int) Option {
 	return func(s *settings) { s.cfg.MaxTurns = n }
 }

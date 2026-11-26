@@ -160,7 +160,7 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 	fs.StringVar(&o.store, "store", "", "directory for saved conversations; enables persistence")
 	fs.StringVar(&o.thread, "thread", defaultThread, "conversation name inside -store")
 	fs.BoolVar(&o.noShell, "no-shell", false, "use the plain disk workspace: no execute tool")
-	fs.IntVar(&o.maxTurns, "max-turns", defaultMaxTurns, "maximum tool-calling model turns per prompt (0 = agent default, negative = unbounded)")
+	fs.IntVar(&o.maxTurns, "max-turns", defaultMaxTurns, "maximum tool-calling model turns per prompt (0 = agent default, -1 = unbounded)")
 	fs.StringVar(&o.thinking, "thinking", "", "thinking setting passed to the provider")
 	fs.StringVar(&o.effort, "effort", "", "reasoning effort passed to the provider")
 	fs.StringVar(&o.baseURL, "base-url", "", "override the provider base URL")

@@ -94,7 +94,8 @@ type Input struct {
 }
 
 // New validates cfg, applies its defaults and builds the agent. It fails for a
-// missing Provider, an unknown non-empty PermissionMode, an invalid middleware
+// missing Provider, an unknown non-empty PermissionMode, a negative numeric
+// field (other than a documented -1 constant), an invalid middleware
 // stack (see Compose), tools with clashing or illegal names across
 // Config.Tools and every ToolProvider, or an OutputSchema whose top-level
 // "type" is not "object" or that cannot be encoded as JSON.
@@ -112,11 +113,8 @@ func New(cfg Config) (*Agent, error) {
 	if mode := cfg.PermissionMode; mode != "" && !mode.Valid() {
 		return nil, fmt.Errorf("agent: unknown permission mode %q", mode)
 	}
-	if cfg.OutputRetries < NoOutputRetries {
-		return nil, fmt.Errorf("agent: Config.OutputRetries %d is invalid", cfg.OutputRetries)
-	}
-	if cfg.EscalateMaxTokens < 0 {
-		return nil, fmt.Errorf("agent: Config.EscalateMaxTokens %d is negative", cfg.EscalateMaxTokens)
+	if err := checkNegatives(cfg); err != nil {
+		return nil, err
 	}
 	if badPromptVerbs(cfg.BudgetNudge, 0) {
 		return nil, errors.New("agent: Config.BudgetNudge has bad format verbs")
@@ -219,6 +217,35 @@ func (a *Agent) stream(ctx context.Context, in Input, resume *resumption) iter.S
 	}
 }
 
+// checkNegatives returns an error naming the first numeric field of cfg that
+// is negative, accepting only the -1 constants the fields document
+// (Unlimited, NoOutputRetries).
+func checkNegatives(cfg Config) error {
+	for _, f := range []struct {
+		name string
+		bad  bool
+	}{
+		{"CacheBoundary", cfg.CacheBoundary < 0},
+		{"LeaseTTL", cfg.LeaseTTL < 0},
+		{"MaxTokens", cfg.MaxTokens < 0},
+		{"MaxTurns", cfg.MaxTurns < 0 && cfg.MaxTurns != Unlimited},
+		{"MaxDuration", cfg.MaxDuration < 0},
+		{"MaxTotalTokens", cfg.MaxTotalTokens < 0},
+		{"ModelTimeout", cfg.ModelTimeout < 0},
+		{"MaxConcurrency", cfg.MaxConcurrency < 0},
+		{"TokenBudget", cfg.TokenBudget < 0},
+		{"EscalateMaxTokens", cfg.EscalateMaxTokens < 0},
+		{"OutputRetries", cfg.OutputRetries < 0 && cfg.OutputRetries != NoOutputRetries},
+		{"Settlement.MaxTurns", cfg.Settlement != nil && cfg.Settlement.MaxTurns < 0},
+		{"MaxToolOutputChars", cfg.MaxToolOutputChars < 0},
+	} {
+		if f.bad {
+			return fmt.Errorf("agent: Config.%s is negative", f.name)
+		}
+	}
+	return nil
+}
+
 // withDefaults fills every zero field that has a documented default.
 func withDefaults(cfg Config) Config {
 	if cfg.Name == "" {
@@ -227,16 +254,16 @@ func withDefaults(cfg Config) Config {
 	if cfg.MaxTurns == 0 {
 		cfg.MaxTurns = DefaultMaxTurns
 	}
-	if cfg.MaxConcurrency <= 0 {
+	if cfg.MaxConcurrency == 0 {
 		cfg.MaxConcurrency = DefaultMaxConcurrency
 	}
-	if cfg.MaxToolOutputChars <= 0 {
+	if cfg.MaxToolOutputChars == 0 {
 		cfg.MaxToolOutputChars = DefaultMaxToolOutputChars
 	}
-	if cfg.LeaseTTL <= 0 {
+	if cfg.LeaseTTL == 0 {
 		cfg.LeaseTTL = DefaultLeaseTTL
 	}
-	if cfg.Settlement != nil && cfg.Settlement.MaxTurns <= 0 {
+	if cfg.Settlement != nil && cfg.Settlement.MaxTurns == 0 {
 		cfg.Settlement.MaxTurns = DefaultSettlementMaxTurns
 	}
 	if cfg.BudgetNudge == "" {

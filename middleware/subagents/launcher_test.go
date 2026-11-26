@@ -310,10 +310,12 @@ func TestChildConfigMaxTurns(t *testing.T) {
 	for _, tt := range []struct {
 		parent, spec, want int
 	}{
-		{parent: 7, spec: 0, want: 7},   // zero inherits
-		{parent: 7, spec: 3, want: 3},   // positive bounds the child
-		{parent: 7, spec: -1, want: -1}, // negative is unbounded
-		{parent: 0, spec: -5, want: -5},
+		// Zero inherits, a positive value bounds the child and
+		// agent.Unlimited leaves it unbounded.
+		{parent: 7, spec: 0, want: 7},
+		{parent: 7, spec: 3, want: 3},
+		{parent: 7, spec: agent.Unlimited, want: agent.Unlimited},
+		{parent: 0, spec: agent.Unlimited, want: agent.Unlimited},
 	} {
 		cfg, err := childConfig(agent.Config{MaxTurns: tt.parent}, Subagent{Name: "s", SystemPrompt: "p", MaxTurns: tt.spec})
 		if err != nil {
