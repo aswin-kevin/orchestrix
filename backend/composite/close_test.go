@@ -243,3 +243,31 @@ func TestCompositeSnapshotterConformance(t *testing.T) {
 		return mustNew(t, testutil.Memory(t))
 	})
 }
+
+// panicCloser is a backend whose Close panics.
+type panicCloser struct{ backend.Backend }
+
+func (panicCloser) Close(context.Context) error { panic("close failed") }
+
+// A Closer that panics must not leave later Close callers waiting forever.
+func TestCloseAfterPanickingCloser(t *testing.T) {
+	closeFn := closeOf(t, mustNew(t, panicCloser{Backend: testutil.Memory(t)}))
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("first Close did not panic")
+			}
+		}()
+		_ = closeFn(context.Background())
+	}()
+	second := make(chan error, 1)
+	go func() { second <- closeFn(context.Background()) }()
+	select {
+	case err := <-second:
+		if err == nil {
+			t.Fatal("second Close = nil, want an error reporting the failed close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second Close blocked after the first Close panicked")
+	}
+}

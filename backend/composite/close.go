@@ -15,7 +15,8 @@ import (
 // are joined. The first call does the work, passing its ctx to each
 // Closer; later and concurrent calls wait for it to finish, or for their
 // own ctx to end (returning ctx.Err() while the work goes on), and return
-// its result.
+// its result. If a Closer panics, the panic reaches the first caller and
+// later calls return an error.
 func (c *composite) Close(ctx context.Context) error {
 	c.closeMu.Lock()
 	if c.closing {
@@ -35,10 +36,17 @@ func (c *composite) Close(ctx context.Context) error {
 	c.closing = true
 	c.closeDone = make(chan struct{})
 	c.closeMu.Unlock()
+	// Deferred, with an error in place first, so that a panicking Closer
+	// does not leave later callers waiting forever.
+	defer close(c.closeDone)
+	c.closeErr = errClosePanicked
 	c.closeErr = c.closeAll(ctx)
-	close(c.closeDone)
 	return c.closeErr
 }
+
+// errClosePanicked is what later Close calls return when a Closer panicked
+// during the first.
+var errClosePanicked = errors.New("composite: a Closer panicked during Close")
 
 // closeAll closes every distinct Closer of c.owned.
 func (c *composite) closeAll(ctx context.Context) error {
