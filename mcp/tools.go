@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -78,7 +79,7 @@ func (s *serverConn) connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, positiveOr(s.cfg.ConnectTimeout, DefaultConnectTimeout))
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(s.cfg.ConnectTimeout, DefaultConnectTimeout))
 	defer cancel()
 	client, err := NewClient(ctx, t, ClientConfig{
 		Info:           s.conn.Info,
@@ -130,7 +131,7 @@ func (s *serverConn) transport() (Transport, error) {
 }
 
 func (s *serverConn) requestTimeout() time.Duration {
-	return positiveOr(s.cfg.RequestTimeout, DefaultRequestTimeout)
+	return cmp.Or(s.cfg.RequestTimeout, DefaultRequestTimeout)
 }
 
 // notified handles a server notification on the client's reader goroutine.
@@ -275,7 +276,7 @@ func always(json.RawMessage) bool { return true }
 
 // call runs the server tool named name with the agent's input.
 func (s *serverConn) call(ctx context.Context, client *Client, name string, in json.RawMessage, profile llm.Profile) tool.Result {
-	ctx, cancel := context.WithTimeout(ctx, positiveOr(s.cfg.CallTimeout, DefaultCallTimeout))
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(s.cfg.CallTimeout, DefaultCallTimeout))
 	defer cancel()
 	if string(in) == "null" {
 		in = nil

@@ -350,3 +350,13 @@ func writeEvent(w http.ResponseWriter, raw json.RawMessage) error {
 	}
 	return rc.Flush()
 }
+
+// positiveOr returns v, or def when v is not positive. HandlerConfig keeps
+// "0 or negative means the default" because Server.Handler cannot return an
+// error.
+func positiveOr[T int | time.Duration](v, def T) T {
+	if v > 0 {
+		return v
+	}
+	return def
+}

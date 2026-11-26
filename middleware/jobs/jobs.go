@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -190,16 +191,9 @@ func New(cfg Config) (*Middleware, error) {
 		}
 	}
 	return &Middleware{
-		jobTimeout: positiveOr(cfg.JobTimeout, DefaultJobTimeout),
-		jobs:       newManager(positiveOr(cfg.MaxRunning, DefaultMaxRunning), positiveOr(cfg.MaxFinished, DefaultMaxFinished)),
+		jobTimeout: cmp.Or(cfg.JobTimeout, DefaultJobTimeout),
+		jobs:       newManager(cmp.Or(cfg.MaxRunning, DefaultMaxRunning), cmp.Or(cfg.MaxFinished, DefaultMaxFinished)),
 	}, nil
-}
-
-func positiveOr[T int | time.Duration](v, fallback T) T {
-	if v > 0 {
-		return v
-	}
-	return fallback
 }
 
 // Name implements agent.Middleware.

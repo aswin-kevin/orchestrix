@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -129,7 +130,7 @@ func DialHTTP(cfg HTTPConfig) (Transport, error) {
 	t := &httpTransport{
 		url:      u.String(),
 		header:   header,
-		max:      positiveOr(cfg.MaxMessageBytes, DefaultMaxMessageBytes),
+		max:      cmp.Or(cfg.MaxMessageBytes, DefaultMaxMessageBytes),
 		retry:    DefaultSSERetry,
 		msgs:     make(chan json.RawMessage),
 		done:     make(chan struct{}),

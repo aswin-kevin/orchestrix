@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -113,8 +114,8 @@ func newSearchClient(name string, client *http.Client, userAgent, baseURL, defau
 	return &searchClient{
 		name:      name,
 		client:    client,
-		userAgent: orDefault(userAgent, DefaultUserAgent),
-		baseURL:   orDefault(baseURL, defaultURL),
+		userAgent: cmp.Or(userAgent, DefaultUserAgent),
+		baseURL:   cmp.Or(baseURL, defaultURL),
 	}, nil
 }
 

@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -133,8 +134,8 @@ func StartStdio(cfg StdioConfig) (Transport, error) {
 		stdout:     p.ours[1],
 		stderr:     p.ours[2],
 		tail:       newRing(DefaultStderrBytes),
-		maxBytes:   positiveOr(cfg.MaxMessageBytes, DefaultMaxMessageBytes),
-		grace:      positiveOr(cfg.CloseGrace, DefaultCloseGrace),
+		maxBytes:   cmp.Or(cfg.MaxMessageBytes, DefaultMaxMessageBytes),
+		grace:      cmp.Or(cfg.CloseGrace, DefaultCloseGrace),
 		msgs:       make(chan json.RawMessage),
 		writes:     make(chan writeRequest),
 		exited:     make(chan struct{}),
@@ -436,12 +437,4 @@ func (r *ring) String() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return string(r.buf)
-}
-
-// positiveOr returns v, or def when v is not positive.
-func positiveOr[T int | time.Duration](v, def T) T {
-	if v > 0 {
-		return v
-	}
-	return def
 }

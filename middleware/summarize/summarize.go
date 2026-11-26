@@ -1,6 +1,7 @@
 package summarize
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -161,21 +162,13 @@ func New(cfg Config) (*Middleware, error) {
 	if cfg.Summarizer != nil && (cfg.Provider != nil || cfg.Model != "" || cfg.SummaryPrompt != "") {
 		return nil, errSummarizerExcludes
 	}
-	cfg.TriggerFraction = orDefault(cfg.TriggerFraction, DefaultTriggerFraction)
-	cfg.KeepFraction = orDefault(cfg.KeepFraction, DefaultKeepFraction)
-	cfg.KeepToolResults = orDefault(cfg.KeepToolResults, DefaultKeepToolResults)
-	cfg.ClearResultChars = orDefault(cfg.ClearResultChars, DefaultClearResultChars)
-	cfg.MaxOldInputChars = orDefault(cfg.MaxOldInputChars, DefaultMaxOldInputChars)
-	cfg.MaxFailures = orDefault(cfg.MaxFailures, DefaultMaxFailures)
+	cfg.TriggerFraction = cmp.Or(cfg.TriggerFraction, DefaultTriggerFraction)
+	cfg.KeepFraction = cmp.Or(cfg.KeepFraction, DefaultKeepFraction)
+	cfg.KeepToolResults = cmp.Or(cfg.KeepToolResults, DefaultKeepToolResults)
+	cfg.ClearResultChars = cmp.Or(cfg.ClearResultChars, DefaultClearResultChars)
+	cfg.MaxOldInputChars = cmp.Or(cfg.MaxOldInputChars, DefaultMaxOldInputChars)
+	cfg.MaxFailures = cmp.Or(cfg.MaxFailures, DefaultMaxFailures)
 	return &Middleware{cfg: cfg}, nil
-}
-
-// orDefault returns v, or def when v is not positive.
-func orDefault[T int | float64](v, def T) T {
-	if v > 0 {
-		return v
-	}
-	return def
 }
 
 // Name implements agent.Middleware.

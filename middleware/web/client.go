@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -90,7 +91,7 @@ func newClient(cc ClientConfig, policy dialPolicy) (*http.Client, error) {
 	}
 	guard := &guardTransport{
 		next:         tr,
-		userAgent:    orDefault(cc.UserAgent, DefaultUserAgent),
+		userAgent:    cmp.Or(cc.UserAgent, DefaultUserAgent),
 		blockPrivate: !cc.AllowPrivateNetworks,
 	}
 	if proxy != nil {
@@ -216,11 +217,4 @@ func positive[T int | int64 | time.Duration](v, def T) T {
 		return def
 	}
 	return v
-}
-
-func orDefault(s, def string) string {
-	if s == "" {
-		return def
-	}
-	return s
 }

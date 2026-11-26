@@ -1,6 +1,7 @@
 package async
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -206,20 +207,20 @@ func New(cfg Config) (*Middleware, error) {
 		specs:     make(map[string]subagents.Subagent, len(list)),
 		order:     make([]string, len(list)),
 		runner:    cfg.Runner,
-		maxDepth:  positiveOr(cfg.MaxDepth, subagents.DefaultMaxDepth),
+		maxDepth:  cmp.Or(cfg.MaxDepth, subagents.DefaultMaxDepth),
 		prompt:    DefaultPrompt,
 		remind:    !cfg.DisableStopReminder,
 		onSettled: cfg.OnSettled,
 		jobs: jobs.NewManager[*task](IDPrefix, jobs.Limits{
-			MaxRunning:  positiveOr(cfg.MaxRunning, DefaultMaxRunning),
-			MaxFinished: positiveOr(cfg.MaxFinished, DefaultMaxFinished),
+			MaxRunning:  cmp.Or(cfg.MaxRunning, DefaultMaxRunning),
+			MaxFinished: cmp.Or(cfg.MaxFinished, DefaultMaxFinished),
 		}),
 	}
 	for i, s := range list {
 		m.specs[s.Name], m.order[i] = s, s.Name
 	}
 	if m.runner == nil {
-		l, err := newLocalRunner(m.specs, positiveOr(cfg.TaskTimeout, DefaultTaskTimeout), cfg.OnEvent, m.bound.Load)
+		l, err := newLocalRunner(m.specs, cmp.Or(cfg.TaskTimeout, DefaultTaskTimeout), cfg.OnEvent, m.bound.Load)
 		if err != nil {
 			return nil, fmt.Errorf("async: %w", err)
 		}
@@ -236,13 +237,6 @@ func New(cfg Config) (*Middleware, error) {
 	m.jobs.SetPinned((*task).waiting)
 	m.tools = m.buildTools()
 	return m, nil
-}
-
-func positiveOr[T int | time.Duration](v, fallback T) T {
-	if v > 0 {
-		return v
-	}
-	return fallback
 }
 
 // Name implements agent.Middleware.

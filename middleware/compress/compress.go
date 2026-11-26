@@ -1,6 +1,7 @@
 package compress
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -137,24 +138,16 @@ func New(cfg Config) (*Middleware, error) {
 			return nil, fmt.Errorf("compress: %s is negative", f.name)
 		}
 	}
-	cfg.TriggerFraction = orDefault(cfg.TriggerFraction, DefaultTriggerFraction)
-	cfg.KeepTurns = orDefault(cfg.KeepTurns, DefaultKeepTurns)
-	cfg.MinRangeTokens = orDefault(cfg.MinRangeTokens, DefaultMinRangeTokens)
-	cfg.MaxSummaryChars = orDefault(cfg.MaxSummaryChars, DefaultMaxSummaryChars)
-	cfg.MaxIgnored = orDefault(cfg.MaxIgnored, DefaultMaxIgnored)
+	cfg.TriggerFraction = cmp.Or(cfg.TriggerFraction, DefaultTriggerFraction)
+	cfg.KeepTurns = cmp.Or(cfg.KeepTurns, DefaultKeepTurns)
+	cfg.MinRangeTokens = cmp.Or(cfg.MinRangeTokens, DefaultMinRangeTokens)
+	cfg.MaxSummaryChars = cmp.Or(cfg.MaxSummaryChars, DefaultMaxSummaryChars)
+	cfg.MaxIgnored = cmp.Or(cfg.MaxIgnored, DefaultMaxIgnored)
 	m := &Middleware{cfg: cfg, prompt: DefaultPrompt}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt
 	}
 	return m, nil
-}
-
-// orDefault returns v, or def when v is not positive.
-func orDefault[T int | float64](v, def T) T {
-	if v > 0 {
-		return v
-	}
-	return def
 }
 
 // Name implements agent.Middleware.
