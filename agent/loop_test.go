@@ -1246,13 +1246,17 @@ func (passThrough) WrapModel(ctx context.Context, req *ModelRequest, next ModelH
 }
 
 func TestWrapperCallingNextEmitsOnce(t *testing.T) {
-	p := llmtest.New(llmtest.Turn{Text: "streamed"})
-	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{passThrough{}}})
+	for _, nonStreaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("NonStreaming=%v", nonStreaming), func(t *testing.T) {
+			p := llmtest.New(llmtest.Turn{Text: "streamed"})
+			a := mustNew(t, Config{Provider: p, Middleware: []Middleware{passThrough{}}, NonStreaming: nonStreaming})
 
-	events, _ := collect(t, a.Run(t.Context(), userInput("hi")))
+			events, _ := collect(t, a.Run(t.Context(), userInput("hi")))
 
-	want := []Event{{Kind: KindText, Text: "streamed"}, {Kind: KindFinal}}
-	if got := streamKinds(events); !reflect.DeepEqual(got, want) {
-		t.Fatalf("events = %+v, want %+v", got, want)
+			want := []Event{{Kind: KindText, Text: "streamed"}, {Kind: KindFinal}}
+			if got := streamKinds(events); !reflect.DeepEqual(got, want) {
+				t.Fatalf("events = %+v, want %+v", got, want)
+			}
+		})
 	}
 }

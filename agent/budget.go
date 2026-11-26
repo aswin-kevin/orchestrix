@@ -307,9 +307,10 @@ func formatPrompt(prompt string, arg any) string {
 	return fmt.Sprintf(prompt, arg)
 }
 
-// badPromptVerbs reports whether prompt, which takes one argument, has a
-// malformed verb or more than one. A prompt without a verb is fine.
-func badPromptVerbs(prompt string) bool {
-	out, _, _ := strings.Cut(fmt.Sprintf(prompt, 0), "%!(EXTRA")
+// badPromptVerbs reports whether prompt, which is formatted with one argument
+// of arg's type, has a malformed verb, a verb that does not suit arg, or more
+// than one verb. A prompt without a verb is fine.
+func badPromptVerbs(prompt string, arg any) bool {
+	out, _, _ := strings.Cut(fmt.Sprintf(prompt, arg), "%!(EXTRA")
 	return strings.Contains(out, "%!")
 }

@@ -267,6 +267,21 @@ func TestCustomOutputPrompts(t *testing.T) {
 	}
 }
 
+func TestInvalidOutputPromptVerbs(t *testing.T) {
+	for prompt, want := range map[string]string{
+		"try again":   "try again",
+		"fix (%s)":    "fix (",
+		"100%% wrong": "100% wrong",
+	} {
+		p, final := runOutput(t, Config{InvalidOutputPrompt: prompt}, llmtest.Turn{Text: "nope"}, llmtest.Turn{Text: `{"n":1}`})
+		wantOutput(t, final, `{"n":1}`)
+		got := lastText(p.Requests[1])
+		if !strings.HasPrefix(got, want) || strings.Contains(got, "%!") {
+			t.Errorf("prompt %q sent %q, want prefix %q and no format error", prompt, got, want)
+		}
+	}
+}
+
 func TestOutputRetriesConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

@@ -106,10 +106,10 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.EscalateMaxTokens < 0 {
 		return nil, fmt.Errorf("agent: Config.EscalateMaxTokens %d is negative", cfg.EscalateMaxTokens)
 	}
-	if badPromptVerbs(cfg.BudgetNudge) {
+	if badPromptVerbs(cfg.BudgetNudge, 0) {
 		return nil, errors.New("agent: Config.BudgetNudge has bad format verbs")
 	}
-	if badPromptVerbs(cfg.InvalidOutputPrompt) {
+	if badPromptVerbs(cfg.InvalidOutputPrompt, errors.New("x")) {
 		return nil, errors.New("agent: Config.InvalidOutputPrompt has bad format verbs")
 	}
 	cfg = withDefaults(cloneConfig(cfg))

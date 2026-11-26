@@ -45,3 +45,17 @@ func TestOutcomeTokenLimitIsSoftStop(t *testing.T) {
 		t.Fatalf("outcome = %+v, %v; want the text with a stopped note", res, err)
 	}
 }
+
+// TestOutcomeRefusal reports a child's refusal with its text, not as a
+// failure with a nil error.
+func TestOutcomeRefusal(t *testing.T) {
+	for text, want := range map[string]string{
+		"I can't help with that.": "subagent worker refused: I can't help with that.",
+		"":                        "subagent worker refused",
+	} {
+		res, err := outcome(context.Background(), "worker", &agent.Final{Reason: agent.ReasonRefusal, Text: text})
+		if err != nil || !res.IsError || len(res.Content) != 1 || res.Content[0].Text != want {
+			t.Errorf("outcome(refusal %q) = %+v, %v; want error result %q", text, res, err, want)
+		}
+	}
+}

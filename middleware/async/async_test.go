@@ -379,3 +379,12 @@ func TestAgentCloseDrainsTasksBeforeResources(t *testing.T) {
 		t.Errorf("task outcome = %+v, want %s", out, StatusCancelled)
 	}
 }
+
+func TestLocalOutcomeRefusal(t *testing.T) {
+	for text, want := range map[string]string{"I can't help with that.": "refused: I can't help with that.", "": "refused"} {
+		out := localOutcome(&agent.Final{Reason: agent.ReasonRefusal, Text: text}, false, false)
+		if out.Status != StatusFailed || out.Error != want || out.Text != "" {
+			t.Errorf("outcome(refusal %q) = %+v, want failed with error %q", text, out, want)
+		}
+	}
+}

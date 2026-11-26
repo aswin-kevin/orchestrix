@@ -216,7 +216,8 @@ func drain(ctx context.Context, events iter.Seq2[agent.Event, error]) *agent.Fin
 
 // outcome turns a finished subagent run into the task result. A cancelled
 // call returns the context's error, so the parent reports the call as
-// cancelled rather than as a subagent failure.
+// cancelled rather than as a subagent failure. A refusal is an error result
+// carrying the child's reply, which says why.
 func outcome(ctx context.Context, name string, final *agent.Final) (tool.Result, error) {
 	if err := ctx.Err(); err != nil {
 		return tool.Result{}, err
@@ -226,6 +227,11 @@ func outcome(ctx context.Context, name string, final *agent.Final) (tool.Result,
 		return tool.Text(finalText(final)), nil
 	case agent.ReasonMaxTurns, agent.ReasonTokenLimit, agent.ReasonTimeout:
 		return tool.Text(fmt.Sprintf("%s\n[subagent stopped: %s]", finalText(final), final.Reason)), nil
+	case agent.ReasonRefusal:
+		if final.Text == "" {
+			return tool.Errorf("subagent %s refused", name), nil
+		}
+		return tool.Errorf("subagent %s refused: %s", name, final.Text), nil
 	default:
 		return tool.Errorf("subagent %s failed (%s): %v", name, final.Reason, final.Err), nil
 	}

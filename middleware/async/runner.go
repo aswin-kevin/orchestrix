@@ -179,7 +179,7 @@ func (t *localTask) run(ctx context.Context, child *agent.Agent, in agent.Input,
 
 // localOutcome maps a subagent's Final to the task's outcome. A run that
 // completed (or reached its own turn or time limit) completed, even when a
-// stop raced its end.
+// stop raced its end. A refusal failed with the child's reply as the error.
 func localOutcome(final *agent.Final, stopped, timedOut bool) Outcome {
 	if final == nil {
 		return Outcome{Status: StatusFailed, Error: "the subagent ended without a result"}
@@ -192,6 +192,11 @@ func localOutcome(final *agent.Final, stopped, timedOut bool) Outcome {
 		out.Status, out.Text = StatusCompleted, fmt.Sprintf("%s\n[stopped: %s]", finalText(final), final.Reason)
 	case final.Reason == agent.ReasonInterrupted:
 		out.Status, out.Error = StatusBlocked, "needs approval for: "+strings.Join(pendingTools(final), ", ")
+	case final.Reason == agent.ReasonRefusal:
+		out.Status, out.Error = StatusFailed, "refused"
+		if final.Text != "" {
+			out.Error += ": " + final.Text
+		}
 	case stopped:
 		out.Status = StatusCancelled
 	case timedOut:

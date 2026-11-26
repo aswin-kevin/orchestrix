@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aswin-kevin/orchestrix/agent/internal/elision"
 	"log/slog"
 	"runtime/debug"
 	"slices"
@@ -16,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/agent/internal/elision"
 	"github.com/aswin-kevin/orchestrix/agent/internal/runctx"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/checkpoint"
