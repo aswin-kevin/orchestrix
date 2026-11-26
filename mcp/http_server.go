@@ -36,24 +36,27 @@ const (
 // the goroutines waiting to send on it.
 const eventWriteTimeout = 10 * time.Second
 
-// HandlerOptions configure Server.Handler.
-type HandlerOptions struct {
-	// StreamResponses answers each POSTed request with an SSE stream: the
-	// notifications its handler sends (see Notify), then its response.
-	// false answers with a JSON body, and handler notifications go to the
-	// session's GET stream if one is open (dropped otherwise), with no
-	// ordering relative to the response, so a client may see them after
-	// the response or not at all.
-	StreamResponses bool
+// HandlerConfig configures Server.Handler. A negative MaxSessions or
+// SessionIdleTimeout means the default.
+type HandlerConfig struct {
+	// JSONResponses answers each POSTed request with a plain JSON body
+	// instead of an SSE stream. Its handler's notifications (see Notify)
+	// then go to the session's GET stream if one is open (dropped
+	// otherwise), with no ordering relative to the response, so a client
+	// may see them after the response or not at all. false (the default)
+	// answers with an SSE stream carrying the notifications the handler
+	// sends, then its response, which is where the MCP specification puts
+	// a request's notifications.
+	JSONResponses bool
 	// DisableGET replies 405 to GET, so sessions get no server-initiated
 	// stream and notifications such as tools/list_changed are dropped.
 	// false lets each session keep one GET stream open.
 	DisableGET bool
 	// MaxSessions caps the live sessions; an initialize over the cap gets
-	// 503. 0 → DefaultMaxSessions.
+	// 503. 0 or negative → DefaultMaxSessions.
 	MaxSessions int
 	// SessionIdleTimeout ends a session that has had no request and no open
-	// stream for this long; later requests for it get 404. 0 →
+	// stream for this long; later requests for it get 404. 0 or negative →
 	// DefaultSessionIdleTimeout.
 	SessionIdleTimeout time.Duration
 	// AllowedHosts lists the Host header values the handler serves; any
@@ -67,15 +70,15 @@ type HandlerOptions struct {
 }
 
 // defaultAllowedHosts are the hosts a handler serves when
-// HandlerOptions.AllowedHosts is empty.
+// HandlerConfig.AllowedHosts is empty.
 var defaultAllowedHosts = []string{"localhost", "127.0.0.1", "[::1]"}
 
 // Handler serves s over the streamable HTTP transport, at whatever path it
 // is mounted on. A POSTed initialize request creates a session whose random
 // id is returned in the Mcp-Session-Id header; every other request must
 // carry a known id (missing → 400, unknown → 404). POSTed notifications and
-// responses get 202; requests are answered as JSON or, with
-// StreamResponses, as an SSE stream, and a request reusing the id of one
+// responses get 202; requests are answered as an SSE stream or, with
+// JSONResponses, as JSON, and a request reusing the id of one
 // still in flight gets 400. GET opens the session's notification stream,
 // DELETE ends the session.
 //
@@ -102,7 +105,7 @@ var defaultAllowedHosts = []string{"localhost", "127.0.0.1", "[::1]"}
 // Behind a reverse proxy, list the public name in AllowedHosts; if the
 // proxy rewrites Host, browser requests fail the Origin check. Any other
 // authentication is up to the embedding program.
-func (s *Server) Handler(opts HandlerOptions) http.Handler {
+func (s *Server) Handler(opts HandlerConfig) http.Handler {
 	opts.MaxSessions = positiveOr(opts.MaxSessions, DefaultMaxSessions)
 	opts.SessionIdleTimeout = positiveOr(opts.SessionIdleTimeout, DefaultSessionIdleTimeout)
 	if len(opts.AllowedHosts) == 0 {
@@ -114,7 +117,7 @@ func (s *Server) Handler(opts HandlerOptions) http.Handler {
 // httpHandler is the http.Handler returned by Server.Handler.
 type httpHandler struct {
 	srv  *Server
-	opts HandlerOptions
+	opts HandlerConfig
 	now  func() time.Time // the clock of session expiry
 
 	mu       sync.Mutex
@@ -148,7 +151,7 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // hostAllowed reports whether host, a Host header, matches an entry of
-// allowed (see HandlerOptions.AllowedHosts).
+// allowed (see HandlerConfig.AllowedHosts).
 func hostAllowed(host string, allowed []string) bool {
 	name := hostName(host)
 	for _, a := range allowed {
@@ -242,7 +245,7 @@ func (h *httpHandler) answer(w http.ResponseWriter, r *http.Request, hs *httpSes
 		http.NotFound(w, r)
 		return false
 	}
-	streaming := h.opts.StreamResponses
+	streaming := !h.opts.JSONResponses
 	if streaming && startEventStream(w) != nil {
 		return false
 	}

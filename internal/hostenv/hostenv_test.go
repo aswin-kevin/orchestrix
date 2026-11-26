@@ -44,3 +44,22 @@ func TestDefaultNamesIsCopy(t *testing.T) {
 		t.Fatalf("DefaultNames() = %v, want %v", got, want)
 	}
 }
+
+func TestInvalidKey(t *testing.T) {
+	for _, tt := range []struct {
+		vars map[string]string
+		key  string
+		bad  bool
+	}{
+		{nil, "", false},
+		{map[string]string{"A": "1", "B_2": "x=y"}, "", false},
+		{map[string]string{"": "1"}, "", true},
+		{map[string]string{"OK": "1", "A=B": "1"}, "A=B", true},
+		{map[string]string{"A\x00": "1"}, "A\x00", true},
+	} {
+		key, bad := InvalidKey(tt.vars)
+		if key != tt.key || bad != tt.bad {
+			t.Errorf("InvalidKey(%q) = %q, %v; want %q, %v", tt.vars, key, bad, tt.key, tt.bad)
+		}
+	}
+}

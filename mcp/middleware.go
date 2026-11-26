@@ -186,7 +186,7 @@ func Connect(ctx context.Context, servers []ServerConfig, cfg ConnectConfig) (*M
 	if err := validateServers(servers); err != nil {
 		for _, sc := range servers {
 			if sc.Transport != nil {
-				_ = sc.Transport.Close(context.WithoutCancel(ctx))
+				closeDetached(ctx, sc.Transport.Close)
 			}
 		}
 		return nil, err

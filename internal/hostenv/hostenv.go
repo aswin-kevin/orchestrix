@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 )
 
 // defaultNames backs DefaultNames; it is never handed out.
@@ -41,4 +42,16 @@ func Pairs(vars map[string]string) []string {
 		env = append(env, key+"="+vars[key])
 	}
 	return env
+}
+
+// InvalidKey returns the first key of vars, in sorted order, that cannot
+// name an environment variable (empty, or holding '=' or NUL), and whether
+// there is one.
+func InvalidKey(vars map[string]string) (string, bool) {
+	for _, key := range slices.Sorted(maps.Keys(vars)) {
+		if key == "" || strings.ContainsAny(key, "=\x00") {
+			return key, true
+		}
+	}
+	return "", false
 }

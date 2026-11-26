@@ -83,3 +83,17 @@ func (r *release) wait(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+
+// detachedCloseTimeout bounds closeDetached: enough for a stdio server's
+// whole default Close (stdin EOF, SIGTERM, SIGKILL and its leftovers).
+const detachedCloseTimeout = 5 * DefaultCloseGrace
+
+// closeDetached runs a cleanup Close on a failure path with ctx's values
+// but not its cancellation (ctx may be what failed), bounded by
+// detachedCloseTimeout so a stuck transport cannot hang the caller; the
+// error is dropped, as the caller reports its own.
+func closeDetached(ctx context.Context, closeFn func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedCloseTimeout)
+	defer cancel()
+	_ = closeFn(ctx)
+}

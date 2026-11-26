@@ -507,3 +507,73 @@ func TestNewClientRejectsNegativeRequestTimeout(t *testing.T) {
 		t.Error("transport left open after rejection")
 	}
 }
+
+// deadlineRecorder is a Transport whose Close records the state of the
+// ctx it got, when it got it.
+type deadlineRecorder struct {
+	*fakeTransport
+	ctxs chan closeCtx
+}
+
+// closeCtx is the state of a ctx passed to Close.
+type closeCtx struct {
+	err         error
+	hasDeadline bool
+}
+
+func (r *deadlineRecorder) Close(ctx context.Context) error {
+	_, ok := ctx.Deadline()
+	select {
+	case r.ctxs <- closeCtx{ctx.Err(), ok}:
+	default:
+	}
+	return r.fakeTransport.Close(ctx)
+}
+
+// The cleanup Close on a failure path drops the caller's cancellation but
+// is bounded, so a stuck transport cannot hang the caller. After a failed
+// initialize the bound applies to Client.Close, which returns when its ctx
+// ends; the client hands its transport a ctx without cancellation.
+func TestFailureCleanupCloseIsBounded(t *testing.T) {
+	newRecorder := func() *deadlineRecorder {
+		return &deadlineRecorder{
+			fakeTransport: newFakeTransport(func(msg map[string]any) []string { return initializeReply(msg, ProtocolVersion) }),
+			ctxs:          make(chan closeCtx, 1),
+		}
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, tt := range []struct {
+		name    string
+		bounded bool // the transport's own Close gets a deadline
+		run     func(*deadlineRecorder) error
+	}{
+		{"negative RequestTimeout", true, func(r *deadlineRecorder) error {
+			_, err := NewClient(context.Background(), r, ClientConfig{RequestTimeout: -time.Second})
+			return err
+		}},
+		{"failed initialize", false, func(r *deadlineRecorder) error {
+			_, err := NewClient(cancelled, r, ClientConfig{})
+			return err
+		}},
+		{"invalid servers", true, func(r *deadlineRecorder) error {
+			_, err := Connect(cancelled, []ServerConfig{{Name: "a", Transport: r}, {Name: "a", Transport: r}}, ConnectConfig{})
+			return err
+		}},
+	} {
+		r := newRecorder()
+		if err := tt.run(r); err == nil {
+			t.Errorf("%s: no error", tt.name)
+			continue
+		}
+		select {
+		case got := <-r.ctxs:
+			if got.err != nil || got.hasDeadline != tt.bounded {
+				t.Errorf("%s: cleanup Close ctx err %v, deadline %v; want no error, deadline %v",
+					tt.name, got.err, got.hasDeadline, tt.bounded)
+			}
+		default:
+			t.Errorf("%s: transport not closed", tt.name)
+		}
+	}
+}

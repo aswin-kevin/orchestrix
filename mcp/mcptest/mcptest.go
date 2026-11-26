@@ -76,11 +76,11 @@ func NewServer() *mcp.Server {
 // unused transport connected to a new session of a NewServer() server (in
 // process, over HTTP, or a child process serving it over stdio).
 //
-// Over HTTP the server must stream its responses
-// (HandlerOptions{StreamResponses: true}): with JSON responses a
-// request's notifications can only go out on the session's GET stream,
-// separately from the response and dropped while that stream is not open,
-// so NotificationsBeforeReply cannot hold.
+// Over HTTP the server must stream its responses, which the zero
+// mcp.HandlerConfig does: with JSONResponses a request's notifications can
+// only go out on the session's GET stream, separately from the response
+// and dropped while that stream is not open, so NotificationsBeforeReply
+// cannot hold.
 //
 // Each subtest calls connect for its own transports and runs within 10
 // seconds; the Close cases run twice, on a fresh transport ("fresh") and

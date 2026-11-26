@@ -169,7 +169,7 @@ func (w *recordingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter
 
 // serveHTTP serves s over HTTP behind a recorder; the server closes when the
 // test ends.
-func serveHTTP(t *testing.T, s *Server, opts HandlerOptions) (*recorder, *httptest.Server) {
+func serveHTTP(t *testing.T, s *Server, opts HandlerConfig) (*recorder, *httptest.Server) {
 	t.Helper()
 	rec := &recorder{next: s.Handler(opts), getOpen: make(chan struct{}, 16)}
 	ts := httptest.NewServer(rec)
@@ -229,7 +229,7 @@ func waitNotification(t *testing.T, ch <-chan string, method string) {
 }
 
 func TestHTTPJSONResponses(t *testing.T) {
-	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{})
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{JSONResponses: true})
 	c := connectHTTP(t, HTTPConfig{
 		URL:         ts.URL,
 		BearerToken: "tok",
@@ -283,7 +283,7 @@ func TestHTTPJSONResponses(t *testing.T) {
 }
 
 func TestHTTPHeadersOverrideBearer(t *testing.T) {
-	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{DisableGET: true})
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{DisableGET: true})
 	connectHTTP(t, HTTPConfig{
 		URL:         ts.URL,
 		BearerToken: "ignored",
@@ -304,8 +304,9 @@ func TestHTTPSSEResponses(t *testing.T) {
 		}
 		return TextResult("done"), nil
 	})
-	// No GET stream: the notification can only arrive on the POST stream.
-	rec, ts := serveHTTP(t, s, HandlerOptions{StreamResponses: true, DisableGET: true})
+	// No GET stream: the notification can only arrive on the POST stream,
+	// which the zero config uses.
+	rec, ts := serveHTTP(t, s, HandlerConfig{DisableGET: true})
 	opts, notes := notifications()
 	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, opts)
 
@@ -331,7 +332,7 @@ func TestHTTPSSEResponses(t *testing.T) {
 
 func TestHTTPListChangedViaGET(t *testing.T) {
 	s := newTestServer(nil)
-	rec, ts := serveHTTP(t, s, HandlerOptions{})
+	rec, ts := serveHTTP(t, s, HandlerConfig{})
 	opts, notes := notifications()
 	connectHTTP(t, HTTPConfig{URL: ts.URL}, opts)
 
@@ -348,7 +349,7 @@ func TestHTTPListChangedViaGET(t *testing.T) {
 }
 
 func TestHTTPWithoutGET(t *testing.T) {
-	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{DisableGET: true})
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{DisableGET: true})
 	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientConfig{})
 	if got := callText(t, c, "echo", `{"text":"x"}`); got != "x" {
 		t.Fatalf("echo = %q", got)
@@ -374,7 +375,7 @@ func TestHTTPWithoutGET(t *testing.T) {
 }
 
 func TestHTTPGETGivesUp(t *testing.T) {
-	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{})
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{})
 	rec.setIntercept(func(w http.ResponseWriter, r *http.Request, _ string) bool {
 		if r.Method != http.MethodGet {
 			return false
@@ -398,7 +399,7 @@ func TestHTTPGETGivesUp(t *testing.T) {
 }
 
 func TestHTTPGETKeepsReconnectingAfterIdleStreams(t *testing.T) {
-	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{})
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{})
 	rec.setIntercept(func(w http.ResponseWriter, r *http.Request, _ string) bool {
 		if r.Method != http.MethodGet {
 			return false
@@ -425,7 +426,7 @@ func TestHTTPGETKeepsReconnectingAfterIdleStreams(t *testing.T) {
 
 func TestHTTPGETReconnects(t *testing.T) {
 	s := newTestServer(nil)
-	rec, ts := serveHTTP(t, s, HandlerOptions{})
+	rec, ts := serveHTTP(t, s, HandlerConfig{})
 	var gets atomic.Int32
 	rec.setIntercept(func(w http.ResponseWriter, r *http.Request, _ string) bool {
 		if r.Method != http.MethodGet || gets.Add(1) > 1 {
@@ -450,7 +451,7 @@ func TestHTTPGETReconnects(t *testing.T) {
 }
 
 func TestHTTPSessionExpired(t *testing.T) {
-	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{})
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{})
 	var expired atomic.Bool
 	rec.setIntercept(func(w http.ResponseWriter, r *http.Request, _ string) bool {
 		if !expired.Load() || r.Header.Get("Mcp-Session-Id") == "" {
@@ -476,7 +477,7 @@ func TestHTTPSessionExpired(t *testing.T) {
 }
 
 func TestHTTPErrorStatus(t *testing.T) {
-	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{DisableGET: true})
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{DisableGET: true})
 	var failing atomic.Bool
 	rec.setIntercept(func(w http.ResponseWriter, _ *http.Request, rpcMethod string) bool {
 		if !failing.Load() || rpcMethod != "tools/call" {
@@ -512,7 +513,7 @@ func TestHTTPErrorStatus(t *testing.T) {
 func TestHTTPOversizedResponse(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
-			_, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{StreamResponses: stream, DisableGET: true})
+			_, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{JSONResponses: !stream, DisableGET: true})
 			c := connectHTTP(t, HTTPConfig{URL: ts.URL, MaxMessageBytes: bigResultBytes / 2}, ClientConfig{})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -538,7 +539,7 @@ func TestHTTPOversizedResponse(t *testing.T) {
 }
 
 func TestHTTPCloseSendsDelete(t *testing.T) {
-	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{})
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{})
 	c, err := NewClient(context.Background(), dialTransport(t, HTTPConfig{URL: ts.URL}), ClientConfig{})
 	if err != nil {
 		t.Fatal(err)
@@ -568,7 +569,7 @@ func TestHTTPCloseSendsDelete(t *testing.T) {
 }
 
 func TestHTTPNoGoroutineLeak(t *testing.T) {
-	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{StreamResponses: true})
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{})
 	baseline := runtime.NumGoroutine()
 
 	c, err := NewClient(context.Background(), dialTransport(t, HTTPConfig{URL: ts.URL}), ClientConfig{})
@@ -594,7 +595,7 @@ func TestHTTPNoGoroutineLeak(t *testing.T) {
 }
 
 func TestHTTPCallsAfterCloseFail(t *testing.T) {
-	_, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{DisableGET: true})
+	_, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{DisableGET: true})
 	tr := dialTransport(t, HTTPConfig{URL: ts.URL})
 	c, err := NewClient(context.Background(), tr, ClientConfig{})
 	if err != nil {
@@ -618,6 +619,10 @@ func TestDialHTTPValidatesURL(t *testing.T) {
 			t.Errorf("DialHTTP(%q) succeeded, want an error", bad)
 		}
 	}
+	if _, err := DialHTTP(HTTPConfig{URL: "http://127.0.0.1:1/mcp", MaxMessageBytes: -1}); err == nil ||
+		err.Error() != "mcp: MaxMessageBytes is negative" {
+		t.Errorf("negative MaxMessageBytes: err = %v", err)
+	}
 	// Valid URLs dial without I/O: nothing listens on port 1.
 	for _, good := range []string{"http://127.0.0.1:1/mcp", "https://127.0.0.1:1/mcp"} {
 		tr, err := DialHTTP(HTTPConfig{URL: good})
@@ -631,7 +636,7 @@ func TestDialHTTPValidatesURL(t *testing.T) {
 }
 
 func TestHTTPIdleSessionExpires(t *testing.T) {
-	_, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{DisableGET: true, SessionIdleTimeout: 5 * testRetry})
+	_, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{DisableGET: true, SessionIdleTimeout: 5 * testRetry})
 	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientConfig{})
 	time.Sleep(15 * testRetry)
 	if _, err := c.CallTool(context.Background(), "echo", json.RawMessage(`{"text":"x"}`)); !errors.Is(err, ErrSessionExpired) {
@@ -640,7 +645,7 @@ func TestHTTPIdleSessionExpires(t *testing.T) {
 }
 
 func TestHTTPSessionWithOpenStreamDoesNotExpire(t *testing.T) {
-	rec, ts := serveHTTP(t, newTestServer(nil), HandlerOptions{SessionIdleTimeout: 5 * testRetry})
+	rec, ts := serveHTTP(t, newTestServer(nil), HandlerConfig{SessionIdleTimeout: 5 * testRetry})
 	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientConfig{})
 	rec.waitGETOpen(t)
 	time.Sleep(15 * testRetry)
@@ -719,7 +724,7 @@ func (c *fakeClock) advance(d time.Duration) {
 }
 
 // serveWithClock serves s's handler with its clock replaced by clock.
-func serveWithClock(t *testing.T, s *Server, opts HandlerOptions, clock *fakeClock) *httptest.Server {
+func serveWithClock(t *testing.T, s *Server, opts HandlerConfig, clock *fakeClock) *httptest.Server {
 	t.Helper()
 	h := s.Handler(opts).(*httpHandler)
 	h.now = clock.Now
@@ -730,7 +735,7 @@ func serveWithClock(t *testing.T, s *Server, opts HandlerOptions, clock *fakeClo
 
 func TestUninitializedSessionsEvicted(t *testing.T) {
 	clock := &fakeClock{now: time.Now()}
-	ts := serveWithClock(t, newTestServer(nil), HandlerOptions{MaxSessions: 4}, clock)
+	ts := serveWithClock(t, newTestServer(nil), HandlerConfig{MaxSessions: 4}, clock)
 	for i := range 4 {
 		if status, sid := rawInitialize(t, ts.URL, initializeBody); status != http.StatusOK || sid == "" {
 			t.Fatalf("initialize %d: status %d, id %q", i, status, sid)
@@ -747,7 +752,7 @@ func TestUninitializedSessionsEvicted(t *testing.T) {
 
 func TestInitializedSessionsKeepTheirSlots(t *testing.T) {
 	clock := &fakeClock{now: time.Now()}
-	ts := serveWithClock(t, newTestServer(nil), HandlerOptions{MaxSessions: 4}, clock)
+	ts := serveWithClock(t, newTestServer(nil), HandlerConfig{MaxSessions: 4}, clock)
 	for i := range 4 {
 		status, sid := rawInitialize(t, ts.URL, initializeBody)
 		if status != http.StatusOK || sid == "" {
@@ -767,7 +772,7 @@ func TestInitializedSessionsKeepTheirSlots(t *testing.T) {
 // while the table has room: pending sessions are evicted only to make room.
 func TestLaxClientKeepsSessionWhenNotFull(t *testing.T) {
 	clock := &fakeClock{now: time.Now()}
-	ts := serveWithClock(t, newTestServer(nil), HandlerOptions{MaxSessions: 4}, clock)
+	ts := serveWithClock(t, newTestServer(nil), HandlerConfig{MaxSessions: 4}, clock)
 	status, sid := rawInitialize(t, ts.URL, initializeBody)
 	if status != http.StatusOK || sid == "" {
 		t.Fatalf("initialize: status %d, id %q", status, sid)
@@ -792,7 +797,7 @@ func goroutinesIn(fn string) int {
 
 func TestSSEReplyClosedOnTimeout(t *testing.T) {
 	blocked := make(chan error, 1)
-	rec, ts := serveHTTP(t, newTestServer(blocked), HandlerOptions{StreamResponses: true, DisableGET: true})
+	rec, ts := serveHTTP(t, newTestServer(blocked), HandlerConfig{DisableGET: true})
 	c := connectHTTP(t, HTTPConfig{URL: ts.URL}, ClientConfig{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -829,7 +834,7 @@ func TestSSEReplyClosedOnTimeout(t *testing.T) {
 
 func TestHTTPCloseBoundedByContext(t *testing.T) {
 	s := newTestServer(nil)
-	inner := s.Handler(HandlerOptions{})
+	inner := s.Handler(HandlerConfig{})
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			<-r.Context().Done() // never answers

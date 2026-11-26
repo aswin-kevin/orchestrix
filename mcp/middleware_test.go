@@ -375,7 +375,7 @@ func TestConnectFailureClosesOthers(t *testing.T) {
 }
 
 func TestConnectOverHTTP(t *testing.T) {
-	handler := newTestServer(nil).Handler(HandlerOptions{})
+	handler := newTestServer(nil).Handler(HandlerConfig{})
 	var auth atomic.Value
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth.Store(r.Header.Get("Authorization"))

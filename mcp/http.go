@@ -55,7 +55,7 @@ type HTTPConfig struct {
 	// reply is an error naming the status.
 	Client *http.Client
 	// MaxMessageBytes caps one incoming message (a JSON body or an SSE
-	// event); 0 → DefaultMaxMessageBytes.
+	// event); 0 → DefaultMaxMessageBytes; negative is an error.
 	MaxMessageBytes int
 }
 
@@ -113,6 +113,9 @@ func DialHTTP(cfg HTTPConfig) (Transport, error) {
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("mcp: http: URL %q is not an absolute http or https URL", cfg.URL)
+	}
+	if cfg.MaxMessageBytes < 0 {
+		return nil, errors.New("mcp: MaxMessageBytes is negative")
 	}
 	header := http.Header{}
 	for k, v := range cfg.Headers {

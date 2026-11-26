@@ -44,9 +44,7 @@ func TestInProcess(t *testing.T) {
 
 func TestHTTP(t *testing.T) {
 	mcptest.Run(t, func(t *testing.T) mcp.Transport {
-		// Streamed responses carry each request's notifications before its
-		// response on the same stream; see Run.
-		srv := httptest.NewServer(mcptest.NewServer().Handler(mcp.HandlerOptions{StreamResponses: true}))
+		srv := httptest.NewServer(mcptest.NewServer().Handler(mcp.HandlerConfig{}))
 		t.Cleanup(srv.Close)
 		tr, err := mcp.DialHTTP(mcp.HTTPConfig{URL: srv.URL})
 		if err != nil {
@@ -260,17 +258,33 @@ func heldNotifications(lag bool) func(json.RawMessage) []json.RawMessage {
 
 // clobberConcurrent overwrites the echo text of a message sent while
 // another Send is in flight, like a transport sharing one write buffer.
-// It relies on Sends overlapping: the 2ms sleep keeps each Send in flight
-// long enough that the kit's 8 concurrent callers always collide, while
-// sequential callers (one Send at a time) never do.
+// The overlap is forced: the first Send of the Concurrent case (its echo
+// texts start with "conc-") waits until a second one is in flight, which
+// the kit's 8 concurrent callers guarantee, so that second Send is always
+// clobbered. Other cases send one message at a time and never overlap.
 func clobberConcurrent() func(ctx context.Context, m *mutant, msg json.RawMessage) error {
-	var inFlight atomic.Int32
+	var (
+		inFlight atomic.Int32
+		arrived  atomic.Int32
+		overlap  = make(chan struct{})
+	)
 	return func(ctx context.Context, m *mutant, msg json.RawMessage) error {
 		defer inFlight.Add(-1)
 		if inFlight.Add(1) > 1 {
 			msg = json.RawMessage(strings.Replace(string(msg), `"text":"`, `"text":"clobbered `, 1))
 		}
-		time.Sleep(2 * time.Millisecond)
+		if strings.Contains(string(msg), `"text":"conc-`) || strings.Contains(string(msg), `"text":"clobbered conc-`) {
+			switch arrived.Add(1) {
+			case 1: // hold this Send in flight until another one joins it
+				select {
+				case <-overlap:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			case 2:
+				close(overlap)
+			}
+		}
 		return m.inner.Send(ctx, msg)
 	}
 }

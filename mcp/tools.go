@@ -92,7 +92,7 @@ func (s *serverConn) connect(ctx context.Context) error {
 	if client.HasTools() {
 		tools, err := s.listTools(ctx, client)
 		if err != nil {
-			_ = client.Close(context.WithoutCancel(ctx))
+			closeDetached(ctx, client.Close)
 			return err
 		}
 		s.tools.Store(&tools)

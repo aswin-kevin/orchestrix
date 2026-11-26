@@ -235,6 +235,22 @@ func TestStartStdioErrors(t *testing.T) {
 	if _, err := StartStdio(StdioConfig{Command: t.TempDir() + "/missing"}); err == nil {
 		t.Error("missing executable accepted")
 	}
+	for _, tt := range []struct {
+		name string
+		cfg  StdioConfig
+		want string
+	}{
+		{"negative MaxMessageBytes", StdioConfig{MaxMessageBytes: -1}, "mcp: MaxMessageBytes is negative"},
+		{"negative CloseGrace", StdioConfig{CloseGrace: -time.Second}, "mcp: CloseGrace is negative"},
+		{"empty env key", StdioConfig{Env: map[string]string{"": "x"}}, `mcp: env key "" is invalid`},
+		{"env key with =", StdioConfig{Env: map[string]string{"A=B": "x"}}, `mcp: env key "A=B" is invalid`},
+		{"env key with NUL", StdioConfig{Env: map[string]string{"A\x00": "x"}}, `mcp: env key "A\x00" is invalid`},
+	} {
+		tt.cfg.Command = t.TempDir() + "/missing" // the check comes before the start
+		if _, err := StartStdio(tt.cfg); err == nil || err.Error() != tt.want {
+			t.Errorf("%s: err = %v, want %q", tt.name, err, tt.want)
+		}
+	}
 }
 
 func TestNoGoroutineLeak(t *testing.T) {

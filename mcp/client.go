@@ -68,7 +68,7 @@ type Client struct {
 // notifications/initialized. On failure it closes t.
 func NewClient(ctx context.Context, t Transport, cfg ClientConfig) (*Client, error) {
 	if cfg.RequestTimeout < 0 {
-		_ = t.Close(context.WithoutCancel(ctx))
+		closeDetached(ctx, t.Close)
 		return nil, errors.New("mcp: RequestTimeout is negative")
 	}
 	if cfg.Info == (Implementation{}) {
@@ -89,7 +89,7 @@ func NewClient(ctx context.Context, t Transport, cfg ClientConfig) (*Client, err
 	go c.replier()
 	go c.read()
 	if err := c.initialize(ctx); err != nil {
-		_ = c.Close(context.WithoutCancel(ctx))
+		closeDetached(ctx, c.Close)
 		return nil, err
 	}
 	return c, nil

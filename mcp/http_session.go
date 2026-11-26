@@ -78,7 +78,7 @@ func (h *httpHandler) newSession(w http.ResponseWriter) *httpSession {
 	now := h.now()
 	hs := &httpSession{
 		id:              hex.EncodeToString(buf),
-		streamResponses: h.opts.StreamResponses,
+		streamResponses: !h.opts.JSONResponses,
 		now:             h.now,
 		created:         now,
 		posts:           map[string]*outStream{},
