@@ -19,7 +19,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/disk"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
-	"github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
@@ -213,93 +212,31 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		fmt.Fprintln(stderr, "orx:", termsafe.String(fmt.Sprintf(format, args...)))
 		return nil, nil, code
 	}
-	cfg, err := llm.ParseModel(o.model)
+	cfg, provider, code, err := setupProvider(o, newProvider)
 	if err != nil {
-		return fail(exitUsage, "%v", err)
-	}
-	if o.baseURL != "" {
-		cfg.BaseURL = o.baseURL
-	}
-	cfg.Thinking, cfg.ReasoningEffort = llm.ThinkingMode(o.thinking), llm.ReasoningEffort(o.effort)
-	provider, err := newProvider(cfg)
-	if err != nil {
-		return fail(exitError, "%v", err)
+		return fail(code, "%v", err)
 	}
 
 	warnIfHoldsHome(o.dir, stderr)
-	agentOpts := []orchestrix.Option{
-		orchestrix.WithApprover(ap.decide),
-		orchestrix.WithMaxTurns(o.maxTurns),
-		orchestrix.WithConfig(func(c *agent.Config) { c.Model = cfg.Model }),
-		orchestrix.WithPlanMode(planmode.Config{}),
-		orchestrix.WithAskUser(askuser.Config{Asker: ap}),
+	agentOpts := coreOptions(o, ap, cfg.Model)
+	backendOpts, closeBackend, err := backendOptions(o)
+	if err != nil {
+		return fail(exitError, "%v", err)
 	}
-	if o.noShell {
-		ws, err := disk.New(o.dir, disk.Config{})
-		if err != nil {
-			return fail(exitError, "%v", err)
-		}
-		// Released last, after everything that may still use it.
-		cleanups = append(cleanups, func() { _ = ws.Close() })
-		agentOpts = append(agentOpts, orchestrix.WithBackend(ws))
-	} else {
-		// The jobs middleware keeps background jobs alive beyond a single
-		// call, so the caller must stop them on every exit path.
-		jm, err := jobs.New(jobs.Config{})
-		if err != nil {
-			return fail(exitError, "%v", err)
-		}
-		cleanups = append(cleanups, func() { _ = jm.Close(context.Background()) })
-		agentOpts = append(agentOpts,
-			orchestrix.WithShell(o.dir, shell.Config{}), orchestrix.WithJobs(jm))
+	cleanups = append(cleanups, closeBackend)
+	agentOpts = append(agentOpts, backendOpts...)
+	feats, code, err := featureOptions(o, stderr)
+	if err != nil {
+		return fail(code, "%v", err)
 	}
-	if o.store != "" {
-		cp, err := file.New(o.store, file.Config{})
-		if err != nil {
-			return fail(exitError, "open store: %v", err)
-		}
-		agentOpts = append(agentOpts, orchestrix.WithCheckpointer(cp))
-	}
-	if mode := effectiveMode(o, stderr); mode != "" {
-		agentOpts = append(agentOpts, orchestrix.WithPermissionMode(mode))
-	}
-	if o.systemFile != "" {
-		text, err := os.ReadFile(o.systemFile)
-		if err != nil {
-			return fail(exitUsage, "read system prompt: %v", err)
-		}
-		agentOpts = append(agentOpts, orchestrix.WithSystemPrompt(string(text)))
-	}
-	if opt, err := memoryOption(o, stderr); err != nil {
-		return fail(exitUsage, "memory: %v", err)
-	} else if opt != nil {
-		agentOpts = append(agentOpts, opt)
-	}
-	if len(o.skillDirs) > 0 {
-		opt, err := skillsOption(o.skillDirs, stderr)
-		if err != nil {
-			return fail(exitUsage, "skills: %v", err)
-		}
-		agentOpts = append(agentOpts, opt)
-	}
-	if o.web {
-		opt, err := webOption(o.search)
-		if err != nil {
-			return fail(exitUsage, "web: %v", err)
-		}
-		agentOpts = append(agentOpts, opt)
-	}
+	agentOpts = append(agentOpts, feats...)
 	if o.mcpFile != "" {
-		m, code, err := connectMCP(ctx, o.mcpFile, stderr)
+		opt, closeMCP, code, err := mcpOption(ctx, o.mcpFile, stderr)
 		if err != nil {
 			return fail(code, "mcp: %v", err)
 		}
-		cleanups = append(cleanups, func() {
-			if err := m.Close(context.Background()); err != nil {
-				fmt.Fprintln(stderr, "orx: mcp:", termsafe.String(err.Error()))
-			}
-		})
-		agentOpts = append(agentOpts, orchestrix.WithMCP(m))
+		cleanups = append(cleanups, closeMCP)
+		agentOpts = append(agentOpts, opt)
 	}
 	// Last, so background subagents stop before the MCP servers and jobs
 	// they may use.
@@ -314,15 +251,91 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 	if err != nil {
 		return fail(exitUsage, "%v", err)
 	}
-	if !o.noShell {
-		// The shell workspace keeps its directory open (on Windows that
-		// directory cannot be removed meanwhile): release it last, once the
-		// jobs and servers that may still use it have stopped.
-		if c, ok := backend.AsCloser(ag.Config().Backend); ok {
-			cleanups = slices.Insert(cleanups, 0, func() { _ = c.Close(context.WithoutCancel(ctx)) })
-		}
+	if c := shellWorkspaceCloser(ctx, ag, o); c != nil {
+		cleanups = slices.Insert(cleanups, 0, c)
 	}
 	return ag, shutdown, exitOK
+}
+
+// shellWorkspaceCloser returns a func releasing the shell workspace, or nil.
+// The workspace keeps its directory open (on Windows that directory cannot
+// be removed meanwhile): the caller releases it last, once the jobs and
+// servers that may still use it have stopped.
+func shellWorkspaceCloser(ctx context.Context, ag *agent.Agent, o options) func() {
+	if o.noShell {
+		return nil
+	}
+	c, ok := backend.AsCloser(ag.Config().Backend)
+	if !ok {
+		return nil
+	}
+	return func() { _ = c.Close(context.WithoutCancel(ctx)) }
+}
+
+// coreOptions returns the options every orx agent gets.
+func coreOptions(o options, ap *approver, model string) []orchestrix.Option {
+	return []orchestrix.Option{
+		orchestrix.WithApprover(ap.decide),
+		orchestrix.WithMaxTurns(o.maxTurns),
+		orchestrix.WithConfig(func(c *agent.Config) { c.Model = model }),
+		orchestrix.WithPlanMode(planmode.Config{}),
+		orchestrix.WithAskUser(askuser.Config{Asker: ap}),
+	}
+}
+
+// setupProvider parses -model and builds the provider. On failure it returns
+// the exit code to use.
+func setupProvider(o options, newProvider func(llm.Config) (llm.Provider, error)) (llm.Config, llm.Provider, int, error) {
+	cfg, err := llm.ParseModel(o.model)
+	if err != nil {
+		return llm.Config{}, nil, exitUsage, err
+	}
+	if o.baseURL != "" {
+		cfg.BaseURL = o.baseURL
+	}
+	cfg.Thinking, cfg.ReasoningEffort = llm.ThinkingMode(o.thinking), llm.ReasoningEffort(o.effort)
+	provider, err := newProvider(cfg)
+	if err != nil {
+		return llm.Config{}, nil, exitError, err
+	}
+	return cfg, provider, exitOK, nil
+}
+
+// backendOptions returns the options for the workspace: a plain disk backend
+// with -no-shell, otherwise a shell with a jobs middleware. The returned
+// cleanup releases what was started and is never nil on success.
+func backendOptions(o options) ([]orchestrix.Option, func(), error) {
+	if o.noShell {
+		ws, err := disk.New(o.dir, disk.Config{})
+		if err != nil {
+			return nil, nil, err
+		}
+		// Released last, after everything that may still use it.
+		return []orchestrix.Option{orchestrix.WithBackend(ws)}, func() { _ = ws.Close() }, nil
+	}
+	// The jobs middleware keeps background jobs alive beyond a single
+	// call, so the caller must stop them on every exit path.
+	jm, err := jobs.New(jobs.Config{})
+	if err != nil {
+		return nil, nil, err
+	}
+	opts := []orchestrix.Option{orchestrix.WithShell(o.dir, shell.Config{}), orchestrix.WithJobs(jm)}
+	return opts, func() { _ = jm.Close(context.Background()) }, nil
+}
+
+// mcpOption connects the -mcp servers. The returned cleanup closes them,
+// reporting a failure on stderr.
+func mcpOption(ctx context.Context, file string, stderr io.Writer) (orchestrix.Option, func(), int, error) {
+	m, code, err := connectMCP(ctx, file, stderr)
+	if err != nil {
+		return nil, nil, code, err
+	}
+	closeMCP := func() {
+		if err := m.Close(context.Background()); err != nil {
+			fmt.Fprintln(stderr, "orx: mcp:", termsafe.String(err.Error()))
+		}
+	}
+	return orchestrix.WithMCP(m), closeMCP, exitOK, nil
 }
 
 // effectiveMode resolves -yes and -mode; an explicit -mode wins.

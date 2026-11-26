@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/checkpoint/file"
 	"github.com/aswin-kevin/orchestrix/internal/termsafe"
 	"github.com/aswin-kevin/orchestrix/mcp"
 	"github.com/aswin-kevin/orchestrix/middleware/async"
@@ -206,4 +207,48 @@ func scaleOptions(o options) (opts []orchestrix.Option, stop func(), err error) 
 		opts = append(opts, orchestrix.WithCompress(compress.Config{}))
 	}
 	return opts, stop, nil
+}
+
+// featureOptions returns the agent options for the independent flags:
+// -store, -yes/-mode, -system, -memory, -skills and -web, in that order. On
+// failure it returns the exit code and an error that carries its own prefix.
+func featureOptions(o options, stderr io.Writer) ([]orchestrix.Option, int, error) {
+	var opts []orchestrix.Option
+	if o.store != "" {
+		cp, err := file.New(o.store, file.Config{})
+		if err != nil {
+			return nil, exitError, fmt.Errorf("open store: %v", err)
+		}
+		opts = append(opts, orchestrix.WithCheckpointer(cp))
+	}
+	if mode := effectiveMode(o, stderr); mode != "" {
+		opts = append(opts, orchestrix.WithPermissionMode(mode))
+	}
+	if o.systemFile != "" {
+		text, err := os.ReadFile(o.systemFile)
+		if err != nil {
+			return nil, exitUsage, fmt.Errorf("read system prompt: %v", err)
+		}
+		opts = append(opts, orchestrix.WithSystemPrompt(string(text)))
+	}
+	if opt, err := memoryOption(o, stderr); err != nil {
+		return nil, exitUsage, fmt.Errorf("memory: %v", err)
+	} else if opt != nil {
+		opts = append(opts, opt)
+	}
+	if len(o.skillDirs) > 0 {
+		opt, err := skillsOption(o.skillDirs, stderr)
+		if err != nil {
+			return nil, exitUsage, fmt.Errorf("skills: %v", err)
+		}
+		opts = append(opts, opt)
+	}
+	if o.web {
+		opt, err := webOption(o.search)
+		if err != nil {
+			return nil, exitUsage, fmt.Errorf("web: %v", err)
+		}
+		opts = append(opts, opt)
+	}
+	return opts, exitOK, nil
 }
