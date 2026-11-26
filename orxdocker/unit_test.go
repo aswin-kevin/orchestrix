@@ -340,9 +340,7 @@ func TestManagerCloseWaitsForFirst(t *testing.T) {
 	release := f.waitGate()
 	first := make(chan error, 1)
 	go func() { first <- m.Close(t.Context()) }()
-	for !m.isClosed() {
-		time.Sleep(time.Millisecond)
-	}
+	waitFor(t, "the first Close to start", m.isClosed)
 	short, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	if err := m.Close(short); !errors.Is(err, context.DeadlineExceeded) {

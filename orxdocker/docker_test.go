@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -128,14 +129,28 @@ func TestDockerConformance(t *testing.T) {
 	}, backendtest.Options{ModTimeResolution: time.Second})
 }
 
+// caseManager returns a Manager of its own for a kit case, so that what one
+// case leaves running cannot affect the next. Its scope carries the case
+// name for operators.
+func caseManager(t *testing.T) *Manager {
+	t.Helper()
+	name := regexp.MustCompile(`[^A-Za-z0-9_.-]+`).ReplaceAllString(t.Name(), "-")
+	scope := fmt.Sprintf("orxtest-%d-%d-%s", os.Getpid(), scopeSeq.Add(1), name)
+	return newTestManager(t, Config{Scope: scope[:min(len(scope), 63)]})
+}
+
 func TestExecutorConformance(t *testing.T) {
-	m := newTestManager(t, Config{})
-	backendtest.RunExecutor(t, func(*testing.T) backend.Executor { return m.Executor("conf") })
+	if os.Getenv("ORX_TEST_DOCKER") != "1" {
+		t.Skip("set ORX_TEST_DOCKER=1 to run against a Docker daemon")
+	}
+	backendtest.RunExecutor(t, func(t *testing.T) backend.Executor { return caseManager(t).Executor("conf") })
 }
 
 func TestStarterConformance(t *testing.T) {
-	m := newTestManager(t, Config{})
-	backendtest.RunStarter(t, func(*testing.T) backend.Starter { return m.Executor("conf") })
+	if os.Getenv("ORX_TEST_DOCKER") != "1" {
+		t.Skip("set ORX_TEST_DOCKER=1 to run against a Docker daemon")
+	}
+	backendtest.RunStarter(t, func(t *testing.T) backend.Starter { return caseManager(t).Executor("conf") })
 }
 
 // hostileNames matches backend/sandbox's list: names built to break out of a
@@ -244,7 +259,7 @@ func TestDockerNoHostEnvironment(t *testing.T) {
 			t.Errorf("env lacks %s: %q", want, res.Output)
 		}
 	}
-	if strings.Contains(res.Output, "SHARED=options") {
+	if strings.Contains(res.Output, "SHARED=config") {
 		t.Errorf("ExecOptions.Env did not override Config.Env: %q", res.Output)
 	}
 }

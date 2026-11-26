@@ -123,7 +123,7 @@ func (m *Manager) Backend(threadID string) backend.Backend {
 	return m.Executor(threadID).sb
 }
 
-// Executor returns the thread's executor, whose paths (ExecConfig.Dir) are
+// Executor returns the thread's executor, whose paths (ExecOptions.Dir) are
 // paths inside the container. Most callers want Backend. Creating one past
 // Config.MaxThreads evicts the least recently used executor that runs no
 // command and removes its container in the background.
