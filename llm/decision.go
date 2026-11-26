@@ -18,12 +18,13 @@ const (
 	QuestionScore  QuestionType = "score"
 )
 
-// Choice is a choice option or a score level.
+// Choice is one choice of a choice question or one level of a score
+// question.
 type Choice struct {
 	// Value is the choice's identifier, used as the answer and as a key of
 	// Answer.Probabilities; unique within a question.
 	Value string
-	// Description explains to the model what the option or level means.
+	// Description explains to the model what the choice or level means.
 	Description string
 }
 
@@ -51,7 +52,7 @@ type Answer struct {
 	// other fields are set.
 	Type          QuestionType
 	Yes           float64            // QuestionYesNo: probability of yes
-	Choice        string             // Choice: the chosen option
+	Choice        string             // Choice: the chosen choice's Value
 	Score         float64            // Score: expected level index, may be fractional
 	Probabilities map[string]float64 // Choice/Score: by Choice.Value
 	Confidence    float64            // Choice/Score

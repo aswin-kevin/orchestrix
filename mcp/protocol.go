@@ -3,6 +3,9 @@
 // stdio transport that runs a server as a child process, a streamable HTTP
 // transport, and a small Server that can be served over stdio, HTTP or in
 // process. OAuth, sampling and elicitation are not supported.
+//
+// Interfaces never gain methods after v1; capabilities are optional
+// interfaces discovered by type assertion.
 package mcp
 
 import (

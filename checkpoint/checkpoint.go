@@ -6,6 +6,9 @@
 // Implementations live in subpackages: memory (process-local) and file
 // (append-only JSONL on disk). checkpointtest holds a conformance suite every
 // implementation should pass.
+//
+// Interfaces never gain methods after v1; capabilities are optional
+// interfaces discovered by type assertion.
 package checkpoint
 
 import (

@@ -4,6 +4,10 @@
 //
 // It is a leaf package: it knows nothing about tools, backends or models.
 //
+// Mode and the rule grammar are closed sets on purpose: Stricter depends on
+// a total order and they are the safety boundary. Custom policy belongs in
+// a tool's CheckPermission, a ToolWrapper, or an Approver.
+//
 // # Limits
 //
 // Rules are matched lexically. Path rules compare cleaned virtual paths,

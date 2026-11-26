@@ -8,6 +8,20 @@ import (
 
 // Provider is a model backend. Implementations translate a Request to a
 // vendor API and the reply back into the provider-neutral types.
+//
+// An implementation keeps these rules:
+//   - Complete returns what Collect would assemble from Stream for the same
+//     request.
+//   - A stream that ends without an error yields at least one event.
+//   - Errors drive retry, fallback and context-overflow handling: return
+//     errors that IsRetryable and IsContextOverflow classify correctly (an
+//     *APIError, or an error with a Retryable() bool or ContextOverflow()
+//     bool method).
+//   - Usage reported by successive events of one response follows
+//     Usage.MergeEcho.
+//   - Capabilities such as token counting arrive as optional interfaces,
+//     never as methods on Provider.
+//   - HTTP adapters are built on Transport.
 type Provider interface {
 	// Stream sends req and yields incremental events as they arrive. A
 	// non-nil error ends the sequence.

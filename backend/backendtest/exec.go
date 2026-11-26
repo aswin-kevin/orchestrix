@@ -27,7 +27,8 @@ const markerSlack = 64
 // against executors built by newExecutor; each case gets a fresh one.
 //
 // Commands are POSIX sh command lines, so run the kit from a unix-only test
-// file for shell-based executors.
+// file for shell-based executors. The Truncate case allows a cut Output to
+// exceed MaxOutputBytes by an omission marker of at most 64 bytes.
 func RunExecutor(t *testing.T, newExecutor func(t *testing.T) backend.Executor) {
 	t.Helper()
 	exec := func(t *testing.T, cmd string, opts backend.ExecOptions) backend.ExecResult {

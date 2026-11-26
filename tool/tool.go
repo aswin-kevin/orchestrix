@@ -2,6 +2,11 @@
 // model can take: the Tool interface, its optional extensions, typed tool
 // construction with generated JSON schemas, input validation, a registry and
 // output truncation.
+//
+// Interfaces never gain methods after v1; capabilities are optional
+// interfaces discovered by type assertion. Decorators implement Unwrap; look
+// capabilities up with As, which walks the Unwrap chain, never with a bare
+// type assertion.
 package tool
 
 import (
@@ -48,9 +53,11 @@ type ConcurrencySafer interface {
 }
 
 // PermissionChecker is implemented by tools with a permission verdict of
-// their own, consulted after the rules (see permission.Evaluate). A tool
-// without it, like one returning the zero Decision, has no opinion: the
-// call is then asked about unless a rule or the mode decides it.
+// their own, consulted after the rules (see permission.Evaluate). The zero
+// Decision and Ask mean no opinion: the rules and mode decide, as for a
+// tool without it. Only Allow and Deny are acted on (see permission.Evaluate
+// steps 2 and 7). Ask has no effect on the verdict; its Message, when set,
+// becomes the approval question when no rule or mode decides the call.
 type PermissionChecker interface {
 	// CheckPermission is the tool's own verdict for a call with input in.
 	CheckPermission(ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision

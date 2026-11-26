@@ -101,10 +101,12 @@ type EditStepError struct {
 	Err error
 }
 
+// Error implements error.
 func (e *EditStepError) Error() string {
 	return fmt.Sprintf("edit %d of %d: %v", e.Index+1, e.Total, e.Err)
 }
 
+// Unwrap returns the edit step's error.
 func (e *EditStepError) Unwrap() error { return e.Err }
 
 // ApplyEdits applies edits to content in order with the ApplyEdit rules and

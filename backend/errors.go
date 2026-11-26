@@ -42,6 +42,7 @@ type TooLargeError struct {
 	Size int64
 }
 
+// Error implements error.
 func (e *TooLargeError) Error() string {
 	return fmt.Sprintf("%v: %d bytes (limit %d)", ErrTooLarge, e.Size, MaxReadFileBytes)
 }

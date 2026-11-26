@@ -16,9 +16,13 @@ type EventKind string
 
 // The kinds of Event a run emits. KindFinal is always the last one.
 const (
-	// KindText is a delta of assistant text (Event.Text).
+	// KindText is assistant text (Event.Text): a delta while the reply
+	// streams, but the whole reply's text in one event under
+	// Config.NonStreaming or when a ModelWrapper answered without calling
+	// next.
 	KindText EventKind = "text"
-	// KindThinking is a delta of model reasoning (Event.Text).
+	// KindThinking is model reasoning (Event.Text), a delta or the whole
+	// reply's reasoning in the same cases as KindText.
 	KindThinking EventKind = "thinking"
 	// KindToolUse announces an attempt to run a tool call (ToolID, ToolName,
 	// Input). It is emitted once the call's fate is known: right before the
@@ -126,6 +130,7 @@ type PanicError struct {
 	Stack []byte
 }
 
+// Error implements error.
 func (e *PanicError) Error() string {
 	return fmt.Sprintf("agent: panic: %v", e.Value)
 }

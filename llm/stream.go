@@ -70,6 +70,10 @@ type slot struct {
 
 // Accumulator assembles streaming events into a Response. The zero value is
 // ready to use; it is not safe for concurrent use.
+//
+// Accumulator rejects unknown event types: it is the reference consumer
+// that a provider must satisfy. Other consumers of StreamEvent ignore event
+// types they do not know.
 type Accumulator struct {
 	slots      []*slot       // in order of first-seen Index
 	byIndex    map[int]*slot // provider block index -> slot

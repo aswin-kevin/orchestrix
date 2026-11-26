@@ -1,6 +1,13 @@
 // Package agent runs the model/tool loop and defines the contracts that
 // extend it.
 //
+// Compatibility: EventKind and TerminalReason may gain values in minor
+// releases. Hosts ignore event kinds they do not know and treat unknown
+// terminal reasons as failures. Interfaces in this package never gain
+// methods; new hooks arrive as new optional interfaces. Agent, Thread and
+// the permission mode are concrete on purpose: they are the fail-closed
+// safety boundary.
+//
 // # Middleware
 //
 // Every optional behaviour of a run is a Middleware: a value with a Name and
@@ -174,7 +181,10 @@ const MaxStopContinuations = 3
 // wrapper that calls next more than once must restore the request it passed
 // first, or each retry carries the inner edits again. A wrapper that answers
 // without calling next still produces the turn's text and thinking events
-// from its response; to filter or redact the stream, swap req.Provider.
+// from its response. One that called next and then returns a different
+// response does not: the events sent came from the replies next produced,
+// and the response it returns is not emitted. To filter or redact the
+// stream, swap req.Provider.
 type ModelWrapper interface {
 	WrapModel(ctx context.Context, req *ModelRequest, next ModelHandler) (*llm.Response, error)
 }

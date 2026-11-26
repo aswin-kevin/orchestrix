@@ -20,7 +20,8 @@ import (
 
 // Agent runs the model/tool loop described by a Config. It is immutable after
 // New, apart from being closed (Close), and safe for concurrent Runs;
-// everything a run changes lives in that run's State.
+// everything a run changes lives in that run's State. Create one with New;
+// the zero value is not usable.
 type Agent struct {
 	cfg Config
 	// logger is Config.Logger, or a discarding logger when that is nil.

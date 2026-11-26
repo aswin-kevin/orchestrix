@@ -45,6 +45,8 @@ var (
 // Between runs, Messages, State and Pending describe the outcome of the
 // last one; while a run is in progress they describe the State it started
 // from.
+//
+// Create one with Agent.Thread; the zero value is not usable.
 type Thread struct {
 	id    string
 	agent *Agent

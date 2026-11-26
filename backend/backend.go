@@ -1,6 +1,12 @@
 // Package backend defines the storage and execution contracts that tools use
 // to touch files and run commands. Paths are virtual and absolute ("/src/a.go");
 // each implementation decides how they map to real storage.
+//
+// Interfaces never gain methods after v1; capabilities are optional
+// interfaces discovered by type assertion. Decorators implement Unwrap; look
+// capabilities up with AsExecutor, AsStarter, AsSnapshotter, AsMultiEditor
+// and AsCloser, which walk the Unwrap chain, never with a bare type
+// assertion.
 package backend
 
 import (
@@ -125,7 +131,9 @@ type ExecOptions struct {
 // ExecResult is the outcome of Executor.Execute.
 type ExecResult struct {
 	// Output is the captured output of the command, cut at
-	// ExecOptions.MaxOutputBytes.
+	// ExecOptions.MaxOutputBytes. A cut Output may carry a short marker
+	// saying how much was omitted, so it may exceed MaxOutputBytes by at
+	// most 64 bytes; Truncated is then set.
 	Output string
 	// ExitCode is the command's exit status; -1 when it was killed by a
 	// signal or timed out.

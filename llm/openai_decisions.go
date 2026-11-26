@@ -257,7 +257,7 @@ func (r openAIDecisionsReply) toResponse(qs []Question) *DecisionResponse {
 	return out
 }
 
-// probabilities maps the answer's probabilities by option value, or by label
+// probabilities maps the answer's probabilities by choice value, or by label
 // for scores (the request sends each level's Choice.Value as its label).
 func (a openAIDecisionAnswer) probabilities(byLabel bool) map[string]float64 {
 	if a.Probabilities == nil {

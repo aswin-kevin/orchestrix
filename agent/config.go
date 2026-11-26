@@ -84,10 +84,12 @@ type Config struct {
 	// SyncWorkspace stores the content of a run's backend in its State
 	// (under a run-local key, so neither a subagent nor a fork inherits it)
 	// and restores it into an empty backend when a run starts, so a
-	// thread's files survive a restart along with its checkpoint. It applies only to a backend the run resolves itself (not
-	// Input.Backend) that implements backend.Snapshotter. Use it only with
-	// per-thread backends (BackendFactory), never with a backend shared
-	// between threads. False keeps the workspace out of State.
+	// thread's files survive a restart along with its checkpoint. It
+	// applies only to a backend the run resolves itself (not Input.Backend)
+	// that implements backend.Snapshotter or wraps one (found with
+	// backend.AsSnapshotter through Unwrap). Use it only with per-thread
+	// backends (BackendFactory), never with a backend shared between
+	// threads. False keeps the workspace out of State.
 	SyncWorkspace bool
 
 	// Checkpointer, when set, saves a run's State under Input.ThreadID. The

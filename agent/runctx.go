@@ -78,14 +78,22 @@ func ThreadID(ctx context.Context) (string, bool) {
 // Emit sends ev on the stream of the run ctx belongs to and reports whether
 // it was sent. It is valid in every hook, wrapper, permission check and tool
 // call of a run; a tool call's context carries its run's emitter, so an event
-// a tool emits is the tool's run's own, with an empty ParentToolID. Empty
-// Agent, RunID, Turn and Time are filled in as for the run's other events;
-// ParentToolID is left as given. Typically ev is a KindCustom event whose
-// Data is a value of the emitting package's own type.
+// a tool emits is the tool's run's own, with an empty ParentToolID. An
+// empty Agent or Time is filled in as for the run's other events; RunID and
+// Turn are filled in together, when RunID is empty, so an event with a
+// RunID keeps its Turn as given. ParentToolID is left as given. Typically ev
+// is a KindCustom event whose Data is a value of the emitting package's own
+// type.
 //
 // Emit returns false for KindFinal, which only the run itself sends, for a
 // ctx that belongs to no run, inside a RunWrapper's WrapRun (the stream has
-// not started), and once the run has ended or its consumer stopped reading.
+// not started) and in the end function WrapRun returned (the run is sealed
+// before end functions run), and once the run has ended or its consumer
+// stopped reading.
+//
+// Emit waits until the consumer takes the event, so never call Emit (or
+// Forward) from the goroutine that reads the run's events: it would
+// deadlock.
 //
 // Forward is for re-emitting a nested run's events under the current tool
 // call; Emit is for a run's own events.
