@@ -130,6 +130,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 		return r != nil && r.emit(ev)
 	}
 	ctx = runContext(ctx, info, emit)
+	info.Depth = max(info.Depth, in.Depth)
 	ctx, ends := a.wrapRun(ctx, info)
 	be := a.backendFor(in)
 	r := &run{

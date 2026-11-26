@@ -73,6 +73,15 @@ type Input struct {
 	// reports in Event.Agent, tool.Call.AgentID and RunInfo.AgentName; empty
 	// keeps Config.Name.
 	AgentName string
+	// Depth, when positive, is the least RunInfo.Depth of the run: a run
+	// started from a tool call's context is nested by that call (its Depth
+	// is the parent's plus one), and Depth marks as nested a run that
+	// continues a nested one outside any tool call, such as a background
+	// task resumed after a restart, so that middleware treats it as a
+	// subagent (nesting limits, plan mode, the guard). The run's Depth is
+	// the larger of the two; zero or less leaves it as ctx gives it.
+	// ParentToolID stays as ctx gives it.
+	Depth int
 	// Ephemeral keeps the run out of Config.Checkpointer even when ThreadID
 	// is set; nested (subagent) runs set it because their parent's thread is
 	// the one that is saved. False saves as Config.Checkpointer describes.
@@ -94,6 +103,8 @@ type Input struct {
 // Config.Model; New fails when an excluder names a middleware that is
 // Required. Only the stack is filtered: Config().Middleware stays
 // unfiltered, so a child built from it re-filters for its own model.
+// Every Binder of the filtered stack is then bound to the new agent, in
+// stack order; New fails with the first error.
 func New(cfg Config) (*Agent, error) {
 	if cfg.Provider == nil {
 		return nil, errors.New("agent: Config.Provider is required")
@@ -129,7 +140,7 @@ func New(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Agent{
+	a := &Agent{
 		cfg:          cfg,
 		logger:       loggerOrDiscard(cfg.Logger),
 		stack:        stack,
@@ -138,7 +149,15 @@ func New(cfg Config) (*Agent, error) {
 		resolvers:    orphanResolvers(stack),
 		runTool:      chainTool(stack, invokeTool),
 		outputPrompt: format,
-	}, nil
+	}
+	for _, mw := range stack {
+		if b, ok := mw.(Binder); ok {
+			if err := b.Bind(a); err != nil {
+				return nil, fmt.Errorf("agent: middleware %q: %w", mw.Name(), err)
+			}
+		}
+	}
+	return a, nil
 }
 
 // Config returns a copy of the agent's configuration with defaults applied.

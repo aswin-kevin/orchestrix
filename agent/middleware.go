@@ -76,6 +76,15 @@ type RunWrapper interface {
 	WrapRun(ctx context.Context, info RunInfo) (context.Context, func(final *Final))
 }
 
+// Binder is implemented by middleware that needs the Agent it is part of.
+// New calls Bind once, after the stack is composed and filtered, in stack
+// order; an error fails New. Subagents built from the agent's configuration
+// go through New too, so Bind is called again with each of them: a
+// middleware that must know the agent the host built keeps the first one.
+type Binder interface {
+	Bind(a *Agent) error
+}
+
 // Orphan is a tool_use in State that has no tool_result.
 type Orphan struct {
 	// ID is the tool_use id.

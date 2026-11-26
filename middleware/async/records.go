@@ -100,7 +100,8 @@ func addRecord(s *state.State, r TaskRecord) {
 // updateRecords brings the run's records of threadID up to date with the
 // tasks, then lets edit change each of them, in one State update, and returns
 // a copy of the records of threadID. A running record whose episode stopped
-// takes its outcome; one whose task the middleware does not know is lost.
+// takes its outcome; one whose task the middleware does not know (and
+// could not reattach when the run started, see BeforeAgent) is lost.
 // Records of other threads are kept untouched. edit may be nil.
 func (m *Middleware) updateRecords(s *state.State, threadID string, edit func(*TaskRecord)) []TaskRecord {
 	return jobs.UpdateRecords(s, tasksKey, threadID, m.jobs.MaxFinished(), m.acc, func(r *TaskRecord) {

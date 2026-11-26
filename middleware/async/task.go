@@ -53,11 +53,12 @@ var errCancelledWaiting = errors.New("async: the task was cancelled while it wai
 // when the task now waits for a decision.
 type task struct {
 	// base is the start_task call's context (or for an adopted task, the
-	// call's that adopted it), without its cancellation. An episode a host's
-	// decision starts runs from it, so it runs nested in the parent run
-	// (agent.RunInfo.Depth is the parent's plus one), with that call's
-	// values (its tool call id, run id and trace span); a follow-up runs
-	// from the update_task call's context instead.
+	// context that adopted it: an update_task call's, a run's start or a
+	// host's Resolve), without its cancellation. An episode a host's
+	// decision starts runs from it, with that context's values (a tool
+	// call id, run id and trace span, when it has them); a follow-up runs
+	// from the update_task call's context instead. Either way the runner
+	// keeps the episode nested (agent.Input.Depth).
 	base context.Context
 
 	mu      sync.Mutex

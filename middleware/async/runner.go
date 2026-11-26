@@ -194,7 +194,12 @@ type Reattacher interface {
 	// not hold (after a restart, or after the middleware released it). For
 	// a waiting or ended record it returns a Handle whose episode stopped:
 	// Done is closed and Outcome mirrors the record (Status, Result as
-	// Text, Error and Pending), so it can be continued or resolved. It
+	// Text, Error and Pending), so it can be continued or resolved. For a
+	// running record, whose process went away, it goes on with the task:
+	// a running Handle of a new episode, or a stopped waiting one when the
+	// task waits. ctx may belong to no run (a host's Resolve after a
+	// restart); every episode must then still run nested in the agent the
+	// task was started from. It
 	// fails with an error wrapping ErrCannotReattach when the task's
 	// history is gone or the record cannot be taken over. The middleware
 	// serializes Attach calls, so a runner need not handle two concurrent
@@ -240,17 +245,20 @@ type localRunner struct {
 	fallback *cpmemory.Checkpointer
 	// onEvent is Config.OnEvent.
 	onEvent func(taskID string, ev agent.Event)
+	// bound returns the agent the middleware is bound to (see
+	// Middleware.Bind); nil when none.
+	bound func() *agent.Agent
 }
 
 var _ Reattacher = (*localRunner)(nil)
 
 // newLocalRunner returns the local runner of specs; New builds it when
 // Config.Runner is nil.
-func newLocalRunner(specs map[string]subagents.Subagent, timeout time.Duration, onEvent func(string, agent.Event)) *localRunner {
+func newLocalRunner(specs map[string]subagents.Subagent, timeout time.Duration, onEvent func(string, agent.Event), bound func() *agent.Agent) *localRunner {
 	// The inbox middleware is one pointer: every child, and their children,
 	// share it, and the Launcher dedupes it by identity.
 	boxes := newInboxes()
-	l := &localRunner{specs: specs, inboxes: boxes, timeout: timeout, fallback: cpmemory.New(), onEvent: onEvent}
+	l := &localRunner{specs: specs, inboxes: boxes, timeout: timeout, fallback: cpmemory.New(), onEvent: onEvent, bound: bound}
 	l.launcher = subagents.NewLauncher(subagents.LauncherConfig{Extra: []agent.Middleware{boxes}, Checkpointer: l.checkpointer})
 	return l
 }
@@ -335,67 +343,116 @@ func (l *localRunner) Start(ctx context.Context, req Request) (Handle, error) {
 	}
 	in.ThreadID = req.TaskThreadID
 	in.Ephemeral = false
-	sess := &localSession{l: l, taskID: req.TaskID, child: child, threadID: in.ThreadID, backend: in.Backend, agentName: in.AgentName}
+	in.Depth = info.Depth + 1
+	sess := &localSession{l: l, taskID: req.TaskID, child: child, threadID: in.ThreadID, backend: in.Backend, agentName: in.AgentName, depth: in.Depth}
 	return sess.start(ctx, in, nil)
 }
 
-// Attach implements Reattacher for a task that is not running: it loads the
-// task's thread from the checkpointer its episodes saved to and returns a
-// Handle whose episode stopped, with the record's outcome, which can be
-// continued or, for a waiting task, resolved; what a waiting task waits for
-// is read from the loaded thread, not from the record. A task cancelled
+// restartText is the message that continues a task whose process went away
+// while it ran.
+const restartText = "The process running this task restarted. Continue the task from where you left off."
+
+// Attach implements Reattacher. It loads the task's thread from the
+// checkpointer its episodes saved to: the parent agent's Checkpointer, else
+// the runner's in-memory store, which a new process starts empty (the task
+// then cannot be reattached). The parent agent is the one of the run ctx
+// belongs to, else the agent the middleware is bound to (a host's Resolve
+// after a restart). The task runs on the backend the middleware passed with
+// ctx, else on the parent's BackendFactory(rec.ThreadID) or Backend.
+//
+// From the loaded thread: a pending action gives a Handle whose episode
+// stopped waiting on it, read from the thread in full, not from the
+// record; an ended record gives a stopped Handle with the record's
+// outcome, which can be continued; a running record (its process went
+// away) starts a new episode from the saved State, told that the process
+// restarted (the calls the crash cut off are answered as for any run, see
+// agent.OrphanResolver). Every episode runs nested (agent.Input.Depth) in
+// the stricter of the task's mode and FollowUpMode's. A task cancelled
 // while it waited cannot be taken over (as the middleware refuses to
-// continue one it holds). A running record cannot be reattached yet. ctx
-// must belong to
-// the parent's run; the middleware passes the call's backend with it.
+// continue one it holds).
 func (l *localRunner) Attach(ctx context.Context, rec TaskRecord) (Handle, error) {
-	if rec.Status == StatusRunning {
-		return nil, fmt.Errorf("%w: a running task is not reattached", ErrCannotReattach)
-	}
 	if rec.TaskThreadID == "" {
 		return nil, fmt.Errorf("%w: the record names no task thread", ErrCannotReattach)
 	}
-	info, ok := agent.Info(ctx)
-	if !ok {
-		return nil, errors.New("a background task can only be reattached inside an agent run")
+	parent, depth := l.parentOf(ctx)
+	if parent == nil {
+		return nil, fmt.Errorf("%w: no agent to run it with", ErrCannotReattach)
 	}
 	spec, ok := l.specs[rec.SubagentType]
 	if !ok {
 		return nil, fmt.Errorf("%w: unknown subagent type %q", ErrCannotReattach, rec.SubagentType)
 	}
 	f, _ := followUpOf(ctx)
-	if f.backend == nil {
+	be := f.backend
+	if be == nil {
+		be = backendOf(parent, rec.ThreadID)
+	}
+	if be == nil {
 		return nil, fmt.Errorf("%w: no backend to run it on", ErrCannotReattach)
 	}
-	child, err := l.launcher.Agent(info.Agent, spec)
+	child, err := l.launcher.Agent(parent, spec)
 	if err != nil {
 		return nil, err
 	}
-	s, v, err := l.checkpointer(info.Agent).Load(ctx, rec.TaskThreadID)
+	s, v, err := l.checkpointer(parent).Load(ctx, rec.TaskThreadID)
 	if errors.Is(err, checkpoint.ErrNotFound) {
 		return nil, fmt.Errorf("%w: its thread %s is gone", ErrCannotReattach, rec.TaskThreadID)
 	}
 	if err != nil {
 		return nil, err
 	}
+	sess := &localSession{l: l, taskID: rec.ID, child: child, threadID: rec.TaskThreadID, backend: be, agentName: spec.Name, depth: depth}
 	out := Outcome{Status: rec.Status, Text: rec.Result, Error: rec.Error}
 	intr, pending := agent.Pending(s)
 	switch {
-	case rec.Status == StatusWaiting && !pending:
-		return nil, fmt.Errorf("%w: its thread %s holds no pending action", ErrCannotReattach, rec.TaskThreadID)
-	case rec.Status == StatusWaiting:
-		out.Pending = intr // the thread's, in full: the record's is a capped copy
 	case rec.Status == StatusCancelled && pending:
 		// Cancelled while it waited: its pending actions never run.
 		return nil, errCancelledWaiting
+	case pending && !rec.Status.terminal():
+		// The thread's, in full: the record's is a capped copy. A running
+		// record whose task started waiting before its process went away
+		// waits too.
+		out = Outcome{Status: StatusWaiting, Pending: intr}
+	case rec.Status == StatusWaiting:
+		return nil, fmt.Errorf("%w: its thread %s holds no pending action", ErrCannotReattach, rec.TaskThreadID)
+	case rec.Status == StatusRunning:
+		in, err := sess.input(ctx, s, v, llm.UserText(restartText))
+		if err != nil {
+			return nil, err
+		}
+		return sess.start(ctx, in, nil)
 	}
-	sess := &localSession{l: l, taskID: rec.ID, child: child, threadID: rec.TaskThreadID, backend: f.backend, agentName: spec.Name}
 	done := make(chan struct{})
 	close(done)
 	return &localTask{
 		sess: sess, stop: func(error) {}, done: done, inbox: &inbox{closed: true},
 		out: out, last: s, version: v,
 	}, nil
+}
+
+// parentOf returns the agent a task reattached with ctx runs under, and the
+// Depth of its runs: the agent of the run ctx belongs to, one level below
+// that run, else the bound agent, at Depth 1.
+func (l *localRunner) parentOf(ctx context.Context) (*agent.Agent, int) {
+	if info, ok := agent.Info(ctx); ok && info.Agent != nil {
+		return info.Agent, info.Depth + 1
+	}
+	if l.bound != nil {
+		if a := l.bound(); a != nil {
+			return a, 1
+		}
+	}
+	return nil, 0
+}
+
+// backendOf is the backend parent's runs of threadID use when the run
+// names none: BackendFactory(threadID), else Backend; nil when neither.
+func backendOf(parent *agent.Agent, threadID string) backend.Backend {
+	cfg := parent.Config()
+	if cfg.BackendFactory != nil {
+		return cfg.BackendFactory(threadID)
+	}
+	return cfg.Backend
 }
 
 // localSession is what every episode of one local task shares.
@@ -406,6 +463,33 @@ type localSession struct {
 	threadID  string
 	backend   backend.Backend
 	agentName string
+	// depth is the agent.Input.Depth of every episode: the starting run's
+	// plus one, so an episode started outside a tool call (after a restart,
+	// or by a host's decision) still runs nested.
+	depth int
+}
+
+// input is the Input of an episode that continues the task from last (saved
+// at version) with msgs: on a copy of last in the stricter of the task's
+// permission mode and FollowUpMode's, nested, on the task's backend.
+func (sess *localSession) input(ctx context.Context, last *state.State, version checkpoint.Version, msgs ...llm.Message) (agent.Input, error) {
+	s := last.Clone()
+	mode := sess.child.PermissionMode(s)
+	if f, ok := followUpOf(ctx); ok && f.mode != "" {
+		mode = permission.Stricter(f.mode, mode)
+	}
+	if err := agent.SetPermissionMode(s, mode); err != nil {
+		return agent.Input{}, err
+	}
+	return agent.Input{
+		ThreadID:  sess.threadID,
+		State:     s,
+		Version:   version,
+		Messages:  msgs,
+		Backend:   sess.backendFor(ctx),
+		AgentName: sess.agentName,
+		Depth:     sess.depth,
+	}, nil
 }
 
 // start runs one episode of the task with in, on a context detached from
@@ -540,23 +624,11 @@ func (t *localTask) next(ctx context.Context, last *state.State, version checkpo
 			return nil, fmt.Errorf("async: the task has no history to continue: %w", err)
 		}
 	}
-	s := last.Clone()
-	mode := sess.child.PermissionMode(s)
-	f, ok := followUpOf(ctx)
-	if ok && f.mode != "" {
-		mode = permission.Stricter(f.mode, mode)
-	}
-	if err := agent.SetPermissionMode(s, mode); err != nil {
+	in, err := sess.input(ctx, last, version, llm.UserText(updateText(message)))
+	if err != nil {
 		return nil, err
 	}
-	return sess.start(ctx, agent.Input{
-		ThreadID:  sess.threadID,
-		State:     s,
-		Version:   version,
-		Messages:  []llm.Message{llm.UserText(updateText(message))},
-		Backend:   sess.backendFor(ctx),
-		AgentName: sess.agentName,
-	}, nil)
+	return sess.start(ctx, in, nil)
 }
 
 // backendFor is the backend an episode runs on: the task's own, or for a
@@ -604,22 +676,11 @@ func (t *localTask) Resolve(ctx context.Context, decisions []agent.Decision) (Ha
 	last, version := t.last, t.version
 	t.mu.Unlock()
 	sess := t.sess
-	s := last.Clone()
-	if f, ok := followUpOf(ctx); ok && f.mode != "" {
-		if err := agent.SetPermissionMode(s, permission.Stricter(f.mode, sess.child.PermissionMode(s))); err != nil {
-			t.mu.Lock()
-			t.continued = false
-			t.mu.Unlock()
-			return nil, err
-		}
+	in, err := sess.input(ctx, last, version)
+	var h Handle
+	if err == nil {
+		h, err = sess.start(ctx, in, slices.Clone(decisions))
 	}
-	h, err := sess.start(ctx, agent.Input{
-		ThreadID:  sess.threadID,
-		State:     s,
-		Version:   version,
-		Backend:   sess.backendFor(ctx),
-		AgentName: sess.agentName,
-	}, slices.Clone(decisions))
 	if err != nil {
 		t.mu.Lock()
 		t.continued = false

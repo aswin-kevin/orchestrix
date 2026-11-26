@@ -7,13 +7,11 @@ import (
 	"testing"
 
 	"github.com/aswin-kevin/orchestrix/agent"
-	"github.com/aswin-kevin/orchestrix/checkpoint/file"
 	summarystate "github.com/aswin-kevin/orchestrix/internal/summary"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
-	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -182,57 +180,6 @@ func TestUpdateReachesOnlyTheTask(t *testing.T) {
 		if strings.Contains(requestText(req), "<task-update>") {
 			t.Fatalf("the grandchild drained its parent's inbox: %q", requestText(req))
 		}
-	}
-}
-
-func TestLostAfterRestart(t *testing.T) {
-	dir := t.TempDir()
-	newAgent := func(m *Middleware, p llm.Provider) *agent.Agent {
-		cp, err := file.New(dir, file.Config{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		a, err := agent.New(agent.Config{Provider: p, Middleware: []agent.Middleware{m}, Checkpointer: cp, PermissionMode: permission.ModeDefault})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return a
-	}
-	drain := func(a *agent.Agent, text string) *agent.Thread {
-		th, err := a.Thread(context.Background(), "t")
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, err := range th.Prompt(context.Background(), text) {
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		return th
-	}
-
-	g := newGate(llmtest.Turn{Text: "never"})
-	m1, err := New(Config{Subagents: []subagents.Subagent{researcher(g)}, DisableStopReminder: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = m1.Close(context.Background()) }) // G19: agent 1's task must not outlive the test
-	drain(newAgent(m1, llmtest.New(start("s1", "researcher", "slow"), llmtest.Turn{Text: "started"})), "go")
-
-	m2, err := New(Config{Subagents: []subagents.Subagent{researcher(g)}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = m2.Close(context.Background()) })
-	p2 := llmtest.New(llmtest.Turn{Text: "ok"})
-	th := drain(newAgent(m2, p2), "next")
-	notes := notifications(p2)
-	want := "<task-notification>Background task async_1 (researcher) was lost: the process restarted before it finished. Start it again if it is still needed.</task-notification>"
-	if len(notes) != 1 || notes[0].Text() != want {
-		t.Fatalf("notifications = %+v", notes)
-	}
-	if r := record(t, th.State(), "async_1"); r.Status != StatusLost || !r.Notified {
-		t.Fatalf("record = %+v", r)
 	}
 }
 

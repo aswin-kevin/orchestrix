@@ -343,9 +343,9 @@ func (m *Middleware) continueTask(ctx context.Context, c *tool.Call, r TaskRecor
 	return tool.Text(fmt.Sprintf("Task %s continues with your message; you will be notified when it finishes.", r.ID))
 }
 
-// reattach takes over the stopped task r, which this process does not hold,
-// through the Runner's Reattacher, and registers it under its id. Attach
-// calls are serialized, so one task is never attached twice.
+// reattach takes over task r, which this process does not hold, through the
+// Runner's Reattacher, and registers it under its id. Attach calls are
+// serialized, so one task is never attached twice.
 func (m *Middleware) reattach(ctx context.Context, r TaskRecord) (*jobs.Job[*task], error) {
 	ra, ok := m.runner.(Reattacher)
 	if !ok {
@@ -364,21 +364,32 @@ func (m *Middleware) reattach(ctx context.Context, r TaskRecord) (*jobs.Job[*tas
 		return nil, err
 	}
 	t := newTask(ctx)
-	t.attach(h)
-	// Bound after attach: the attached episode stopped before, and was
-	// reported then; only later episodes are.
-	t.bind(TaskRecord{
+	meta := TaskRecord{
 		ID: r.ID, ThreadID: r.ThreadID, TaskThreadID: r.TaskThreadID, SubagentType: r.SubagentType, Description: r.Description,
 		StartMode: r.StartMode, Started: r.Started,
-	}, m.settled)
+	}
+	if r.Status == StatusRunning {
+		// Its episode is reported when it stops, as is a wait the
+		// process that went away never saw recorded.
+		t.bind(meta, m.settled)
+		t.attach(h)
+	} else {
+		// Bound after attach: the attached episode stopped before, and
+		// was reported then; only later episodes are.
+		t.attach(h)
+		t.bind(meta, m.settled)
+	}
 	j, err := m.jobs.Adopt(r.ThreadID, r.ID, r.Started, t)
 	if err != nil {
+		t.bind(meta, nil) // nobody is told of a task nobody holds
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DefaultStopWait)
 		_ = h.Stop(stopCtx) // nobody holds it
 		cancel()
 		return nil, err
 	}
-	if r.Notified {
+	// For a waiting record Notified only says the model was told it
+	// waits: its job is not settled, so it must not be released.
+	if r.Notified && r.terminal() {
 		m.jobs.MarkNotified(r.ThreadID, r.ID)
 	}
 	if f, ok := followUpOf(ctx); ok {
