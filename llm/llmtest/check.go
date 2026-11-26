@@ -18,8 +18,8 @@ const cancelWait = 5 * time.Second
 // verifies, in order, that Stream yields at least one event and no error;
 // that every event is accepted by an llm.Accumulator; that Complete returns
 // the same Message, StopReason and Usage as the collected stream; and that
-// Stream with an already-cancelled context ends with an error matching
-// context.Canceled within five seconds.
+// Stream with an already-cancelled context ends within five seconds, its
+// first error matching context.Canceled and nothing yielded after it.
 //
 // It calls Stream and Complete with req, so it is meant for deterministic
 // providers such as scripted backends and httptest servers, which answer the
@@ -79,23 +79,35 @@ func checkStream(t testing.TB, p llm.Provider, req llm.Request) (*llm.Response, 
 }
 
 // checkCancelled checks that a stream started with a cancelled context ends
-// with context.Canceled.
+// with context.Canceled. The first error counts; anything yielded after it
+// is flagged, since an error ends the sequence.
 func checkCancelled(t testing.TB, p llm.Provider, req llm.Request) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result := make(chan error, 1)
+	type outcome struct {
+		err  error
+		more bool // something was yielded after err
+	}
+	result := make(chan outcome, 1)
 	go func() {
-		var last error
+		var o outcome
 		for _, err := range p.Stream(ctx, req) {
-			last = err
+			if o.err != nil {
+				o.more = true
+				continue
+			}
+			o.err = err
 		}
-		result <- last
+		result <- o
 	}()
 	select {
-	case err := <-result:
-		if !errors.Is(err, context.Canceled) {
-			t.Errorf("llmtest: Stream with a cancelled context ended with %v, want context.Canceled", err)
+	case o := <-result:
+		if !errors.Is(o.err, context.Canceled) {
+			t.Errorf("llmtest: Stream with a cancelled context ended with %v, want context.Canceled", o.err)
+		}
+		if o.more {
+			t.Errorf("llmtest: Stream with a cancelled context yielded more after its error")
 		}
 	case <-time.After(cancelWait):
 		t.Errorf("llmtest: Stream with a cancelled context did not end within %s", cancelWait)

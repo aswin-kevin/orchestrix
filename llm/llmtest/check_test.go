@@ -2,6 +2,7 @@ package llmtest_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"strings"
@@ -28,6 +29,8 @@ func (r *recorder) Errorf(format string, args ...any) {
 }
 
 func (r *recorder) mentions(s string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for _, e := range r.errs {
 		if strings.Contains(e, s) {
 			return true
@@ -62,22 +65,37 @@ func TestCheckProviderFlagsEmptyStream(t *testing.T) {
 	}
 }
 
-// mismatchProvider completes with different text than it streams.
-type mismatchProvider struct{ *llmtest.Scripted }
+// mismatchProvider completes with the scripted response changed by edit.
+type mismatchProvider struct {
+	*llmtest.Scripted
+	edit func(*llm.Response)
+}
 
-func (m mismatchProvider) Complete(context.Context, llm.Request) (*llm.Response, error) {
-	return &llm.Response{
-		Message:    llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{{Type: llm.BlockText, Text: "other"}}},
-		StopReason: llm.StopEndTurn,
-	}, nil
+func (m mismatchProvider) Complete(ctx context.Context, req llm.Request) (*llm.Response, error) {
+	resp, err := m.Scripted.Complete(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	m.edit(resp)
+	return resp, nil
 }
 
 func TestCheckProviderFlagsMismatch(t *testing.T) {
-	p := mismatchProvider{llmtest.New(llmtest.Turn{Text: "hi"}, llmtest.Turn{Text: "hi"}, llmtest.Turn{Text: "hi"})}
-	rec := &recorder{TB: t}
-	llmtest.CheckProvider(rec, p, checkReq)
-	if !rec.mentions("Complete") {
-		t.Errorf("errors = %q, want one mentioning \"Complete\"", rec.errs)
+	for want, edit := range map[string]func(*llm.Response){
+		"Complete Message": func(r *llm.Response) {
+			r.Message = llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{{Type: llm.BlockText, Text: "other"}}}
+		},
+		"Complete StopReason": func(r *llm.Response) { r.StopReason = llm.StopMaxTokens },
+		"Complete Usage":      func(r *llm.Response) { r.Usage.Output += 7 },
+	} {
+		t.Run(want, func(t *testing.T) {
+			p := mismatchProvider{llmtest.New(llmtest.Turn{Text: "hi"}, llmtest.Turn{Text: "hi"}, llmtest.Turn{Text: "hi"}), edit}
+			rec := &recorder{TB: t}
+			llmtest.CheckProvider(rec, p, checkReq)
+			if !rec.mentions(want) {
+				t.Errorf("errors = %q, want one mentioning %q", rec.errs, want)
+			}
+		})
 	}
 }
 
@@ -94,5 +112,41 @@ func TestCheckProviderFlagsIgnoredCancellation(t *testing.T) {
 	llmtest.CheckProvider(rec, p, checkReq)
 	if !rec.mentions("cancel") {
 		t.Errorf("errors = %q, want one mentioning cancel", rec.errs)
+	}
+}
+
+// cancelErrs streams normally, but a cancelled Stream yields errs in order.
+type cancelErrs struct {
+	*llmtest.Scripted
+	errs []error
+}
+
+func (p cancelErrs) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.StreamEvent, error] {
+	if ctx.Err() == nil {
+		return p.Scripted.Stream(ctx, req)
+	}
+	return func(yield func(llm.StreamEvent, error) bool) {
+		for _, err := range p.errs {
+			yield(llm.StreamEvent{}, err)
+		}
+	}
+}
+
+func TestCheckProviderCancelledKeepsFirstError(t *testing.T) {
+	for name, tc := range map[string]struct {
+		errs []error
+		want string
+	}{
+		"canceled first": {[]error{context.Canceled, errors.New("late")}, "after its error"},
+		"canceled last":  {[]error{errors.New("early"), context.Canceled}, "ended with early"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := cancelErrs{llmtest.New(llmtest.Turn{Text: "hi"}, llmtest.Turn{Text: "hi"}), tc.errs}
+			rec := &recorder{TB: t}
+			llmtest.CheckProvider(rec, p, checkReq)
+			if !rec.mentions(tc.want) {
+				t.Errorf("errors = %q, want one mentioning %q", rec.errs, tc.want)
+			}
+		})
 	}
 }
