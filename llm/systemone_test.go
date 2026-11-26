@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -60,7 +59,7 @@ func TestSystemOneRequestAndAnswers(t *testing.T) {
 
 	req := soRequest()
 	req.Input = []Block{TextBlock("first"), TextBlock("second")}
-	resp, err := newTestSystemOne(t, srv.URL).Decide(context.Background(), req)
+	resp, err := newTestSystemOne(t, srv.URL).Decide(t.Context(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +109,7 @@ func TestSystemOneURL(t *testing.T) {
 	defer srv.Close()
 	for _, suffix := range []string{"", "/", "/v1", "/v1/"} {
 		path.Store("")
-		if _, err := newTestSystemOne(t, srv.URL+suffix).Decide(context.Background(), soRequest()); err != nil {
+		if _, err := newTestSystemOne(t, srv.URL+suffix).Decide(t.Context(), soRequest()); err != nil {
 			t.Fatalf("base %q: %v", suffix, err)
 		}
 		if path.Load() != "/v1/systemone" {
@@ -123,7 +122,7 @@ func TestSystemOneRejectsImageInput(t *testing.T) {
 	d := newTestSystemOne(t, "http://unused.invalid")
 	req := soRequest()
 	req.Input = []Block{TextBlock("ok"), {Type: BlockImage}}
-	_, err := d.Decide(context.Background(), req)
+	_, err := d.Decide(t.Context(), req)
 	if err == nil || err.Error() != "llm: systemone accepts text input only (got image)" {
 		t.Errorf("err = %v", err)
 	}
@@ -134,7 +133,7 @@ func TestSystemOneMissingAnswer(t *testing.T) {
 		io.WriteString(w, `{"answers":{"refund":{"type":"noul","noul":0.5}}}`)
 	}))
 	defer srv.Close()
-	_, err := newTestSystemOne(t, srv.URL).Decide(context.Background(), soRequest())
+	_, err := newTestSystemOne(t, srv.URL).Decide(t.Context(), soRequest())
 	if err == nil || !strings.Contains(err.Error(), `no answer for question "team"`) {
 		t.Errorf("err = %v", err)
 	}
@@ -147,7 +146,7 @@ func TestSystemOneBadScoreKey(t *testing.T) {
 			 "team":{"type":"choice","choice":"payments"},
 			 "urgency":{"type":"score","score":1,"probabilities":{"`+key+`":1}}}}`)
 		}))
-		_, err := newTestSystemOne(t, srv.URL).Decide(context.Background(), soRequest())
+		_, err := newTestSystemOne(t, srv.URL).Decide(t.Context(), soRequest())
 		srv.Close()
 		want := `llm: systemone score key "` + key + `" for question "urgency" is not a level index`
 		if err == nil || err.Error() != want {
@@ -169,7 +168,7 @@ func TestSystemOneRetriesThenAPIError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Decide(context.Background(), soRequest()); err != nil || hits.Load() != 2 {
+	if _, err := d.Decide(t.Context(), soRequest()); err != nil || hits.Load() != 2 {
 		t.Errorf("err = %v, hits = %d", err, hits.Load())
 	}
 	srv.Close()
@@ -185,7 +184,7 @@ func TestSystemOneRetriesThenAPIError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = d.Decide(context.Background(), soRequest())
+	_, err = d.Decide(t.Context(), soRequest())
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest || hits.Load() != 1 {
 		t.Errorf("err = %v, hits = %d", err, hits.Load())

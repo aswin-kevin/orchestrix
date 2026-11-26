@@ -75,7 +75,7 @@ func TestFallbackStreamSwitchesBeforeContent(t *testing.T) {
 		{Provider: llmtest.New(overloaded()), Name: "a"},
 		{Provider: backup, Name: "b"},
 	}})
-	resp, err := llm.Collect(context.Background(), p, llm.Request{})
+	resp, err := llm.Collect(t.Context(), p, llm.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestFallbackStreamCoolsDownAfterMidStreamFailure(t *testing.T) {
 	if _, err := drain(p, llm.Request{}); err == nil {
 		t.Fatal("first stream succeeded")
 	}
-	resp, err := llm.Collect(context.Background(), p, llm.Request{})
+	resp, err := llm.Collect(t.Context(), p, llm.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestFallbackStreamStopsWhenConsumerStops(t *testing.T) {
 	}}
 	p := newFallback(t, llm.FallbackConfig{Entries: []llm.FallbackEntry{{Provider: primary}, {Provider: llmtest.New()}}})
 	n := 0
-	for range p.Stream(context.Background(), llm.Request{}) {
+	for range p.Stream(t.Context(), llm.Request{}) {
 		n++
 		if n == 2 {
 			break
@@ -268,7 +268,7 @@ func TestFallbackStreamSwitchesOnInStreamOverload(t *testing.T) {
 		Entries:    []llm.FallbackEntry{{Provider: primary, Name: "a"}, {Provider: backup, Name: "b"}},
 		OnFallback: func(_ context.Context, ev llm.FallbackEvent) { events = append(events, ev) },
 	})
-	resp, err := llm.Collect(context.Background(), p, llm.Request{})
+	resp, err := llm.Collect(t.Context(), p, llm.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -33,13 +33,13 @@ func newFallback(t *testing.T, cfg llm.FallbackConfig) *llm.Fallback {
 
 func TestNewFallbackValidates(t *testing.T) {
 	ok := llmtest.New()
-	cases := map[string][]llm.FallbackEntry{
+	tests := map[string][]llm.FallbackEntry{
 		"none":      nil,
 		"one":       {{Provider: ok}},
 		"nil":       {{Provider: ok}, {Provider: nil}},
 		"duplicate": {{Provider: ok, Name: "m"}, {Provider: ok, Name: "m"}},
 	}
-	for name, entries := range cases {
+	for name, entries := range tests {
 		if _, err := llm.NewFallback(llm.FallbackConfig{Entries: entries}); err == nil {
 			t.Errorf("%s: NewFallback succeeded, want an error", name)
 		}
@@ -58,7 +58,7 @@ func TestFallbackSwitchesOnOverload(t *testing.T) {
 		},
 		OnFallback: func(_ context.Context, ev llm.FallbackEvent) { events = append(events, ev) },
 	})
-	resp, err := p.Complete(context.Background(), llm.Request{})
+	resp, err := p.Complete(t.Context(), llm.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestFallbackClearsModelForBackups(t *testing.T) {
 	primary := llmtest.New(overloaded())
 	backup := llmtest.New(llmtest.Turn{Text: "ok"})
 	p := newFallback(t, llm.FallbackConfig{Entries: []llm.FallbackEntry{{Provider: primary}, {Provider: backup}}})
-	if _, err := p.Complete(context.Background(), llm.Request{Model: "primary-model"}); err != nil {
+	if _, err := p.Complete(t.Context(), llm.Request{Model: "primary-model"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := primary.Requests[0].Model; got != "primary-model" {
@@ -98,7 +98,7 @@ func TestFallbackClampsMaxTokens(t *testing.T) {
 		{Provider: backup, Model: "fallback-test-small"},
 	}})
 	req := llm.Request{MaxTokens: 8000}
-	if _, err := p.Complete(context.Background(), req); err != nil {
+	if _, err := p.Complete(t.Context(), req); err != nil {
 		t.Fatal(err)
 	}
 	if got := primary.Requests[0].MaxTokens; got != 8000 {
@@ -118,7 +118,7 @@ func TestFallbackKeepsMaxTokensForUnknownModel(t *testing.T) {
 		{Provider: llmtest.New(overloaded())},
 		{Provider: backup, Model: "zz-no-such-model-family"},
 	}})
-	if _, err := p.Complete(context.Background(), llm.Request{MaxTokens: 16000}); err != nil {
+	if _, err := p.Complete(t.Context(), llm.Request{MaxTokens: 16000}); err != nil {
 		t.Fatal(err)
 	}
 	if got := backup.Requests[0].MaxTokens; got != 16000 {
@@ -130,7 +130,7 @@ func TestDefaultShouldFallback(t *testing.T) {
 	// No case covers a retryable status whose body marks a context overflow:
 	// IsContextOverflow only accepts statuses 0, 400 and 413, none of which
 	// is retryable, so that combination cannot occur.
-	cases := map[string]struct {
+	tests := map[string]struct {
 		err  error
 		want bool
 	}{
@@ -140,9 +140,9 @@ func TestDefaultShouldFallback(t *testing.T) {
 		"canceled":    {fmt.Errorf("send: %w", context.Canceled), false},
 		"network":     {&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, true},
 	}
-	for name, c := range cases {
-		if got := llm.DefaultShouldFallback(c.err); got != c.want {
-			t.Errorf("%s: DefaultShouldFallback = %v, want %v", name, got, c.want)
+	for name, tt := range tests {
+		if got := llm.DefaultShouldFallback(tt.err); got != tt.want {
+			t.Errorf("%s: DefaultShouldFallback = %v, want %v", name, got, tt.want)
 		}
 	}
 }
@@ -154,7 +154,7 @@ func TestFallbackCooldown(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	llm.SetFallbackClock(p, func() time.Time { return now })
 
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := p.Complete(ctx, llm.Request{}); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestFallbackAllCoolingStillTries(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	llm.SetFallbackClock(p, func() time.Time { return now })
 
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := p.Complete(ctx, llm.Request{}); err == nil {
 		t.Fatal("call 1 succeeded")
 	}
@@ -199,12 +199,12 @@ func TestFallbackAllCoolingStillTries(t *testing.T) {
 }
 
 func TestFallbackNoSwitchOnNonRetryable(t *testing.T) {
-	cases := map[string]error{
+	tests := map[string]error{
 		"bad request": &llm.APIError{Status: 400},
 		"canceled":    fmt.Errorf("send: %w", context.Canceled),
 		"overflow":    &llm.APIError{Status: 400, Body: "prompt is too long"},
 	}
-	for name, want := range cases {
+	for name, want := range tests {
 		primary := llmtest.New(llmtest.Turn{Err: want}, llmtest.Turn{Text: "primary"})
 		backup := llmtest.New(llmtest.Turn{Text: "ok"})
 		called := false
@@ -212,7 +212,7 @@ func TestFallbackNoSwitchOnNonRetryable(t *testing.T) {
 			Entries:    []llm.FallbackEntry{{Provider: primary}, {Provider: backup}},
 			OnFallback: func(context.Context, llm.FallbackEvent) { called = true },
 		})
-		_, err := p.Complete(context.Background(), llm.Request{})
+		_, err := p.Complete(t.Context(), llm.Request{})
 		if err != want {
 			t.Errorf("%s: err = %v, want it returned unchanged", name, err)
 		}
@@ -220,7 +220,7 @@ func TestFallbackNoSwitchOnNonRetryable(t *testing.T) {
 			t.Errorf("%s: switched to the backup", name)
 		}
 		// No cool-down started: the next call goes to the primary again.
-		if _, err := p.Complete(context.Background(), llm.Request{}); err != nil || primary.Calls() != 2 {
+		if _, err := p.Complete(t.Context(), llm.Request{}); err != nil || primary.Calls() != 2 {
 			t.Errorf("%s: second call err %v, primary calls %d; want nil and 2", name, err, primary.Calls())
 		}
 	}
@@ -229,7 +229,7 @@ func TestFallbackNoSwitchOnNonRetryable(t *testing.T) {
 		{Provider: llmtest.New(llmtest.Turn{Err: fmt.Errorf("send: %w", context.Canceled)})},
 		{Provider: llmtest.New(llmtest.Turn{Text: "ok"})},
 	}})
-	if _, err := p.Complete(context.Background(), llm.Request{}); !errors.Is(err, context.Canceled) {
+	if _, err := p.Complete(t.Context(), llm.Request{}); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 	// A 400 keeps its *APIError.
@@ -238,7 +238,7 @@ func TestFallbackNoSwitchOnNonRetryable(t *testing.T) {
 		{Provider: llmtest.New(llmtest.Turn{Text: "ok"})},
 	}})
 	var apiErr *llm.APIError
-	if _, err := p.Complete(context.Background(), llm.Request{}); !errors.As(err, &apiErr) || apiErr.Status != 400 {
+	if _, err := p.Complete(t.Context(), llm.Request{}); !errors.As(err, &apiErr) || apiErr.Status != 400 {
 		t.Errorf("err = %v, want status 400", err)
 	}
 }
@@ -254,7 +254,7 @@ func TestFallbackCustomShouldFallback(t *testing.T) {
 			return errors.As(err, &apiErr) && apiErr.Status == 401
 		},
 	})
-	resp, err := p.Complete(context.Background(), llm.Request{})
+	resp, err := p.Complete(t.Context(), llm.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestFallbackConcurrent(t *testing.T) {
 	errs := make(chan error, 20)
 	for range 20 {
 		wg.Go(func() {
-			resp, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{llm.UserText("hi")}})
+			resp, err := p.Complete(t.Context(), llm.Request{Messages: []llm.Message{llm.UserText("hi")}})
 			if err == nil && resp.Message.Text() != "ok" {
 				err = fmt.Errorf("text = %q", resp.Message.Text())
 			}
@@ -317,7 +317,7 @@ func TestFallbackConcurrent(t *testing.T) {
 	}
 	// Once the burst is over the primary is cooling down and is skipped.
 	before := primary.calls
-	if _, err := p.Complete(context.Background(), llm.Request{}); err != nil {
+	if _, err := p.Complete(t.Context(), llm.Request{}); err != nil {
 		t.Fatal(err)
 	}
 	if primary.calls != before {
@@ -331,10 +331,10 @@ func TestFallbackSkipsCoolingWhenOthersFail(t *testing.T) {
 	c := llmtest.New(llmtest.Turn{Err: &llm.APIError{Status: 503}})
 	p := newFallback(t, llm.FallbackConfig{Entries: []llm.FallbackEntry{{Provider: primary}, {Provider: b}, {Provider: c}}})
 
-	if _, err := p.Complete(context.Background(), llm.Request{}); err != nil {
+	if _, err := p.Complete(t.Context(), llm.Request{}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := p.Complete(context.Background(), llm.Request{})
+	_, err := p.Complete(t.Context(), llm.Request{})
 	var apiErr *llm.APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != 503 {
 		t.Errorf("err = %v, want the last entry's 503", err)
@@ -362,7 +362,7 @@ func checkStamps(t *testing.T, how string, resp *llm.Response, want string) {
 }
 
 func TestFallbackStampsBlocks(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	entries := func() []llm.FallbackEntry {
 		return []llm.FallbackEntry{
 			{Provider: llmtest.New(overloaded()), Name: "a"},
@@ -419,7 +419,7 @@ func TestFallbackProvenanceRoundTrip(t *testing.T) {
 		Cooldown: -1,
 	})
 	msgs := provenanceHistory()
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := p.Complete(ctx, llm.Request{Messages: msgs}); err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +494,7 @@ func TestFallbackFillsModelFromNewProvider(t *testing.T) {
 	if entries[0].Model != "" {
 		t.Errorf("primary Model = %q, want empty", entries[0].Model)
 	}
-	_, _ = p.Complete(context.Background(), llm.Request{MaxTokens: 64_000})
+	_, _ = p.Complete(t.Context(), llm.Request{MaxTokens: 64_000})
 	if got := maxTokens(); got != 16_384 {
 		t.Errorf("backup max_tokens = %d, want 16384 (gpt-4o profile)", got)
 	}
@@ -517,7 +517,7 @@ func TestFallbackExplicitModelWins(t *testing.T) {
 	if got := llm.FallbackEntries(p)[1].Model; got != "fallback-test-explicit" {
 		t.Errorf("Model = %q, want the explicit one", got)
 	}
-	_, _ = p.Complete(context.Background(), llm.Request{MaxTokens: 64_000})
+	_, _ = p.Complete(t.Context(), llm.Request{MaxTokens: 64_000})
 	if got := maxTokens(); got != 500 {
 		t.Errorf("backup max_tokens = %d, want 500", got)
 	}
@@ -567,7 +567,7 @@ const (
 )
 
 func TestDefaultShouldFallbackInStream(t *testing.T) {
-	cases := map[string]struct {
+	tests := map[string]struct {
 		err  error
 		want bool
 	}{
@@ -586,9 +586,9 @@ func TestDefaultShouldFallbackInStream(t *testing.T) {
 		"status 400 with type": {&llm.APIError{Status: 400, Body: anthropicOverloadedEvent}, false},
 		"canceled":             {errors.Join(context.Canceled, &llm.APIError{Body: anthropicOverloadedEvent}), false},
 	}
-	for name, c := range cases {
-		if got := llm.DefaultShouldFallback(c.err); got != c.want {
-			t.Errorf("%s: DefaultShouldFallback = %v, want %v", name, got, c.want)
+	for name, tt := range tests {
+		if got := llm.DefaultShouldFallback(tt.err); got != tt.want {
+			t.Errorf("%s: DefaultShouldFallback = %v, want %v", name, got, tt.want)
 		}
 	}
 }
@@ -623,7 +623,7 @@ func (c *cancelling) Stream(context.Context, llm.Request) iter.Seq2[llm.StreamEv
 func TestFallbackNoSwitchWhenContextDone(t *testing.T) {
 	for _, mode := range []string{"complete", "stream"} {
 		t.Run(mode, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			primary := &cancelling{cancel: cancel}
 			backup := llmtest.New(llmtest.Turn{Text: "ok"}, llmtest.Turn{Text: "ok"})
@@ -649,7 +649,7 @@ func TestFallbackNoSwitchWhenContextDone(t *testing.T) {
 			primary.mu.Lock()
 			primary.cancel = nil
 			primary.mu.Unlock()
-			_, _ = p.Complete(context.Background(), llm.Request{})
+			_, _ = p.Complete(t.Context(), llm.Request{})
 			primary.mu.Lock()
 			calls := primary.calls
 			primary.mu.Unlock()

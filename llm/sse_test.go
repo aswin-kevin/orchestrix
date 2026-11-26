@@ -93,7 +93,7 @@ func lastStreamError(ctx context.Context, p Provider) error {
 
 func TestStreamIdleTimeout(t *testing.T) {
 	idle := func(c *Config) { c.StreamIdleTimeout = testIdle }
-	cases := []struct {
+	tests := []struct {
 		name  string
 		first string
 		build func(t *testing.T, url string) Provider
@@ -108,11 +108,11 @@ func TestStreamIdleTimeout(t *testing.T) {
 			return newTestResponses(t, url, idle)
 		}},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			url, _ := newStallServer(t, "text/event-stream", tc.first)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			url, _ := newStallServer(t, "text/event-stream", tt.first)
 			start := time.Now()
-			err := lastStreamError(context.Background(), tc.build(t, url))
+			err := lastStreamError(t.Context(), tt.build(t, url))
 			if !errors.Is(err, ErrStreamIdle) {
 				t.Fatalf("err = %v, want ErrStreamIdle", err)
 			}
@@ -125,7 +125,7 @@ func TestStreamIdleTimeout(t *testing.T) {
 
 func TestStreamIdleTimeoutBeforeFirstEvent(t *testing.T) {
 	url, _ := newStallServer(t, "text/event-stream", "")
-	err := lastStreamError(context.Background(), newTestOpenAI(t, url, func(c *Config) { c.StreamIdleTimeout = testIdle }))
+	err := lastStreamError(t.Context(), newTestOpenAI(t, url, func(c *Config) { c.StreamIdleTimeout = testIdle }))
 	if !errors.Is(err, ErrStreamIdle) {
 		t.Fatalf("err = %v, want ErrStreamIdle", err)
 	}
@@ -140,7 +140,7 @@ func TestIdleTimeoutAfterContentNotRetried(t *testing.T) {
 
 	var text strings.Builder
 	var last error
-	for ev, err := range p.Stream(context.Background(), Request{Messages: []Message{UserText("x")}}) {
+	for ev, err := range p.Stream(t.Context(), Request{Messages: []Message{UserText("x")}}) {
 		if err != nil {
 			last = err
 			continue
@@ -161,7 +161,7 @@ func TestIdleTimeoutAfterContentNotRetried(t *testing.T) {
 func TestCallerDeadlineBeatsIdleTimeout(t *testing.T) {
 	url, _ := newStallServer(t, "text/event-stream", openAIFirstDelta)
 	p := newTestOpenAI(t, url, func(c *Config) { c.StreamIdleTimeout = 10 * time.Second })
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 
 	if err := lastStreamError(ctx, p); !errors.Is(err, context.DeadlineExceeded) {
@@ -185,7 +185,7 @@ func TestFallbackSwitchesOnIdleBeforeContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := Collect(context.Background(), f, Request{Messages: []Message{UserText("x")}})
+	resp, err := Collect(t.Context(), f, Request{Messages: []Message{UserText("x")}})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestAnthropicCompleteIdleTimeout(t *testing.T) {
 	url, _ := newStallServer(t, "application/json", `{"id":"m","content":[`)
 	p := newTestProviderWith(t, FormatAnthropic, url, func(c *Config) { c.StreamIdleTimeout = testIdle })
 	start := time.Now()
-	_, err := p.Complete(context.Background(), Request{Messages: []Message{UserText("x")}})
+	_, err := p.Complete(t.Context(), Request{Messages: []Message{UserText("x")}})
 	if !errors.Is(err, ErrStreamIdle) {
 		t.Fatalf("err = %v, want ErrStreamIdle", err)
 	}
@@ -208,12 +208,12 @@ func TestAnthropicCompleteIdleTimeout(t *testing.T) {
 }
 
 func TestStreamIdleTimeoutDefault(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		set, want time.Duration
 	}{{0, DefaultStreamIdleTimeout}, {-1, 0}, {time.Second, time.Second}} {
-		tr := testTransport(t, func(c *Config) { c.StreamIdleTimeout = tc.set })
-		if got := tr.streamIdleTimeout(); got != tc.want {
-			t.Errorf("streamIdleTimeout(%v) = %v, want %v", tc.set, got, tc.want)
+		tr := testTransport(t, func(c *Config) { c.StreamIdleTimeout = tt.set })
+		if got := tr.streamIdleTimeout(); got != tt.want {
+			t.Errorf("streamIdleTimeout(%v) = %v, want %v", tt.set, got, tt.want)
 		}
 	}
 }
@@ -250,7 +250,7 @@ func TestStreamKeepAliveCommentsResetIdleTimeout(t *testing.T) {
 	t.Cleanup(srv.Close)
 	p := newTestOpenAI(t, srv.URL, func(c *Config) { c.StreamIdleTimeout = testIdle })
 
-	resp, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	resp, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestStreamKeepAliveCommentsResetIdleTimeout(t *testing.T) {
 func TestCallerCancelWithIdleTimerIsCanceled(t *testing.T) {
 	url, _ := newStallServer(t, "text/event-stream", openAIFirstDelta)
 	p := newTestOpenAI(t, url, func(c *Config) { c.StreamIdleTimeout = 10 * time.Second })
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var last error

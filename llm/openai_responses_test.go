@@ -51,7 +51,7 @@ func collectResponses(t *testing.T, p *responsesProvider, req Request) *Response
 	if len(req.Messages) == 0 {
 		req.Messages = []Message{UserText("x")}
 	}
-	resp, err := Collect(context.Background(), p, req)
+	resp, err := Collect(t.Context(), p, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestResponsesIncompleteMaxTokens(t *testing.T) {
 func TestResponsesFailedEvent(t *testing.T) {
 	stream := responsesBody(`{"type":"response.failed","response":{"error":{"code":"context_length_exceeded","message":"maximum context length exceeded"}}}`)
 	srv := newSSEServer(t, 200, "text/event-stream", stream)
-	_, err := Collect(context.Background(), newTestResponses(t, srv.URL), Request{Messages: []Message{UserText("x")}})
+	_, err := Collect(t.Context(), newTestResponses(t, srv.URL), Request{Messages: []Message{UserText("x")}})
 
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || !IsContextOverflow(err) {
@@ -273,7 +273,7 @@ func TestResponsesFailedEvent(t *testing.T) {
 
 func TestResponsesErrorEvent(t *testing.T) {
 	srv := newSSEServer(t, 200, "text/event-stream", responsesBody(`{"type":"error","code":"server_error","message":"boom"}`))
-	_, err := Collect(context.Background(), newTestResponses(t, srv.URL), Request{Messages: []Message{UserText("x")}})
+	_, err := Collect(t.Context(), newTestResponses(t, srv.URL), Request{Messages: []Message{UserText("x")}})
 
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Body, "boom") {
@@ -285,7 +285,7 @@ func TestResponsesTruncatedStreamNotRetried(t *testing.T) {
 	srv := newSSEServer(t, 200, "text/event-stream", responsesBody(responsesTextDelta))
 	p := newTestResponses(t, srv.URL, func(c *Config) { c.MaxRetries = 3 })
 
-	if _, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}}); err == nil {
+	if _, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}}); err == nil {
 		t.Fatal("expected error for truncated stream")
 	}
 	if got := srv.hits.Load(); got != 1 {
@@ -297,7 +297,7 @@ func TestResponsesHTTPErrorRetried(t *testing.T) {
 	srv := newSSEServer(t, 503, "application/json", `{"error":"busy"}`)
 	p := newTestResponses(t, srv.URL, func(c *Config) { c.MaxRetries = 2 })
 
-	_, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	_, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != 503 {
 		t.Fatalf("err = %v", err)
@@ -315,7 +315,7 @@ func TestResponsesStreamConsumerBreakClosesConnection(t *testing.T) {
 	url, gone := newBlockingServer(t, responsesFirstDelta)
 	p := newTestResponses(t, url)
 
-	for _, err := range p.Stream(context.Background(), Request{Messages: []Message{UserText("x")}}) {
+	for _, err := range p.Stream(t.Context(), Request{Messages: []Message{UserText("x")}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -327,7 +327,7 @@ func TestResponsesStreamConsumerBreakClosesConnection(t *testing.T) {
 func TestResponsesStreamContextCancelClosesConnection(t *testing.T) {
 	url, gone := newBlockingServer(t, responsesFirstDelta)
 	p := newTestResponses(t, url)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var last error

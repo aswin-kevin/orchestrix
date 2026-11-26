@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -64,11 +63,11 @@ func TestExtraNestedKeys(t *testing.T) {
 			url, bodies, _ := optionsServer(t)
 			req := optionRequest()
 			req.Extra = map[string]any{"model": map[string]any{"name": "x"}}
-			if _, err := f.make(t, url).Complete(context.Background(), req); !errors.Is(err, ErrExtraConflict) {
+			if _, err := f.make(t, url).Complete(t.Context(), req); !errors.Is(err, ErrExtraConflict) {
 				t.Fatalf("nested value under \"model\": err = %v, want ErrExtraConflict", err)
 			}
 			req.Extra = map[string]any{"metadata": map[string]any{"model": "x", "stream": true}}
-			_, _ = f.make(t, url).Complete(context.Background(), req)
+			_, _ = f.make(t, url).Complete(t.Context(), req)
 			if len(*bodies) != 1 {
 				t.Fatalf("got %d requests, want 1", len(*bodies))
 			}
@@ -107,7 +106,7 @@ func TestToolChoiceWire(t *testing.T) {
 				url, bodies, _ := optionsServer(t)
 				req := optionRequest()
 				req.ToolChoice = tc
-				_, _ = f.make(t, url).Complete(context.Background(), req)
+				_, _ = f.make(t, url).Complete(t.Context(), req)
 				if len(*bodies) != 1 {
 					t.Fatalf("got %d requests, want 1", len(*bodies))
 				}
@@ -123,7 +122,7 @@ func TestToolChoiceWire(t *testing.T) {
 		}
 		t.Run(f.name+"/zero", func(t *testing.T) {
 			url, bodies, _ := optionsServer(t)
-			_, _ = f.make(t, url).Complete(context.Background(), optionRequest())
+			_, _ = f.make(t, url).Complete(t.Context(), optionRequest())
 			if _, ok := (*bodies)[0]["tool_choice"]; ok {
 				t.Error("tool_choice present for zero ToolChoice")
 			}
@@ -132,7 +131,7 @@ func TestToolChoiceWire(t *testing.T) {
 }
 
 func TestToolChoiceInvalid(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
 		name  string
 		tc    ToolChoice
 		tools []ToolSchema
@@ -145,14 +144,14 @@ func TestToolChoiceInvalid(t *testing.T) {
 		{"unknown tool", ToolChoice{Mode: ToolChoiceTool, Name: "missing"}, searchTool, `tool choice names unknown tool "missing"`},
 	}
 	for _, f := range optionFormats() {
-		for _, c := range cases {
-			t.Run(f.name+"/"+c.name, func(t *testing.T) {
+		for _, tt := range tests {
+			t.Run(f.name+"/"+tt.name, func(t *testing.T) {
 				url, _, hits := optionsServer(t)
 				req := optionRequest()
-				req.Tools, req.ToolChoice = c.tools, c.tc
-				_, err := f.make(t, url).Complete(context.Background(), req)
-				if err == nil || !strings.Contains(err.Error(), c.want) {
-					t.Fatalf("err = %v, want containing %q", err, c.want)
+				req.Tools, req.ToolChoice = tt.tools, tt.tc
+				_, err := f.make(t, url).Complete(t.Context(), req)
+				if err == nil || !strings.Contains(err.Error(), tt.want) {
+					t.Fatalf("err = %v, want containing %q", err, tt.want)
 				}
 				if n := strings.Count(err.Error(), "llm: "); n != 1 {
 					t.Errorf("err = %q has %d \"llm: \" prefixes, want 1", err, n)
@@ -171,7 +170,7 @@ func TestExtraMerged(t *testing.T) {
 			url, bodies, _ := optionsServer(t)
 			req := optionRequest()
 			req.Extra = map[string]any{"top_p": 0.5}
-			_, _ = f.make(t, url).Complete(context.Background(), req)
+			_, _ = f.make(t, url).Complete(t.Context(), req)
 			if got := string((*bodies)[0]["top_p"]); got != "0.5" {
 				t.Errorf("top_p = %q, want 0.5", got)
 			}
@@ -194,7 +193,7 @@ func TestExtraNested(t *testing.T) {
 			url, bodies, _ := optionsServer(t)
 			req := optionRequest()
 			req.Extra = map[string]any{"metadata": map[string]any{"ids": []int{1, 2}, "k": "v"}}
-			_, _ = f.make(t, url).Complete(context.Background(), req)
+			_, _ = f.make(t, url).Complete(t.Context(), req)
 			if got := string((*bodies)[0]["metadata"]); got != `{"ids":[1,2],"k":"v"}` {
 				t.Errorf("metadata = %s", got)
 			}
@@ -209,7 +208,7 @@ func TestExtraConflict(t *testing.T) {
 			req := optionRequest()
 			for _, key := range []string{"model", "stream"} {
 				req.Extra = map[string]any{key: "x"}
-				_, err := f.make(t, url).Complete(context.Background(), req)
+				_, err := f.make(t, url).Complete(t.Context(), req)
 				if !errors.Is(err, ErrExtraConflict) {
 					t.Fatalf("%s: err = %v, want ErrExtraConflict", key, err)
 				}
@@ -218,7 +217,7 @@ func TestExtraConflict(t *testing.T) {
 				t.Error("server was hit")
 			}
 			req.Extra = map[string]any{"temperature": 1}
-			_, _ = f.make(t, url).Complete(context.Background(), req)
+			_, _ = f.make(t, url).Complete(t.Context(), req)
 			if len(*bodies) != 1 || string((*bodies)[0]["temperature"]) != "1" {
 				t.Errorf("temperature extra not sent: %v", *bodies)
 			}

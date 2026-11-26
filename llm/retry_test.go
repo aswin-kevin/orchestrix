@@ -45,7 +45,7 @@ func TestDoRetries429ThenSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resp, err := testTransport(t).Do(context.Background(), requestTo(srv.URL))
+	resp, err := testTransport(t).Do(t.Context(), requestTo(srv.URL))
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestDoDoesNotRetry400(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := testTransport(t).Do(context.Background(), requestTo(srv.URL))
+	_, err := testTransport(t).Do(t.Context(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
 		t.Fatalf("err = %v, want *APIError with status 400", err)
@@ -85,7 +85,7 @@ func TestDoHonorsMaxRetriesNegative(t *testing.T) {
 	defer srv.Close()
 
 	tr := testTransport(t, func(c *Config) { c.MaxRetries = -1 })
-	if _, err := tr.Do(context.Background(), requestTo(srv.URL)); err == nil {
+	if _, err := tr.Do(t.Context(), requestTo(srv.URL)); err == nil {
 		t.Fatal("want error")
 	}
 	if got := hits.Load(); got != 1 {
@@ -102,7 +102,7 @@ func TestDoGivesUpAfterMaxRetries(t *testing.T) {
 	defer srv.Close()
 
 	tr := testTransport(t, func(c *Config) { c.MaxRetries = 2 })
-	if _, err := tr.Do(context.Background(), requestTo(srv.URL)); !IsRetryable(err) {
+	if _, err := tr.Do(t.Context(), requestTo(srv.URL)); !IsRetryable(err) {
 		t.Fatalf("err = %v, want the last retryable APIError", err)
 	}
 	if got := hits.Load(); got != 3 {
@@ -118,7 +118,7 @@ func TestDoStopsOnContextCancel(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	start := time.Now()
@@ -141,7 +141,7 @@ func TestDoCancelDuringRetryWait(t *testing.T) {
 	defer srv.Close()
 
 	tr := testTransport(t, func(c *Config) { c.RetryInterval = time.Minute })
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(50*time.Millisecond, cancel)
 
 	_, err := tr.Do(ctx, requestTo(srv.URL))
@@ -162,7 +162,7 @@ func TestDoSkipsWaitPastDeadline(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	start := time.Now()
 	_, err := testTransport(t).Do(ctx, requestTo(srv.URL))
@@ -188,7 +188,7 @@ func TestDoHandsOffToFallback(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ctx := withHandoff(context.Background(), DefaultShouldFallback)
+	ctx := withHandoff(t.Context(), DefaultShouldFallback)
 	if _, err := testTransport(t).Do(ctx, requestTo(srv.URL)); err == nil {
 		t.Fatal("want an error")
 	}
@@ -198,7 +198,7 @@ func TestDoHandsOffToFallback(t *testing.T) {
 
 	// An error the fallback would not switch on is retried as usual.
 	hits.Store(0)
-	ctx = withHandoff(context.Background(), func(error) bool { return false })
+	ctx = withHandoff(t.Context(), func(error) bool { return false })
 	if _, err := testTransport(t).Do(ctx, requestTo(srv.URL)); err == nil {
 		t.Fatal("want an error")
 	}
@@ -284,7 +284,7 @@ func TestParseRetryAfter(t *testing.T) {
 func TestDoBuildErrorIsNotRetried(t *testing.T) {
 	var builds int
 	tr := testTransport(t)
-	_, err := tr.Do(context.Background(), func() (*http.Request, error) {
+	_, err := tr.Do(t.Context(), func() (*http.Request, error) {
 		builds++
 		return http.NewRequest(http.MethodPost, "http://bad host/", nil)
 	})
@@ -317,7 +317,7 @@ func TestDoRetryAfterZeroRetriesImmediately(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	resp, err := tr.Do(context.Background(), requestTo(srv.URL))
+	resp, err := tr.Do(t.Context(), requestTo(srv.URL))
 	if err != nil {
 		t.Fatalf("do: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestDoRetriesNetworkError(t *testing.T) {
 	srv.Close() // connections to url are now refused
 
 	tr := testTransport(t, func(c *Config) { c.MaxRetries = 1 })
-	if _, err := tr.Do(context.Background(), requestTo(url)); !IsRetryable(err) {
+	if _, err := tr.Do(t.Context(), requestTo(url)); !IsRetryable(err) {
 		t.Fatalf("err = %v, want a retryable network error", err)
 	}
 }
@@ -402,7 +402,7 @@ func TestRateLimitPerSecond(t *testing.T) {
 
 	start := clock.Now()
 	for range 3 {
-		if err := l.acquire(context.Background()); err != nil {
+		if err := l.acquire(t.Context()); err != nil {
 			t.Fatalf("acquire: %v", err)
 		}
 	}
@@ -418,7 +418,7 @@ func TestRateLimitPerMinuteAndNil(t *testing.T) {
 
 	start := clock.Now()
 	for range 3 {
-		_ = l.acquire(context.Background())
+		_ = l.acquire(t.Context())
 	}
 	if got := clock.Now().Sub(start); got != 30*time.Second {
 		t.Errorf("took %v, want 30s", got)
@@ -428,16 +428,16 @@ func TestRateLimitPerMinuteAndNil(t *testing.T) {
 		t.Error("empty RateLimit should yield no limiter")
 	}
 	var none *limiter
-	if err := none.acquire(context.Background()); err != nil {
+	if err := none.acquire(t.Context()); err != nil {
 		t.Errorf("nil limiter acquire: %v", err)
 	}
 }
 
 func TestRateLimitRespectsContext(t *testing.T) {
 	l := newLimiter(&RateLimit{PerMinute: 1})
-	_ = l.acquire(context.Background()) // consumes the only token
+	_ = l.acquire(t.Context()) // consumes the only token
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	if err := l.acquire(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
@@ -458,11 +458,9 @@ func TestRateLimitConcurrentUse(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range 20 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = l.acquire(context.Background())
-		}()
+		wg.Go(func() {
+			_ = l.acquire(t.Context())
+		})
 	}
 	wg.Wait()
 	// 20 simultaneous requests at 10/s: a burst of 10, then the last waits 1s.

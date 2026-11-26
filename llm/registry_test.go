@@ -100,9 +100,7 @@ func TestRegisterConcurrent(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		f := Format(fmt.Sprintf("conc-%d", i))
 		restore(t, f)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if i%2 == 0 {
 				RegisterProvider(f, func(Config) (Provider, error) { return &fakeProvider{}, nil })
 			} else {
@@ -111,7 +109,7 @@ func TestRegisterConcurrent(t *testing.T) {
 			if _, ok := lookup(f); !ok {
 				t.Errorf("%s not registered", f)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

@@ -30,7 +30,7 @@ func CheckProvider(t testing.TB, p llm.Provider, req llm.Request) {
 	if !ok {
 		return
 	}
-	got, err := p.Complete(context.Background(), req)
+	got, err := p.Complete(t.Context(), req)
 	switch {
 	case err != nil:
 		t.Errorf("llmtest: Complete failed: %v", err)
@@ -55,7 +55,7 @@ func checkStream(t testing.TB, p llm.Provider, req llm.Request) (*llm.Response, 
 	t.Helper()
 	var acc llm.Accumulator
 	events := 0
-	for ev, err := range p.Stream(context.Background(), req) {
+	for ev, err := range p.Stream(t.Context(), req) {
 		if err != nil {
 			t.Errorf("llmtest: Stream returned an error: %v", err)
 			return nil, false
@@ -83,7 +83,7 @@ func checkStream(t testing.TB, p llm.Provider, req llm.Request) (*llm.Response, 
 // is flagged, since an error ends the sequence.
 func checkCancelled(t testing.TB, p llm.Provider, req llm.Request) {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	type outcome struct {
 		err  error

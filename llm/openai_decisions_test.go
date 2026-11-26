@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -58,7 +57,7 @@ func TestOpenAIDecisionsRequest(t *testing.T) {
 
 	req := soRequest()
 	req.Input = []Block{TextBlock("first"), TextBlock("second")}
-	if _, err := d.Decide(context.Background(), req); err != nil {
+	if _, err := d.Decide(t.Context(), req); err != nil {
 		t.Fatal(err)
 	}
 	assertJSONEq(t, body, `{"model":"decider-1","input":"first\n\nsecond","questions":`+oaWireQuestions+`}`)
@@ -69,7 +68,7 @@ func TestOpenAIDecisionsRequest(t *testing.T) {
 		{Type: BlockImage, Source: &Source{Type: "base64", MediaType: "image/png", Data: "QUJD"}},
 		{Type: BlockImage, Source: &Source{Type: "url", URL: "https://example.com/a.png"}},
 	}
-	if _, err := d.Decide(context.Background(), req); err != nil {
+	if _, err := d.Decide(t.Context(), req); err != nil {
 		t.Fatal(err)
 	}
 	assertJSONEq(t, body, `{"model":"other","input":[{"role":"user","content":[
@@ -81,7 +80,7 @@ func TestOpenAIDecisionsRequest(t *testing.T) {
 func TestOpenAIDecisionsAnswers(t *testing.T) {
 	srv := oaServer(t, oaReplyJSON, nil)
 	defer srv.Close()
-	resp, err := newTestOpenAIDecisions(t, srv.URL+"/v1/").Decide(context.Background(), soRequest())
+	resp, err := newTestOpenAIDecisions(t, srv.URL+"/v1/").Decide(t.Context(), soRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +105,7 @@ func TestOpenAIDecisionsRefusal(t *testing.T) {
 	 {"type":"refusal","name":"team"},
 	 {"type":"score","name":"urgency","score":0,"probabilities":[]}]}`, nil)
 	defer srv.Close()
-	resp, err := newTestOpenAIDecisions(t, srv.URL+"/v1").Decide(context.Background(), soRequest())
+	resp, err := newTestOpenAIDecisions(t, srv.URL+"/v1").Decide(t.Context(), soRequest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +121,7 @@ func TestOpenAIDecisionsMissingAnswer(t *testing.T) {
 	srv := oaServer(t, `{"answers":[{"type":"predicate","name":"refund","probability":0.5},
 	 {"type":"predicate","name":"stray","probability":0.5}]}`, nil)
 	defer srv.Close()
-	_, err := newTestOpenAIDecisions(t, srv.URL+"/v1").Decide(context.Background(), soRequest())
+	_, err := newTestOpenAIDecisions(t, srv.URL+"/v1").Decide(t.Context(), soRequest())
 	if err == nil || !strings.Contains(err.Error(), `no answer for question "team"`) {
 		t.Errorf("err = %v", err)
 	}
@@ -132,7 +131,7 @@ func TestOpenAIDecisionsRejectsDocument(t *testing.T) {
 	d := newTestOpenAIDecisions(t, "http://unused.invalid/v1")
 	req := soRequest()
 	req.Input = []Block{TextBlock("ok"), {Type: BlockDocument}}
-	_, err := d.Decide(context.Background(), req)
+	_, err := d.Decide(t.Context(), req)
 	if err == nil || err.Error() != "llm: openai-decisions does not accept document input" {
 		t.Errorf("err = %v", err)
 	}

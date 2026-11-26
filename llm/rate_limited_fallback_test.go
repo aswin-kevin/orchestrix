@@ -41,7 +41,7 @@ func TestRateLimitedPrimaryFallsBackPromptly(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			start := time.Now()
 			var text strings.Builder
@@ -99,7 +99,7 @@ func TestFallbackLastEntryKeepsRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := llm.Request{MaxTokens: 100, Messages: []llm.Message{llm.UserText("hi")}}
-	if _, err := fb.Complete(context.Background(), req); err == nil {
+	if _, err := fb.Complete(t.Context(), req); err == nil {
 		t.Fatal("want an error when every entry fails")
 	}
 	if got := primaryHits.Load(); got != 1 {

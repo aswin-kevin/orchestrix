@@ -94,7 +94,7 @@ func TestAnthropicRequestShape(t *testing.T) {
 		Tools: []ToolSchema{{Name: "ls", Description: "list", InputSchema: map[string]any{"type": "object"}}},
 		Stop:  []string{"END"},
 	}
-	if _, err := Collect(context.Background(), p, req); err != nil {
+	if _, err := Collect(t.Context(), p, req); err != nil {
 		t.Fatal(err)
 	}
 
@@ -153,7 +153,7 @@ func TestAnthropicThinkingAndHistory(t *testing.T) {
 	}
 	run := func(thinking ThinkingMode) []any {
 		req := Request{Messages: history, MaxTokens: 4000, Thinking: thinking, ReasoningEffort: "high"}
-		if _, err := Collect(context.Background(), p, req); err != nil {
+		if _, err := Collect(t.Context(), p, req); err != nil {
 			t.Fatal(err)
 		}
 		return srv.body["messages"].([]any)[1].(map[string]any)["content"].([]any)
@@ -223,7 +223,7 @@ func TestAnthropicStreamTextToolThinking(t *testing.T) {
 	srv := newSSEServer(t, 200, "text/event-stream", richStream)
 	p := newTestAnthropic(t, srv.URL)
 
-	resp, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	resp, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +275,7 @@ func TestAnthropicRedactedThinkingRoundTrip(t *testing.T) {
 	srv := newSSEServer(t, 200, "text/event-stream", redactedStream)
 	p := newTestAnthropic(t, srv.URL)
 
-	resp, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	resp, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestAnthropicRedactedThinkingRoundTrip(t *testing.T) {
 		UserText("x"), resp.Message,
 		{Role: RoleUser, Content: []Block{ToolResultText("tu_1", "ok", false)}},
 	}
-	if _, err := Collect(context.Background(), p, Request{Messages: history, Thinking: "enabled"}); err != nil {
+	if _, err := Collect(t.Context(), p, Request{Messages: history, Thinking: "enabled"}); err != nil {
 		t.Fatal(err)
 	}
 	replayed := srv.body["messages"].([]any)[1].(map[string]any)["content"].([]any)[0]
@@ -306,7 +306,7 @@ func TestAnthropicCompleteRedactedThinking(t *testing.T) {
 	srv := newSSEServer(t, 200, "application/json", reply)
 	p := newTestAnthropic(t, srv.URL)
 
-	resp, err := p.Complete(context.Background(), Request{Messages: []Message{UserText("x")}})
+	resp, err := p.Complete(t.Context(), Request{Messages: []Message{UserText("x")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ data: {"type":"error","error":{"type":"invalid_request_error","message":"prompt 
 	srv := newSSEServer(t, 200, "text/event-stream", stream)
 	p := newTestAnthropic(t, srv.URL)
 
-	_, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	_, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -343,7 +343,7 @@ func TestAnthropicComplete(t *testing.T) {
 	srv := newSSEServer(t, 200, "application/json", reply)
 	p := newTestAnthropic(t, srv.URL)
 
-	resp, err := p.Complete(context.Background(), Request{Messages: []Message{UserText("x")}})
+	resp, err := p.Complete(t.Context(), Request{Messages: []Message{UserText("x")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}}); err == nil {
+	if _, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}}); err == nil {
 		t.Fatal("expected error for truncated stream")
 	}
 	if got := srv.hits.Load(); got != 1 {
@@ -385,11 +385,11 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
 }
 
 func TestNewValidation(t *testing.T) {
-	cases := map[string]Config{
+	tests := map[string]Config{
 		"no model":       {Format: FormatAnthropic},
 		"unknown format": {Format: "bogus", Model: "m"},
 	}
-	for name, cfg := range cases {
+	for name, cfg := range tests {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("%s: expected error", name)
 		}
@@ -435,7 +435,7 @@ func TestAnthropicStreamConsumerBreakClosesConnection(t *testing.T) {
 	url, gone := newBlockingServer(t, anthropicFirstDelta)
 	p := newTestAnthropic(t, url)
 
-	for _, err := range p.Stream(context.Background(), Request{Messages: []Message{UserText("x")}}) {
+	for _, err := range p.Stream(t.Context(), Request{Messages: []Message{UserText("x")}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -447,7 +447,7 @@ func TestAnthropicStreamConsumerBreakClosesConnection(t *testing.T) {
 func TestAnthropicStreamContextCancelClosesConnection(t *testing.T) {
 	url, gone := newBlockingServer(t, anthropicFirstDelta)
 	p := newTestAnthropic(t, url)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var last error
@@ -513,7 +513,7 @@ func sendCacheRequest(t *testing.T, req Request) map[string]any {
 	t.Helper()
 	srv := newSSEServer(t, 200, "text/event-stream", textOnlyStream)
 	p := newTestAnthropic(t, srv.URL+"/v1")
-	if _, err := Collect(context.Background(), p, req); err != nil {
+	if _, err := Collect(t.Context(), p, req); err != nil {
 		t.Fatal(err)
 	}
 	return srv.body
@@ -589,7 +589,7 @@ func equalBools(a, b []bool) bool {
 func anthropicAssistantContent(t *testing.T, srv *sseServer, p *anthropicProvider, assistant []Block) []any {
 	t.Helper()
 	history := []Message{UserText("q"), {Role: RoleAssistant, Content: assistant}, UserText("again")}
-	if _, err := Collect(context.Background(), p, Request{Messages: history, Thinking: "adaptive"}); err != nil {
+	if _, err := Collect(t.Context(), p, Request{Messages: history, Thinking: "adaptive"}); err != nil {
 		t.Fatal(err)
 	}
 	return srv.body["messages"].([]any)[1].(map[string]any)["content"].([]any)
@@ -619,7 +619,7 @@ func TestAnthropicThinkingBudgetClamped(t *testing.T) {
 	p := newTestAnthropic(t, srv.URL)
 
 	req := Request{Messages: []Message{UserText("q")}, MaxTokens: 1000, Thinking: "enabled"}
-	if _, err := Collect(context.Background(), p, req); err != nil {
+	if _, err := Collect(t.Context(), p, req); err != nil {
 		t.Fatal(err)
 	}
 	budget := srv.body["thinking"].(map[string]any)["budget_tokens"]
@@ -638,7 +638,7 @@ func TestAnthropicThinkingDropsTemperature(t *testing.T) {
 
 	for _, mode := range []ThinkingMode{ThinkingEnabled, ThinkingAdaptive} {
 		req := Request{Messages: []Message{UserText("q")}, Thinking: mode, Temperature: &temp}
-		if _, err := Collect(context.Background(), p, req); err != nil {
+		if _, err := Collect(t.Context(), p, req); err != nil {
 			t.Fatal(err)
 		}
 		for _, k := range []string{"temperature", "top_k"} {
@@ -649,7 +649,7 @@ func TestAnthropicThinkingDropsTemperature(t *testing.T) {
 	}
 	for _, mode := range []ThinkingMode{"", ThinkingDisabled} {
 		req := Request{Messages: []Message{UserText("q")}, Thinking: mode, Temperature: &temp}
-		if _, err := Collect(context.Background(), p, req); err != nil {
+		if _, err := Collect(t.Context(), p, req); err != nil {
 			t.Fatal(err)
 		}
 		if srv.body["temperature"] != temp {
@@ -686,7 +686,7 @@ func TestForeignThinkingNotReplayed(t *testing.T) {
 func TestAdaptersStampThinking(t *testing.T) {
 	srv := newSSEServer(t, 200, "text/event-stream", richStream)
 	p := newTestAnthropic(t, srv.URL)
-	resp, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	resp, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -696,7 +696,7 @@ func TestAdaptersStampThinking(t *testing.T) {
 
 	srv = newSSEServer(t, 200, "text/event-stream", redactedStream)
 	p = newTestAnthropic(t, srv.URL)
-	if resp, err = Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}}); err != nil {
+	if resp, err = Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := resp.Message.Content[0].ProviderData[formatKey]; got != string(FormatAnthropic) {
@@ -710,7 +710,7 @@ func TestAdaptersStampThinking(t *testing.T) {
 		"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`
 	srv = newSSEServer(t, 200, "application/json", reply)
 	p = newTestAnthropic(t, srv.URL)
-	if resp, err = p.Complete(context.Background(), Request{Messages: []Message{UserText("x")}}); err != nil {
+	if resp, err = p.Complete(t.Context(), Request{Messages: []Message{UserText("x")}}); err != nil {
 		t.Fatal(err)
 	}
 	for i, b := range resp.Message.Content[:2] {
@@ -738,7 +738,7 @@ data: {"type":"message_stop"}
 
 `
 	srv := newSSEServer(t, 200, "text/event-stream", stream)
-	resp, err := Collect(context.Background(), newTestAnthropic(t, srv.URL), Request{Messages: []Message{UserText("x")}})
+	resp, err := Collect(t.Context(), newTestAnthropic(t, srv.URL), Request{Messages: []Message{UserText("x")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,7 +753,7 @@ data: {"type":"message_stop"}
 		"content":[{"type":"text","text":"later"}],"stop_reason":"pause_turn",
 		"usage":{"input_tokens":1,"output_tokens":1}}`
 	srv = newSSEServer(t, 200, "application/json", reply)
-	resp, err = newTestAnthropic(t, srv.URL).Complete(context.Background(), Request{Messages: []Message{UserText("x")}})
+	resp, err = newTestAnthropic(t, srv.URL).Complete(t.Context(), Request{Messages: []Message{UserText("x")}})
 	if err != nil {
 		t.Fatal(err)
 	}

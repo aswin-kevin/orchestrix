@@ -21,7 +21,7 @@ func TestScriptedStreamsTextThenTools(t *testing.T) {
 		Usage: llm.Usage{Input: 10, Output: 5},
 	})
 
-	resp, err := llm.Collect(context.Background(), s, llm.Request{Model: "m"})
+	resp, err := llm.Collect(t.Context(), s, llm.Request{Model: "m"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestScriptedStreamsTextThenTools(t *testing.T) {
 
 func TestScriptedDefaultStopReasonIsEndTurn(t *testing.T) {
 	s := llmtest.New(llmtest.Turn{Text: "done"})
-	resp, err := llm.Collect(context.Background(), s, llm.Request{})
+	resp, err := llm.Collect(t.Context(), s, llm.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestScriptedDefaultStopReasonIsEndTurn(t *testing.T) {
 
 func TestScriptedExhausted(t *testing.T) {
 	s := llmtest.New()
-	_, err := s.Complete(context.Background(), llm.Request{})
+	_, err := s.Complete(t.Context(), llm.Request{})
 	if err == nil || err.Error() != "llmtest: script exhausted" {
 		t.Errorf("err = %v", err)
 	}
@@ -69,7 +69,7 @@ func TestScriptedExhausted(t *testing.T) {
 func TestScriptedTurnErrReturnedBeforeEvents(t *testing.T) {
 	boom := errors.New("boom")
 	s := llmtest.New(llmtest.Turn{Text: "never", Err: boom})
-	for ev, err := range s.Stream(context.Background(), llm.Request{}) {
+	for ev, err := range s.Stream(t.Context(), llm.Request{}) {
 		if !errors.Is(err, boom) {
 			t.Fatalf("first yield = %+v, %v", ev, err)
 		}
@@ -83,11 +83,11 @@ func TestScriptedCompleteMatchesStream(t *testing.T) {
 		Text:      "hi",
 		ToolCalls: []llmtest.Call{{ID: "t1", Name: "x", Input: map[string]int{"n": 1}}},
 	}
-	streamed, err := llm.Collect(context.Background(), llmtest.New(turn), llm.Request{})
+	streamed, err := llm.Collect(t.Context(), llmtest.New(turn), llm.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := llmtest.New(turn).Complete(context.Background(), llm.Request{})
+	completed, err := llmtest.New(turn).Complete(t.Context(), llm.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestScriptedRecordsIndependentRequestCopies(t *testing.T) {
 		System:   []string{"sys"},
 		Messages: []llm.Message{llm.UserText("hello")},
 	}
-	if _, err := s.Complete(context.Background(), req); err != nil {
+	if _, err := s.Complete(t.Context(), req); err != nil {
 		t.Fatal(err)
 	}
 	req.System[0] = "changed"
@@ -119,7 +119,7 @@ func TestScriptedRawToolInputIsVerbatim(t *testing.T) {
 		RawToolInput: true,
 		ToolCalls:    []llmtest.Call{{ID: "t1", Name: "x", Input: `{"broken":`}},
 	})
-	resp, err := s.Complete(context.Background(), llm.Request{})
+	resp, err := s.Complete(t.Context(), llm.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestScriptedRawToolInputIsVerbatim(t *testing.T) {
 }
 
 func TestErrExhaustedExported(t *testing.T) {
-	_, err := llmtest.New().Complete(context.Background(), llm.Request{})
+	_, err := llmtest.New().Complete(t.Context(), llm.Request{})
 	if !errors.Is(err, llmtest.ErrExhausted) {
 		t.Errorf("err = %v, want ErrExhausted", err)
 	}
@@ -139,7 +139,7 @@ func TestFuncTurnSeesRequest(t *testing.T) {
 	s := llmtest.New(llmtest.Func(func(r llm.Request) llmtest.Turn {
 		return llmtest.Turn{Text: r.Messages[0].Text()}
 	}))
-	resp, err := s.Complete(context.Background(), llm.Request{Messages: []llm.Message{llm.UserText("echo")}})
+	resp, err := s.Complete(t.Context(), llm.Request{Messages: []llm.Message{llm.UserText("echo")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestFuncTurnSeesRequest(t *testing.T) {
 func TestFuncTurnNestedFuncIsError(t *testing.T) {
 	inner := llmtest.Func(func(llm.Request) llmtest.Turn { return llmtest.Turn{Text: "x"} })
 	s := llmtest.New(llmtest.Func(func(llm.Request) llmtest.Turn { return inner }))
-	_, err := s.Complete(context.Background(), llm.Request{})
+	_, err := s.Complete(t.Context(), llm.Request{})
 	if err == nil || err.Error() != "llmtest: Func returned a Func turn" {
 		t.Errorf("err = %v", err)
 	}
@@ -160,14 +160,14 @@ func TestFuncTurnNestedFuncIsError(t *testing.T) {
 func TestFuncTurnErrIsReturned(t *testing.T) {
 	boom := errors.New("boom")
 	s := llmtest.New(llmtest.Func(func(llm.Request) llmtest.Turn { return llmtest.Turn{Err: boom} }))
-	if _, err := s.Complete(context.Background(), llm.Request{}); !errors.Is(err, boom) {
+	if _, err := s.Complete(t.Context(), llm.Request{}); !errors.Is(err, boom) {
 		t.Errorf("err = %v, want boom", err)
 	}
 }
 
 func TestTurnModelAndID(t *testing.T) {
 	s := llmtest.New(llmtest.Turn{Text: "x", Model: "m1", ID: "r1"})
-	resp, err := s.Complete(context.Background(), llm.Request{})
+	resp, err := s.Complete(t.Context(), llm.Request{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestTurnModelAndID(t *testing.T) {
 
 func TestScriptedCancelledCtxDoesNotConsumeTurn(t *testing.T) {
 	s := llmtest.New(llmtest.Turn{Text: "ok"})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err := s.Complete(ctx, llm.Request{})
 	if !errors.Is(err, context.Canceled) {
@@ -187,7 +187,7 @@ func TestScriptedCancelledCtxDoesNotConsumeTurn(t *testing.T) {
 	if s.Calls() != 0 {
 		t.Errorf("Calls = %d, want 0", s.Calls())
 	}
-	if _, err := s.Complete(context.Background(), llm.Request{}); err != nil {
+	if _, err := s.Complete(t.Context(), llm.Request{}); err != nil {
 		t.Errorf("turn was consumed by the cancelled call: %v", err)
 	}
 }

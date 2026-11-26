@@ -133,7 +133,7 @@ func (p cancelErrs) Stream(ctx context.Context, req llm.Request) iter.Seq2[llm.S
 }
 
 func TestCheckProviderCancelledKeepsFirstError(t *testing.T) {
-	for name, tc := range map[string]struct {
+	for name, tt := range map[string]struct {
 		errs []error
 		want string
 	}{
@@ -141,11 +141,11 @@ func TestCheckProviderCancelledKeepsFirstError(t *testing.T) {
 		"canceled last":  {[]error{errors.New("early"), context.Canceled}, "ended with early"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			p := cancelErrs{llmtest.New(llmtest.Turn{Text: "hi"}, llmtest.Turn{Text: "hi"}), tc.errs}
+			p := cancelErrs{llmtest.New(llmtest.Turn{Text: "hi"}, llmtest.Turn{Text: "hi"}), tt.errs}
 			rec := &recorder{TB: t}
 			llmtest.CheckProvider(rec, p, checkReq)
-			if !rec.mentions(tc.want) {
-				t.Errorf("errors = %q, want one mentioning %q", rec.errs, tc.want)
+			if !rec.mentions(tt.want) {
+				t.Errorf("errors = %q, want one mentioning %q", rec.errs, tt.want)
 			}
 		})
 	}

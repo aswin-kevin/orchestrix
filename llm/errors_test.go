@@ -27,7 +27,7 @@ func TestBaseURLQueryKeyNotLeaked(t *testing.T) {
 	defer srv.Close()
 
 	p := newTestOpenAI(t, srv.URL+"/v1?key="+testSecret)
-	_, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	_, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 	if err == nil {
 		t.Fatal("want an error from a 500 reply")
 	}
@@ -43,7 +43,7 @@ func TestBaseURLQueryKeyNotLeaked(t *testing.T) {
 	closed.Close() // connections are now refused
 
 	p = newTestOpenAI(t, base)
-	_, err = Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+	_, err = Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 	if err == nil {
 		t.Fatal("want a network error")
 	}
@@ -72,7 +72,7 @@ func TestTransportErrorKeepsDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = tr.Do(context.Background(), requestTo(srv.URL+"?key="+testSecret))
+	_, err = tr.Do(t.Context(), requestTo(srv.URL+"?key="+testSecret))
 	if err == nil {
 		t.Fatal("want a timeout")
 	}
@@ -90,7 +90,7 @@ func TestTransportErrorKeepsDeadline(t *testing.T) {
 
 func TestBuildErrorRedactsURL(t *testing.T) {
 	tr := testTransport(t)
-	_, err := tr.Do(context.Background(), requestTo("http://h/\x7f?key="+testSecret))
+	_, err := tr.Do(t.Context(), requestTo("http://h/\x7f?key="+testSecret))
 	if err == nil {
 		t.Fatal("want a build error")
 	}
@@ -106,7 +106,7 @@ func TestAPIErrorRedactsKey(t *testing.T) {
 	defer srv.Close()
 
 	tr := testTransport(t, func(c *Config) { c.APIKey = testSecret })
-	_, err := tr.Do(context.Background(), requestTo(srv.URL))
+	_, err := tr.Do(t.Context(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("err = %v, want *APIError", err)
@@ -130,7 +130,7 @@ func TestAPIErrorShortKeyNotRedacted(t *testing.T) {
 
 	// "the" is too short to redact without mangling the body.
 	tr := testTransport(t, func(c *Config) { c.APIKey = "the" })
-	_, err := tr.Do(context.Background(), requestTo(srv.URL))
+	_, err := tr.Do(t.Context(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Body, "the request was bad") {
 		t.Fatalf("err = %v, want the body unchanged", err)
@@ -180,7 +180,7 @@ func TestAPIErrorRequestID(t *testing.T) {
 			w.Header().Set("X-Other", "kept")
 			w.WriteHeader(http.StatusBadRequest)
 		}))
-		_, err := testTransport(t).Do(context.Background(), requestTo(srv.URL))
+		_, err := testTransport(t).Do(t.Context(), requestTo(srv.URL))
 		srv.Close()
 		var apiErr *APIError
 		if !errors.As(err, &apiErr) {
@@ -289,7 +289,7 @@ func TestAPIErrorRedactsConfiguredSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = tr.Do(context.Background(), requestTo(srv.URL))
+	_, err = tr.Do(t.Context(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("err = %v, want *APIError", err)
@@ -314,7 +314,7 @@ func TestTransportErrorRedactsConfiguredSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = tr.Do(context.Background(), requestTo("http://h/x"))
+	_, err = tr.Do(t.Context(), requestTo("http://h/x"))
 	if err == nil {
 		t.Fatal("want a transport error")
 	}
@@ -348,7 +348,7 @@ func TestStreamErrorRedactsConfiguredSecrets(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				_, err = Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+				_, err = Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 				return err
 			},
 		},
@@ -357,7 +357,7 @@ func TestStreamErrorRedactsConfiguredSecrets(t *testing.T) {
 			body: chunks(`{"error":{"message":"bad ` + key + `"}}`),
 			run: func(t *testing.T, base string) error {
 				p := newTestOpenAI(t, base, func(c *Config) { c.APIKey = key })
-				_, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+				_, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 				return err
 			},
 		},
@@ -366,7 +366,7 @@ func TestStreamErrorRedactsConfiguredSecrets(t *testing.T) {
 			body: responsesBody(`{"type":"error","code":"invalid_api_key","message":"bad ` + key + `"}`),
 			run: func(t *testing.T, base string) error {
 				p := newTestResponses(t, base, func(c *Config) { c.APIKey = key })
-				_, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}})
+				_, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}})
 				return err
 			},
 		},
@@ -399,7 +399,7 @@ func TestAPIErrorHeaderDropsCookies(t *testing.T) {
 	defer srv.Close()
 
 	tr := testTransport(t, func(c *Config) { c.MaxRetries = -1 })
-	_, err := tr.Do(context.Background(), requestTo(srv.URL))
+	_, err := tr.Do(t.Context(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("err = %v, want *APIError", err)

@@ -57,7 +57,7 @@ func collectOpenAI(t *testing.T, p *openAIProvider, req Request) *Response {
 	if len(req.Messages) == 0 {
 		req.Messages = []Message{UserText("x")}
 	}
-	resp, err := Collect(context.Background(), p, req)
+	resp, err := Collect(t.Context(), p, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestOpenAIChatMidStreamDropNotRetried(t *testing.T) {
 	srv := newSSEServer(t, 200, "text/event-stream", stream)
 	p := newTestOpenAI(t, srv.URL, func(c *Config) { c.MaxRetries = 3 })
 
-	if _, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}}); err == nil {
+	if _, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}}); err == nil {
 		t.Fatal("expected error for truncated stream")
 	}
 	if got := srv.hits.Load(); got != 1 {
@@ -334,7 +334,7 @@ func TestOpenAIChatMidStreamDropNotRetried(t *testing.T) {
 func TestOpenAIChatStreamErrorChunk(t *testing.T) {
 	stream := chunks(`{"error":{"message":"maximum context length exceeded"}}`)
 	srv := newSSEServer(t, 200, "text/event-stream", stream)
-	_, err := Collect(context.Background(), newTestOpenAI(t, srv.URL), Request{Messages: []Message{UserText("x")}})
+	_, err := Collect(t.Context(), newTestOpenAI(t, srv.URL), Request{Messages: []Message{UserText("x")}})
 
 	if !IsContextOverflow(err) {
 		t.Errorf("err = %v, want context overflow", err)
@@ -424,7 +424,7 @@ func TestOpenAIChatNoRetryOnceContentYielded(t *testing.T) {
 	// Content arrives, then the stream drops: the consumer has seen text, so
 	// the error must surface instead of a silent replay.
 	srv, hits := newSequenceServer(t, "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n", openAIHelloStream)
-	_, err := Collect(context.Background(), newTestOpenAI(t, srv.URL), Request{Messages: []Message{UserText("x")}})
+	_, err := Collect(t.Context(), newTestOpenAI(t, srv.URL), Request{Messages: []Message{UserText("x")}})
 
 	if err == nil || hits.Load() != 1 {
 		t.Errorf("err = %v, hits = %d", err, hits.Load())
@@ -439,7 +439,7 @@ func TestOpenAIChatStreamConsumerBreakClosesConnection(t *testing.T) {
 	url, gone := newBlockingServer(t, openAIFirstDelta)
 	p := newTestOpenAI(t, url)
 
-	for _, err := range p.Stream(context.Background(), Request{Messages: []Message{UserText("x")}}) {
+	for _, err := range p.Stream(t.Context(), Request{Messages: []Message{UserText("x")}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -453,7 +453,7 @@ func TestOpenAIChatStreamConsumerBreakClosesConnection(t *testing.T) {
 func TestOpenAIChatStreamContextCancelClosesConnection(t *testing.T) {
 	url, gone := newBlockingServer(t, openAIFirstDelta)
 	p := newTestOpenAI(t, url)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var last error
@@ -568,7 +568,7 @@ func TestSyntheticToolIDsUniqueAcrossResponses(t *testing.T) {
 }
 
 func TestDoneWithoutFinishReason(t *testing.T) {
-	for name, tc := range map[string]struct {
+	for name, tt := range map[string]struct {
 		payload string
 		want    StopReason
 	}{
@@ -576,10 +576,10 @@ func TestDoneWithoutFinishReason(t *testing.T) {
 		"tool": {`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"n","arguments":"{}"}}]}}]}`, StopToolUse},
 	} {
 		t.Run(name, func(t *testing.T) {
-			srv := newSSEServer(t, 200, "text/event-stream", chunks(tc.payload))
+			srv := newSSEServer(t, 200, "text/event-stream", chunks(tt.payload))
 			resp := collectOpenAI(t, newTestOpenAI(t, srv.URL), Request{})
-			if resp.StopReason != tc.want {
-				t.Errorf("stop = %q, want %q", resp.StopReason, tc.want)
+			if resp.StopReason != tt.want {
+				t.Errorf("stop = %q, want %q", resp.StopReason, tt.want)
 			}
 		})
 	}
@@ -631,7 +631,7 @@ func TestHeadersCopied(t *testing.T) {
 	headers["X-Extra"] = "mutated"
 	headers["X-Added"] = "late"
 
-	if _, err := Collect(context.Background(), p, Request{Messages: []Message{UserText("x")}}); err != nil {
+	if _, err := Collect(t.Context(), p, Request{Messages: []Message{UserText("x")}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := srv.headers.Get("X-Extra"); got != "yes" {
@@ -643,7 +643,7 @@ func TestHeadersCopied(t *testing.T) {
 }
 
 func TestOpenAIDefaultsToMaxCompletionTokens(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		baseURL, field string
 		want           string
 	}{
@@ -651,7 +651,7 @@ func TestOpenAIDefaultsToMaxCompletionTokens(t *testing.T) {
 		{"https://api.openai.com/v1", "max_tokens", "max_tokens"},
 		{"https://llm.example.com/v1", "", "max_tokens"},
 	} {
-		p := newTestOpenAI(t, tc.baseURL, func(c *Config) { c.MaxTokensField = tc.field })
+		p := newTestOpenAI(t, tt.baseURL, func(c *Config) { c.MaxTokensField = tt.field })
 		raw, err := json.Marshal(p.buildRequest(Request{MaxTokens: 50}))
 		if err != nil {
 			t.Fatal(err)
@@ -661,14 +661,14 @@ func TestOpenAIDefaultsToMaxCompletionTokens(t *testing.T) {
 			t.Fatal(err)
 		}
 		other := "max_tokens"
-		if tc.want == other {
+		if tt.want == other {
 			other = "max_completion_tokens"
 		}
-		if body[tc.want] != float64(50) {
-			t.Errorf("%s field=%q: %s = %v", tc.baseURL, tc.field, tc.want, body[tc.want])
+		if body[tt.want] != float64(50) {
+			t.Errorf("%s field=%q: %s = %v", tt.baseURL, tt.field, tt.want, body[tt.want])
 		}
 		if _, ok := body[other]; ok {
-			t.Errorf("%s field=%q: %s must not be sent", tc.baseURL, tc.field, other)
+			t.Errorf("%s field=%q: %s must not be sent", tt.baseURL, tt.field, other)
 		}
 	}
 }

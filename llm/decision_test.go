@@ -27,7 +27,7 @@ func TestDecisionRequestValidate(t *testing.T) {
 		}
 		return o
 	}
-	cases := []struct {
+	tests := []struct {
 		name   string
 		mutate func(r *DecisionRequest)
 		want   string
@@ -47,16 +47,16 @@ func TestDecisionRequestValidate(t *testing.T) {
 		{"empty option value", func(r *DecisionRequest) { r.Questions[1].Choices[0].Value = "" }, "team"},
 		{"duplicate option value", func(r *DecisionRequest) { r.Questions[1].Choices[1].Value = "a" }, "team"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			r := validDecisionRequest()
-			tc.mutate(&r)
+			tt.mutate(&r)
 			err := r.Validate()
 			if err == nil {
 				t.Fatal("want error, got nil")
 			}
-			if !strings.HasPrefix(err.Error(), "llm: ") || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("error %q: want llm: prefix and %q", err, tc.want)
+			if !strings.HasPrefix(err.Error(), "llm: ") || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error %q: want llm: prefix and %q", err, tt.want)
 			}
 		})
 	}

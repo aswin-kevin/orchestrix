@@ -1,7 +1,6 @@
 package llm_test
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,7 +42,7 @@ func TestOpenAIDecisionsDocumentedReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := d.Decide(context.Background(), llm.DecisionRequest{Input: docInput, Questions: docQuestions})
+	resp, err := d.Decide(t.Context(), llm.DecisionRequest{Input: docInput, Questions: docQuestions})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -79,7 +78,7 @@ func TestSystemOneDocumentedRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Decide(context.Background(), llm.DecisionRequest{Input: docInput, Questions: docQuestions}); err != nil {
+	if _, err := d.Decide(t.Context(), llm.DecisionRequest{Input: docInput, Questions: docQuestions}); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
 	var levels []string

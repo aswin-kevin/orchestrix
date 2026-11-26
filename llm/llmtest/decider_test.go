@@ -19,7 +19,7 @@ func TestScriptedDecider(t *testing.T) {
 		},
 		llmtest.DecisionTurn{Err: errBoom},
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	req := llm.DecisionRequest{Input: []llm.Block{{Type: llm.BlockText, Text: "x"}}}
 
 	resp, err := d.Decide(ctx, req)
@@ -46,7 +46,7 @@ func TestScriptedDeciderRecordsClone(t *testing.T) {
 		Input:     []llm.Block{{Type: llm.BlockText, Text: "a"}},
 		Questions: []llm.Question{{Name: "q"}},
 	}
-	if _, err := d.Decide(context.Background(), req); err != nil {
+	if _, err := d.Decide(t.Context(), req); err != nil {
 		t.Fatal(err)
 	}
 	req.Input[0].Text = "changed"
@@ -58,7 +58,7 @@ func TestScriptedDeciderRecordsClone(t *testing.T) {
 
 func TestScriptedDeciderCancelledCtx(t *testing.T) {
 	d := llmtest.NewDecider(llmtest.DecisionTurn{})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := d.Decide(ctx, llm.DecisionRequest{}); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
@@ -74,7 +74,7 @@ func TestScriptedDeciderConcurrent(t *testing.T) {
 	for range 20 {
 		go func() {
 			defer func() { done <- struct{}{} }()
-			_, _ = d.Decide(context.Background(), llm.DecisionRequest{})
+			_, _ = d.Decide(t.Context(), llm.DecisionRequest{})
 		}()
 	}
 	for range 20 {
@@ -88,7 +88,7 @@ func TestScriptedDeciderConcurrent(t *testing.T) {
 func TestScriptedDeciderAnswersAreCopies(t *testing.T) {
 	script := map[string]llm.Answer{"q": {Type: llm.QuestionYesNo, Yes: 0.9}}
 	d := llmtest.NewDecider(llmtest.DecisionTurn{Answers: script})
-	resp, err := d.Decide(context.Background(), llm.DecisionRequest{})
+	resp, err := d.Decide(t.Context(), llm.DecisionRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
