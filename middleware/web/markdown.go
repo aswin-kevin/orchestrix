@@ -98,6 +98,31 @@ func (c *converter) children(n *html.Node) {
 	}
 }
 
+// elementHandlers converts the elements that need more than their children,
+// by tag name. It is filled in init: assigning it directly would make an
+// initialization cycle through node.
+var elementHandlers map[string]func(*converter, *html.Node)
+
+func init() {
+	elementHandlers = map[string]func(*converter, *html.Node){
+		"blockquote": (*converter).blockquote,
+		"br":         func(c *converter, _ *html.Node) { c.br() },
+		"hr":         (*converter).rule,
+		"a":          (*converter).link,
+		"img":        (*converter).image,
+		"ul":         func(c *converter, n *html.Node) { c.list(n, false) },
+		"ol":         func(c *converter, n *html.Node) { c.list(n, true) },
+		"li":         (*converter).item,
+		"pre":        (*converter).pre,
+		"code":       (*converter).code,
+		"strong":     func(c *converter, n *html.Node) { c.wrap(n, "**") },
+		"b":          func(c *converter, n *html.Node) { c.wrap(n, "**") },
+		"em":         func(c *converter, n *html.Node) { c.wrap(n, "*") },
+		"i":          func(c *converter, n *html.Node) { c.wrap(n, "*") },
+		"table":      (*converter).table,
+	}
+}
+
 func (c *converter) node(n *html.Node) {
 	if c.full {
 		return
@@ -132,40 +157,25 @@ func (c *converter) node(n *html.Node) {
 		c.block(paragraph)
 		return
 	}
-	switch n.Data {
-	case "blockquote":
-		c.block(paragraph)
-		pushed := c.pushPrefix(quotePrefix)
-		c.children(n)
-		c.popPrefix(pushed)
-		c.block(paragraph)
-	case "br":
-		c.br()
-	case "hr":
-		c.block(paragraph)
-		c.word("---")
-		c.block(paragraph)
-	case "a":
-		c.link(n)
-	case "img":
-		c.image(n)
-	case "ul", "ol":
-		c.list(n, n.Data == "ol")
-	case "li":
-		c.item(n)
-	case "pre":
-		c.pre(n)
-	case "code":
-		c.code(n)
-	case "strong", "b":
-		c.wrap(n, "**")
-	case "em", "i":
-		c.wrap(n, "*")
-	case "table":
-		c.table(n)
-	default:
-		c.children(n)
+	if h, ok := elementHandlers[n.Data]; ok {
+		h(c, n)
+		return
 	}
+	c.children(n)
+}
+
+func (c *converter) blockquote(n *html.Node) {
+	c.block(paragraph)
+	pushed := c.pushPrefix(quotePrefix)
+	c.children(n)
+	c.popPrefix(pushed)
+	c.block(paragraph)
+}
+
+func (c *converter) rule(*html.Node) {
+	c.block(paragraph)
+	c.word("---")
+	c.block(paragraph)
 }
 
 func (c *converter) wrap(n *html.Node, marker string) {
