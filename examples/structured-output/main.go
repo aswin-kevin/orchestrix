@@ -20,6 +20,9 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/examples/internal/exmodel"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
+	"github.com/aswin-kevin/orchestrix/middleware/planning"
+	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 )
 
 func main() {
@@ -51,7 +54,7 @@ func run(ctx context.Context, w io.Writer) error {
 	)
 	a, err := exmodel.New(model,
 		orchestrix.WithSystemPrompt("You triage bug reports. Answer from the report alone; you have no files or tools to look at."),
-		orchestrix.WithoutMiddleware("filesystem", "planning", "subagents"), // nothing to explore: answer from the report
+		orchestrix.WithoutMiddleware(filesystem.Name, planning.Name, subagents.Name), // nothing to explore: answer from the report
 		orchestrix.WithOutputType[Triage](),
 		orchestrix.WithMaxTurns(5),
 	)

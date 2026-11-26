@@ -11,6 +11,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/mcp"
 	"github.com/aswin-kevin/orchestrix/middleware/askuser"
+	"github.com/aswin-kevin/orchestrix/middleware/async"
 	"github.com/aswin-kevin/orchestrix/middleware/cache"
 	"github.com/aswin-kevin/orchestrix/middleware/compress"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
@@ -51,7 +52,7 @@ func WithCheckpointer(c checkpoint.Checkpointer) Option {
 
 // WithSubagents adds subagent types the model can start with the task tool.
 // They join the built-in general-purpose and fork subagents. An invalid spec
-// makes New fail, even when WithoutMiddleware("subagents") removes the
+// makes New fail, even when WithoutMiddleware(subagents.Name) removes the
 // middleware afterwards.
 func WithSubagents(specs ...subagents.Subagent) Option {
 	return func(s *settings) { s.extraSubagents = append(s.extraSubagents, specs...) }
@@ -133,7 +134,7 @@ func WithShell(root string, cfg shell.Config) Option {
 // backend.Starter): WithShell provides one, and so does a sandbox built with
 // sandbox.NewStarter, passed with WithBackend or from WithBackendFactory.
 // Agent.Close stops the jobs still running (m is an agent.Closer); a host
-// that does not close the agent calls m.Close instead.
+// that does not close the agent calls m.Close(ctx) instead.
 func WithJobs(m *jobs.Middleware) Option {
 	return func(s *settings) { s.jobs = m }
 }
@@ -176,89 +177,111 @@ func (s *settings) closeBuilt() {
 	}
 }
 
-// baseStack returns the preset's middleware in its fixed order (see New).
-// summarize comes first because it rebuilds the request messages from State,
-// which would discard the rewrites of any model wrapper before it.
+// stackEntry is one slot of the preset's middleware stack.
+type stackEntry struct {
+	// name is the middleware's Name, the one WithMiddleware and
+	// WithoutMiddleware match; it labels the slot.
+	name string
+	// option names what asked for the middleware; it prefixes a build
+	// error. Empty records the error as is, for a middleware whose errors
+	// already say where they come from.
+	option string
+	// on reports whether the stack has the middleware; nil means always.
+	on func(*settings) bool
+	// build returns the middleware.
+	build func(*settings) (agent.Middleware, error)
+}
+
+// presetStack is the preset's middleware in its fixed order, outermost
+// first (see New). summarize comes first because it rebuilds the request messages from
+// State, which would discard the rewrites of any model wrapper before it.
+// rubric sits early, so that BeforeStop (reverse order) consults the async
+// reminder before grading, and hooks after grading. profiles is last, so that
+// its suffix is the last segment and its overrides see the final tool list.
+var presetStack = []stackEntry{
+	{name: summarize.Name, option: "WithSummarize", build: func(s *settings) (agent.Middleware, error) { return summarize.New(s.summarize) }},
+	{name: compress.Name, option: "WithCompress", on: func(s *settings) bool { return s.compress != nil },
+		build: func(s *settings) (agent.Middleware, error) { return compress.New(*s.compress) }},
+	{name: cache.Name, option: "cache", build: func(*settings) (agent.Middleware, error) { return cache.New(cache.Config{}) }},
+	{name: hooks.Name, option: "WithHooks", on: func(s *settings) bool { return s.hooks != nil },
+		build: func(s *settings) (agent.Middleware, error) { return hooks.New(*s.hooks) }},
+	{name: hitl.Name, option: "WithInterruptOn or WithInterruptConfig", on: func(s *settings) bool { return len(s.interruptOn) > 0 },
+		build: func(s *settings) (agent.Middleware, error) { return hitl.New(hitl.Config{InterruptOn: s.interruptOn}) }},
+	{name: rubric.Name, option: "WithRubric", on: func(s *settings) bool { return s.rubric != nil },
+		build: func(s *settings) (agent.Middleware, error) { return rubric.New(*s.rubric) }},
+	{name: memory.Name, option: "WithMemory", on: func(s *settings) bool { return s.memory != nil },
+		build: func(s *settings) (agent.Middleware, error) { return memory.New(*s.memory) }},
+	{name: skills.Name, option: "WithSkills", on: func(s *settings) bool { return s.skills != nil }, build: buildSkills},
+	{name: planmode.Name, option: "WithPlanMode", on: func(s *settings) bool { return s.planMode != nil },
+		build: func(s *settings) (agent.Middleware, error) { return planmode.New(*s.planMode) }},
+	{name: filesystem.Name, option: "filesystem", build: buildFilesystem},
+	{name: planning.Name, option: "planning", build: func(*settings) (agent.Middleware, error) { return planning.New(planning.Config{}) }},
+	{name: subagents.Name, build: func(s *settings) (agent.Middleware, error) {
+		cfg := s.subagents
+		cfg.Subagents = s.subagentSpecs()
+		return subagents.New(cfg)
+	}},
+	{name: async.Name, on: func(s *settings) bool { return s.async != nil },
+		build: func(s *settings) (agent.Middleware, error) { return s.async, nil }},
+	{name: deferred.Name, option: "WithDeferredTools", on: func(s *settings) bool { _, ok := s.deferredConfig(); return ok },
+		build: func(s *settings) (agent.Middleware, error) { cfg, _ := s.deferredConfig(); return deferred.New(cfg) }},
+	{name: mcp.Name, on: func(s *settings) bool { return s.mcp != nil },
+		build: func(s *settings) (agent.Middleware, error) { return s.mcp, nil }},
+	{name: web.Name, option: "WithWeb", on: func(s *settings) bool { return s.web != nil },
+		build: func(s *settings) (agent.Middleware, error) { return web.New(*s.web) }},
+	{name: askuser.Name, option: "WithAskUser", on: func(s *settings) bool { return s.askUser != nil },
+		build: func(s *settings) (agent.Middleware, error) { return askuser.New(*s.askUser) }},
+	{name: jobs.Name, on: func(s *settings) bool { return s.jobs != nil },
+		build: func(s *settings) (agent.Middleware, error) { return s.jobs, nil }},
+	{name: profiles.Name, option: "WithProfiles", on: func(s *settings) bool { return s.profiles != nil },
+		build: func(s *settings) (agent.Middleware, error) { return profiles.New(*s.profiles) }},
+}
+
+// buildSkills builds the WithSkills middleware, recording a failure so that
+// checkSubagentSkills does not repeat it.
+func buildSkills(s *settings) (agent.Middleware, error) {
+	m, err := skills.New(*s.skills)
+	if err != nil {
+		s.skillsFailed = true
+		return nil, err
+	}
+	return m, nil
+}
+
+// buildFilesystem builds the file tools, with execute when the agent can run
+// commands. A backend given with WithBackend can when it is an Executor. With
+// a factory the backends are unknown when tools are collected, so jobs (which
+// needs commands) is the promise that execute works.
+func buildFilesystem(s *settings) (agent.Middleware, error) {
+	_, canExecute := backend.AsExecutor(s.cfg.Backend)
+	return filesystem.New(filesystem.Config{Execute: s.shell != nil || s.jobs != nil || canExecute, Background: s.jobs != nil})
+}
+
+// baseStack builds the entries of presetStack that s turns on, in order.
 func (s *settings) baseStack() []agent.Middleware {
-	stack := s.appendBuilt(nil, "WithSummarize", func() (agent.Middleware, error) { return summarize.New(s.summarize) })
-	if s.compress != nil {
-		stack = s.appendBuilt(stack, "WithCompress", func() (agent.Middleware, error) { return compress.New(*s.compress) })
-	}
-	stack = s.appendBuilt(stack, "cache", func() (agent.Middleware, error) { return cache.New(cache.Config{}) })
-	if s.hooks != nil {
-		stack = s.appendBuilt(stack, "WithHooks", func() (agent.Middleware, error) { return hooks.New(*s.hooks) })
-	}
-	if len(s.interruptOn) > 0 {
-		stack = s.appendBuilt(stack, "WithInterruptOn or WithInterruptConfig", func() (agent.Middleware, error) {
-			return hitl.New(hitl.Config{InterruptOn: s.interruptOn})
-		})
-	}
-	if s.rubric != nil {
-		// Early, so that BeforeStop (reverse order) consults the async
-		// reminder before grading, and hooks after grading.
-		stack = s.appendBuilt(stack, "WithRubric", func() (agent.Middleware, error) { return rubric.New(*s.rubric) })
-	}
-	if s.memory != nil {
-		stack = s.appendBuilt(stack, "WithMemory", func() (agent.Middleware, error) { return memory.New(*s.memory) })
-	}
-	if s.skills != nil {
-		if sk, err := skills.New(*s.skills); err != nil {
-			s.errs = append(s.errs, fmt.Errorf("WithSkills: %w", err))
-			s.skillsFailed = true
-		} else {
-			stack = append(stack, sk)
+	var out []agent.Middleware
+	for _, e := range presetStack {
+		if e.on == nil || e.on(s) {
+			out = s.appendBuilt(out, e.option, func() (agent.Middleware, error) { return e.build(s) })
 		}
 	}
-	if s.planMode != nil {
-		stack = s.appendBuilt(stack, "WithPlanMode", func() (agent.Middleware, error) { return planmode.New(*s.planMode) })
-	}
-	// A backend given with WithBackend can run commands when it is an
-	// Executor. With a factory the backends are unknown when tools are
-	// collected, so jobs (which needs commands) is the promise that execute
-	// works.
-	_, canExecute := backend.AsExecutor(s.cfg.Backend)
-	stack = s.appendBuilt(stack, "filesystem", func() (agent.Middleware, error) {
-		return filesystem.New(filesystem.Config{Execute: s.shell != nil || s.jobs != nil || canExecute, Background: s.jobs != nil})
-	})
-	stack = s.appendBuilt(stack, "planning", func() (agent.Middleware, error) { return planning.New(planning.Config{}) })
-	if sub := s.subagentsMiddleware(); sub != nil {
-		stack = append(stack, sub)
-	}
-	if s.async != nil {
-		stack = append(stack, s.async)
-	}
-	if cfg, ok := s.deferredConfig(); ok {
-		stack = s.appendBuilt(stack, "WithDeferredTools", func() (agent.Middleware, error) { return deferred.New(cfg) })
-	}
-	if s.mcp != nil {
-		stack = append(stack, s.mcp)
-	}
-	if s.web != nil {
-		stack = s.appendBuilt(stack, "WithWeb", func() (agent.Middleware, error) { return web.New(*s.web) })
-	}
-	if s.askUser != nil {
-		stack = s.appendBuilt(stack, "WithAskUser", func() (agent.Middleware, error) { return askuser.New(*s.askUser) })
-	}
-	if s.jobs != nil {
-		stack = append(stack, s.jobs)
-	}
-	if s.profiles != nil {
-		// Last, so that its suffix is the last segment and its overrides see
-		// the final tool list.
-		stack = s.appendBuilt(stack, "WithProfiles", func() (agent.Middleware, error) { return profiles.New(*s.profiles) })
-	}
-	return stack
+	return out
 }
 
 // appendBuilt appends the middleware build returns to stack, or records its
-// error, prefixed with the option that asked for it, and returns stack as is.
+// error, prefixed with the option that asked for it (unless option is empty),
+// and returns stack as is.
 func (s *settings) appendBuilt(stack []agent.Middleware, option string, build func() (agent.Middleware, error)) []agent.Middleware {
 	m, err := build()
-	if err != nil {
+	switch {
+	case err == nil:
+		return append(stack, m)
+	case option == "":
+		s.errs = append(s.errs, err)
+	default:
 		s.errs = append(s.errs, fmt.Errorf("%s: %w", option, err))
-		return stack
 	}
-	return append(stack, m)
+	return stack
 }
 
 // deferredConfig returns the deferred middleware's configuration and whether
@@ -278,10 +301,10 @@ func (s *settings) deferredConfig() (deferred.Config, bool) {
 
 // hidden reports whether t is marked gated or deferred.
 func hidden(t tool.Tool) bool {
-	if g, ok := t.(deferred.Gater); ok && g.Gated() {
+	if g, ok := tool.As[deferred.Gater](t); ok && g.Gated() {
 		return true
 	}
-	d, ok := t.(deferred.Deferrer)
+	d, ok := tool.As[deferred.Deferrer](t)
 	return ok && d.Deferred()
 }
 
@@ -310,19 +333,6 @@ func (s *settings) checkSubagentSkills(stack []agent.Middleware) {
 // of WithSubagents.
 func (s *settings) subagentSpecs() []subagents.Subagent {
 	return slices.Concat(s.subagents.Subagents, s.extraSubagents)
-}
-
-// subagentsMiddleware builds the subagents middleware, or returns nil after
-// recording why it could not.
-func (s *settings) subagentsMiddleware() agent.Middleware {
-	cfg := s.subagents
-	cfg.Subagents = s.subagentSpecs()
-	m, err := subagents.New(cfg)
-	if err != nil {
-		s.errs = append(s.errs, err)
-		return nil
-	}
-	return m
 }
 
 // WithMemory loads standing instructions, such as memory.DefaultFiles(), into

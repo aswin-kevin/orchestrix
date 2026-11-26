@@ -72,6 +72,24 @@ type settings struct {
 // Option customizes the agent built by New.
 type Option func(*settings)
 
+// Options bundles opts into one Option, applied in order; nil entries are
+// skipped. It lets a host name a reusable preset:
+//
+//	reviewer := orchestrix.Options(
+//		orchestrix.WithSystemPrompt("You are a careful code reviewer."),
+//		orchestrix.WithPermissionMode(permission.ModePlan),
+//	)
+//	a, err := orchestrix.New("anthropic:claude-sonnet-4-5", reviewer, orchestrix.WithMaxTurns(20))
+func Options(opts ...Option) Option {
+	return func(s *settings) {
+		for _, opt := range opts {
+			if opt != nil {
+				opt(s)
+			}
+		}
+	}
+}
+
 // WithSystemPrompt sets the system prompt segments. Each segment is a
 // separate section; all of them are treated as the stable, cacheable prefix.
 func WithSystemPrompt(segments ...string) Option {
@@ -91,8 +109,16 @@ func WithMiddleware(m ...agent.Middleware) Option {
 	return func(s *settings) { s.cfg.Middleware = append(s.cfg.Middleware, m...) }
 }
 
-// WithoutMiddleware removes middleware by name, for example "planning" to
-// drop the write_todos tool. New fails if a name matches nothing.
+// WithoutMiddleware removes middleware by name. New fails if a name matches
+// nothing. Each middleware package exports its name as Name: summarize.Name,
+// compress.Name, cache.Name, hooks.Name, hitl.Name, rubric.Name, memory.Name,
+// skills.Name, planmode.Name, filesystem.Name, planning.Name,
+// subagents.Name, async.Name, deferred.Name, mcp.Name, web.Name,
+// askuser.Name, jobs.Name and profiles.Name for the preset's stack, and
+// guard.Name and orxotel.Name for middleware added with WithMiddleware. To
+// drop the write_todos tool:
+//
+//	orchestrix.WithoutMiddleware(planning.Name)
 func WithoutMiddleware(names ...string) Option {
 	return func(s *settings) { s.exclude = append(s.exclude, names...) }
 }

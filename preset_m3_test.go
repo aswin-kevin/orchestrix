@@ -148,6 +148,12 @@ func TestMCPHiddenToolsAddsDeferred(t *testing.T) {
 	}
 }
 
+// unwrapper wraps a tool without its marker methods; tool.As finds them
+// through Unwrap.
+type unwrapper struct{ tool.Tool }
+
+func (u unwrapper) Unwrap() tool.Tool { return u.Tool }
+
 func TestHiddenWithToolsAddsDeferred(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -155,6 +161,7 @@ func TestHiddenWithToolsAddsDeferred(t *testing.T) {
 	}{
 		{"gated", deferred.Gate(noopTool("secret"))},
 		{"deferred", deferred.Defer(noopTool("secret"))},
+		{"wrapped", unwrapper{deferred.Defer(noopTool("secret"))}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := llmtest.New(llmtest.Turn{Text: "ok"})

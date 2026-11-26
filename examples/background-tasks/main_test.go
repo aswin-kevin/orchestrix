@@ -26,6 +26,7 @@ func TestBackgroundTasksOffline(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"check_task", "running",
+		"settled: async_1 (researcher) completed",
 		"notice: <task-notification>Background task async_1 (researcher) completed.",
 		"answer: The researcher reports that " + finding,
 	} {

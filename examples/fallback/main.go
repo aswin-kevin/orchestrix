@@ -28,6 +28,9 @@ import (
 	"github.com/aswin-kevin/orchestrix/examples/internal/exmodel"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
+	"github.com/aswin-kevin/orchestrix/middleware/planning"
+	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 )
 
 // fallbackEnv names the backup model's spec in live mode.
@@ -62,7 +65,7 @@ func run(ctx context.Context, w io.Writer) error {
 				fmt.Fprintf(w, "switched: %s -> %s\n", exmodel.Safe(ev.From), exmodel.Safe(ev.To))
 			},
 		}),
-		orchestrix.WithoutMiddleware("filesystem", "planning", "subagents"), // nothing to explore: answer directly
+		orchestrix.WithoutMiddleware(filesystem.Name, planning.Name, subagents.Name), // nothing to explore: answer directly
 		orchestrix.WithMaxTurns(3),
 	)
 	if err != nil {

@@ -25,15 +25,17 @@ import (
 // async (WithAsync), deferred, mcp (WithMCP), web (WithWeb), askuser
 // (WithAskUser), jobs (WithJobs), profiles (WithProfiles). deferred is
 // present with WithDeferredTools, and otherwise added with a zero
-// deferred.Config when WithSkills has Tools or WithMCP has a deferred or gated
-// server. summarize must stay first: it rebuilds the request from State.
-// rubric sits early because BeforeStop hooks run in reverse order: the async
-// reminder about running tasks is consulted before the answer is graded, and
-// hooks' Stop hooks after it. They share agent.MaxStopContinuations (see
-// WithRubric). profiles is last, so its prompt
-// suffix is the last segment and its overrides see the final tool list.
-// WithMiddleware replaces a middleware of the same name in place and appends
-// the others after profiles; WithoutMiddleware removes by name.
+// deferred.Config when WithSkills has Tools, WithMCP has a deferred or gated
+// server, or a WithTools tool is marked with deferred.Gate or deferred.Defer.
+// summarize must stay first: it rebuilds the request from State. rubric sits
+// early because BeforeStop hooks run in reverse order: the async reminder
+// about running tasks is consulted before the answer is graded, and hooks'
+// Stop hooks after it. They share agent.MaxStopContinuations (see
+// WithRubric). profiles is last, so its prompt suffix is the last segment
+// and its overrides see the final tool list. WithMiddleware replaces a
+// middleware of the same name in place and appends the others after
+// profiles; WithoutMiddleware removes by name (each middleware package
+// exports its name as Name, such as planning.Name).
 //
 // spec is a model spec string such as "anthropic:claude-sonnet-4-5" or
 // "openai:gpt-4.1" (credentials and base URL come from the environment, see

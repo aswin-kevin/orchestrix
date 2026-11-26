@@ -16,10 +16,25 @@ import (
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/mcp"
+	"github.com/aswin-kevin/orchestrix/middleware/askuser"
+	"github.com/aswin-kevin/orchestrix/middleware/async"
+	"github.com/aswin-kevin/orchestrix/middleware/cache"
+	"github.com/aswin-kevin/orchestrix/middleware/compress"
+	"github.com/aswin-kevin/orchestrix/middleware/deferred"
+	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
+	"github.com/aswin-kevin/orchestrix/middleware/hitl"
 	"github.com/aswin-kevin/orchestrix/middleware/hooks"
 	"github.com/aswin-kevin/orchestrix/middleware/jobs"
+	"github.com/aswin-kevin/orchestrix/middleware/memory"
+	"github.com/aswin-kevin/orchestrix/middleware/planmode"
+	"github.com/aswin-kevin/orchestrix/middleware/planning"
+	"github.com/aswin-kevin/orchestrix/middleware/profiles"
+	"github.com/aswin-kevin/orchestrix/middleware/rubric"
+	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
+	"github.com/aswin-kevin/orchestrix/middleware/web"
 	"github.com/aswin-kevin/orchestrix/permission"
 )
 
@@ -59,6 +74,43 @@ func TestFullStackOrder(t *testing.T) {
 	want := []string{"summarize", "cache", "hooks", "hitl", "filesystem", "planning", "subagents", "jobs"}
 	if got := stackNames(a); !slices.Equal(got, want) {
 		t.Errorf("full stack = %v, want %v", got, want)
+	}
+}
+
+// TestStackOrder pins the order New's doc gives, every optional middleware
+// on, by the middleware's Name constants.
+func TestStackOrder(t *testing.T) {
+	am, err := async.New(async.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = am.Close(context.Background()) })
+	a, err := orchestrix.NewWithProvider(llmtest.New(),
+		orchestrix.WithShell(t.TempDir(), shell.Config{}),
+		orchestrix.WithJobs(mustJobs(t)),
+		orchestrix.WithHooks(hooks.Config{}),
+		orchestrix.WithInterruptOn("write_file"),
+		orchestrix.WithMemory(memory.Config{Files: memory.DefaultFiles()}),
+		orchestrix.WithSkills(testSkills()),
+		orchestrix.WithPlanMode(planmode.Config{}),
+		orchestrix.WithDeferredTools(deferred.Config{}),
+		orchestrix.WithMCP(connectMCP(t, false)),
+		orchestrix.WithWeb(web.Config{}),
+		orchestrix.WithAskUser(askuser.Config{}),
+		orchestrix.WithAsync(am),
+		orchestrix.WithCompress(compress.Config{}),
+		orchestrix.WithRubric(passRubric()),
+		orchestrix.WithProfiles(profiles.Config{}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeAtEnd(t, a)
+	want := []string{summarize.Name, compress.Name, cache.Name, hooks.Name, hitl.Name, rubric.Name,
+		memory.Name, skills.Name, planmode.Name, filesystem.Name, planning.Name, subagents.Name,
+		async.Name, deferred.Name, mcp.Name, web.Name, askuser.Name, jobs.Name, profiles.Name}
+	if got := stackNames(a); !slices.Equal(got, want) {
+		t.Errorf("stack = %v, want %v", got, want)
 	}
 }
 

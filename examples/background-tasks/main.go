@@ -9,7 +9,8 @@
 // The model gets start_task, check_task, update_task, cancel_task and
 // list_tasks. Here it starts a researcher, checks on it once, and ends the
 // first prompt while the researcher works; the second prompt on the same
-// thread receives the notification with the researcher's result.
+// thread receives the notification with the researcher's result. The host
+// hears of the task's end too, through async.Config.OnSettled.
 package main
 
 import (
@@ -72,17 +73,29 @@ func runModel(ctx context.Context, w io.Writer, model any) error {
 			Text: "Honey never spoils: archaeologists have found edible honey in ancient Egyptian tombs.",
 		}),
 	}
+	// OnSettled tells the host when a task stops: it ended, or it waits for
+	// a decision the host gives with tasks.Resolve. It runs on the task's
+	// goroutine and must not block, so it hands the record over.
+	settled := make(chan async.TaskRecord, 1)
 	tasks, err := async.New(async.Config{
 		Subagents: []subagents.Subagent{researcher},
 		// By default a run that ends while its tasks still run is reminded
 		// of them once. This host ends the first prompt on purpose and
 		// prompts again later, so the reminder is off.
 		DisableStopReminder: true,
+		OnSettled: func(_ context.Context, _ string, rec async.TaskRecord) {
+			select {
+			case settled <- rec:
+			default:
+			}
+		},
 	})
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tasks.Close(context.Background()) }() // stops background subagents still running
+	// The agent never closes here, so the host closes the middleware: it
+	// stops the background subagents still running.
+	defer func() { _ = tasks.Close(ctx) }()
 
 	a, err := exmodel.New(model,
 		orchestrix.WithSystemPrompt("Delegate research to the researcher in the background. Do not wait for it: end your turn, and report its finding once you are told it finished."),
@@ -108,6 +121,14 @@ func runModel(ctx context.Context, w io.Writer, model any) error {
 	// makes sure the task has ended, so the output is the same every run.
 	if err := exmodel.WaitTasks(ctx, a, th); err != nil {
 		return err
+	}
+	if len(async.Tasks(th.State())) > 0 { // live, the model may start none
+		select {
+		case rec := <-settled:
+			fmt.Fprintf(w, "settled: %s (%s) %s\n", rec.ID, exmodel.Safe(rec.SubagentType), rec.Status)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	if err := prompt(ctx, w, th, "Any news from the researcher?"); err != nil {
 		return err
