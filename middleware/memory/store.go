@@ -237,8 +237,17 @@ func (s *FileStore) RecordPaths(e Entry) []permission.PathAccess {
 
 // EntryPath implements Pather: the entry's file in the store directory. Only
 // the base name of e.File counts, so an entry whose File holds a directory
-// part (such as "../x.md") still maps to a path inside the directory.
-func (s *FileStore) EntryPath(e Entry) string { return path.Join(s.dir, path.Base(e.File)) }
+// part (such as "../x.md") still maps to a path inside the directory. A File
+// whose base name is "", ".", ".." or "/" maps to the directory itself, never
+// to its parent.
+func (s *FileStore) EntryPath(e Entry) string {
+	switch base := path.Base(e.File); base {
+	case ".", "..", "/":
+		return s.dir
+	default:
+		return path.Join(s.dir, base)
+	}
+}
 
 // load reads every entry in the directory, newest first. Files that cannot be
 // read or parsed are returned by base name in unreadable. A missing

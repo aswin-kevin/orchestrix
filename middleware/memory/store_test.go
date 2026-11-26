@@ -373,6 +373,11 @@ func TestFileStoreIsPather(t *testing.T) {
 		"/etc/passwd":    "/m/passwd",
 		"sub/../../y.md": "/m/y.md",
 		"":               "/m",
+		"..":             "/m",
+		"a/..":           "/m",
+		"../":            "/m",
+		".":              "/m",
+		"/":              "/m",
 	} {
 		if got := p.EntryPath(Entry{File: file}); got != want {
 			t.Errorf("EntryPath(%q) = %q, want %q", file, got, want)
