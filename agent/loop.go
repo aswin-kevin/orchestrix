@@ -318,8 +318,13 @@ func (r *run) loop() *Final {
 }
 
 // afterReply runs the tool calls of a recorded reply, if any, then applies
-// the run limits. It returns a Final when the run must end.
+// the run limits. It returns a Final when the run must end. A refused reply
+// ends the run at once: its tool calls do not run (the next run answers
+// them), and no settlement, BeforeStop or output check follows.
 func (r *run) afterReply(resp *llm.Response) *Final {
+	if resp.StopReason == llm.StopRefusal {
+		return r.finish(ReasonRefusal, nil)
+	}
 	uses := resp.Message.ToolUses()
 	if len(uses) == 0 {
 		return r.afterNoToolTurn(resp)
@@ -360,7 +365,9 @@ func (r *run) modelTurn() (*llm.Response, *Final) {
 
 // callModel runs the model handler chain once, bounded by
 // Config.ModelTimeout when set. The timeout's context is derived from the
-// run's, so modelFailure tells it apart from the run being cancelled.
+// run's, so modelFailure tells it apart from the run being cancelled. When a
+// wrapper answered without reaching the innermost handler, callModel emits
+// the reply's thinking and text itself, as completeModel does.
 func (r *run) callModel() (*llm.Response, error) {
 	r.attempts.Store(0)
 	ctx := r.ctx
@@ -372,6 +379,9 @@ func (r *run) callModel() (*llm.Response, error) {
 	resp, err := r.model(ctx, r.modelRequest())
 	if err == nil && resp == nil {
 		err = errNoResponse
+	}
+	if err == nil && r.attempts.Load() == 0 {
+		r.emitReply(resp)
 	}
 	return resp, err
 }
@@ -449,13 +459,19 @@ func (r *run) completeModel(ctx context.Context, req *ModelRequest) (*llm.Respon
 	if resp == nil {
 		return nil, errNoResponse
 	}
+	r.emitReply(resp)
+	return resp, nil
+}
+
+// emitReply forwards a whole reply's thinking, then its text, as one event
+// each; empty ones are skipped.
+func (r *run) emitReply(resp *llm.Response) {
 	if thinking := thinkingText(resp.Message); thinking != "" {
 		r.emit(Event{Kind: KindThinking, Text: thinking})
 	}
 	if text := resp.Message.Text(); text != "" {
 		r.emit(Event{Kind: KindText, Text: text})
 	}
-	return resp, nil
 }
 
 // countAttempt notes a call of the innermost model handler, reporting every

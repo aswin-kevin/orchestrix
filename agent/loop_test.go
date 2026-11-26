@@ -1190,3 +1190,66 @@ func TestNestedRunHasOwnRunID(t *testing.T) {
 		t.Fatal("no forwarded child events")
 	}
 }
+
+// cachedAnswer is a ModelWrapper that answers without calling next.
+type cachedAnswer struct{}
+
+func (cachedAnswer) Name() string { return "cached" }
+
+func (cachedAnswer) WrapModel(context.Context, *ModelRequest, ModelHandler) (*llm.Response, error) {
+	return &llm.Response{
+		Message: llm.Message{Role: llm.RoleAssistant, Content: []llm.Block{
+			{Type: llm.BlockThinking, Thinking: "t"},
+			llm.TextBlock("cached"),
+		}},
+		StopReason: llm.StopEndTurn,
+	}, nil
+}
+
+// streamKinds returns the text, thinking, retry and final events of events.
+func streamKinds(events []Event) []Event {
+	var out []Event
+	for _, ev := range events {
+		switch ev.Kind {
+		case KindText, KindThinking, KindRetry, KindFinal:
+			out = append(out, Event{Kind: ev.Kind, Text: ev.Text})
+		}
+	}
+	return out
+}
+
+func TestShortCircuitWrapperEmitsText(t *testing.T) {
+	p := llmtest.New()
+	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{cachedAnswer{}}})
+
+	events, final := collect(t, a.Run(t.Context(), userInput("hi")))
+
+	if final.Reason != ReasonCompleted || final.Text != "cached" || p.Calls() != 0 {
+		t.Fatalf("final = %+v after %d provider calls, want completed with the cached text", final, p.Calls())
+	}
+	want := []Event{{Kind: KindThinking, Text: "t"}, {Kind: KindText, Text: "cached"}, {Kind: KindFinal}}
+	if got := streamKinds(events); !reflect.DeepEqual(got, want) {
+		t.Fatalf("events = %+v, want %+v", got, want)
+	}
+}
+
+// passThrough is a ModelWrapper that calls next once.
+type passThrough struct{}
+
+func (passThrough) Name() string { return "pass" }
+
+func (passThrough) WrapModel(ctx context.Context, req *ModelRequest, next ModelHandler) (*llm.Response, error) {
+	return next(ctx, req)
+}
+
+func TestWrapperCallingNextEmitsOnce(t *testing.T) {
+	p := llmtest.New(llmtest.Turn{Text: "streamed"})
+	a := mustNew(t, Config{Provider: p, Middleware: []Middleware{passThrough{}}})
+
+	events, _ := collect(t, a.Run(t.Context(), userInput("hi")))
+
+	want := []Event{{Kind: KindText, Text: "streamed"}, {Kind: KindFinal}}
+	if got := streamKinds(events); !reflect.DeepEqual(got, want) {
+		t.Fatalf("events = %+v, want %+v", got, want)
+	}
+}

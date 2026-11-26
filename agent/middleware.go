@@ -172,7 +172,9 @@ const MaxStopContinuations = 3
 // wrapping semantics. The ModelRequest is shared by every layer, and inner
 // wrappers edit it in place (appending system segments, filtering tools): a
 // wrapper that calls next more than once must restore the request it passed
-// first, or each retry carries the inner edits again.
+// first, or each retry carries the inner edits again. A wrapper that answers
+// without calling next still produces the turn's text and thinking events
+// from its response; to filter or redact the stream, swap req.Provider.
 type ModelWrapper interface {
 	WrapModel(ctx context.Context, req *ModelRequest, next ModelHandler) (*llm.Response, error)
 }

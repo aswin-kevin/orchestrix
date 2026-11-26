@@ -99,6 +99,10 @@ const (
 	// OutputRetries corrections (Final.Err wraps ErrInvalidOutput). Final.Text
 	// is the last reply.
 	ReasonInvalidOutput TerminalReason = "invalid_output"
+	// ReasonRefusal: the model declined to answer (llm.StopRefusal).
+	// Final.Text is its reply; tool calls in that reply did not run. Not a
+	// success.
+	ReasonRefusal TerminalReason = "refusal"
 	// ReasonInternalError: code the run calls on its own goroutine (the
 	// provider, a ModelWrapper, the Checkpointer or its lease) panicked.
 	// Final.Err is a *PanicError, or wraps ErrClosed for a run started
