@@ -1446,6 +1446,7 @@ Orchestrix follows semantic versioning. Before v1.0.0 a minor release may break 
 - **Exported API.** Exported identifiers of the non-internal packages are not removed or changed incompatibly within v1.
 - **Interfaces.** An interface never gains a method. A new capability arrives as a new optional interface, found by type assertion through `Unwrap` ([Extending Orchestrix](#extending-orchestrix)).
 - **Enums grow.** The value sets of enums (event kinds, terminal reasons, background task statuses, and in `llm` stop reasons, error kinds, block types and stream event types) may grow in a minor release. Give a switch on them a default case and treat an unknown value as its documentation says: ignore an event kind you do not know, and treat an unknown terminal reason or task status as a failure.
+- **Not API.** Default prompt texts, tool descriptions, log messages and error texts may change in a minor release; match errors with `errors.Is` and `errors.As`, not their text.
 - **Satellites.** `orxotel`, `orxpg` and `orxdocker` stay on v0.x after the core reaches 1.0, because they track dependencies that still move, such as the OpenTelemetry GenAI conventions; a minor release of one may break its API. `evals` is not released.
 - **Security fixes** go into the latest minor release of each module ([SECURITY.md](SECURITY.md)).
 
