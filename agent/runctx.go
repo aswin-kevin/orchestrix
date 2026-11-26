@@ -5,13 +5,15 @@ import (
 	"slices"
 	"sync/atomic"
 
+	"github.com/aswin-kevin/orchestrix/agent/internal/runctx"
 	"github.com/aswin-kevin/orchestrix/llm"
 )
 
 // RunInfo describes the run a context belongs to. Info returns it from the
 // context of every hook, wrapper, permission check and tool call of a run.
 type RunInfo struct {
-	// Agent is the agent executing the run; never nil.
+	// Agent is the agent executing the run; never nil inside a run. It may
+	// be nil in a context built by agenttest.Context.
 	Agent *Agent
 	// RunID identifies this run: 16 random hex characters, new for every
 	// run, including a nested one and each Resume. Events carry it as
@@ -37,9 +39,6 @@ type RunInfo struct {
 	run *run // the run described, for Tools; nil in the zero RunInfo
 }
 
-// runInfoKey keys the *RunInfo of a run in its context.
-type runInfoKey struct{}
-
 // toolScopeKey keys the *toolScope of the tool call a context belongs to.
 // A run sets it to nil in its own context, so that hooks of a nested run are
 // not mistaken for code running inside the parent's tool call.
@@ -59,7 +58,7 @@ type toolScope struct {
 // Info returns the RunInfo of the run ctx belongs to, and false when ctx
 // belongs to no run.
 func Info(ctx context.Context) (RunInfo, bool) {
-	info, ok := ctx.Value(runInfoKey{}).(*RunInfo)
+	info, ok := ctx.Value(runctx.InfoKey{}).(*RunInfo)
 	if !ok {
 		return RunInfo{}, false
 	}
@@ -67,6 +66,38 @@ func Info(ctx context.Context) (RunInfo, bool) {
 	// Clipped, so that appending to it cannot write into the run's record.
 	out.Input = slices.Clip(out.Input)
 	return out, true
+}
+
+// ThreadID returns the thread of the run ctx belongs to (RunInfo.ThreadID),
+// and false when ctx belongs to no run or the run has no thread.
+func ThreadID(ctx context.Context) (string, bool) {
+	info, ok := Info(ctx)
+	return info.ThreadID, ok && info.ThreadID != ""
+}
+
+// Emit sends ev on the stream of the run ctx belongs to and reports whether
+// it was sent. It is valid in every hook, wrapper, permission check and tool
+// call of a run; a tool call's context carries its run's emitter, so an event
+// a tool emits is the tool's run's own, with an empty ParentToolID. Empty
+// Agent, RunID, Turn and Time are filled in as for the run's other events;
+// ParentToolID is left as given. Typically ev is a KindCustom event whose
+// Data is a value of the emitting package's own type.
+//
+// Emit returns false for KindFinal, which only the run itself sends, for a
+// ctx that belongs to no run, inside a RunWrapper's WrapRun (the stream has
+// not started), and once the run has ended or its consumer stopped reading.
+//
+// Forward is for re-emitting a nested run's events under the current tool
+// call; Emit is for a run's own events.
+func Emit(ctx context.Context, ev Event) bool {
+	if ev.Kind == KindFinal {
+		return false
+	}
+	emit, _ := ctx.Value(runctx.EmitKey{}).(func(Event) bool)
+	if emit == nil {
+		return false
+	}
+	return emit(ev)
 }
 
 // Forward re-emits ev on the stream of the run whose tool call ctx belongs
@@ -78,6 +109,9 @@ func Info(ctx context.Context) (RunInfo, bool) {
 // Forward reports whether the event was sent: false for KindFinal, outside a
 // tool call, once that tool call has returned, or once the run has ended or
 // its consumer stopped reading.
+//
+// Forward is for re-emitting a nested run's events under the current tool
+// call; Emit is for a run's own events.
 func Forward(ctx context.Context, ev Event) bool {
 	if ev.Kind == KindFinal {
 		return false
@@ -92,14 +126,15 @@ func Forward(ctx context.Context, ev Event) bool {
 	return scope.run.emit(ev)
 }
 
-// runContext returns ctx carrying info, with info's nesting derived from the
-// tool call ctx was taken from, if any.
-func runContext(ctx context.Context, info *RunInfo) context.Context {
+// runContext returns ctx carrying info and emit, the run's emitter for Emit,
+// with info's nesting derived from the tool call ctx was taken from, if any.
+func runContext(ctx context.Context, info *RunInfo, emit func(Event) bool) context.Context {
 	if parent, _ := ctx.Value(toolScopeKey{}).(*toolScope); parent != nil {
 		info.Depth = parent.run.info.Depth + 1
 		info.ParentToolID = parent.toolUseID
 	}
-	ctx = context.WithValue(ctx, runInfoKey{}, info)
+	ctx = context.WithValue(ctx, runctx.InfoKey{}, info)
+	ctx = context.WithValue(ctx, runctx.EmitKey{}, emit)
 	return context.WithValue(ctx, toolScopeKey{}, (*toolScope)(nil))
 }
 

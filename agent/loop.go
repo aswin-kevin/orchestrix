@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/agent/internal/runctx"
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/llm"
@@ -120,7 +121,14 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 	if resume == nil {
 		info.Input = in.Messages
 	}
-	ctx = runContext(ctx, info)
+	// The emitter refuses events until the run exists: a RunWrapper calling
+	// Emit from WrapRun runs before anyone reads the stream.
+	var target atomic.Pointer[run]
+	emit := func(ev Event) bool {
+		r := target.Load()
+		return r != nil && r.emit(ev)
+	}
+	ctx = runContext(ctx, info, emit)
 	ctx, ends := a.wrapRun(ctx, info)
 	be := a.backendFor(in)
 	r := &run{
@@ -143,6 +151,7 @@ func (a *Agent) newRun(ctx context.Context, in Input, resume *resumption) *run {
 	}
 	r.outputActive = a.outputPrompt != "" && info.Depth == 0
 	info.run = r
+	target.Store(r)
 	r.logger = info.Logger()
 	innermost := r.streamModel
 	if a.cfg.NonStreaming {
@@ -164,7 +173,7 @@ func (a *Agent) wrapRun(ctx context.Context, info *RunInfo) (context.Context, []
 			continue
 		}
 		next, end := w.WrapRun(ctx, *info)
-		if next == nil || next.Value(runInfoKey{}) != info {
+		if next == nil || next.Value(runctx.InfoKey{}) != info {
 			panic(fmt.Sprintf("agent: %s.WrapRun returned a context not derived from the run's", mw.Name()))
 		}
 		ctx = next

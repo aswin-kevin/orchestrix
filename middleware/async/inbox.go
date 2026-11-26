@@ -117,8 +117,9 @@ func (x *inboxes) remove(threadID string) int {
 
 // take drains the inbox of the run ctx belongs to; nil when it has none.
 func (x *inboxes) take(ctx context.Context) []string {
+	threadID, _ := agent.ThreadID(ctx)
 	x.mu.Lock()
-	b := x.byThread[runThread(ctx)]
+	b := x.byThread[threadID]
 	x.mu.Unlock()
 	if b == nil {
 		return nil

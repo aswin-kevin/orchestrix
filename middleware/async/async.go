@@ -248,7 +248,7 @@ func (m *Middleware) Drain(ctx context.Context) error { return m.Close(ctx) }
 // turns is released (see jobs.Manager.Release); check_task then reports the
 // recorded outcome.
 func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
-	threadID := runThread(ctx)
+	threadID, _ := agent.ThreadID(ctx)
 	if threadID != "" {
 		m.jobs.Release(threadID)
 	}
@@ -279,7 +279,8 @@ func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 	var add []string
 	if req.State != nil {
 		records, _ := TasksKey.Get(req.State)
-		if list := runningList(jobs.ThreadRecords(records, runThread(ctx)), time.Now()); list != "" {
+		threadID, _ := agent.ThreadID(ctx)
+		if list := runningList(jobs.ThreadRecords(records, threadID), time.Now()); list != "" {
 			add = append(add, list)
 		}
 	}
@@ -299,7 +300,8 @@ func (m *Middleware) BeforeStop(ctx context.Context, s *state.State, _ *llm.Resp
 	if reminded, _ := remindedKey.Get(s); !m.remind || reminded {
 		return "", nil
 	}
-	ids := runningIDs(m.updateRecords(s, runThread(ctx), nil))
+	threadID, _ := agent.ThreadID(ctx)
+	ids := runningIDs(m.updateRecords(s, threadID, nil))
 	if len(ids) == 0 {
 		return "", nil
 	}
@@ -358,12 +360,6 @@ func runningIDs(records []TaskRecord) []string {
 		}
 	}
 	return ids
-}
-
-// runThread is the thread of the run ctx belongs to; empty outside a run.
-func runThread(ctx context.Context) string {
-	info, _ := agent.Info(ctx)
-	return info.ThreadID
 }
 
 // markNotified records, in r and on its job, that the model was told the

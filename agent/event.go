@@ -40,6 +40,9 @@ const (
 	// KindInterrupt reports that the run is waiting for a human decision
 	// (Interrupt).
 	KindInterrupt EventKind = "interrupt"
+	// KindCustom is an event a hook, wrapper, permission check or tool sent
+	// with Emit (Data). The agent never sends one itself.
+	KindCustom EventKind = "custom"
 	// KindFinal ends the stream (Final).
 	KindFinal EventKind = "final"
 )
@@ -185,6 +188,10 @@ type Event struct {
 	Interrupt *Interrupt
 	// Final is set for KindFinal.
 	Final *Final
+	// Data is set on KindCustom: a value of the emitting package's own type,
+	// so hosts can type-switch on it. KindCustom events are not checkpointed
+	// or recorded in State.
+	Data any
 }
 
 // Final is the outcome of a run, delivered with KindFinal.

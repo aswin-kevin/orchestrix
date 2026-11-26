@@ -246,7 +246,7 @@ func (s starter) Start(ctx context.Context, c *tool.Call, command string, timeou
 // notification to read the output, and afterwards task_output reports the
 // recorded outcome only.
 func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
-	threadID := runThread(ctx)
+	threadID, _ := agent.ThreadID(ctx)
 	if threadID != "" {
 		m.jobs.Release(threadID)
 	}
@@ -259,12 +259,6 @@ func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
 	})
 	s.AppendMessages(notices...)
 	return nil
-}
-
-// runThread is the thread of the run ctx belongs to; empty outside a run.
-func runThread(ctx context.Context) string {
-	info, _ := agent.Info(ctx)
-	return info.ThreadID
 }
 
 // markNotified records, in r and on its job, that the model was told the job
