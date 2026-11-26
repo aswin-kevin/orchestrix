@@ -10,8 +10,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/middleware/planning"
 )
 
-// ExampleNew gives an agent the planning middleware, lets a scripted model
-// write a todo list and reads the list back from the run's State.
+// ExampleNew shows a scripted model writing a todo list read back with Todos.
 func ExampleNew() {
 	mw, err := planning.New(planning.Config{})
 	if err != nil {
@@ -45,6 +44,10 @@ func ExampleNew() {
 		if ev.Kind == agent.KindFinal {
 			final = ev.Final
 		}
+	}
+	if final == nil {
+		fmt.Println("error: no final event")
+		return
 	}
 	fmt.Println(final.Text)
 	for _, t := range planning.Todos(final.State) {

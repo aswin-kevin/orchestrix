@@ -14,8 +14,7 @@ const exampleReply = `{"id":"msg_1","type":"message","role":"assistant","model":
 	"content":[{"type":"text","text":"Hello from the model."}],"stop_reason":"end_turn",
 	"usage":{"input_tokens":1,"output_tokens":5}}`
 
-// ExampleNew runs one completion against a local server that answers like
-// the Anthropic Messages API.
+// ExampleNew runs one completion against a local Anthropic-style server.
 func ExampleNew() {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)

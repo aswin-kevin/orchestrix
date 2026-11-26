@@ -20,7 +20,11 @@ func ExampleNew() {
 			return tool.Text("Hello, " + in.Name + "!"), nil
 		})
 
-	schema, _ := json.Marshal(greet.Schema())
+	schema, err := json.Marshal(greet.Schema())
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
 	fmt.Println(greet.Name())
 	fmt.Println(string(schema))
 

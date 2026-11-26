@@ -11,13 +11,12 @@ import (
 // libraries cannot collide.
 var counterKey = state.NewKey[int]("example.counter")
 
-// ExampleNewKey declares a typed key and shows its value surviving a JSON
-// round trip of the State.
+// ExampleNewKey shows a typed key surviving a JSON round trip of the State.
 func ExampleNewKey() {
 	s := state.New()
 	counterKey.Set(s, 42)
-	v, _ := counterKey.Get(s)
-	fmt.Println(v)
+	v, ok := counterKey.Get(s)
+	fmt.Println(v, ok)
 
 	data, err := json.Marshal(s)
 	if err != nil {
@@ -29,9 +28,9 @@ func ExampleNewKey() {
 		fmt.Println("error:", err)
 		return
 	}
-	v, ok := counterKey.Get(restored)
+	v, ok = counterKey.Get(restored)
 	fmt.Println(v, ok)
 	// Output:
-	// 42
+	// 42 true
 	// 42 true
 }
