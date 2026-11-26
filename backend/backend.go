@@ -58,7 +58,9 @@ type GrepOptions struct {
 	// IgnoreCase matches case-insensitively.
 	IgnoreCase bool
 	Literal    bool // treat the pattern as plain text instead of RE2
-	MaxResults int  // 0 means the implementation default (1000)
+	// MaxResults caps the results; 0 or negative means the implementation
+	// default (DefaultMaxResults).
+	MaxResults int
 }
 
 // GrepMatch is one result of Backend.Grep. Line and Text are set in content

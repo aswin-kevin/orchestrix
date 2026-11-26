@@ -294,7 +294,7 @@ func (m *Manager) ReapIdle(ctx context.Context) (int, error) {
 // ReapOptions selects the containers Reap removes.
 type ReapOptions struct {
 	// OlderThan limits Reap to containers created at least this long ago;
-	// 0 means any age.
+	// 0 or negative means any age.
 	OlderThan time.Duration
 	// Keep reports the threads whose containers must stay, for instance
 	// those a checkpoint store still has. nil keeps none.

@@ -34,7 +34,8 @@ type Scenario struct {
 	Name string
 	// Description says what the scenario checks.
 	Description string
-	// Timeout bounds one trial; zero means DefaultTrialTimeout.
+	// Timeout bounds one trial; zero or negative means
+	// DefaultTrialTimeout.
 	Timeout time.Duration
 	// Run executes one trial and records its outcome on t.
 	Run func(ctx context.Context, env Env, t *T)
@@ -209,12 +210,13 @@ type Results struct {
 
 // Options configures RunSuite.
 type Options struct {
-	// Trials is how many times each scenario runs; zero means 5.
+	// Trials is how many times each scenario runs; zero or negative means
+	// 5.
 	Trials int
 	// Filter, when non-nil, selects scenarios by name.
 	Filter *regexp.Regexp
 	// MaxTotalTokens stops the suite once the trials so far used this many
-	// tokens (input and output); zero means no limit.
+	// tokens (input and output); zero or negative means no limit.
 	MaxTotalTokens int
 	// Progress, when non-nil, is called after each trial.
 	Progress func(scenario string, i int, tr Trial)
