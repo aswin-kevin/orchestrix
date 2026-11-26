@@ -48,7 +48,7 @@ func RunWith(t *testing.T, newStore func(t *testing.T) kv.Store, opts Options) {
 		tol = time.Second
 	}
 	recent := max(time.Minute, tol)
-	cases := []struct {
+	tests := []struct {
 		name string
 		fn   func(*testing.T, kv.Store)
 	}{
@@ -68,17 +68,16 @@ func RunWith(t *testing.T, newStore func(t *testing.T) kv.Store, opts Options) {
 		{"ConcurrentPutGet", concurrentPutGet},
 		{"CancelledContext", cancelledContext},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) { tc.fn(t, newStore(t)) })
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { tt.fn(t, newStore(t)) })
 	}
 }
-
-var ctx = context.Background()
 
 const ns = "kvtest"
 
 func mustPut(t *testing.T, s kv.Store, namespace, key, value string) {
 	t.Helper()
+	ctx := t.Context()
 	if err := s.Put(ctx, namespace, key, []byte(value)); err != nil {
 		t.Fatalf("Put(%q, %q): %v", namespace, key, err)
 	}
@@ -86,6 +85,7 @@ func mustPut(t *testing.T, s kv.Store, namespace, key, value string) {
 
 func mustGet(t *testing.T, s kv.Store, namespace, key string) kv.Item {
 	t.Helper()
+	ctx := t.Context()
 	item, err := s.Get(ctx, namespace, key)
 	if err != nil {
 		t.Fatalf("Get(%q, %q): %v", namespace, key, err)
@@ -95,6 +95,7 @@ func mustGet(t *testing.T, s kv.Store, namespace, key string) kv.Item {
 
 func keysOf(t *testing.T, s kv.Store, namespace, prefix string) []string {
 	t.Helper()
+	ctx := t.Context()
 	infos, err := s.List(ctx, namespace, prefix)
 	if err != nil {
 		t.Fatalf("List(%q, %q): %v", namespace, prefix, err)
@@ -115,6 +116,7 @@ func roundTrip(t *testing.T, s kv.Store) {
 }
 
 func missingKey(t *testing.T, s kv.Store) {
+	ctx := t.Context()
 	if _, err := s.Get(ctx, ns, "/missing"); !errors.Is(err, backend.ErrNotFound) {
 		t.Fatalf("Get missing: got %v, want backend.ErrNotFound", err)
 	}
@@ -129,6 +131,7 @@ func missingKey(t *testing.T, s kv.Store) {
 }
 
 func overwrite(t *testing.T, s kv.Store) {
+	ctx := t.Context()
 	mustPut(t, s, ns, "/f", "a much longer first value")
 	mustPut(t, s, ns, "/f", "short")
 	if got := mustGet(t, s, ns, "/f"); string(got.Value) != "short" {
@@ -141,6 +144,7 @@ func overwrite(t *testing.T, s kv.Store) {
 }
 
 func deleteRemoves(t *testing.T, s kv.Store) {
+	ctx := t.Context()
 	mustPut(t, s, ns, "/d", "x")
 	mustPut(t, s, ns, "/keep", "y")
 	if err := s.Delete(ctx, ns, "/d"); err != nil {
@@ -155,6 +159,7 @@ func deleteRemoves(t *testing.T, s kv.Store) {
 }
 
 func emptyAndBinary(t *testing.T, s kv.Store) {
+	ctx := t.Context()
 	binary := []byte{0, 1, 2, 0xff, 0xfe, '\n', 0, 'z'}
 	if err := s.Put(ctx, ns, "/bin", binary); err != nil {
 		t.Fatal(err)
@@ -182,6 +187,7 @@ func emptyAndBinary(t *testing.T, s kv.Store) {
 }
 
 func namespaceIsolation(t *testing.T, s kv.Store) {
+	ctx := t.Context()
 	mustPut(t, s, "one", "/k", "1")
 	mustPut(t, s, "two", "/k", "2")
 	mustPut(t, s, "one-more", "/other", "3")
@@ -206,14 +212,14 @@ func listPrefix(t *testing.T, s kv.Store) {
 	for _, k := range []string{"/dir/a", "/dir/b/c", "/dir2/x", "/di", "/other"} {
 		mustPut(t, s, ns, k, k)
 	}
-	cases := map[string][]string{
+	tests := map[string][]string{
 		"/dir/": {"/dir/a", "/dir/b/c"},
 		"/dir":  {"/dir/a", "/dir/b/c", "/dir2/x"},
 		"/di":   {"/di", "/dir/a", "/dir/b/c", "/dir2/x"},
 		"":      {"/di", "/dir/a", "/dir/b/c", "/dir2/x", "/other"},
 		"/zzz":  {},
 	}
-	for prefix, want := range cases {
+	for prefix, want := range tests {
 		if got := keysOf(t, s, ns, prefix); !slices.Equal(got, want) {
 			t.Errorf("List(%q) = %q, want %q", prefix, got, want)
 		}
@@ -242,6 +248,7 @@ func listPrefixLiteral(t *testing.T, s kv.Store) {
 }
 
 func listEmpty(t *testing.T, s kv.Store) {
+	ctx := t.Context()
 	infos, err := s.List(ctx, "never-used", "/")
 	if err != nil || len(infos) != 0 {
 		t.Fatalf("List on an empty namespace = %v, %v", infos, err)
@@ -270,6 +277,7 @@ func awkwardKeys(t *testing.T, s kv.Store) {
 }
 
 func valuesAreCopies(t *testing.T, s kv.Store) {
+	ctx := t.Context()
 	value := []byte("original")
 	if err := s.Put(ctx, ns, "/c", value); err != nil {
 		t.Fatal(err)
@@ -286,6 +294,7 @@ func valuesAreCopies(t *testing.T, s kv.Store) {
 }
 
 func modTime(t *testing.T, s kv.Store, tol, recent time.Duration) {
+	ctx := t.Context()
 	before := time.Now().Add(-recent)
 	mustPut(t, s, ns, "/m", "v")
 	item := mustGet(t, s, ns, "/m")
@@ -302,6 +311,7 @@ func modTime(t *testing.T, s kv.Store, tol, recent time.Duration) {
 }
 
 func statAgrees(t *testing.T, s kv.Store, tol time.Duration) {
+	ctx := t.Context()
 	st, ok := s.(kv.Stater)
 	if !ok {
 		t.Skip("store does not implement kv.Stater")
@@ -327,12 +337,11 @@ func statAgrees(t *testing.T, s kv.Store, tol time.Duration) {
 }
 
 func concurrentPutGet(t *testing.T, s kv.Store) {
+	ctx := t.Context()
 	const workers, each = 8, 20
 	var wg sync.WaitGroup
 	for w := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range each {
 				own := fmt.Sprintf("/w%d/%d", w, i)
 				if err := s.Put(ctx, ns, own, []byte(own)); err != nil {
@@ -353,7 +362,7 @@ func concurrentPutGet(t *testing.T, s kv.Store) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if n := len(keysOf(t, s, ns, "/w")); n != workers*each {
@@ -366,6 +375,7 @@ func concurrentPutGet(t *testing.T, s kv.Store) {
 }
 
 func cancelledContext(t *testing.T, s kv.Store) {
+	ctx := t.Context()
 	mustPut(t, s, ns, "/k", "v")
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()

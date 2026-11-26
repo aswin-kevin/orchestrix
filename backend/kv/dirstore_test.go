@@ -18,15 +18,16 @@ import (
 )
 
 func TestDirStoreKeyEncoding(t *testing.T) {
+	ctx := t.Context()
 	dir := t.TempDir()
 	b := newBackend(t, newDirStore(t, dir), "ns")
-	cases := map[string]string{
+	tests := map[string]string{
 		"/a b/ü?.md": "/a b/ü?.md",
 		"/x/../y":    "/y",
 		"/-rf":       "/-rf",
 		"/a\\b:c*d":  "/a\\b:c*d",
 	}
-	for in, cleaned := range cases {
+	for in, cleaned := range tests {
 		if err := b.Write(ctx, in, []byte("v:"+in)); err != nil {
 			t.Fatalf("Write(%q): %v", in, err)
 		}
@@ -40,8 +41,8 @@ func TestDirStoreKeyEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != len(cases) {
-		t.Fatalf("%d entries, want %d", len(entries), len(cases))
+	if len(entries) != len(tests) {
+		t.Fatalf("%d entries, want %d", len(entries), len(tests))
 	}
 	for _, e := range entries {
 		n := e.Name()
@@ -52,6 +53,7 @@ func TestDirStoreKeyEncoding(t *testing.T) {
 }
 
 func TestDirStoreAtomicWrite(t *testing.T) {
+	ctx := t.Context()
 	dir := t.TempDir()
 	s := newDirStore(t, dir)
 	if err := s.Put(ctx, "ns", "/k", []byte("x")); err != nil {
@@ -93,6 +95,7 @@ func TestDirStoreAtomicWrite(t *testing.T) {
 }
 
 func TestDirStoreIgnoresStrayTempFiles(t *testing.T) {
+	ctx := t.Context()
 	dir := t.TempDir()
 	s := newDirStore(t, dir)
 	b := newBackend(t, s, "ns")
@@ -143,6 +146,7 @@ func TestNewDirStoreRemovesOldTempFiles(t *testing.T) {
 }
 
 func TestDirStoreCaseVariantsStayDistinct(t *testing.T) {
+	ctx := t.Context()
 	dir := t.TempDir()
 	s := newDirStore(t, dir)
 	for _, pair := range [][2]string{{"/aa.md", "/aG.md"}, {"/a_b.md", "/aEb.md"}} {
@@ -180,6 +184,7 @@ func TestDirStoreCaseVariantsStayDistinct(t *testing.T) {
 }
 
 func TestDirStoreHeaderIntegrity(t *testing.T) {
+	ctx := t.Context()
 	dir := t.TempDir()
 	s := newDirStore(t, dir)
 	nsDir := filepath.Join(dir, nsDirName("ns"))
@@ -234,6 +239,7 @@ func keyFile(key string) string {
 }
 
 func TestDirStoreFailedWriteLeavesNoTemp(t *testing.T) {
+	ctx := t.Context()
 	if runtime.GOOS == "windows" {
 		t.Skip("directory-over-file rename semantics differ on Windows")
 	}
@@ -257,6 +263,7 @@ func TestDirStoreFailedWriteLeavesNoTemp(t *testing.T) {
 }
 
 func TestDirStorePermissions(t *testing.T) {
+	ctx := t.Context()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permissions")
 	}

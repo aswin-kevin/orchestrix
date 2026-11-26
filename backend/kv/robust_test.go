@@ -26,6 +26,7 @@ func corruptKey(t *testing.T, dir string) {
 }
 
 func TestCorruptFileCanBeOverwrittenAndDeleted(t *testing.T) {
+	ctx := t.Context()
 	t.Run("write", func(t *testing.T) {
 		dir := t.TempDir()
 		corruptKey(t, dir)
@@ -60,6 +61,7 @@ func TestCorruptFileCanBeOverwrittenAndDeleted(t *testing.T) {
 }
 
 func TestNonRegularKeyFileIsNotCorrupt(t *testing.T) {
+	ctx := t.Context()
 	dir := t.TempDir()
 	// A directory where /d.txt's key file should be.
 	if err := os.MkdirAll(filepath.Join(dir, nsDirName("ns"), keyFile("/d.txt")), 0o700); err != nil {
@@ -97,6 +99,7 @@ func TestStaleTempSweepIgnoresInjectedClock(t *testing.T) {
 }
 
 func TestKeyTooLongNamedOnce(t *testing.T) {
+	ctx := t.Context()
 	b, err := kv.New(newDirStore(t, t.TempDir()), "ns")
 	if err != nil {
 		t.Fatal(err)

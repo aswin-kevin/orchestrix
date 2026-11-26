@@ -21,10 +21,10 @@ func TestString(t *testing.T) {
 		{"byte order mark", "\ufeffa", `\ufeffa`},
 		{"unicode text kept", "héllo ✓", "héllo ✓"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := String(tc.in); got != tc.want {
-				t.Errorf("String(%q) = %q, want %q", tc.in, got, tc.want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := String(tt.in); got != tt.want {
+				t.Errorf("String(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
 	}

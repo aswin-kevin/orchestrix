@@ -124,7 +124,7 @@ func TestPaginateEmptyIsNonNil(t *testing.T) {
 }
 
 func TestListOptionsPageLimit(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		limit, want int
 	}{
 		{0, checkpoint.DefaultListLimit},
@@ -132,9 +132,9 @@ func TestListOptionsPageLimit(t *testing.T) {
 		{7, 7},
 		{math.MaxInt, math.MaxInt},
 	} {
-		got, err := checkpoint.ListOptions{Limit: tc.limit}.PageLimit()
-		if err != nil || got != tc.want {
-			t.Errorf("PageLimit(%d) = %d, %v, want %d", tc.limit, got, err, tc.want)
+		got, err := checkpoint.ListOptions{Limit: tt.limit}.PageLimit()
+		if err != nil || got != tt.want {
+			t.Errorf("PageLimit(%d) = %d, %v, want %d", tt.limit, got, err, tt.want)
 		}
 	}
 	for _, limit := range []int{-1, math.MinInt} {

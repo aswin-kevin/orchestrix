@@ -9,7 +9,7 @@ import (
 )
 
 func TestOutputCaptureKeepsHeadAndTail(t *testing.T) {
-	cases := []struct {
+	tests := []struct {
 		name   string
 		max    int
 		writes []string
@@ -25,18 +25,18 @@ func TestOutputCaptureKeepsHeadAndTail(t *testing.T) {
 		{"zero keeps nothing", 0, []string{"abc"}, "\n…[3 bytes omitted]…\n"},
 		{"negative keeps nothing", -5, []string{"abc"}, "\n…[3 bytes omitted]…\n"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			c := backend.NewOutputCapture(tc.max)
-			for _, w := range tc.writes {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := backend.NewOutputCapture(tt.max)
+			for _, w := range tt.writes {
 				if n, err := c.Write([]byte(w)); n != len(w) || err != nil {
 					t.Fatalf("Write = %d, %v", n, err)
 				}
 			}
-			if got := c.String(); got != tc.want {
-				t.Errorf("String = %q, want %q", got, tc.want)
+			if got := c.String(); got != tt.want {
+				t.Errorf("String = %q, want %q", got, tt.want)
 			}
-			trunc := strings.Contains(tc.want, "omitted")
+			trunc := strings.Contains(tt.want, "omitted")
 			if c.Truncated() != trunc {
 				t.Errorf("Truncated = %v, want %v", c.Truncated(), trunc)
 			}

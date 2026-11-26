@@ -77,6 +77,7 @@ func requireNoPwned(t *testing.T, dir string) {
 }
 
 func TestSandboxQuotesHostilePaths(t *testing.T) {
+	ctx := t.Context()
 	e := newLocalExec(t)
 	// The root itself is hostile too.
 	root := filepath.Join(t.TempDir(), "r'oot $(touch pwned) `touch pwned`")
@@ -188,6 +189,7 @@ func TestSandboxQuotesHostilePaths(t *testing.T) {
 }
 
 func TestSandboxBinaryRoundTrip(t *testing.T) {
+	ctx := t.Context()
 	b := newSandbox(t, newLocalExec(t), t.TempDir())
 	data := make([]byte, 4<<10)
 	for i := range data {
@@ -206,6 +208,7 @@ func TestSandboxBinaryRoundTrip(t *testing.T) {
 }
 
 func TestSandboxLargeWriteChunks(t *testing.T) {
+	ctx := t.Context()
 	e := newLocalExec(t)
 	b := newSandbox(t, e, t.TempDir())
 	line := strings.Repeat("0123456789abcdef", 4) + "\n"

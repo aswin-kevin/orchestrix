@@ -1,7 +1,6 @@
 package disk_test
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -38,7 +37,7 @@ func openDisk(t *testing.T, root string, cfg disk.Config) *disk.Backend {
 }
 
 func TestDiskCloseReleasesRoot(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := filepath.Join(t.TempDir(), "ws")
 	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -94,7 +93,7 @@ func TestDiskNewRequiresExistingDirectory(t *testing.T) {
 }
 
 func TestDiskRejectsTraversal(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	b, root := newDisk(t, disk.Config{})
 	// A sibling of root that traversal would reach if cleaning were broken.
 	secret := filepath.Join(filepath.Dir(root), "secret-"+filepath.Base(root))
@@ -120,7 +119,7 @@ func TestDiskRejectsTraversal(t *testing.T) {
 }
 
 func TestDiskRejectsSymlinkEscape(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	b, root := newDisk(t, disk.Config{})
 	outside := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("needle\n"), 0o644); err != nil {
@@ -187,7 +186,7 @@ func TestDiskRejectsSymlinkEscape(t *testing.T) {
 }
 
 func TestDiskSymlinkInsideRootIsAllowed(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	b, root := newDisk(t, disk.Config{})
 	if err := b.Write(ctx, "/real/a.txt", []byte("hi\n")); err != nil {
 		t.Fatal(err)
@@ -201,7 +200,7 @@ func TestDiskSymlinkInsideRootIsAllowed(t *testing.T) {
 
 func TestDiskDeleteRootFails(t *testing.T) {
 	b, root := newDisk(t, disk.Config{})
-	if err := b.Delete(context.Background(), "/"); err == nil {
+	if err := b.Delete(t.Context(), "/"); err == nil {
 		t.Fatal("deleting root must fail")
 	}
 	if _, err := os.Stat(root); err != nil {
@@ -210,7 +209,7 @@ func TestDiskDeleteRootFails(t *testing.T) {
 }
 
 func TestDiskWritePreservesModeAndLeavesNoTemp(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	b, root := newDisk(t, disk.Config{})
 	target := filepath.Join(root, "script.sh")
 	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
@@ -236,7 +235,7 @@ func TestDiskWritePreservesModeAndLeavesNoTemp(t *testing.T) {
 }
 
 func TestDiskNonVirtualMode(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	b, root := newDisk(t, disk.Config{DisableVirtual: true})
 	real := filepath.Join(root, "dir", "a.txt")
 	if err := b.Write(ctx, real, []byte("hi\n")); err != nil {
@@ -281,7 +280,7 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 }
 
 func TestDiskRefusesFilesOverReadLimit(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	b, root := newDisk(t, disk.Config{})
 	// A sparse file: large on paper, cheap to create.
 	f, err := os.Create(filepath.Join(root, "big"))
@@ -352,7 +351,7 @@ func TestDiskRealPath(t *testing.T) {
 // while the backend reads or writes through it: an operation may fail, but
 // must never reach the outside directory.
 func TestDiskSymlinkSwapRace(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	t.Run("read", func(t *testing.T) {
 		b, root, _ := newSwapRace(t)
 		hammerDuringSwaps(t, root, func() bool {
@@ -380,7 +379,7 @@ func newSwapRace(t *testing.T) (b *disk.Backend, root, outside string) {
 	if err := os.WriteFile(filepath.Join(outside, "f.txt"), []byte("outside"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Write(context.Background(), "/dir/f.txt", []byte("inside")); err != nil {
+	if err := b.Write(t.Context(), "/dir/f.txt", []byte("inside")); err != nil {
 		t.Fatal(err)
 	}
 	mustSymlink(t, outside, filepath.Join(root, "link"))
@@ -424,7 +423,7 @@ func hammerDuringSwaps(t *testing.T, root string, escaped func() bool) {
 func TestConfigZeroIsVirtual(t *testing.T) {
 	root := t.TempDir()
 	b := openDisk(t, root, disk.Config{})
-	if err := b.Write(context.Background(), "/a.txt", []byte("x")); err != nil {
+	if err := b.Write(t.Context(), "/a.txt", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "a.txt")); err != nil {

@@ -84,7 +84,7 @@ func TestStringList(t *testing.T) {
 	type fm struct {
 		Tools StringList `yaml:"tools"`
 	}
-	cases := map[string]struct {
+	tests := map[string]struct {
 		in   string
 		want StringList
 	}{
@@ -94,14 +94,14 @@ func TestStringList(t *testing.T) {
 		"empty string":    {`tools: ""`, nil},
 		"absent":          {"other: 1", nil},
 	}
-	for name, tc := range cases {
+	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			var f fm
-			if _, ok, err := Parse([]byte("---\n"+tc.in+"\n---\n"), &f); err != nil || !ok {
+			if _, ok, err := Parse([]byte("---\n"+tt.in+"\n---\n"), &f); err != nil || !ok {
 				t.Fatalf("ok=%v err=%v", ok, err)
 			}
-			if !reflect.DeepEqual(f.Tools, tc.want) && len(f.Tools)+len(tc.want) != 0 {
-				t.Fatalf("Tools = %#v, want %#v", f.Tools, tc.want)
+			if !reflect.DeepEqual(f.Tools, tt.want) && len(f.Tools)+len(tt.want) != 0 {
+				t.Fatalf("Tools = %#v, want %#v", f.Tools, tt.want)
 			}
 		})
 	}

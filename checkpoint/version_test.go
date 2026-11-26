@@ -27,7 +27,7 @@ func TestVersionHelpers(t *testing.T) {
 }
 
 func TestConflictWrapsErrConflict(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		expected, current checkpoint.Version
 		want              string
 	}{
@@ -35,9 +35,9 @@ func TestConflictWrapsErrConflict(t *testing.T) {
 		{"", "g:2", `checkpoint: thread was changed by another writer: thread "t" already exists at version "g:2"`},
 		{"g:1", "g:2", `checkpoint: thread was changed by another writer: thread "t" is at version "g:2", expected "g:1"`},
 	} {
-		err := checkpoint.Conflict("t", tc.expected, tc.current)
-		if !errors.Is(err, checkpoint.ErrConflict) || err.Error() != tc.want {
-			t.Errorf("Conflict(%q, %q) = %v, want %q", tc.expected, tc.current, err, tc.want)
+		err := checkpoint.Conflict("t", tt.expected, tt.current)
+		if !errors.Is(err, checkpoint.ErrConflict) || err.Error() != tt.want {
+			t.Errorf("Conflict(%q, %q) = %v, want %q", tt.expected, tt.current, err, tt.want)
 		}
 	}
 }

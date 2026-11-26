@@ -1,7 +1,6 @@
 package disk_test
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,7 +16,7 @@ func TestDiskRipgrepParity(t *testing.T) {
 	if _, err := exec.LookPath("rg"); err != nil {
 		t.Skip("rg not installed")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	withRg, root := newDisk(t, disk.Config{})
 	pureGo := openDisk(t, root, disk.Config{DisableRipgrep: true})
 	files := map[string]string{
@@ -46,7 +45,7 @@ func TestDiskRipgrepParity(t *testing.T) {
 		}
 	}
 
-	cases := []struct {
+	tests := []struct {
 		pattern string
 		opts    backend.GrepOptions
 	}{
@@ -69,14 +68,14 @@ func TestDiskRipgrepParity(t *testing.T) {
 		{"^$", backend.GrepOptions{Mode: backend.GrepContent}},
 		{"nomatchanywhere", backend.GrepOptions{Mode: backend.GrepContent}},
 	}
-	for _, c := range cases {
-		name := fmt.Sprintf("%s/%s/%+v", c.pattern, c.opts.Mode, c.opts)
+	for _, tt := range tests {
+		name := fmt.Sprintf("%s/%s/%+v", tt.pattern, tt.opts.Mode, tt.opts)
 		t.Run(name, func(t *testing.T) {
-			want, err := pureGo.Grep(ctx, c.pattern, c.opts)
+			want, err := pureGo.Grep(ctx, tt.pattern, tt.opts)
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := withRg.Grep(ctx, c.pattern, c.opts)
+			got, err := withRg.Grep(ctx, tt.pattern, tt.opts)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -88,7 +87,7 @@ func TestDiskRipgrepParity(t *testing.T) {
 }
 
 func TestDiskGrepSkipsGitAndNodeModules(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	b, root := newDisk(t, disk.Config{DisableRipgrep: true})
 	for _, name := range []string{".git/config", "node_modules/x/i.js", "ok.txt"} {
 		p := filepath.Join(root, name)
@@ -109,7 +108,7 @@ func TestDiskGrepSkipsGitAndNodeModules(t *testing.T) {
 }
 
 func TestDiskGrepSemantics(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, rg := range []bool{true, false} {
 		b, root := newDisk(t, disk.Config{DisableRipgrep: !rg})
 		write := func(name, content string) {
@@ -122,21 +121,21 @@ func TestDiskGrepSemantics(t *testing.T) {
 		write("digits.txt", "\u0663\n")
 		write("huge.txt", "hello\n"+strings.Repeat("x", backend.MaxGrepFileBytes))
 		write("ok.txt", "hello\n")
-		for _, c := range []struct{ pattern, path string }{
+		for _, tt := range []struct{ pattern, path string }{
 			{"hello", ""}, {"hello", "/bin.dat"}, {"hello", "/bad.txt"}, {"hello", "/huge.txt"}, {`\d`, ""},
 		} {
-			got, err := b.Grep(ctx, c.pattern, backend.GrepOptions{Mode: backend.GrepFiles, Path: c.path})
+			got, err := b.Grep(ctx, tt.pattern, backend.GrepOptions{Mode: backend.GrepFiles, Path: tt.path})
 			if err != nil {
 				t.Fatal(err)
 			}
 			want := 0
-			if c.path == "" && c.pattern == "hello" {
+			if tt.path == "" && tt.pattern == "hello" {
 				// only ok.txt: binary, invalid UTF-8 and oversized files are
 				// skipped
 				want = 1
 			}
 			if len(got) != want {
-				t.Errorf("rg=%v Grep(%q, %q) = %+v, want %d result(s)", rg, c.pattern, c.path, got, want)
+				t.Errorf("rg=%v Grep(%q, %q) = %+v, want %d result(s)", rg, tt.pattern, tt.path, got, want)
 			}
 		}
 	}
@@ -151,7 +150,7 @@ func TestDiskGrepFallsBackWhenRipgrepRejectsPattern(t *testing.T) {
 		t.Fatal(err)
 	}
 	// RE2 accepts \Q...\E quoting; Rust's regex engine rejects it.
-	got, err := b.Grep(context.Background(), `\Qa.\E`, backend.GrepOptions{Mode: backend.GrepFiles})
+	got, err := b.Grep(t.Context(), `\Qa.\E`, backend.GrepOptions{Mode: backend.GrepFiles})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("got %+v, %v; want fallback to the Go walker", got, err)
 	}

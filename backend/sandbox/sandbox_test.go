@@ -21,8 +21,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 )
 
-var ctx = context.Background()
-
 var (
 	_ backend.Backend     = (*sandbox.Backend)(nil)
 	_ backend.MultiEditor = (*sandbox.Backend)(nil)
@@ -92,6 +90,7 @@ func newSandbox(t *testing.T, exec backend.Executor, root string) *sandbox.Backe
 
 func readBytes(t *testing.T, b backend.Backend, p string) []byte {
 	t.Helper()
+	ctx := t.Context()
 	res, err := b.Read(ctx, p, 0, 0)
 	if err != nil {
 		t.Fatalf("Read(%q): %v", p, err)
@@ -118,6 +117,7 @@ func TestSandboxConformance(t *testing.T) {
 }
 
 func TestSandboxOverShell(t *testing.T) {
+	ctx := t.Context()
 	skipWithoutSh(t)
 	dir := t.TempDir()
 	sh, err := shell.New(dir, shell.Config{})
@@ -149,6 +149,7 @@ func TestSandboxOverShell(t *testing.T) {
 }
 
 func TestSandboxExecuteDir(t *testing.T) {
+	ctx := t.Context()
 	e := newLocalExec(t)
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
@@ -217,6 +218,7 @@ func (r *recordingExec) Execute(_ context.Context, _ string, opts backend.ExecOp
 }
 
 func TestScriptEnvFreshPerCall(t *testing.T) {
+	ctx := t.Context()
 	rec := &recordingExec{}
 	b := newSandbox(t, rec, "/work")
 	if _, err := b.Read(ctx, "/f.txt", 0, 0); !errors.Is(err, backend.ErrNotFound) {
@@ -236,8 +238,9 @@ func TestScriptEnvFreshPerCall(t *testing.T) {
 }
 
 func TestSandboxErrorMapping(t *testing.T) {
+	ctx := t.Context()
 	boom := errors.New("transport down")
-	cases := []struct {
+	tests := []struct {
 		name string
 		exec fakeExec
 		want error
@@ -250,9 +253,9 @@ func TestSandboxErrorMapping(t *testing.T) {
 		{"executor error", fakeExec{err: boom}, boom, ""},
 		{"timeout", fakeExec{res: backend.ExecResult{ExitCode: -1, TimedOut: true}}, nil, "timed out"},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			b := newSandbox(t, c.exec, "/work")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newSandbox(t, tt.exec, "/work")
 			ops := map[string]error{}
 			_, ops["read"] = b.Read(ctx, "/a/f.txt", 0, 0)
 			ops["write"] = b.Write(ctx, "/a/f.txt", []byte("x"))
@@ -265,11 +268,11 @@ func TestSandboxErrorMapping(t *testing.T) {
 				switch {
 				case err == nil:
 					t.Errorf("%s: no error", op)
-				case c.want != nil && !errors.Is(err, c.want):
-					t.Errorf("%s: error = %v, want %v", op, err, c.want)
-				case !strings.Contains(err.Error(), c.text):
-					t.Errorf("%s: error = %v, want it to contain %q", op, err, c.text)
-				case c.want != nil && c.want != boom && !strings.Contains(err.Error(), "/a"):
+				case tt.want != nil && !errors.Is(err, tt.want):
+					t.Errorf("%s: error = %v, want %v", op, err, tt.want)
+				case !strings.Contains(err.Error(), tt.text):
+					t.Errorf("%s: error = %v, want it to contain %q", op, err, tt.text)
+				case tt.want != nil && tt.want != boom && !strings.Contains(err.Error(), "/a"):
 					t.Errorf("%s: error = %v, want it to name the path", op, err)
 				}
 			}
@@ -278,6 +281,7 @@ func TestSandboxErrorMapping(t *testing.T) {
 }
 
 func TestSandboxTruncatedOutputIsError(t *testing.T) {
+	ctx := t.Context()
 	b := newSandbox(t, fakeExec{res: backend.ExecResult{Output: "5\n1700000000\n", Truncated: true}}, "/work")
 	if _, err := b.Read(ctx, "/f.txt", 0, 0); err == nil {
 		t.Fatal("truncated output accepted")
@@ -285,6 +289,7 @@ func TestSandboxTruncatedOutputIsError(t *testing.T) {
 }
 
 func TestSandboxDeleteRootRefused(t *testing.T) {
+	ctx := t.Context()
 	b := newSandbox(t, newLocalExec(t), t.TempDir())
 	for _, p := range []string{"/", "/..", "."} {
 		if err := b.Delete(ctx, p); !errors.Is(err, backend.ErrInvalidPath) {
@@ -294,6 +299,7 @@ func TestSandboxDeleteRootRefused(t *testing.T) {
 }
 
 func TestSandboxWriteRootIsDir(t *testing.T) {
+	ctx := t.Context()
 	b := newSandbox(t, fakeExec{}, "/work")
 	if err := b.Write(ctx, "/", []byte("x")); !errors.Is(err, backend.ErrIsDir) {
 		t.Fatalf("Write(/) = %v, want ErrIsDir", err)
@@ -301,6 +307,7 @@ func TestSandboxWriteRootIsDir(t *testing.T) {
 }
 
 func TestSandboxWriteLongName(t *testing.T) {
+	ctx := t.Context()
 	b := newSandbox(t, newLocalExec(t), t.TempDir())
 	name := "/" + strings.Repeat("n", 240)
 	if err := b.Write(ctx, name, []byte("long")); err != nil {

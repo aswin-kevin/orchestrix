@@ -3,7 +3,6 @@
 package disk_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -33,7 +32,7 @@ func TestRewriteKeepsMode(t *testing.T) {
 			t.Errorf("temp created with mode %o, want 600", got)
 		}
 	})()
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := b.Write(ctx, "/key", []byte("new secret")); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +51,7 @@ func TestDiskRejectsNonRegularFiles(t *testing.T) {
 	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
 		t.Skipf("mkfifo unavailable: %v", err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := b.Read(ctx, "/pipe", 0, 0); err == nil {
 		t.Error("Read of a FIFO must fail instead of blocking")
 	}

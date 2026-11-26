@@ -47,7 +47,7 @@ func newShell(t *testing.T, cfg shell.Config) (*shell.Backend, string) {
 
 func execute(t *testing.T, b *shell.Backend, cmd string, opts backend.ExecOptions) backend.ExecResult {
 	t.Helper()
-	res, err := b.Execute(context.Background(), cmd, opts)
+	res, err := b.Execute(t.Context(), cmd, opts)
 	if err != nil {
 		t.Fatalf("Execute(%q): %v", cmd, err)
 	}
@@ -130,7 +130,7 @@ func TestExecuteRunsInRootAndDir(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	for dir, want := range map[string]error{
 		// cleaned to <root>/x, which does not exist
 		"/../x":     backend.ErrNotFound,
@@ -263,18 +263,18 @@ func containsLine(lines []string, want string) bool {
 }
 
 func TestTimeoutKillsGroup(t *testing.T) {
-	cases := map[string]struct {
+	tests := map[string]struct {
 		cfg  shell.Config
 		exec backend.ExecOptions
 	}{
 		"exec timeout":    {exec: backend.ExecOptions{Timeout: 200 * time.Millisecond}},
 		"default timeout": {cfg: shell.Config{Timeout: 200 * time.Millisecond}},
 	}
-	for name, tc := range cases {
+	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			b, _ := newShell(t, tc.cfg)
+			b, _ := newShell(t, tt.cfg)
 			start := time.Now()
-			res := execute(t, b, "echo $$; sleep 30", tc.exec)
+			res := execute(t, b, "echo $$; sleep 30", tt.exec)
 			if elapsed := time.Since(start); elapsed > 3*time.Second {
 				t.Errorf("timed-out command took %s", elapsed)
 			}
@@ -336,7 +336,7 @@ func TestOutputCapHeadAndTail(t *testing.T) {
 
 func TestStartOutputWhileRunningAndStop(t *testing.T) {
 	b, _ := newShell(t, shell.Config{})
-	p, err := b.Start(context.Background(), "echo $$; echo started; sleep 30", backend.ExecOptions{})
+	p, err := b.Start(t.Context(), "echo $$; echo started; sleep 30", backend.ExecOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +350,7 @@ func TestStartOutputWhileRunningAndStop(t *testing.T) {
 	if _, ok := p.Result(); ok {
 		t.Fatal("Result must not be final while the command runs")
 	}
-	if err := p.Stop(context.Background()); err != nil {
+	if err := p.Stop(t.Context()); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 	select {
@@ -363,14 +363,14 @@ func TestStartOutputWhileRunningAndStop(t *testing.T) {
 		t.Errorf("Result = %+v, %v", res, ok)
 	}
 	requireGone(t, -firstLinePID(t, res.Output))
-	if err := p.Stop(context.Background()); err != nil {
+	if err := p.Stop(t.Context()); err != nil {
 		t.Errorf("Stop after Done = %v, want nil", err)
 	}
 }
 
 func TestStartOutlivesContext(t *testing.T) {
 	b, _ := newShell(t, shell.Config{})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	p, err := b.Start(ctx, "sleep 1; echo late", backend.ExecOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -379,7 +379,7 @@ func TestStartOutlivesContext(t *testing.T) {
 	select {
 	case <-p.Done():
 	case <-time.After(5 * time.Second):
-		_ = p.Stop(context.Background())
+		_ = p.Stop(t.Context())
 		t.Fatal("process did not finish")
 	}
 	if res, _ := p.Result(); res.Output != "late\n" || res.ExitCode != 0 {
@@ -393,7 +393,7 @@ func TestStartOutlivesContext(t *testing.T) {
 
 func TestExecuteContextCancelStopsGroup(t *testing.T) {
 	b, root := newShell(t, shell.Config{})
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel()
 	pidFile := filepath.Join(root, "pid")
 	start := time.Now()
@@ -467,7 +467,7 @@ func TestNewPassesDiskConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Write(context.Background(), filepath.ToSlash(filepath.Join(abs, "x.txt")), []byte("x")); err != nil {
+	if err := b.Write(t.Context(), filepath.ToSlash(filepath.Join(abs, "x.txt")), []byte("x")); err != nil {
 		t.Fatalf("Write by host path: %v", err)
 	}
 }

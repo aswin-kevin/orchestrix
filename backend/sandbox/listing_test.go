@@ -44,7 +44,7 @@ func fakeDate(t *testing.T, e *localExec, failOn string, noise int, msg string) 
 }
 
 // listAll runs Ls, Glob and Grep at the root and returns their errors.
-func listAll(b backend.Backend) map[string]error {
+func listAll(ctx context.Context, b backend.Backend) map[string]error {
 	errs := map[string]error{}
 	_, errs["ls"] = b.Ls(ctx, "/")
 	_, errs["glob"] = b.Glob(ctx, "**", "/")
@@ -59,7 +59,7 @@ func TestSandboxListingToolFailureIsLoud(t *testing.T) {
 		root := t.TempDir()
 		mustWriteHost(t, filepath.Join(root, "a.txt"), "x")
 		b := newSandbox(t, e, root)
-		for op, err := range listAll(b) {
+		for op, err := range listAll(t.Context(), b) {
 			if err == nil {
 				t.Errorf("%s: no error although date always fails", op)
 			}
@@ -72,7 +72,7 @@ func TestSandboxListingToolFailureIsLoud(t *testing.T) {
 		mustWriteHost(t, filepath.Join(root, "ok.txt"), "x")
 		mustWriteHost(t, filepath.Join(root, "victim.txt"), "x")
 		b := newSandbox(t, e, root)
-		for op, err := range listAll(b) {
+		for op, err := range listAll(t.Context(), b) {
 			if err == nil || !strings.Contains(err.Error(), "injected failure") {
 				t.Errorf("%s: error = %v, want the tool's stderr", op, err)
 			}
@@ -88,6 +88,7 @@ const utf8RejectionMsg = "error: invalid UTF-8 was detected in one or more argum
 // a name: every operation that needs date -r on it reports the clear error
 // with the virtual path, and other files still work.
 func TestSandboxNonUTF8RejectionIsClear(t *testing.T) {
+	ctx := t.Context()
 	e := newLocalExec(t)
 	fakeDate(t, e, "*victim*", 0, utf8RejectionMsg)
 	root := t.TempDir()
@@ -101,7 +102,7 @@ func TestSandboxNonUTF8RejectionIsClear(t *testing.T) {
 	if _, err := b.Edit(ctx, "/victim.txt", "x", "y", false); err == nil || err.Error() != want {
 		t.Errorf("Edit error = %v, want %s", err, want)
 	}
-	for op, err := range listAll(b) {
+	for op, err := range listAll(t.Context(), b) {
 		if err == nil || err.Error() != want {
 			t.Errorf("%s error = %v, want %s", op, err, want)
 		}
@@ -125,7 +126,7 @@ func TestSandboxListingWithoutTailIsLoud(t *testing.T) {
 	root := t.TempDir()
 	mustWriteHost(t, filepath.Join(root, "a.txt"), "x")
 	b := newSandbox(t, e, root)
-	for op, err := range listAll(b) {
+	for op, err := range listAll(t.Context(), b) {
 		if err == nil {
 			t.Errorf("%s: no error although tail is missing", op)
 		}
@@ -143,6 +144,7 @@ func mustWriteHost(t *testing.T, p, content string) {
 }
 
 func TestSandboxGrepPrunesSkippedDirs(t *testing.T) {
+	ctx := t.Context()
 	e := newLocalExec(t)
 	logFile := fakeDate(t, e, "", 0, "")
 	root := t.TempDir()
@@ -176,6 +178,7 @@ func TestSandboxGrepPrunesSkippedDirs(t *testing.T) {
 }
 
 func TestSandboxSymlinks(t *testing.T) {
+	ctx := t.Context()
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "dir"), 0o755); err != nil {
 		t.Fatal(err)
@@ -218,6 +221,7 @@ func TestSandboxSymlinks(t *testing.T) {
 }
 
 func TestSandboxHidesTempFiles(t *testing.T) {
+	ctx := t.Context()
 	root := t.TempDir()
 	mustWriteHost(t, filepath.Join(root, ".orx-tmp-0123456789abcdef"), "needle")
 	mustWriteHost(t, filepath.Join(root, "sub", ".orx-tmp-fedcba9876543210"), "needle")
@@ -260,6 +264,7 @@ func (m *outputMeter) Execute(ctx context.Context, cmd string, opts backend.Exec
 }
 
 func TestSandboxListingStderrBounded(t *testing.T) {
+	ctx := t.Context()
 	e := newLocalExec(t)
 	fakeDate(t, e, "*victim*", 256<<10, "")
 	root := t.TempDir()
@@ -276,6 +281,7 @@ func TestSandboxListingStderrBounded(t *testing.T) {
 }
 
 func TestSandboxUnreadableFile(t *testing.T) {
+	ctx := t.Context()
 	if os.Geteuid() == 0 {
 		t.Skip("root reads unreadable files")
 	}

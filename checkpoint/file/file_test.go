@@ -152,7 +152,7 @@ func runHistory(t *testing.T, c *file.Checkpointer) *state.State {
 }
 
 func TestFileDeltaReplayEqualsState(t *testing.T) {
-	for _, tc := range []struct {
+	for _, tt := range []struct {
 		name      string
 		cfg       file.Config
 		wantSnaps func(int) bool
@@ -160,9 +160,9 @@ func TestFileDeltaReplayEqualsState(t *testing.T) {
 		{"default", file.Config{}, func(n int) bool { return n == 1 }},
 		{"every10", file.Config{SnapshotEvery: 10}, func(n int) bool { return n >= 3 }},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			c := newCPWith(t, dir, tc.cfg)
+			c := newCPWith(t, dir, tt.cfg)
 			last := runHistory(t, c)
 
 			if got, want := stateJSON(t, load(t, c, "thread")), stateJSON(t, last); got != want {
@@ -170,7 +170,7 @@ func TestFileDeltaReplayEqualsState(t *testing.T) {
 			}
 			path := onlyFile(t, dir)
 			snaps := countKind(t, path, "snapshot")
-			if !tc.wantSnaps(snaps) {
+			if !tt.wantSnaps(snaps) {
 				t.Fatalf("unexpected snapshot count %d", snaps)
 			}
 			if lines := len(readLines(t, path)); lines != 30 {

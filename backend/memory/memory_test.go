@@ -27,10 +27,10 @@ func TestNewZeroConfig(t *testing.T) {
 		t.Fatalf("New(Config{}) = %v, %v", m, err)
 	}
 	before := time.Now()
-	if err := m.Write(context.Background(), "/f", []byte("x")); err != nil {
+	if err := m.Write(t.Context(), "/f", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	res, err := m.Read(context.Background(), "/f", 0, 0)
+	res, err := m.Read(t.Context(), "/f", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,10 +45,10 @@ func TestMemoryUsesInjectedClock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Write(context.Background(), "/f", []byte("x")); err != nil {
+	if err := m.Write(t.Context(), "/f", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	res, err := m.Read(context.Background(), "/f", 0, 0)
+	res, err := m.Read(t.Context(), "/f", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,10 +63,10 @@ func TestMemorySnapshotShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Write(context.Background(), "/a/b.txt", []byte("hi")); err != nil {
+	if err := m.Write(t.Context(), "/a/b.txt", []byte("hi")); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := m.Snapshot(context.Background())
+	snap, err := m.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,12 +77,12 @@ func TestMemorySnapshotShape(t *testing.T) {
 }
 
 func TestMemorySnapshotRestore(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	m := testutil.Memory(t)
 	if err := m.Write(ctx, "/keep/a.txt", []byte("original")); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := m.Snapshot(context.Background())
+	snap, err := m.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,17 +108,17 @@ func TestMemorySnapshotRestore(t *testing.T) {
 
 func TestMemoryRestoreRejectsBadInput(t *testing.T) {
 	m := testutil.Memory(t)
-	if err := m.Restore(context.Background(), json.RawMessage(`not json`)); err == nil {
+	if err := m.Restore(t.Context(), json.RawMessage(`not json`)); err == nil {
 		t.Fatal("want error for malformed JSON")
 	}
 	bad := json.RawMessage(`{"files":{"/a":{"content":"!!!","mod_time":"2026-01-02T03:04:05Z"}}}`)
-	if err := m.Restore(context.Background(), bad); err == nil {
+	if err := m.Restore(t.Context(), bad); err == nil {
 		t.Fatal("want error for malformed base64")
 	}
 }
 
 func TestMemoryIsolatesCallerBuffers(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	m := testutil.Memory(t)
 	buf := []byte("abc")
 	if err := m.Write(ctx, "/f", buf); err != nil {
@@ -132,7 +132,7 @@ func TestMemoryIsolatesCallerBuffers(t *testing.T) {
 }
 
 func TestMemoryRefusesFilesOverReadLimit(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	m := testutil.Memory(t)
 	big := make([]byte, backend.MaxReadFileBytes+1)
 	if err := m.Write(ctx, "/big", big); err != nil {
@@ -157,25 +157,25 @@ func TestMemoryRefusesFilesOverReadLimit(t *testing.T) {
 
 func TestSnapshotHonoursCtx(t *testing.T) {
 	m := testutil.Memory(t)
-	if err := m.Write(context.Background(), "/a", []byte("x")); err != nil {
+	if err := m.Write(t.Context(), "/a", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := m.Snapshot(context.Background())
+	snap, err := m.Snapshot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := m.Snapshot(ctx); !errors.Is(err, context.Canceled) {
 		t.Errorf("Snapshot(cancelled) = %v, want context.Canceled", err)
 	}
-	if err := m.Write(context.Background(), "/b", []byte("y")); err != nil {
+	if err := m.Write(t.Context(), "/b", []byte("y")); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.Restore(ctx, snap); !errors.Is(err, context.Canceled) {
 		t.Errorf("Restore(cancelled) = %v, want context.Canceled", err)
 	}
-	if _, err := m.Read(context.Background(), "/b", 0, 0); err != nil {
+	if _, err := m.Read(t.Context(), "/b", 0, 0); err != nil {
 		t.Errorf("a refused Restore must leave the backend untouched: %v", err)
 	}
 }

@@ -59,6 +59,7 @@ func closeOf(t *testing.T, c backend.Backend) func(context.Context) error {
 }
 
 func TestCloseClosesDefaultAndRoutes(t *testing.T) {
+	ctx := t.Context()
 	var order []string
 	def := &ctxCloser{Backend: testutil.Memory(t), order: &order, name: "def"}
 	a := &ioCloserBackend{Backend: testutil.Memory(t), order: &order, name: "a"}
@@ -87,6 +88,7 @@ func TestCloseClosesDefaultAndRoutes(t *testing.T) {
 }
 
 func TestCloseEveryVariant(t *testing.T) {
+	ctx := t.Context()
 	testutil.RequireUnixShell(t)
 	// Each capability variant must have Close: memory (Snapshotter),
 	// execOnly (Executor), a shell (Executor+Starter) and a plain backend.
@@ -113,6 +115,7 @@ func TestCloseEveryVariant(t *testing.T) {
 }
 
 func TestCloseJoinsErrors(t *testing.T) {
+	ctx := t.Context()
 	errA, errB := errors.New("a failed"), errors.New("b failed")
 	def := &ctxCloser{Backend: testutil.Memory(t), err: errA}
 	route := &ctxCloser{Backend: testutil.Memory(t), err: errB}
@@ -131,6 +134,7 @@ func TestCloseJoinsErrors(t *testing.T) {
 }
 
 func TestCloseSharedBackendOnce(t *testing.T) {
+	ctx := t.Context()
 	shared := &ctxCloser{Backend: testutil.Memory(t)}
 	c := mustNew(t, shared,
 		composite.Route{Prefix: "/m", Backend: shared},
@@ -153,6 +157,7 @@ type funcCloser struct {
 func (f funcCloser) Close(context.Context) error { return f.close() }
 
 func TestCloseUncomparableBackend(t *testing.T) {
+	ctx := t.Context()
 	var calls atomic.Int32
 	nc := funcCloser{Backend: testutil.Memory(t), close: func() error { calls.Add(1); return nil }}
 	c := mustNew(t, nc, composite.Route{Prefix: "/m", Backend: nc})
@@ -166,16 +171,15 @@ func TestCloseUncomparableBackend(t *testing.T) {
 }
 
 func TestCloseConcurrent(t *testing.T) {
+	ctx := t.Context()
 	def := &ctxCloser{Backend: testutil.Memory(t), err: errors.New("boom")}
 	closeFn := closeOf(t, mustNew(t, def))
 	var wg sync.WaitGroup
 	errs := make([]error, 8)
 	for i := range errs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			errs[i] = closeFn(ctx)
-		}()
+		})
 	}
 	wg.Wait()
 	for _, err := range errs {
@@ -208,10 +212,10 @@ func TestCloseHonoursEachCallersCtx(t *testing.T) {
 	def := &blockingCloser{Backend: testutil.Memory(t), entered: make(chan struct{}), release: make(chan struct{})}
 	closeFn := closeOf(t, mustNew(t, def))
 	first := make(chan error, 1)
-	go func() { first <- closeFn(context.Background()) }()
+	go func() { first <- closeFn(t.Context()) }()
 	<-def.entered
 
-	expired, cancel := context.WithCancel(context.Background())
+	expired, cancel := context.WithCancel(t.Context())
 	cancel()
 	second := make(chan error, 1)
 	go func() { second <- closeFn(expired) }()
@@ -258,10 +262,10 @@ func TestCloseAfterPanickingCloser(t *testing.T) {
 				t.Fatal("first Close did not panic")
 			}
 		}()
-		_ = closeFn(context.Background())
+		_ = closeFn(t.Context())
 	}()
 	second := make(chan error, 1)
-	go func() { second <- closeFn(context.Background()) }()
+	go func() { second <- closeFn(t.Context()) }()
 	select {
 	case err := <-second:
 		if err == nil {

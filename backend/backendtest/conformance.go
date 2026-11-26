@@ -2,7 +2,6 @@ package backendtest
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -34,7 +33,7 @@ func Run(t *testing.T, newBackend func(t *testing.T) backend.Backend) {
 // run executes the suite; gap spaces writes whose mtimes must differ.
 func run(t *testing.T, newBackend func(t *testing.T) backend.Backend, gap time.Duration) {
 	t.Helper()
-	cases := []struct {
+	tests := []struct {
 		name string
 		fn   func(t *testing.T, b backend.Backend)
 	}{
@@ -58,16 +57,16 @@ func run(t *testing.T, newBackend func(t *testing.T) backend.Backend, gap time.D
 		{"GrepOptions", testGrepOptions},
 		{"GrepSkipsBinaryAndLimits", testGrepSkipsBinaryAndLimits},
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			c.fn(t, newBackend(t))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.fn(t, newBackend(t))
 		})
 	}
 }
 
 func write(t *testing.T, b backend.Backend, path, content string) {
 	t.Helper()
-	if err := b.Write(context.Background(), path, []byte(content)); err != nil {
+	if err := b.Write(t.Context(), path, []byte(content)); err != nil {
 		t.Fatalf("Write(%q): %v", path, err)
 	}
 }
@@ -93,7 +92,7 @@ func equalStrings(a, b []string) bool {
 
 func testWriteReadRoundTrip(t *testing.T, b backend.Backend) {
 	write(t, b, "/hello.txt", "alpha\nbeta\ngamma\n")
-	res, err := b.Read(context.Background(), "/hello.txt", 0, 0)
+	res, err := b.Read(t.Context(), "/hello.txt", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +110,7 @@ func testWriteReadRoundTrip(t *testing.T, b backend.Backend) {
 func testWriteParentsAndOverwrite(t *testing.T, b backend.Backend) {
 	write(t, b, "/a/b/c.txt", "one")
 	write(t, b, "/a/b/c.txt", "two")
-	res, err := b.Read(context.Background(), "/a/b/c.txt", 0, 0)
+	res, err := b.Read(t.Context(), "/a/b/c.txt", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +120,7 @@ func testWriteParentsAndOverwrite(t *testing.T, b backend.Backend) {
 }
 
 func testWriteErrors(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	write(t, b, "/dir/file.txt", "x")
 	wantErr(t, b.Write(ctx, "/dir", []byte("x")), backend.ErrIsDir)
 	wantErr(t, b.Write(ctx, "/dir/file.txt/child", []byte("x")), backend.ErrNotDir)
@@ -133,14 +132,14 @@ func testPathsAreCleaned(t *testing.T, b backend.Backend) {
 	write(t, b, "/x/../y/./z.txt", "cleaned")
 	write(t, b, "../../escape.txt", "stays inside")
 	for _, p := range []string{"/y/z.txt", "y/z.txt", "/escape.txt"} {
-		if _, err := b.Read(context.Background(), p, 0, 0); err != nil {
+		if _, err := b.Read(t.Context(), p, 0, 0); err != nil {
 			t.Fatalf("Read(%q): %v", p, err)
 		}
 	}
 }
 
 func testReadPaging(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	write(t, b, "/n.txt", "0\n1\n2\n3\n4\n")
 
 	res, err := b.Read(ctx, "/n.txt", 1, 2)
@@ -169,7 +168,7 @@ func testReadPaging(t *testing.T, b backend.Backend) {
 }
 
 func testReadLineEndings(t *testing.T, b backend.Backend) {
-	cases := []struct {
+	tests := []struct {
 		content string
 		want    []string
 	}{
@@ -180,21 +179,21 @@ func testReadLineEndings(t *testing.T, b backend.Backend) {
 		{"\n", []string{""}},
 		{"a\r\nb\r\n", []string{"a", "b"}},
 	}
-	for i, c := range cases {
+	for i, tt := range tests {
 		p := fmt.Sprintf("/eol%d.txt", i)
-		write(t, b, p, c.content)
-		res, err := b.Read(context.Background(), p, 0, 0)
+		write(t, b, p, tt.content)
+		res, err := b.Read(t.Context(), p, 0, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !equalStrings(res.Lines, c.want) || res.TotalLines != len(c.want) {
-			t.Errorf("content %q: Lines = %q (total %d), want %q", c.content, res.Lines, res.TotalLines, c.want)
+		if !equalStrings(res.Lines, tt.want) || res.TotalLines != len(tt.want) {
+			t.Errorf("content %q: Lines = %q (total %d), want %q", tt.content, res.Lines, res.TotalLines, tt.want)
 		}
 	}
 }
 
 func testReadErrors(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	write(t, b, "/d/f.txt", "x")
 	_, err := b.Read(ctx, "/missing.txt", 0, 0)
 	wantErr(t, err, backend.ErrNotFound)
@@ -205,10 +204,10 @@ func testReadErrors(t *testing.T, b backend.Backend) {
 }
 
 func testReadBinary(t *testing.T, b backend.Backend) {
-	if err := b.Write(context.Background(), "/img.png", pngHeader); err != nil {
+	if err := b.Write(t.Context(), "/img.png", pngHeader); err != nil {
 		t.Fatal(err)
 	}
-	res, err := b.Read(context.Background(), "/img.png", 0, 0)
+	res, err := b.Read(t.Context(), "/img.png", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +222,7 @@ func testReadBinary(t *testing.T, b backend.Backend) {
 func testReadHugeLine(t *testing.T, b backend.Backend) {
 	line := strings.Repeat("x", bigLineSize)
 	write(t, b, "/huge.txt", line)
-	res, err := b.Read(context.Background(), "/huge.txt", 0, 0)
+	res, err := b.Read(t.Context(), "/huge.txt", 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +232,7 @@ func testReadHugeLine(t *testing.T, b backend.Backend) {
 }
 
 func testEdit(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	write(t, b, "/e.txt", "foo bar\nfoo baz\n")
 
 	res, err := b.Edit(ctx, "/e.txt", "bar", "qux", false)
@@ -254,7 +253,7 @@ func testEdit(t *testing.T, b backend.Backend) {
 }
 
 func testEditErrors(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	write(t, b, "/e.txt", "foo foo\n")
 	_, err := b.Edit(ctx, "/e.txt", "foo", "bar", false)
 	wantErr(t, err, backend.ErrAmbiguous)
@@ -277,7 +276,7 @@ func testEditErrors(t *testing.T, b backend.Backend) {
 }
 
 func testDelete(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	write(t, b, "/keep.txt", "k")
 	write(t, b, "/tree/a.txt", "a")
 	write(t, b, "/tree/sub/b.txt", "b")
@@ -303,7 +302,7 @@ func testDelete(t *testing.T, b backend.Backend) {
 }
 
 func testLs(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	write(t, b, "/z.txt", "12345")
 	write(t, b, "/a/deep/x.txt", "x")
 	write(t, b, "/a/m.txt", "m")
@@ -334,7 +333,7 @@ func testLs(t *testing.T, b backend.Backend) {
 }
 
 func testGlob(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	write(t, b, "/main.go", "package main")
 	write(t, b, "/pkg/util/util.go", "package util")
 	write(t, b, "/pkg/util/util_test.go", "package util")
@@ -367,7 +366,7 @@ func testGlob(t *testing.T, b backend.Backend) {
 }
 
 func testGlobOrderAndBase(t *testing.T, b backend.Backend, gap time.Duration) {
-	ctx := context.Background()
+	ctx := t.Context()
 	write(t, b, "/old.txt", "1")
 	time.Sleep(gap)
 	write(t, b, "/mid.txt", "2")
@@ -395,7 +394,7 @@ func grepFixture(t *testing.T, b backend.Backend) {
 }
 
 func testGrepModes(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	grepFixture(t, b)
 
 	files, err := b.Grep(ctx, `func \w+\(`, backend.GrepOptions{Mode: backend.GrepFiles})
@@ -429,7 +428,7 @@ func testGrepModes(t *testing.T, b backend.Backend) {
 }
 
 func testGrepOptions(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	grepFixture(t, b)
 
 	// Case sensitive by default, insensitive on request.
@@ -473,7 +472,7 @@ func testGrepOptions(t *testing.T, b backend.Backend) {
 }
 
 func testGrepSkipsBinaryAndLimits(t *testing.T, b backend.Backend) {
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := b.Write(ctx, "/bin.dat", append([]byte("needle\x00"), pngHeader...)); err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +518,7 @@ func sorted(s []string) []string {
 // so call it last.
 func bytesOf(t *testing.T, b backend.Backend, path string) string {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, r := range [][2]string{{"\r\n", "<CRLF>"}, {"\n", "<LF>"}} {
 		if _, err := b.Edit(ctx, path, r[0], r[1], true); err != nil && !errors.Is(err, backend.ErrNoMatch) {
 			t.Fatalf("probe %q: %v", r[0], err)
@@ -537,7 +536,7 @@ func testMultiEdit(t *testing.T, b backend.Backend) {
 	if !ok {
 		t.Skip("backend does not implement MultiEditor")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// A line-spanning edit on a CRLF file, after an earlier edit.
 	write(t, b, "/crlf.txt", "one\r\ntwo\r\nthree\r\n")

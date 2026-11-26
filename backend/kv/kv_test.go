@@ -1,7 +1,6 @@
 package kv_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -16,8 +15,6 @@ import (
 	"github.com/aswin-kevin/orchestrix/backend/kv"
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 )
-
-var ctx = context.Background()
 
 func newBackend(t *testing.T, s kv.Store, ns string) *kv.Backend {
 	t.Helper()
@@ -55,7 +52,7 @@ func TestKVConformance(t *testing.T) {
 
 func TestNewValidates(t *testing.T) {
 	s := testutil.MemoryStore(t)
-	for name, c := range map[string]struct {
+	for name, tt := range map[string]struct {
 		store kv.Store
 		ns    string
 	}{
@@ -64,7 +61,7 @@ func TestNewValidates(t *testing.T) {
 		"too long":  {s, strings.Repeat("n", kv.MaxNamespaceBytes+1)},
 		"NUL":       {s, "a\x00b"},
 	} {
-		if _, err := kv.New(c.store, c.ns); err == nil {
+		if _, err := kv.New(tt.store, tt.ns); err == nil {
 			t.Errorf("%s: want error", name)
 		}
 	}
@@ -74,6 +71,7 @@ func TestNewValidates(t *testing.T) {
 }
 
 func TestDirStorePersistsAcrossInstances(t *testing.T) {
+	ctx := t.Context()
 	dir := t.TempDir()
 	b1 := newBackend(t, newDirStore(t, dir), "mem")
 	if err := b1.Write(ctx, "/memories/a.md", []byte("remember")); err != nil {
@@ -97,6 +95,7 @@ func TestDirStorePersistsAcrossInstances(t *testing.T) {
 }
 
 func TestDirStoreUsesInjectedClock(t *testing.T) {
+	ctx := t.Context()
 	stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	s, err := kv.NewDirStore(t.TempDir(), kv.DirStoreConfig{Clock: func() time.Time { return stamp }})
 	if err != nil {
@@ -115,6 +114,7 @@ func TestDirStoreUsesInjectedClock(t *testing.T) {
 }
 
 func TestNamespacesIsolated(t *testing.T) {
+	ctx := t.Context()
 	for name, s := range map[string]kv.Store{
 		"memory": testutil.MemoryStore(t),
 		"dir":    newDirStore(t, t.TempDir()),
@@ -147,6 +147,7 @@ func TestNamespacesIsolated(t *testing.T) {
 }
 
 func TestNamespaceTraversal(t *testing.T) {
+	ctx := t.Context()
 	parent := t.TempDir()
 	dir := filepath.Join(parent, "store")
 	s := newDirStore(t, dir)
@@ -177,6 +178,7 @@ func TestNamespaceTraversal(t *testing.T) {
 }
 
 func TestKeyTooLong(t *testing.T) {
+	ctx := t.Context()
 	long := "/" + strings.Repeat("k", 200)
 	d := newBackend(t, newDirStore(t, t.TempDir()), "ns")
 	err := d.Write(ctx, long, []byte("x"))
@@ -203,6 +205,7 @@ func TestKeyTooLong(t *testing.T) {
 }
 
 func TestMissingLongPathIsNotFound(t *testing.T) {
+	ctx := t.Context()
 	long := "/" + strings.Repeat("d", 200) + "/f.md"
 	dirOnly := "/" + strings.Repeat("d", 200)
 	b := newBackend(t, newDirStore(t, t.TempDir()), "ns")
@@ -228,6 +231,7 @@ func TestMissingLongPathIsNotFound(t *testing.T) {
 }
 
 func TestErrorMessagesWrapOnce(t *testing.T) {
+	ctx := t.Context()
 	b := newBackend(t, newDirStore(t, t.TempDir()), "ns")
 	long := "/" + strings.Repeat("k", 200)
 	for name, err := range map[string]error{
@@ -242,6 +246,7 @@ func TestErrorMessagesWrapOnce(t *testing.T) {
 }
 
 func TestMemoryStoreUsesInjectedClock(t *testing.T) {
+	ctx := t.Context()
 	stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	s, err := kv.NewMemoryStore(kv.MemoryStoreConfig{Clock: func() time.Time { return stamp }})
 	if err != nil {
@@ -261,6 +266,7 @@ func TestMemoryStoreUsesInjectedClock(t *testing.T) {
 }
 
 func TestMemoryStoreCopies(t *testing.T) {
+	ctx := t.Context()
 	s := testutil.MemoryStore(t)
 	in := []byte("original")
 	if err := s.Put(ctx, "ns", "/k", in); err != nil {
@@ -279,6 +285,7 @@ func TestMemoryStoreCopies(t *testing.T) {
 }
 
 func TestStoreGetMissingIsNotFound(t *testing.T) {
+	ctx := t.Context()
 	for name, s := range map[string]kv.Store{
 		"memory": testutil.MemoryStore(t),
 		"dir":    newDirStore(t, t.TempDir()),

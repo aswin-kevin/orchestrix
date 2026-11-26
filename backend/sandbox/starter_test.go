@@ -49,6 +49,7 @@ func TestNewStarterValidates(t *testing.T) {
 }
 
 func TestStartPrefixesQuotedCd(t *testing.T) {
+	ctx := t.Context()
 	f := &fakeStarter{}
 	b, err := sandbox.NewStarter(f, sandbox.Config{Root: "/work space"})
 	if err != nil {
@@ -72,6 +73,7 @@ func TestStartPrefixesQuotedCd(t *testing.T) {
 }
 
 func TestStartOverShell(t *testing.T) {
+	ctx := t.Context()
 	skipWithoutSh(t)
 	dir := t.TempDir()
 	sh, err := shell.New(dir, shell.Config{})

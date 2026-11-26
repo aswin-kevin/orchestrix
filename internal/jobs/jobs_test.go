@@ -207,7 +207,7 @@ func TestShutdownStopsAllAndRefuses(t *testing.T) {
 	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
 	a, _ := startFake(t, m, "t1")
 	b, _ := startFake(t, m, "t2")
-	_ = m.Close(context.Background(), time.Second)
+	_ = m.Close(t.Context(), time.Second)
 	for _, j := range []*Job[*fake]{m.Get("t1", a.ID), m.Get("t2", b.ID)} {
 		if j == nil || !j.Ended() {
 			t.Fatalf("job not stopped and kept: %+v", j)
@@ -230,7 +230,7 @@ func TestShutdownBoundedWithHungHandle(t *testing.T) {
 	}
 	const wait = 100 * time.Millisecond
 	begin := time.Now()
-	_ = m.Close(context.Background(), wait)
+	_ = m.Close(t.Context(), wait)
 	if d := time.Since(begin); d > wait+100*time.Millisecond {
 		t.Fatalf("Shutdown took %s", d)
 	}
@@ -245,7 +245,7 @@ func TestCloseWaitBoundedByContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.end() // let the watcher goroutine go
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	begin := time.Now()
 	err := m.Close(ctx, time.Minute)
@@ -265,7 +265,7 @@ func TestCloseDoneContextWithEndedJobs(t *testing.T) {
 		m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
 		_, f := startFake(t, m, "t")
 		f.end()
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		if err := m.Close(ctx, time.Minute); err != nil {
 			t.Fatalf("Close with every job ended = %v, want nil", err)
@@ -280,7 +280,7 @@ func TestCloseDoneContextWithEndedJobs(t *testing.T) {
 func TestRequestStopAndStop(t *testing.T) {
 	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
 	j, _ := startFake(t, m, "t")
-	if err := Stop(context.Background(), j, time.Second); err != nil || !j.Stopped() {
+	if err := Stop(t.Context(), j, time.Second); err != nil || !j.Stopped() {
 		t.Fatalf("Stop = %v, stopped %v", err, j.Stopped())
 	}
 	if running, err := requestStop(t.Context(), j); running || err != nil {
@@ -289,15 +289,15 @@ func TestRequestStopAndStop(t *testing.T) {
 
 	h, hf := startFake(t, m, "t2")
 	hf.hang = true
-	if err := Stop(context.Background(), h, 50*time.Millisecond); err == nil {
+	if err := Stop(t.Context(), h, 50*time.Millisecond); err == nil {
 		t.Fatal("Stop of a hung handle returned nil")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := Stop(ctx, h, time.Second); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Stop with canceled ctx = %v", err)
 	}
-	if err := Stop[*fake](context.Background(), nil, time.Second); err == nil {
+	if err := Stop[*fake](t.Context(), nil, time.Second); err == nil {
 		t.Fatal("Stop accepted a nil job")
 	}
 	hf.end()
@@ -308,7 +308,7 @@ func TestShutdownWaitsForWatchers(t *testing.T) {
 	for range 3 {
 		startFake(t, m, "t")
 	}
-	_ = m.Close(context.Background(), time.Second)
+	_ = m.Close(t.Context(), time.Second)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if got := len(m.threads["t"].finished); got != 3 {
@@ -320,7 +320,7 @@ func TestWatcherExitsAfterHungHandleEnds(t *testing.T) {
 	m := NewManager[*fake]("x_", Limits{MaxRunning: 5, MaxFinished: 5})
 	j, f := startFake(t, m, "t")
 	f.hang = true
-	_ = m.Close(context.Background(), 20*time.Millisecond)
+	_ = m.Close(t.Context(), 20*time.Millisecond)
 	ch, last := m.Changed("t")
 	f.end()
 	waitFor(t, ch)
@@ -340,11 +340,9 @@ func TestConcurrentStartRespectsLimitAndShutdown(t *testing.T) {
 	var started []*Job[*fake]
 	var wg sync.WaitGroup
 	for i := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if i == workers/2 {
-				_ = m.Close(context.Background(), time.Second)
+				_ = m.Close(t.Context(), time.Second)
 				return
 			}
 			j, err := m.Start("t", nil, func() (*fake, error) { return newFake(), nil })
@@ -362,7 +360,7 @@ func TestConcurrentStartRespectsLimitAndShutdown(t *testing.T) {
 			default:
 				t.Errorf("err = %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if ok.Load() > limit {
@@ -483,7 +481,7 @@ func TestShutdownDuringStart(t *testing.T) {
 	waitFor(t, entered)
 
 	shut := make(chan struct{})
-	go func() { _ = m.Close(context.Background(), 2*time.Second); close(shut) }()
+	go func() { _ = m.Close(t.Context(), 2*time.Second); close(shut) }()
 	select {
 	case <-shut:
 		t.Fatal("Shutdown returned while a start was in flight")
@@ -510,7 +508,7 @@ func TestShutdownWaitForStartIsBounded(t *testing.T) {
 	waitFor(t, entered)
 	const wait = 50 * time.Millisecond
 	begin := time.Now()
-	_ = m.Close(context.Background(), wait)
+	_ = m.Close(t.Context(), wait)
 	if d := time.Since(begin); d > wait+100*time.Millisecond {
 		t.Fatalf("Shutdown took %s", d)
 	}
@@ -532,7 +530,7 @@ func TestPanickingStartRollsBack(t *testing.T) {
 		t.Fatalf("id = %s", j.ID)
 	}
 	// returns at once: no start is left in flight
-	_ = m.Close(context.Background(), time.Second)
+	_ = m.Close(t.Context(), time.Second)
 }
 
 // TestStartCommittingAfterShutdownTimedOut commits a start after Shutdown
@@ -549,7 +547,7 @@ func TestStartCommittingAfterShutdownTimedOut(t *testing.T) {
 	if _, err := m.Start("a", nil, func() (*fake, error) { return a, nil }); err != nil {
 		t.Fatal(err)
 	}
-	_ = m.Close(context.Background(), 20*time.Millisecond)
+	_ = m.Close(t.Context(), 20*time.Millisecond)
 	o := <-out
 	if o.err != nil || !o.j.Stopped() {
 		t.Fatalf("late start = %+v", o)
@@ -744,7 +742,7 @@ func TestRestartRunningIsError(t *testing.T) {
 		t.Fatalf("second Restart while one is in flight = %v, want ErrUnknownJob", err)
 	}
 	close(release)
-	if err := m.Close(context.Background(), time.Second); err != nil {
+	if err := m.Close(t.Context(), time.Second); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if _, err := m.Restart("t", j.ID, e.rearm); !errors.Is(err, ErrShutdown) {
@@ -828,7 +826,7 @@ func TestRestartOfForgottenJobIsStopped(t *testing.T) {
 	waitFor(t, ch)
 	_, err := m.Restart("t", j.ID, func() error {
 		// The nested run that owns the job ends while it restarts.
-		m.StopAndForget(context.Background(), "t", []string{j.ID}, time.Second, func() {})
+		m.StopAndForget(t.Context(), "t", []string{j.ID}, time.Second, func() {})
 		return e.rearm()
 	})
 	if !errors.Is(err, ErrUnknownJob) {

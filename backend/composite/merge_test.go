@@ -13,6 +13,7 @@ import (
 )
 
 func TestLsMergesRealEntriesWithMounts(t *testing.T) {
+	ctx := t.Context()
 	def := testutil.Memory(t)
 	put(t, def, "/.orchestrix/other.txt", "o")
 	put(t, def, "/.orchestrix/memories/shadow.md", "s")
@@ -25,6 +26,7 @@ func TestLsMergesRealEntriesWithMounts(t *testing.T) {
 }
 
 func TestShadowedDefaultFilesHidden(t *testing.T) {
+	ctx := t.Context()
 	def, route := testutil.Memory(t), testutil.Memory(t)
 	put(t, def, "/memories/old.md", "old shadow")
 	c := mustNew(t, def, composite.Route{Prefix: "/memories", Backend: route})
@@ -41,7 +43,7 @@ func TestShadowedDefaultFilesHidden(t *testing.T) {
 	if err != nil || len(ms) != 0 {
 		t.Fatalf("Grep = %+v, %v; want empty", ms, err)
 	}
-	if has(c, "/memories/old.md") {
+	if has(t, c, "/memories/old.md") {
 		t.Fatal("shadowed file readable through the composite")
 	}
 	// Shadowed files must not starve a capped grep of real results.
@@ -56,6 +58,7 @@ func TestShadowedDefaultFilesHidden(t *testing.T) {
 }
 
 func TestGlobAndGrepMerge(t *testing.T) {
+	ctx := t.Context()
 	def, route := testutil.Memory(t), testutil.Memory(t)
 	c := mustNew(t, def, composite.Route{Prefix: "/memories", Backend: route})
 	put(t, c, "/a.md", "alpha hit")
@@ -94,6 +97,7 @@ func TestGlobAndGrepMerge(t *testing.T) {
 }
 
 func TestBasesAtAndBelowMount(t *testing.T) {
+	ctx := t.Context()
 	def, route := testutil.Memory(t), testutil.Memory(t)
 	c := mustNew(t, def, composite.Route{Prefix: "/.orchestrix/memories", Backend: route})
 	put(t, c, "/.orchestrix/memories/sub/n.md", "note")
@@ -133,6 +137,7 @@ func TestBasesAtAndBelowMount(t *testing.T) {
 }
 
 func TestGrepDoublestarGlobsReachMounts(t *testing.T) {
+	ctx := t.Context()
 	def := testutil.Memory(t)
 	put(t, def, "/x/memories/b.md", "hit")
 	c := mustNew(t, def, composite.Route{Prefix: "/.orchestrix/memories", Backend: testutil.Memory(t)})
@@ -160,6 +165,7 @@ func TestGrepDoublestarGlobsReachMounts(t *testing.T) {
 }
 
 func TestGlobDropsMountAncestorsFromDefault(t *testing.T) {
+	ctx := t.Context()
 	def := testutil.Memory(t)
 	put(t, def, "/m", "a file shadowed by the mount ancestor")
 	c := mustNew(t, def, composite.Route{Prefix: "/m/sub", Backend: testutil.Memory(t)})
@@ -171,13 +177,14 @@ func TestGlobDropsMountAncestorsFromDefault(t *testing.T) {
 }
 
 func TestNestedMountAncestorsProtected(t *testing.T) {
+	ctx := t.Context()
 	a := testutil.Memory(t)
 	c := mustNew(t, testutil.Memory(t), composite.Route{Prefix: "/m", Backend: a}, composite.Route{Prefix: "/m/a/b", Backend: testutil.Memory(t)})
 	put(t, a, "/a/other.txt", "keep")
 	if err := c.Delete(ctx, "/m/a"); !errors.Is(err, composite.ErrMountPoint) {
 		t.Fatalf("Delete(/m/a) = %v, want ErrMountPoint", err)
 	}
-	if !has(a, "/a/other.txt") {
+	if !has(t, a, "/a/other.txt") {
 		t.Fatal("refused delete removed outer mount content")
 	}
 	if err := c.Write(ctx, "/m/a", []byte("x")); !errors.Is(err, backend.ErrIsDir) {
@@ -194,6 +201,7 @@ func TestNestedMountAncestorsProtected(t *testing.T) {
 }
 
 func TestAncestorsFilteredFromFileResults(t *testing.T) {
+	ctx := t.Context()
 	// A def file standing where a mount ancestor is.
 	def := testutil.Memory(t)
 	put(t, def, "/m", "hit")

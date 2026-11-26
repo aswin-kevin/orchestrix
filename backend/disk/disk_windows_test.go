@@ -1,7 +1,6 @@
 package disk_test
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -13,7 +12,7 @@ import (
 // A drive-relative path ("C:foo") depends on the process's current
 // directory on that drive, so a non-virtual backend refuses it.
 func TestDiskNonVirtualRefusesDriveRelativePath(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	b, root := newDisk(t, disk.Config{DisableVirtual: true})
 	rel := filepath.VolumeName(root) + "foo.txt"
 	if err := b.Write(ctx, rel, []byte("x")); !errors.Is(err, backend.ErrInvalidPath) {

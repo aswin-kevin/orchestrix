@@ -16,19 +16,19 @@ func TestLeaseReleaseIdempotent(t *testing.T) {
 	l := checkpoint.NewLease("t", "o",
 		func(context.Context) error { renews++; return nil },
 		func(context.Context) error { releases++; return relErr })
-	if err := l.Renew(context.Background()); err != nil || renews != 1 {
+	if err := l.Renew(t.Context()); err != nil || renews != 1 {
 		t.Fatalf("Renew = %v, renews %d", err, renews)
 	}
-	if err := l.Release(context.Background()); !errors.Is(err, relErr) {
+	if err := l.Release(t.Context()); !errors.Is(err, relErr) {
 		t.Fatalf("first Release = %v, want the release error", err)
 	}
-	if err := l.Release(context.Background()); err != nil {
+	if err := l.Release(t.Context()); err != nil {
 		t.Fatalf("second Release = %v, want nil", err)
 	}
 	if releases != 1 {
 		t.Fatalf("release called %d times, want 1", releases)
 	}
-	if err := l.Renew(context.Background()); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+	if err := l.Renew(t.Context()); !errors.Is(err, checkpoint.ErrLeaseHeld) {
 		t.Fatalf("Renew after Release = %v, want ErrLeaseHeld", err)
 	}
 	if renews != 1 {
@@ -69,8 +69,8 @@ func TestLeaseConcurrentRelease(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Add(2)
-		go func() { defer wg.Done(); _ = l.Renew(context.Background()) }()
-		go func() { defer wg.Done(); _ = l.Release(context.Background()) }()
+		go func() { defer wg.Done(); _ = l.Renew(t.Context()) }()
+		go func() { defer wg.Done(); _ = l.Release(t.Context()) }()
 	}
 	wg.Wait()
 	if releases.Load() != 1 {

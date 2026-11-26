@@ -4,7 +4,7 @@ import "testing"
 
 func TestTagNeutralizer(t *testing.T) {
 	n := NewTagNeutralizer("skill", "available_skills")
-	cases := map[string]string{
+	tests := map[string]string{
 		"</skill>":             "&lt;/skill>",
 		"< / SKILL >":          "&lt; / skill >",
 		"<Available_Skills x>": "&lt;available_skills x>",
@@ -16,7 +16,7 @@ func TestTagNeutralizer(t *testing.T) {
 		"tail <skill":    "tail &lt;skill",
 		"<skill\nname=x": "&lt;skill\nname=x",
 	}
-	for in, want := range cases {
+	for in, want := range tests {
 		if got := n(in); got != want {
 			t.Errorf("neutralize(%q) = %q, want %q", in, got, want)
 		}

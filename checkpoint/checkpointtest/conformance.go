@@ -23,7 +23,7 @@ const saveGap = 3 * time.Millisecond
 // implements checkpoint.Lister, checkpoint.Deleter or checkpoint.Leaser.
 func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointer) {
 	t.Helper()
-	cases := []struct {
+	tests := []struct {
 		name string
 		fn   func(*testing.T, checkpoint.Checkpointer)
 	}{
@@ -43,7 +43,7 @@ func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointe
 		{"SequentialSavesFromManyWriters", sequentialSaves},
 		{"CancelledContext", cancelledContext},
 	}
-	listCases := []struct {
+	listTests := []struct {
 		name string
 		fn   func(*testing.T, checkpoint.Checkpointer, checkpoint.Lister)
 	}{
@@ -54,7 +54,7 @@ func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointe
 		{"ListInvalidCursor", listInvalidCursor},
 		{"ListNegativeLimit", listNegativeLimit},
 	}
-	deleteCases := []struct {
+	deleteTests := []struct {
 		name string
 		fn   func(*testing.T, checkpoint.Checkpointer, checkpoint.Deleter)
 	}{
@@ -62,7 +62,7 @@ func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointe
 		{"DeleteInvalidIDs", deleteInvalidIDs},
 		{"VersionAfterDeleteConflicts", versionAfterDelete},
 	}
-	leaseCases := []struct {
+	leaseTests := []struct {
 		name string
 		fn   func(*testing.T, checkpoint.Leaser)
 	}{
@@ -74,41 +74,39 @@ func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointe
 		{"LeaseRenewAfterExpiryFails", leaseRenewAfterExpiry},
 		{"LeasePerThread", leasePerThread},
 	}
-	for _, tc := range listCases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range listTests {
+		t.Run(tt.name, func(t *testing.T) {
 			c := newCheckpointer(t)
 			l, ok := c.(checkpoint.Lister)
 			if !ok {
 				t.Skip("checkpointer does not implement checkpoint.Lister")
 			}
-			tc.fn(t, c, l)
+			tt.fn(t, c, l)
 		})
 	}
-	for _, tc := range deleteCases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range deleteTests {
+		t.Run(tt.name, func(t *testing.T) {
 			c := newCheckpointer(t)
 			d, ok := c.(checkpoint.Deleter)
 			if !ok {
 				t.Skip("checkpointer does not implement checkpoint.Deleter")
 			}
-			tc.fn(t, c, d)
+			tt.fn(t, c, d)
 		})
 	}
-	for _, tc := range leaseCases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range leaseTests {
+		t.Run(tt.name, func(t *testing.T) {
 			l, ok := newCheckpointer(t).(checkpoint.Leaser)
 			if !ok {
 				t.Skip("checkpointer does not implement checkpoint.Leaser")
 			}
-			tc.fn(t, l)
+			tt.fn(t, l)
 		})
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) { tc.fn(t, newCheckpointer(t)) })
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { tt.fn(t, newCheckpointer(t)) })
 	}
 }
-
-var ctx = context.Background()
 
 // stateJSON returns the canonical JSON of s, failing the test on error.
 func stateJSON(t *testing.T, s *state.State) string {
@@ -133,6 +131,7 @@ func stateWith(t *testing.T, texts ...string) *state.State {
 // current returns the thread's version, the zero Version when it has none.
 func current(t *testing.T, c checkpoint.Checkpointer, id string) checkpoint.Version {
 	t.Helper()
+	ctx := t.Context()
 	_, v, err := c.Load(ctx, id)
 	switch {
 	case errors.Is(err, checkpoint.ErrNotFound):
@@ -146,6 +145,7 @@ func current(t *testing.T, c checkpoint.Checkpointer, id string) checkpoint.Vers
 // mustSave saves s over the thread's current version and returns the new one.
 func mustSave(t *testing.T, c checkpoint.Checkpointer, id string, s *state.State) checkpoint.Version {
 	t.Helper()
+	ctx := t.Context()
 	v, err := c.Save(ctx, id, s, current(t, c, id))
 	if err != nil {
 		t.Fatalf("Save(%q): %v", id, err)
@@ -158,6 +158,7 @@ func mustSave(t *testing.T, c checkpoint.Checkpointer, id string, s *state.State
 
 func mustLoad(t *testing.T, c checkpoint.Checkpointer, id string) *state.State {
 	t.Helper()
+	ctx := t.Context()
 	s, _, err := c.Load(ctx, id)
 	if err != nil {
 		t.Fatalf("Load(%q): %v", id, err)
@@ -169,6 +170,7 @@ func mustLoad(t *testing.T, c checkpoint.Checkpointer, id string) *state.State {
 // implement checkpoint.Lister.
 func listAll(t *testing.T, c checkpoint.Checkpointer) ([]checkpoint.ThreadInfo, bool) {
 	t.Helper()
+	ctx := t.Context()
 	l, ok := c.(checkpoint.Lister)
 	if !ok {
 		return nil, false
@@ -208,12 +210,14 @@ func roundTrip(t *testing.T, c checkpoint.Checkpointer) {
 }
 
 func loadMissing(t *testing.T, c checkpoint.Checkpointer) {
+	ctx := t.Context()
 	if _, _, err := c.Load(ctx, "nope"); !errors.Is(err, checkpoint.ErrNotFound) {
 		t.Fatalf("Load missing: got %v, want ErrNotFound", err)
 	}
 }
 
 func listEmpty(t *testing.T, c checkpoint.Checkpointer, l checkpoint.Lister) {
+	ctx := t.Context()
 	page, err := l.List(ctx, checkpoint.ListOptions{})
 	if err != nil || len(page.Threads) != 0 || page.Next != "" {
 		t.Fatalf("List on empty store = %+v, %v", page, err)
@@ -242,6 +246,7 @@ func listNewestFirst(t *testing.T, c checkpoint.Checkpointer, _ checkpoint.Liste
 }
 
 func listPaging(t *testing.T, c checkpoint.Checkpointer, l checkpoint.Lister) {
+	ctx := t.Context()
 	for _, id := range []string{"a", "b", "c"} {
 		mustSave(t, c, id, stateWith(t, id))
 		time.Sleep(saveGap)
@@ -263,6 +268,7 @@ func listPaging(t *testing.T, c checkpoint.Checkpointer, l checkpoint.Lister) {
 }
 
 func listPagingComplete(t *testing.T, c checkpoint.Checkpointer, l checkpoint.Lister) {
+	ctx := t.Context()
 	want := []string{"e", "d", "c", "b", "a"}
 	for i := len(want) - 1; i >= 0; i-- {
 		mustSave(t, c, want[i], stateWith(t, want[i]))
@@ -289,18 +295,21 @@ func listPagingComplete(t *testing.T, c checkpoint.Checkpointer, l checkpoint.Li
 }
 
 func listInvalidCursor(t *testing.T, _ checkpoint.Checkpointer, l checkpoint.Lister) {
+	ctx := t.Context()
 	if _, err := l.List(ctx, checkpoint.ListOptions{Cursor: "!!"}); !errors.Is(err, checkpoint.ErrInvalidCursor) {
 		t.Fatalf("List with a bad cursor: got %v, want ErrInvalidCursor", err)
 	}
 }
 
 func listNegativeLimit(t *testing.T, _ checkpoint.Checkpointer, l checkpoint.Lister) {
+	ctx := t.Context()
 	if _, err := l.List(ctx, checkpoint.ListOptions{Limit: -1}); err == nil {
 		t.Fatal("List accepted a negative limit")
 	}
 }
 
 func deleteThread(t *testing.T, c checkpoint.Checkpointer, d checkpoint.Deleter) {
+	ctx := t.Context()
 	mustSave(t, c, "x", stateWith(t, "1"))
 	if err := d.Delete(ctx, "x"); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -318,6 +327,7 @@ func deleteThread(t *testing.T, c checkpoint.Checkpointer, d checkpoint.Deleter)
 }
 
 func invalidIDs(t *testing.T, c checkpoint.Checkpointer) {
+	ctx := t.Context()
 	for _, id := range []string{"", strings.Repeat("x", checkpoint.MaxThreadIDBytes+1), "a\x00b", "bad\xffutf8"} {
 		s := stateWith(t, "1")
 		if _, err := c.Save(ctx, id, s, ""); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
@@ -330,6 +340,7 @@ func invalidIDs(t *testing.T, c checkpoint.Checkpointer) {
 }
 
 func deleteInvalidIDs(t *testing.T, _ checkpoint.Checkpointer, d checkpoint.Deleter) {
+	ctx := t.Context()
 	for _, id := range []string{"", strings.Repeat("x", checkpoint.MaxThreadIDBytes+1), "a\x00b", "bad\xffutf8"} {
 		if err := d.Delete(ctx, id); !errors.Is(err, checkpoint.ErrInvalidThreadID) {
 			t.Errorf("Delete(%.12q): got %v, want ErrInvalidThreadID", id, err)
@@ -422,6 +433,7 @@ func overwriteKeepsLatest(t *testing.T, c checkpoint.Checkpointer) {
 }
 
 func loadReturnsSavedVersion(t *testing.T, c checkpoint.Checkpointer) {
+	ctx := t.Context()
 	seen := map[checkpoint.Version]bool{}
 	for i := range 3 {
 		v := mustSave(t, c, "t", stateWith(t, strings.Repeat("m", i+1)))
@@ -441,6 +453,7 @@ func loadReturnsSavedVersion(t *testing.T, c checkpoint.Checkpointer) {
 // assertUnchanged fails unless the thread still holds want at version v.
 func assertUnchanged(t *testing.T, c checkpoint.Checkpointer, id string, want *state.State, v checkpoint.Version) {
 	t.Helper()
+	ctx := t.Context()
 	got, gotV, err := c.Load(ctx, id)
 	if err != nil {
 		t.Fatalf("Load(%q): %v", id, err)
@@ -451,6 +464,7 @@ func assertUnchanged(t *testing.T, c checkpoint.Checkpointer, id string, want *s
 }
 
 func staleVersionConflicts(t *testing.T, c checkpoint.Checkpointer) {
+	ctx := t.Context()
 	v1 := mustSave(t, c, "t", stateWith(t, "one"))
 	second := stateWith(t, "one", "two")
 	v2, err := c.Save(ctx, "t", second, v1)
@@ -468,6 +482,7 @@ func staleVersionConflicts(t *testing.T, c checkpoint.Checkpointer) {
 }
 
 func zeroVersionOnExisting(t *testing.T, c checkpoint.Checkpointer) {
+	ctx := t.Context()
 	first := stateWith(t, "first")
 	v1 := mustSave(t, c, "t", first)
 	if _, err := c.Save(ctx, "t", stateWith(t, "intruder"), ""); !errors.Is(err, checkpoint.ErrConflict) {
@@ -477,6 +492,7 @@ func zeroVersionOnExisting(t *testing.T, c checkpoint.Checkpointer) {
 }
 
 func versionOnMissing(t *testing.T, c checkpoint.Checkpointer) {
+	ctx := t.Context()
 	v := mustSave(t, c, "other", stateWith(t, "x"))
 	if _, err := c.Save(ctx, "t", stateWith(t, "x"), v); !errors.Is(err, checkpoint.ErrConflict) {
 		t.Fatalf("Save with a version onto a missing thread: got %v, want ErrConflict", err)
@@ -490,6 +506,7 @@ func versionOnMissing(t *testing.T, c checkpoint.Checkpointer) {
 // before a Delete must not overwrite the thread created after it, even
 // when the new thread has had as many saves.
 func versionAfterDelete(t *testing.T, c checkpoint.Checkpointer, d checkpoint.Deleter) {
+	ctx := t.Context()
 	var old checkpoint.Version
 	for i := range 2 {
 		old = mustSave(t, c, "t", stateWith(t, strings.Repeat("o", i+1)))
@@ -513,6 +530,7 @@ func versionAfterDelete(t *testing.T, c checkpoint.Checkpointer, d checkpoint.De
 }
 
 func concurrentSavesOneWins(t *testing.T, c checkpoint.Checkpointer) {
+	ctx := t.Context()
 	base := mustSave(t, c, "shared", stateWith(t, "base"))
 	const writers = 16
 	var (
@@ -524,9 +542,7 @@ func concurrentSavesOneWins(t *testing.T, c checkpoint.Checkpointer) {
 		conflicts int
 	)
 	for w := range writers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			s := stateWith(t, "base", strings.Repeat("w", w+1))
 			v, err := c.Save(ctx, "shared", s, base)
 			mu.Lock()
@@ -540,7 +556,7 @@ func concurrentSavesOneWins(t *testing.T, c checkpoint.Checkpointer) {
 			default:
 				t.Errorf("Save: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if wins != 1 || conflicts != writers-1 {
@@ -550,12 +566,11 @@ func concurrentSavesOneWins(t *testing.T, c checkpoint.Checkpointer) {
 }
 
 func sequentialSaves(t *testing.T, c checkpoint.Checkpointer) {
+	ctx := t.Context()
 	const writers, each = 8, 10
 	var wg sync.WaitGroup
 	for w := range writers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := 0; i < each; {
 				s := stateWith(t, strings.Repeat("w", w+1), strings.Repeat("i", i+1))
 				_, v, err := c.Load(ctx, "shared")
@@ -571,7 +586,7 @@ func sequentialSaves(t *testing.T, c checkpoint.Checkpointer) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -587,6 +602,7 @@ func sequentialSaves(t *testing.T, c checkpoint.Checkpointer) {
 const leaseTTL = time.Minute
 
 func leaseExclusive(t *testing.T, l checkpoint.Leaser) {
+	ctx := t.Context()
 	lease, err := l.Acquire(ctx, "t", "a", leaseTTL)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
@@ -606,6 +622,7 @@ func leaseExclusive(t *testing.T, l checkpoint.Leaser) {
 }
 
 func leaseRelease(t *testing.T, l checkpoint.Leaser) {
+	ctx := t.Context()
 	lease, err := l.Acquire(ctx, "t", "a", leaseTTL)
 	if err != nil {
 		t.Fatal(err)
@@ -627,6 +644,7 @@ func leaseRelease(t *testing.T, l checkpoint.Leaser) {
 // by another owner does not drop that owner's lease. The Lease is fresh, so
 // the store's own owner check runs.
 func leaseStaleRelease(t *testing.T, l checkpoint.Leaser) {
+	ctx := t.Context()
 	stale, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
@@ -653,6 +671,7 @@ func leaseStaleRelease(t *testing.T, l checkpoint.Leaser) {
 }
 
 func leaseExpires(t *testing.T, l checkpoint.Leaser) {
+	ctx := t.Context()
 	if _, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
@@ -671,6 +690,7 @@ func leaseExpires(t *testing.T, l checkpoint.Leaser) {
 }
 
 func leaseRenewAfterTakeover(t *testing.T, l checkpoint.Leaser) {
+	ctx := t.Context()
 	lease, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
@@ -697,6 +717,7 @@ func leaseRenewAfterTakeover(t *testing.T, l checkpoint.Leaser) {
 // valid: once it expired, another owner may have taken and released it, so
 // renewing must not silently take it again.
 func leaseRenewAfterExpiry(t *testing.T, l checkpoint.Leaser) {
+	ctx := t.Context()
 	lease, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
@@ -714,6 +735,7 @@ func leaseRenewAfterExpiry(t *testing.T, l checkpoint.Leaser) {
 }
 
 func leasePerThread(t *testing.T, l checkpoint.Leaser) {
+	ctx := t.Context()
 	relA, err := l.Acquire(ctx, "t1", "a", leaseTTL)
 	if err != nil {
 		t.Fatal(err)
@@ -727,6 +749,7 @@ func leasePerThread(t *testing.T, l checkpoint.Leaser) {
 }
 
 func cancelledContext(t *testing.T, c checkpoint.Checkpointer) {
+	ctx := t.Context()
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()
 	if _, err := c.Save(cctx, "t", stateWith(t, "1"), ""); !errors.Is(err, context.Canceled) {
