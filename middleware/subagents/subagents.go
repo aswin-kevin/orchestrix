@@ -156,7 +156,9 @@ func New(cfg Config) (*Middleware, error) {
 	for i, s := range list {
 		specs[s.Name], order[i] = s, s.Name
 	}
-	m := &Middleware{specs: specs, maxDepth: DefaultMaxDepth, prompt: DefaultPrompt, fork: !cfg.DisableFork, launcher: NewLauncher(LauncherConfig{})}
+	// An empty LauncherConfig cannot fail validation.
+	launcher, _ := NewLauncher(LauncherConfig{})
+	m := &Middleware{specs: specs, maxDepth: DefaultMaxDepth, prompt: DefaultPrompt, fork: !cfg.DisableFork, launcher: launcher}
 	if m.fork {
 		order = append(order, Fork)
 	}

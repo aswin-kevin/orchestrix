@@ -303,7 +303,11 @@ func New(cfg Config) (*Middleware, error) {
 		m.specs[s.Name], m.order[i] = s, s.Name
 	}
 	if m.runner == nil {
-		m.runner = newLocalRunner(m.specs, positiveOr(cfg.TaskTimeout, DefaultTaskTimeout), cfg.OnEvent, m.bound.Load)
+		l, err := newLocalRunner(m.specs, positiveOr(cfg.TaskTimeout, DefaultTaskTimeout), cfg.OnEvent, m.bound.Load)
+		if err != nil {
+			return nil, fmt.Errorf("async: %w", err)
+		}
+		m.runner = l
 	}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt

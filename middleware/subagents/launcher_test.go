@@ -3,6 +3,7 @@ package subagents
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -74,7 +75,7 @@ func TestLauncherMatchesTaskTool(t *testing.T) {
 	st := state.New()
 	mustSetMode(t, st, permission.ModePlan)
 	skills.ScopeKey.Set(st, skills.Scope{Restrict: true, Allowed: []string{"pdf", "style"}})
-	res := probeRun(t, NewLauncher(LauncherConfig{}), researcher(), st, sk)
+	res := probeRun(t, mustLauncher(t, LauncherConfig{}), researcher(), st, sk)
 	if res.err != nil {
 		t.Fatal(res.err)
 	}
@@ -98,14 +99,14 @@ func TestLauncherMatchesTaskTool(t *testing.T) {
 }
 
 func TestLauncherInputNeedsRun(t *testing.T) {
-	l := NewLauncher(LauncherConfig{})
+	l := mustLauncher(t, LauncherConfig{})
 	if _, err := l.Input(context.Background(), nil, researcher(), "x", "id", &tool.Call{State: state.New()}); err == nil {
 		t.Fatal("want an error outside a run")
 	}
 }
 
 func TestLauncherCachesPerParent(t *testing.T) {
-	l := NewLauncher(LauncherConfig{})
+	l := mustLauncher(t, LauncherConfig{})
 	spec := Subagent{Name: "w", Description: "d", SystemPrompt: "p"}
 	mk := func() *agent.Agent {
 		a, err := agent.New(agent.Config{Provider: llmtest.New()})
@@ -142,7 +143,7 @@ func (c *countMW) BeforeModel(context.Context, *state.State) error {
 func TestLauncherExtraMiddleware(t *testing.T) {
 	var n atomic.Int32
 	extra := &countMW{name: "extra", n: &n}
-	l := NewLauncher(LauncherConfig{Extra: []agent.Middleware{extra}})
+	l := mustLauncher(t, LauncherConfig{Extra: []agent.Middleware{extra}})
 	spec := Subagent{Name: "w", Description: "d", SystemPrompt: "p", Provider: llmtest.New(llmtest.Turn{Text: "hi"})}
 	parent, _ := agent.New(agent.Config{Provider: llmtest.New()})
 	child, err := l.Agent(parent, spec)
@@ -165,7 +166,7 @@ func TestLauncherExtraMiddleware(t *testing.T) {
 func TestLauncherExtraAlreadyPresentByIdentity(t *testing.T) {
 	var n atomic.Int32
 	extra := &countMW{name: "extra", n: &n}
-	l := NewLauncher(LauncherConfig{Extra: []agent.Middleware{extra}})
+	l := mustLauncher(t, LauncherConfig{Extra: []agent.Middleware{extra}})
 	// The parent already carries extra, as a background child does.
 	parent, err := agent.New(agent.Config{Provider: llmtest.New(), Middleware: []agent.Middleware{extra}})
 	if err != nil {
@@ -199,7 +200,7 @@ type wrapped struct{ agent.Middleware }
 
 func TestLauncherUncomparableExtraDoesNotPanic(t *testing.T) {
 	mk := func() agent.Middleware { return wrapped{sliceMW{name: "extra", tags: []string{"a"}}} }
-	l := NewLauncher(LauncherConfig{Extra: []agent.Middleware{mk()}})
+	l := mustLauncher(t, LauncherConfig{Extra: []agent.Middleware{mk()}})
 	parent, err := agent.New(agent.Config{Provider: llmtest.New(), Middleware: []agent.Middleware{mk()}})
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +214,7 @@ func TestLauncherUncomparableExtraDoesNotPanic(t *testing.T) {
 func TestLauncherInputNilCall(t *testing.T) {
 	var gotErr error
 	probe := tool.New("probe", "Probes.", func(ctx context.Context, _ struct{}, _ *tool.Call) (tool.Result, error) {
-		_, gotErr = NewLauncher(LauncherConfig{}).Input(ctx, nil, researcher(), "x", "id", nil)
+		_, gotErr = mustLauncher(t, LauncherConfig{}).Input(ctx, nil, researcher(), "x", "id", nil)
 		return tool.Text("ok"), nil
 	}, tool.WithReadOnly())
 	p := llmtest.New(
@@ -235,7 +236,7 @@ func TestLauncherInputStricterModeWins(t *testing.T) {
 	mustSetMode(t, st, permission.ModeDontAsk)
 	spec := researcher()
 	spec.Skills, spec.PermissionMode = nil, permission.ModeBypass
-	res := probeRun(t, NewLauncher(LauncherConfig{}), spec, st)
+	res := probeRun(t, mustLauncher(t, LauncherConfig{}), spec, st)
 	if res.err != nil {
 		t.Fatal(res.err)
 	}
@@ -246,7 +247,7 @@ func TestLauncherInputStricterModeWins(t *testing.T) {
 
 func TestLauncherAgentValidatesSpec(t *testing.T) {
 	parent, _ := agent.New(agent.Config{Provider: llmtest.New()})
-	if _, err := NewLauncher(LauncherConfig{}).Agent(parent, Subagent{Name: "w", Description: "d"}); err == nil {
+	if _, err := mustLauncher(t, LauncherConfig{}).Agent(parent, Subagent{Name: "w", Description: "d"}); err == nil {
 		t.Fatal("want an error for a spec without SystemPrompt")
 	}
 }
@@ -321,5 +322,35 @@ func TestChildConfigMaxTurns(t *testing.T) {
 		if cfg.MaxTurns != tc.want {
 			t.Errorf("parent %d, spec %d: child MaxTurns = %d, want %d", tc.parent, tc.spec, cfg.MaxTurns, tc.want)
 		}
+	}
+}
+
+func mustLauncher(t *testing.T, cfg LauncherConfig) *Launcher {
+	t.Helper()
+	l, err := NewLauncher(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l
+}
+
+func TestNewLauncherValidatesExtra(t *testing.T) {
+	var n atomic.Int32
+	var typedNil *countMW
+	for name, extra := range map[string][]agent.Middleware{
+		"nil":       {nil},
+		"typed nil": {typedNil},
+		"duplicate": {&countMW{name: "x", n: &n}, &countMW{name: "x", n: &n}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, err := NewLauncher(LauncherConfig{Extra: extra})
+			if err == nil || l != nil || !strings.HasPrefix(err.Error(), "subagents: ") {
+				t.Fatalf("NewLauncher = %v, %v; want a subagents: error", l, err)
+			}
+		})
+	}
+	same := &countMW{name: "x", n: &n}
+	if _, err := NewLauncher(LauncherConfig{Extra: []agent.Middleware{same, same}}); err == nil {
+		t.Fatal("NewLauncher accepted the same extra twice")
 	}
 }

@@ -259,13 +259,17 @@ var _ Reattacher = (*localRunner)(nil)
 
 // newLocalRunner returns the local runner of specs; New builds it when
 // Config.Runner is nil.
-func newLocalRunner(specs map[string]subagents.Subagent, timeout time.Duration, onEvent func(string, string, agent.Event), bound func() *agent.Agent) *localRunner {
+func newLocalRunner(specs map[string]subagents.Subagent, timeout time.Duration, onEvent func(string, string, agent.Event), bound func() *agent.Agent) (*localRunner, error) {
 	// The inbox middleware is one pointer: every child, and their children,
 	// share it, and the Launcher dedupes it by identity.
 	boxes := newInboxes()
 	l := &localRunner{specs: specs, inboxes: boxes, timeout: timeout, fallback: cpmemory.New(), onEvent: onEvent, bound: bound}
-	l.launcher = subagents.NewLauncher(subagents.LauncherConfig{Extra: []agent.Middleware{boxes}, Checkpointer: l.checkpointer})
-	return l
+	launcher, err := subagents.NewLauncher(subagents.LauncherConfig{Extra: []agent.Middleware{boxes}, Checkpointer: l.checkpointer})
+	if err != nil {
+		return nil, err
+	}
+	l.launcher = launcher
+	return l, nil
 }
 
 // checkpointer is the store the tasks started by parent's runs save with.

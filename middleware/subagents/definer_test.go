@@ -108,7 +108,7 @@ func TestLauncherCheckpointer(t *testing.T) {
 	}
 	saved := memory.New()
 	var gotParent *agent.Agent
-	l := NewLauncher(LauncherConfig{Checkpointer: func(p *agent.Agent) checkpoint.Checkpointer {
+	l := mustLauncher(t, LauncherConfig{Checkpointer: func(p *agent.Agent) checkpoint.Checkpointer {
 		gotParent = p
 		return saved
 	}})
@@ -121,9 +121,9 @@ func TestLauncherCheckpointer(t *testing.T) {
 	}
 
 	for name, l := range map[string]*Launcher{
-		"nil func":   NewLauncher(LauncherConfig{}),
-		"nil result": NewLauncher(LauncherConfig{Checkpointer: func(*agent.Agent) checkpoint.Checkpointer { return nil }}),
-		"typed nil result": NewLauncher(LauncherConfig{Checkpointer: func(*agent.Agent) checkpoint.Checkpointer {
+		"nil func":   mustLauncher(t, LauncherConfig{}),
+		"nil result": mustLauncher(t, LauncherConfig{Checkpointer: func(*agent.Agent) checkpoint.Checkpointer { return nil }}),
+		"typed nil result": mustLauncher(t, LauncherConfig{Checkpointer: func(*agent.Agent) checkpoint.Checkpointer {
 			var none *memory.Checkpointer
 			return none
 		}}),

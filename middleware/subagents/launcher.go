@@ -50,8 +50,8 @@ type LauncherConfig struct {
 	// different value in the list makes Agent fail. Identity needs a
 	// pointer or otherwise comparable middleware; a value that is not
 	// comparable is never "the same" and so clashes by name. NewLauncher
-	// does not check Extra itself: two extras with the same name also make
-	// Agent fail, when agent.New rejects the duplicate.
+	// rejects a nil extra (a typed nil pointer included) and two extras with
+	// the same name.
 	Extra []agent.Middleware
 	// Checkpointer, when set, returns the checkpointer the children of
 	// parent are configured with; nil (or a nil result, a typed nil
@@ -68,9 +68,20 @@ type LauncherConfig struct {
 	Checkpointer func(parent *agent.Agent) checkpoint.Checkpointer
 }
 
-// NewLauncher returns a Launcher configured by cfg.
-func NewLauncher(cfg LauncherConfig) *Launcher {
-	return &Launcher{extra: slices.Clone(cfg.Extra), checkpointer: cfg.Checkpointer}
+// NewLauncher validates cfg and returns a Launcher configured by it. It
+// fails for a nil Extra entry and for two Extra entries with the same name.
+func NewLauncher(cfg LauncherConfig) (*Launcher, error) {
+	names := make(map[string]bool, len(cfg.Extra))
+	for i, m := range cfg.Extra {
+		if isNil(m) {
+			return nil, fmt.Errorf("subagents: LauncherConfig.Extra[%d] is nil", i)
+		}
+		if names[m.Name()] {
+			return nil, fmt.Errorf("subagents: LauncherConfig.Extra holds two middleware named %q", m.Name())
+		}
+		names[m.Name()] = true
+	}
+	return &Launcher{extra: slices.Clone(cfg.Extra), checkpointer: cfg.Checkpointer}, nil
 }
 
 // childKey identifies a built subagent: specs are fixed up front, but the
