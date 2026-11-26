@@ -76,7 +76,7 @@ func TestStackOrderM4(t *testing.T) {
 	}
 	defer am.Shutdown()
 	a, err := orchestrix.NewWithProvider(llmtest.New(),
-		orchestrix.WithShell(t.TempDir(), shell.Options{}),
+		orchestrix.WithShell(t.TempDir(), shell.Config{}),
 		orchestrix.WithTasks(tm),
 		orchestrix.WithHooks(hooks.Config{}),
 		orchestrix.WithInterruptOn("write_file"),
@@ -219,7 +219,7 @@ func TestWithMountKeepsShellExecute(t *testing.T) {
 	)
 	a, err := orchestrix.NewWithProvider(p,
 		orchestrix.WithPermissionMode(permission.ModeBypass),
-		orchestrix.WithShell(root, shell.Options{}),
+		orchestrix.WithShell(root, shell.Config{}),
 		orchestrix.WithMount("/kv", kvb),
 	)
 	if err != nil {

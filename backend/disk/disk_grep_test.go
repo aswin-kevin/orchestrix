@@ -18,8 +18,8 @@ func TestDiskRipgrepParity(t *testing.T) {
 		t.Skip("rg not installed")
 	}
 	ctx := context.Background()
-	withRg, root := newDisk(t, disk.WithRipgrep(true))
-	pureGo := openDisk(t, root, disk.WithRipgrep(false))
+	withRg, root := newDisk(t, disk.Config{})
+	pureGo := openDisk(t, root, disk.Config{DisableRipgrep: true})
 	files := map[string]string{
 		"a.go":                  "package a\nfunc Hello() {}\nfunc hello2() {}\n",
 		"b.txt":                 "Hello world\r\nhello again\r\n\r\nno newline at end hello",
@@ -89,7 +89,7 @@ func TestDiskRipgrepParity(t *testing.T) {
 
 func TestDiskGrepSkipsGitAndNodeModules(t *testing.T) {
 	ctx := context.Background()
-	b, root := newDisk(t, disk.WithRipgrep(false))
+	b, root := newDisk(t, disk.Config{DisableRipgrep: true})
 	for _, name := range []string{".git/config", "node_modules/x/i.js", "ok.txt"} {
 		p := filepath.Join(root, name)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -111,7 +111,7 @@ func TestDiskGrepSkipsGitAndNodeModules(t *testing.T) {
 func TestDiskGrepSemantics(t *testing.T) {
 	ctx := context.Background()
 	for _, rg := range []bool{true, false} {
-		b, root := newDisk(t, disk.WithRipgrep(rg))
+		b, root := newDisk(t, disk.Config{DisableRipgrep: !rg})
 		write := func(name, content string) {
 			if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
 				t.Fatal(err)
@@ -144,7 +144,7 @@ func TestDiskGrepFallsBackWhenRipgrepRejectsPattern(t *testing.T) {
 	if _, err := exec.LookPath("rg"); err != nil {
 		t.Skip("rg not installed")
 	}
-	b, root := newDisk(t)
+	b, root := newDisk(t, disk.Config{})
 	if err := os.WriteFile(filepath.Join(root, "f.txt"), []byte("a.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

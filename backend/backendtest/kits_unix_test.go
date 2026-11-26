@@ -16,7 +16,7 @@ import (
 
 func realShell(t *testing.T) *shell.Backend {
 	t.Helper()
-	b, err := shell.New(t.TempDir(), shell.Options{})
+	b, err := shell.New(t.TempDir(), shell.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

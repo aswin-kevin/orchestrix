@@ -34,7 +34,7 @@ import (
 // shellSpec is what WithShell asks for; the backend is built by New.
 type shellSpec struct {
 	root string
-	opts shell.Options
+	cfg  shell.Config
 	// built is the backend useShell opened; New closes it when it fails,
 	// since no agent will.
 	built *shell.Backend
@@ -119,8 +119,8 @@ func WithHooks(cfg hooks.Config) Option {
 // backend.InternalDir (".orchestrix/" in root). They may contain secrets the
 // conversation held; keep that directory out of version control, for
 // instance with a .gitignore entry.
-func WithShell(root string, opts shell.Options) Option {
-	return func(s *settings) { s.shell = &shellSpec{root: root, opts: opts} }
+func WithShell(root string, cfg shell.Config) Option {
+	return func(s *settings) { s.shell = &shellSpec{root: root, cfg: cfg} }
 }
 
 // WithTasks lets execute run commands in the background and adds the tools to
@@ -155,7 +155,7 @@ func (s *settings) canStartCommands() bool {
 
 // useShell builds the shell backend and makes it cfg's workspace.
 func (s *settings) useShell(cfg *agent.Config) {
-	b, err := shell.New(s.shell.root, s.shell.opts)
+	b, err := shell.New(s.shell.root, s.shell.cfg)
 	if err != nil {
 		s.errs = append(s.errs, fmt.Errorf("WithShell: %w", err))
 		return

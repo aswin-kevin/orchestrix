@@ -123,7 +123,8 @@ type ExecOptions struct {
 	// Timeout stops the command after this long; 0 means the backend default.
 	Timeout time.Duration
 	// Env holds variables that override the backend's environment; nil adds
-	// none. Implementations must not modify it.
+	// none. Implementations must not modify it. A key must be non-empty and
+	// contain no '=' or NUL; backends may reject one that does.
 	Env map[string]string
 	// Dir is the working directory as a backend path; empty means the root.
 	Dir string

@@ -16,7 +16,7 @@ import (
 // its new content more widely: the temporary file must already carry the
 // target's mode when it is created, before any byte is written to it.
 func TestRewriteKeepsMode(t *testing.T) {
-	b, root := newDisk(t)
+	b, root := newDisk(t, disk.Config{})
 	target := filepath.Join(root, "key")
 	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestRewriteKeepsMode(t *testing.T) {
 }
 
 func TestDiskRejectsNonRegularFiles(t *testing.T) {
-	b, root := newDisk(t)
+	b, root := newDisk(t, disk.Config{})
 	fifo := filepath.Join(root, "pipe")
 	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
 		t.Skipf("mkfifo unavailable: %v", err)

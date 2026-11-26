@@ -11,7 +11,7 @@ import (
 
 func TestMemoryLimitLinux(t *testing.T) {
 	const limit = 50 << 20
-	b, _ := newShell(t, shell.Options{MemoryLimitBytes: limit})
+	b, _ := newShell(t, shell.Config{MemoryLimitBytes: limit})
 	// Command substitution holds ~200 MB in the shell's memory.
 	res := execute(t, b, "echo $$; x=$(head -c 200000000 /dev/zero | tr '\\0' a); sleep 30",
 		backend.ExecOptions{Timeout: 20 * time.Second})

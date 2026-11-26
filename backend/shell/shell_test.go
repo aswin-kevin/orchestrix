@@ -16,6 +16,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/backendtest"
+	"github.com/aswin-kevin/orchestrix/backend/disk"
 	"github.com/aswin-kevin/orchestrix/backend/shell"
 )
 
@@ -31,9 +32,9 @@ var (
 
 // newShell returns a backend over a fresh temp dir and the dir's symlink-free
 // path, which is what commands see as their working directory.
-func newShell(t *testing.T, opts shell.Options) (*shell.Backend, string) {
+func newShell(t *testing.T, cfg shell.Config) (*shell.Backend, string) {
 	t.Helper()
-	b, err := shell.New(t.TempDir(), opts)
+	b, err := shell.New(t.TempDir(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,13 +86,13 @@ func requireGone(t *testing.T, target int) {
 
 func TestShellConformance(t *testing.T) {
 	backendtest.Run(t, func(t *testing.T) backend.Backend {
-		b, _ := newShell(t, shell.Options{})
+		b, _ := newShell(t, shell.Config{})
 		return b
 	})
 }
 
 func TestExecuteExitCodeAndOutput(t *testing.T) {
-	b, _ := newShell(t, shell.Options{})
+	b, _ := newShell(t, shell.Config{})
 	res := execute(t, b, "echo hi; echo err >&2; exit 3", backend.ExecOptions{})
 	if res.ExitCode != 3 || res.TimedOut || res.Truncated {
 		t.Errorf("result = %+v, want exit 3, not timed out or truncated", res)
@@ -102,7 +103,7 @@ func TestExecuteExitCodeAndOutput(t *testing.T) {
 }
 
 func TestExecuteStdinIsEmpty(t *testing.T) {
-	b, _ := newShell(t, shell.Options{})
+	b, _ := newShell(t, shell.Config{})
 	res := execute(t, b, "cat; echo done", backend.ExecOptions{Timeout: 5 * time.Second})
 	if res.Output != "done\n" || res.TimedOut {
 		t.Errorf("result = %+v; a stdin reader must see EOF at once", res)
@@ -110,7 +111,7 @@ func TestExecuteStdinIsEmpty(t *testing.T) {
 }
 
 func TestExecuteRunsInRootAndDir(t *testing.T) {
-	b, root := newShell(t, shell.Options{})
+	b, root := newShell(t, shell.Config{})
 	if err := os.Mkdir(filepath.Join(root, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +147,7 @@ func TestExecuteRunsInRootAndDir(t *testing.T) {
 
 func TestEnvAllowlist(t *testing.T) {
 	t.Setenv("ORX_SECRET_TEST", "leaked")
-	b, _ := newShell(t, shell.Options{})
+	b, _ := newShell(t, shell.Config{})
 	res := execute(t, b, "env", backend.ExecOptions{})
 	if strings.Contains(res.Output, "ORX_SECRET_TEST") {
 		t.Errorf("host secret leaked into the command env:\n%s", res.Output)
@@ -155,17 +156,17 @@ func TestEnvAllowlist(t *testing.T) {
 		t.Errorf("env lacks the inherited PATH:\n%s", res.Output)
 	}
 
-	inherit, _ := newShell(t, shell.Options{InheritEnv: true})
+	inherit, _ := newShell(t, shell.Config{InheritEnv: true})
 	if res := execute(t, inherit, "env", backend.ExecOptions{}); !containsLine(strings.Split(res.Output, "\n"), "ORX_SECRET_TEST=leaked") {
 		t.Errorf("InheritEnv must pass the host env:\n%s", res.Output)
 	}
 }
 
 // TestEnvPrecedence pins the order: inherited host variables, then
-// NonInteractiveEnv, then SafeGitEnv, then Options.Env, then
+// NonInteractiveEnv, then SafeGitEnv, then Config.Env, then
 // ExecOptions.Env, each overriding the ones before.
 func TestEnvPrecedence(t *testing.T) {
-	b, _ := newShell(t, shell.Options{Env: map[string]string{"A": "1", "B": "options", "TERM": "xterm"}})
+	b, _ := newShell(t, shell.Config{Env: map[string]string{"A": "1", "B": "options", "TERM": "xterm"}})
 	res := execute(t, b, "env", backend.ExecOptions{Env: map[string]string{"B": "exec"}})
 	lines := strings.Split(res.Output, "\n")
 	for _, want := range []string{
@@ -183,21 +184,26 @@ func TestEnvPrecedence(t *testing.T) {
 	}
 
 	// An inherited environment's git settings are replaced by SafeGitEnv, and
-	// an inherited TERM by NonInteractiveEnv; Options.Env can restore them.
+	// an inherited TERM by NonInteractiveEnv; Config.Env can restore them.
 	t.Setenv("GIT_CONFIG_COUNT", "5")
 	t.Setenv("GIT_CONFIG_VALUE_0", "all")
 	t.Setenv("TERM", "xterm-256color")
-	inherit, _ := newShell(t, shell.Options{InheritEnv: true})
+	inherit, _ := newShell(t, shell.Config{InheritEnv: true})
 	lines = strings.Split(execute(t, inherit, "env", backend.ExecOptions{}).Output, "\n")
 	for _, want := range []string{"GIT_CONFIG_COUNT=1", "GIT_CONFIG_VALUE_0=explicit", "TERM=dumb"} {
 		if !containsLine(lines, want) {
 			t.Errorf("inherited env: lacks %q:\n%s", want, strings.Join(lines, "\n"))
 		}
 	}
-	restore, _ := newShell(t, shell.Options{InheritEnv: true, Env: map[string]string{"GIT_CONFIG_COUNT": "0"}})
+	restore, _ := newShell(t, shell.Config{InheritEnv: true, Env: map[string]string{"GIT_CONFIG_COUNT": "0"}})
 	lines = strings.Split(execute(t, restore, "env", backend.ExecOptions{}).Output, "\n")
 	if !containsLine(lines, "GIT_CONFIG_COUNT=0") {
-		t.Errorf("Options.Env did not override SafeGitEnv:\n%s", strings.Join(lines, "\n"))
+		t.Errorf("Config.Env did not override SafeGitEnv:\n%s", strings.Join(lines, "\n"))
+	}
+	plain, _ := newShell(t, shell.Config{})
+	res = execute(t, plain, "env", backend.ExecOptions{Env: map[string]string{"GIT_CONFIG_COUNT": "0"}})
+	if !containsLine(strings.Split(res.Output, "\n"), "GIT_CONFIG_COUNT=0") {
+		t.Errorf("ExecOptions.Env did not override SafeGitEnv:\n%s", res.Output)
 	}
 }
 
@@ -223,7 +229,7 @@ func requireBareRepositoryIgnored(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
-	b, root := newShell(t, shell.Options{})
+	b, root := newShell(t, shell.Config{})
 	marker := filepath.Join(root, "ran")
 	files := map[string]string{
 		"evil/HEAD":   "ref: refs/heads/main\n",
@@ -256,15 +262,15 @@ func containsLine(lines []string, want string) bool {
 
 func TestTimeoutKillsGroup(t *testing.T) {
 	cases := map[string]struct {
-		opts shell.Options
+		cfg  shell.Config
 		exec backend.ExecOptions
 	}{
 		"exec timeout":    {exec: backend.ExecOptions{Timeout: 200 * time.Millisecond}},
-		"default timeout": {opts: shell.Options{Timeout: 200 * time.Millisecond}},
+		"default timeout": {cfg: shell.Config{Timeout: 200 * time.Millisecond}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			b, _ := newShell(t, tc.opts)
+			b, _ := newShell(t, tc.cfg)
 			start := time.Now()
 			res := execute(t, b, "echo $$; sleep 30", tc.exec)
 			if elapsed := time.Since(start); elapsed > 3*time.Second {
@@ -279,7 +285,7 @@ func TestTimeoutKillsGroup(t *testing.T) {
 }
 
 func TestTimeoutEscalatesToKill(t *testing.T) {
-	b, _ := newShell(t, shell.Options{})
+	b, _ := newShell(t, shell.Config{})
 	start := time.Now()
 	// The ignored SIGTERM is inherited by sleep, so only SIGKILL ends the group.
 	res := execute(t, b, "trap '' TERM; echo $$; sleep 30", backend.ExecOptions{Timeout: 200 * time.Millisecond})
@@ -293,7 +299,7 @@ func TestTimeoutEscalatesToKill(t *testing.T) {
 }
 
 func TestGrandchildKilled(t *testing.T) {
-	b, _ := newShell(t, shell.Options{})
+	b, _ := newShell(t, shell.Config{})
 	start := time.Now()
 	res := execute(t, b, "sleep 1000 & echo $!", backend.ExecOptions{})
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
@@ -307,7 +313,7 @@ func TestGrandchildKilled(t *testing.T) {
 }
 
 func TestOutputCapHeadAndTail(t *testing.T) {
-	b, _ := newShell(t, shell.Options{})
+	b, _ := newShell(t, shell.Config{})
 	res := execute(t, b, "seq 1 200000", backend.ExecOptions{MaxOutputBytes: 4096})
 	if !strings.HasPrefix(res.Output, "1\n2\n") || !strings.HasSuffix(res.Output, "\n200000\n") {
 		t.Errorf("output must keep head and tail, got %q…%q", res.Output[:20], res.Output[len(res.Output)-20:])
@@ -319,14 +325,14 @@ func TestOutputCapHeadAndTail(t *testing.T) {
 		t.Errorf("capped output is %d bytes", len(res.Output))
 	}
 
-	capped, _ := newShell(t, shell.Options{MaxOutputBytes: 100})
+	capped, _ := newShell(t, shell.Config{MaxOutputBytes: 100})
 	if res := execute(t, capped, "seq 1 1000", backend.ExecOptions{}); !res.Truncated || len(res.Output) > 100+64 {
-		t.Errorf("Options.MaxOutputBytes ignored: %d bytes, truncated %v", len(res.Output), res.Truncated)
+		t.Errorf("Config.MaxOutputBytes ignored: %d bytes, truncated %v", len(res.Output), res.Truncated)
 	}
 }
 
 func TestStartOutputWhileRunningAndStop(t *testing.T) {
-	b, _ := newShell(t, shell.Options{})
+	b, _ := newShell(t, shell.Config{})
 	p, err := b.Start(context.Background(), "echo $$; echo started; sleep 30", backend.ExecOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -360,7 +366,7 @@ func TestStartOutputWhileRunningAndStop(t *testing.T) {
 }
 
 func TestStartOutlivesContext(t *testing.T) {
-	b, _ := newShell(t, shell.Options{})
+	b, _ := newShell(t, shell.Config{})
 	ctx, cancel := context.WithCancel(context.Background())
 	p, err := b.Start(ctx, "sleep 1; echo late", backend.ExecOptions{})
 	if err != nil {
@@ -383,7 +389,7 @@ func TestStartOutlivesContext(t *testing.T) {
 }
 
 func TestExecuteContextCancelStopsGroup(t *testing.T) {
-	b, root := newShell(t, shell.Options{})
+	b, root := newShell(t, shell.Config{})
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	pidFile := filepath.Join(root, "pid")
@@ -400,4 +406,42 @@ func TestExecuteContextCancelStopsGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireGone(t, -firstLinePID(t, string(data)))
+}
+
+func TestNewRejectsNegative(t *testing.T) {
+	tests := map[string]struct {
+		cfg  shell.Config
+		want string
+	}{
+		"Timeout":          {shell.Config{Timeout: -1}, "shell: Timeout is negative"},
+		"MaxOutputBytes":   {shell.Config{MaxOutputBytes: -1}, "shell: MaxOutputBytes is negative"},
+		"MemoryLimitBytes": {shell.Config{MemoryLimitBytes: -1}, "shell: MemoryLimitBytes is negative"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			b, err := shell.New(t.TempDir(), tt.cfg)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("New error = %v, want %q", err, tt.want)
+			}
+			if b != nil {
+				t.Errorf("New returned a backend with its error")
+			}
+		})
+	}
+}
+
+func TestNewPassesDiskConfig(t *testing.T) {
+	root := t.TempDir()
+	b, err := shell.New(root, shell.Config{Disk: disk.Config{DisableVirtual: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { b.Close() })
+	abs, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Write(context.Background(), filepath.ToSlash(filepath.Join(abs, "x.txt")), []byte("x")); err != nil {
+		t.Fatalf("Write by host path: %v", err)
+	}
 }

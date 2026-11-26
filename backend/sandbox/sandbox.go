@@ -53,7 +53,7 @@
 // Local implementation: wrapping a backend/shell Backend gives a sandbox on
 // the host, useful for development and tests:
 //
-//	sh, err := shell.New(dir, shell.Options{})
+//	sh, err := shell.New(dir, shell.Config{})
 //	...
 //	b, err := sandbox.New(sh, sandbox.Options{Root: dir})
 package sandbox

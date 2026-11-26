@@ -31,7 +31,7 @@ func TestWithTasksRejectsSandboxWithoutStarter(t *testing.T) {
 
 func TestWithTasksRunsJobInSandbox(t *testing.T) {
 	dir := t.TempDir()
-	sh, err := shell.New(dir, shell.Options{})
+	sh, err := shell.New(dir, shell.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

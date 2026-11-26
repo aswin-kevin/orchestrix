@@ -386,7 +386,7 @@ A backend is the file system the file tools operate on.
 
 ```go
 // Imports omitted; model comes from surrounding code.
-ws, err := disk.New("./workspace")
+ws, err := disk.New("./workspace", disk.Config{})
 if err != nil {
 	log.Fatal(err)
 }
@@ -772,7 +772,7 @@ A checkpointed workspace is stored whole in the thread's state, so for large wor
 
 ## Shell and background tasks
 
-`WithShell(root, shell.Options{})` runs the agent on the real directory `root` and adds the `execute` tool. Commands run with a minimal environment, timeouts and output limits; `shell.Options` adjusts them. `WithShell` cannot be combined with `WithBackend` or `WithBackendFactory`, and the one backend is shared by all threads. Commands run under `/bin/sh`, so `execute` works on Unix (Linux, macOS, the BSDs) only: on Windows the file tools work but every command fails to start; run commands in a container there (`orxdocker`).
+`WithShell(root, shell.Config{})` runs the agent on the real directory `root` and adds the `execute` tool. Commands run with a minimal environment, timeouts and output limits; `shell.Config` adjusts them. `WithShell` cannot be combined with `WithBackend` or `WithBackendFactory`, and the one backend is shared by all threads. Commands run under `/bin/sh`, so `execute` works on Unix (Linux, macOS, the BSDs) only: on Windows the file tools work but every command fails to start; run commands in a container there (`orxdocker`).
 
 `WithTasks` lets `execute` start a command in the background (`run_in_background`) and gives the model `task_output`, `task_stop`, `task_list`, `sleep` and `monitor` to follow it. Finished jobs are announced to the model on its next turn. The host owns the `tasks.Middleware` and must call `Shutdown`, or `Close` the agent, to stop jobs still running:
 
@@ -782,7 +782,7 @@ tm := tasks.New(tasks.Config{})
 defer tm.Shutdown() // stops background jobs still running
 
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
-	orchestrix.WithShell("./workspace", shell.Options{}),
+	orchestrix.WithShell("./workspace", shell.Config{}),
 	orchestrix.WithTasks(tm),
 	orchestrix.WithAllow("execute(git:*)"),
 	orchestrix.WithDeny("execute(rm:*)"),

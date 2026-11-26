@@ -14,7 +14,7 @@ import (
 // directory on that drive, so a non-virtual backend refuses it.
 func TestDiskNonVirtualRefusesDriveRelativePath(t *testing.T) {
 	ctx := context.Background()
-	b, root := newDisk(t, disk.WithVirtual(false))
+	b, root := newDisk(t, disk.Config{DisableVirtual: true})
 	rel := filepath.VolumeName(root) + "foo.txt"
 	if err := b.Write(ctx, rel, []byte("x")); !errors.Is(err, backend.ErrInvalidPath) {
 		t.Errorf("Write(%q) = %v, want ErrInvalidPath", rel, err)

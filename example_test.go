@@ -154,7 +154,7 @@ func ExampleWithShell() {
 	defer tm.Shutdown() // stops background jobs still running
 
 	a, err := orchestrix.NewWithProvider(model,
-		orchestrix.WithShell("./workspace", shell.Options{}),
+		orchestrix.WithShell("./workspace", shell.Config{}),
 		orchestrix.WithTasks(tm),
 		orchestrix.WithAllow("execute(git:*)"),
 		orchestrix.WithDeny("execute(rm:*)"),

@@ -60,30 +60,26 @@ type Backend struct {
 
 var _ backend.Backend = (*Backend)(nil)
 
-// Option configures a Backend.
-type Option func(*Backend)
-
-// WithVirtual chooses how paths map to the file system. When true (the
-// default) "/a/b" means <root>/a/b. When false, paths are real file-system
-// paths, which must still lie inside the root. On Windows such a path is
-// absolute with its drive ("C:\work\a.txt" or "C:/work/a.txt"), and the
-// paths the backend returns use forward slashes ("C:/work/a.txt"); a root on
-// a UNC share (\\server\share) needs the default, virtual paths. Drive-letter
-// paths work only when the backend is called directly: the agent's file
-// tools clean every path into "/a/b" form first, so on Windows give an agent
-// a virtual backend.
-func WithVirtual(virtual bool) Option {
-	return func(b *Backend) { b.virtual = virtual }
-}
-
-// WithRipgrep enables (the default) or disables use of the rg binary for Grep.
-// Even when enabled, rg is used only if it is found on PATH.
-func WithRipgrep(enabled bool) Option {
-	return func(b *Backend) { b.ripgrep = enabled }
+// Config holds the optional settings of a Backend. The zero value is valid:
+// virtual paths and ripgrep when it is installed.
+type Config struct {
+	// DisableVirtual makes paths real file-system paths, which must still
+	// lie inside the root, instead of the default where "/a/b" means
+	// <root>/a/b. On Windows such a path is absolute with its drive
+	// ("C:\work\a.txt" or "C:/work/a.txt"), and the paths the backend
+	// returns use forward slashes ("C:/work/a.txt"); a root on a UNC share
+	// (\\server\share) needs the default, virtual paths. Drive-letter
+	// paths work only when the backend is called directly: the agent's file
+	// tools clean every path into "/a/b" form first, so on Windows give an
+	// agent a virtual backend.
+	DisableVirtual bool
+	// DisableRipgrep stops Grep from using the rg binary. Otherwise rg is
+	// used only if it is found on PATH.
+	DisableRipgrep bool
 }
 
 // New returns a Backend rooted at root, which must be an existing directory.
-func New(root string, opts ...Option) (*Backend, error) {
+func New(root string, cfg Config) (*Backend, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("disk: root %q: %w", root, err)
@@ -103,10 +99,7 @@ func New(root string, opts ...Option) (*Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("disk: root %q: %w", root, err)
 	}
-	b := &Backend{root: resolved, fsRoot: fsRoot, virtual: true, ripgrep: true}
-	for _, opt := range opts {
-		opt(b)
-	}
+	b := &Backend{root: resolved, fsRoot: fsRoot, virtual: !cfg.DisableVirtual, ripgrep: !cfg.DisableRipgrep}
 	if b.ripgrep {
 		b.rgPath, _ = exec.LookPath("rg")
 	}

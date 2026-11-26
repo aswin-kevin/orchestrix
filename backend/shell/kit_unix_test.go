@@ -12,14 +12,14 @@ import (
 
 func TestShellExecutorKit(t *testing.T) {
 	backendtest.RunExecutor(t, func(t *testing.T) backend.Executor {
-		b, _ := newShell(t, shell.Options{})
+		b, _ := newShell(t, shell.Config{})
 		return b
 	})
 }
 
 func TestShellStarterKit(t *testing.T) {
 	backendtest.RunStarter(t, func(t *testing.T) backend.Starter {
-		b, _ := newShell(t, shell.Options{})
+		b, _ := newShell(t, shell.Config{})
 		return b
 	})
 }

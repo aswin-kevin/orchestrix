@@ -62,7 +62,7 @@ func run(ctx context.Context, w io.Writer) error {
 	if err := os.Mkdir(root, 0o755); err != nil {
 		return err
 	}
-	workspace, err := disk.New(root) // the agent's files live here
+	workspace, err := disk.New(root, disk.Config{}) // the agent's files live here
 	if err != nil {
 		return err
 	}

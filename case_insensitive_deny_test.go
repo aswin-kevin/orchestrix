@@ -27,7 +27,7 @@ func TestDenyRulesHoldOnCaseInsensitiveFileSystems(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "SECRETS", "KEY")); err != nil {
 		t.Skip("the temp directory is on a case-sensitive file system")
 	}
-	b, err := disk.New(root, disk.WithVirtual(true))
+	b, err := disk.New(root, disk.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

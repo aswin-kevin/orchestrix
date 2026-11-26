@@ -56,7 +56,7 @@ func TestStackOrderM3(t *testing.T) {
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown()
 	a, err := orchestrix.NewWithProvider(llmtest.New(),
-		orchestrix.WithShell(t.TempDir(), shell.Options{}),
+		orchestrix.WithShell(t.TempDir(), shell.Config{}),
 		orchestrix.WithTasks(tm),
 		orchestrix.WithHooks(hooks.Config{}),
 		orchestrix.WithInterruptOn("write_file"),

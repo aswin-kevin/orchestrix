@@ -238,7 +238,7 @@ type noMulti struct{ backend.Backend }
 
 func TestCapabilitiesFollowDefault(t *testing.T) {
 	testutil.RequireUnixShell(t)
-	sh, err := shell.New(t.TempDir(), shell.Options{})
+	sh, err := shell.New(t.TempDir(), shell.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

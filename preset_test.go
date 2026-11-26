@@ -47,7 +47,7 @@ func TestFullStackOrder(t *testing.T) {
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown()
 	a, err := orchestrix.NewWithProvider(llmtest.New(),
-		orchestrix.WithShell(sh, shell.Options{}),
+		orchestrix.WithShell(sh, shell.Config{}),
 		orchestrix.WithTasks(tm),
 		orchestrix.WithHooks(hooks.Config{}),
 		orchestrix.WithInterruptOn("write_file"),
@@ -153,7 +153,7 @@ func TestWithInterruptOnPauses(t *testing.T) {
 
 func TestWithShellRegistersExecute(t *testing.T) {
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.NewWithProvider(p, orchestrix.WithShell(t.TempDir(), shell.Options{}))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithShell(t.TempDir(), shell.Config{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestWithTasksOffersBackgroundTools(t *testing.T) {
 	tm := tasks.New(tasks.Config{})
 	defer tm.Shutdown()
 	p := llmtest.New(llmtest.Turn{Text: "ok"})
-	a, err := orchestrix.NewWithProvider(p, orchestrix.WithShell(t.TempDir(), shell.Options{}), orchestrix.WithTasks(tm))
+	a, err := orchestrix.NewWithProvider(p, orchestrix.WithShell(t.TempDir(), shell.Config{}), orchestrix.WithTasks(tm))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestWithShellAndBackendExclusive(t *testing.T) {
 		"backend": orchestrix.WithBackend(shellBackend(t)),
 		"factory": orchestrix.WithBackendFactory(func(string) backend.Backend { return shellBackend(t) }),
 	} {
-		_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithShell(t.TempDir(), shell.Options{}), opt)
+		_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithShell(t.TempDir(), shell.Config{}), opt)
 		if err == nil || !strings.Contains(err.Error(), "WithShell") {
 			t.Errorf("%s: err = %v, want an error naming WithShell", name, err)
 		}
@@ -245,7 +245,7 @@ func TestWithShellAndBackendExclusive(t *testing.T) {
 
 func shellBackend(t *testing.T) backend.Backend {
 	t.Helper()
-	b, err := shell.New(t.TempDir(), shell.Options{})
+	b, err := shell.New(t.TempDir(), shell.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,5 +325,12 @@ func TestWithTasksOnFactoryBackendOffersBackgroundExecute(t *testing.T) {
 		if b.Type == llm.BlockToolResult && b.IsError {
 			t.Errorf("background execute failed: %+v", b.Content)
 		}
+	}
+}
+
+func TestWithShellRejectsNegativeTimeout(t *testing.T) {
+	_, err := orchestrix.NewWithProvider(llmtest.New(), orchestrix.WithShell(t.TempDir(), shell.Config{Timeout: -1}))
+	if err == nil || !strings.Contains(err.Error(), "WithShell: shell: Timeout is negative") {
+		t.Errorf("err = %v, want one containing %q", err, "WithShell: shell: Timeout is negative")
 	}
 }

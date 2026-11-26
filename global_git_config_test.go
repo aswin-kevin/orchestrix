@@ -46,7 +46,7 @@ func TestGlobalGitConfigInWorkspaceNeedsApproval(t *testing.T) {
 				llmtest.Turn{Text: "done"},
 			)
 			a, err := orchestrix.NewWithProvider(model,
-				orchestrix.WithShell(home, shell.Options{}),
+				orchestrix.WithShell(home, shell.Config{}),
 				orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
 				orchestrix.WithAllow("execute(git:*)"),
 				orchestrix.WithApprover(func(context.Context, permission.Request, string) permission.Decision {
@@ -95,7 +95,7 @@ func TestIncludedGitConfigNeedsApproval(t *testing.T) {
 		llmtest.Turn{Text: "done"},
 	)
 	a, err := orchestrix.NewWithProvider(model,
-		orchestrix.WithShell(home, shell.Options{}),
+		orchestrix.WithShell(home, shell.Config{}),
 		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
 		orchestrix.WithAllow("execute(git:*)"),
 		orchestrix.WithApprover(func(context.Context, permission.Request, string) permission.Decision {

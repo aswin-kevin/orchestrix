@@ -605,7 +605,7 @@ func backgroundJob(ctx context.Context, env Env, t *T) {
 	m := tasks.New(tasks.Config{JobTimeout: time.Minute})
 	defer m.Shutdown()
 	a, err := newAgent(env,
-		orchestrix.WithShell(dir, shell.Options{}),
+		orchestrix.WithShell(dir, shell.Config{}),
 		orchestrix.WithTasks(m),
 		// The job's command is allowed; anything else the model runs is
 		// declined rather than left waiting for a human.

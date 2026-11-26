@@ -238,7 +238,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		orchestrix.WithAskUser(askuser.Config{Ask: ap.ask}),
 	}
 	if o.noShell {
-		ws, err := disk.New(o.dir)
+		ws, err := disk.New(o.dir, disk.Config{})
 		if err != nil {
 			return fail(exitError, "%v", err)
 		}
@@ -251,7 +251,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 		jobs := tasks.New(tasks.Config{})
 		cleanups = append(cleanups, jobs.Shutdown)
 		agentOpts = append(agentOpts,
-			orchestrix.WithShell(o.dir, shell.Options{}), orchestrix.WithTasks(jobs))
+			orchestrix.WithShell(o.dir, shell.Config{}), orchestrix.WithTasks(jobs))
 	}
 	if o.store != "" {
 		cp, err := file.New(o.store)

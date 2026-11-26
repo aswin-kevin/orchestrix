@@ -74,7 +74,7 @@ func TestStartPrefixesQuotedCd(t *testing.T) {
 func TestStartOverShell(t *testing.T) {
 	skipWithoutSh(t)
 	dir := t.TempDir()
-	sh, err := shell.New(dir, shell.Options{})
+	sh, err := shell.New(dir, shell.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

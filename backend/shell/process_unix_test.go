@@ -71,7 +71,7 @@ func TestDelayedKillSkippedOnceGroupGone(t *testing.T) {
 }
 
 func TestStopTakesCtx(t *testing.T) {
-	b, err := New(t.TempDir(), Options{})
+	b, err := New(t.TempDir(), Config{})
 	if err != nil {
 		t.Fatal(err)
 	}

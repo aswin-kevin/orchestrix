@@ -17,7 +17,7 @@
 //
 // Commands get no stdin, a small allowlisted environment (InheritedEnv) plus
 // the variables of NonInteractiveEnv and SafeGitEnv (the host environment,
-// which may hold API keys, is not inherited unless Options.InheritEnv is
+// which may hold API keys, is not inherited unless Config.InheritEnv is
 // set), and output capped at a head and a tail so memory stays bounded.
 // Those three functions return copies: changing what they return does not
 // change what commands get.
@@ -43,9 +43,9 @@ import (
 	"github.com/aswin-kevin/orchestrix/internal/hostenv"
 )
 
-// Defaults for Options and for the kill sequence.
+// Defaults for Config and for the kill sequence.
 const (
-	// DefaultTimeout bounds a command when neither ExecOptions nor Options
+	// DefaultTimeout bounds a command when neither ExecOptions nor Config
 	// set a timeout.
 	DefaultTimeout = 2 * time.Minute
 	// DefaultMaxOutputBytes caps captured output; the first half and the last
@@ -80,13 +80,14 @@ func NonInteractiveEnv() map[string]string { return maps.Clone(nonInteractiveEnv
 
 // SafeGitEnv returns the variables that set safe.bareRepository=explicit, so
 // git uses a bare repository only when one is named with --git-dir or
-// GIT_DIR, never one it merely finds: a directory with HEAD, config, objects and refs, which an
-// agent could write with file tools, would otherwise let its config run
-// commands (an alias, core.fsmonitor) from any git call made inside it.
+// GIT_DIR, never one it merely finds: a directory with HEAD, config, objects
+// and refs, which an agent could write with file tools, would otherwise let
+// its config run commands (an alias, core.fsmonitor) from any git call made
+// inside it.
 // Configuration set through the environment overrides the repository's, and
 // git 2.38 and later honour this setting. It replaces any GIT_CONFIG_COUNT
-// settings an inherited environment carries; Options.Env can restore them.
-// Each call returns a fresh copy.
+// settings an inherited environment carries; Config.Env or ExecOptions.Env
+// can restore them. Each call returns a fresh copy.
 func SafeGitEnv() map[string]string { return maps.Clone(safeGitEnv) }
 
 // InheritedEnv returns the names of the host variables passed to commands by
@@ -95,8 +96,8 @@ func SafeGitEnv() map[string]string { return maps.Clone(safeGitEnv) }
 // fresh copy.
 func InheritedEnv() []string { return hostenv.DefaultNames() }
 
-// Options configures a Backend. The zero value is ready to use.
-type Options struct {
+// Config holds the optional settings of a Backend. The zero value is valid.
+type Config struct {
 	// Env is added to every command's environment after the inherited
 	// variables, NonInteractiveEnv and SafeGitEnv, so it wins over them;
 	// ExecOptions.Env wins over it. nil adds nothing.
@@ -114,9 +115,9 @@ type Options struct {
 	// memory exceeds it, sampled every DefaultMemSample. Linux only; 0
 	// disables the watchdog.
 	MemoryLimitBytes int64
-	// DiskOptions configure the underlying disk backend; nil uses its
+	// Disk configures the underlying disk backend; the zero value uses its
 	// defaults.
-	DiskOptions []disk.Option
+	Disk disk.Config
 }
 
 // Backend is a disk backend that also runs commands; it implements
@@ -124,7 +125,7 @@ type Options struct {
 type Backend struct {
 	// Backend is the disk backend that provides the file operations.
 	*disk.Backend
-	opts Options
+	cfg Config
 }
 
 var (
@@ -135,12 +136,20 @@ var (
 )
 
 // New returns a Backend rooted at root, which must be an existing directory.
-func New(root string, opts Options) (*Backend, error) {
-	d, err := disk.New(root, opts.DiskOptions...)
+func New(root string, cfg Config) (*Backend, error) {
+	switch {
+	case cfg.Timeout < 0:
+		return nil, errors.New("shell: Timeout is negative")
+	case cfg.MaxOutputBytes < 0:
+		return nil, errors.New("shell: MaxOutputBytes is negative")
+	case cfg.MemoryLimitBytes < 0:
+		return nil, errors.New("shell: MemoryLimitBytes is negative")
+	}
+	d, err := disk.New(root, cfg.Disk)
 	if err != nil {
 		return nil, fmt.Errorf("shell: %w", err)
 	}
-	return &Backend{Backend: d, opts: opts}, nil
+	return &Backend{Backend: d, cfg: cfg}, nil
 }
 
 // Execute runs cmd and waits for it. When ctx ends first the command's group
@@ -178,7 +187,7 @@ func (b *Backend) Start(ctx context.Context, cmd string, opts backend.ExecOption
 	c := exec.Command(Shell, "-c", cmd) // nil Stdin reads from the null device
 	c.Dir = dir
 	c.Env = b.environ(opts.Env)
-	return startProcess(c, b.maxOutput(opts), b.timeout(opts), b.opts.MemoryLimitBytes)
+	return startProcess(c, b.maxOutput(opts), b.timeout(opts), b.cfg.MemoryLimitBytes)
 }
 
 // workDir resolves a command's working directory, which must be an existing
@@ -203,19 +212,19 @@ func (b *Backend) workDir(dir string) (string, error) {
 // environ builds a command's environment, lowest precedence first. exec.Cmd
 // keeps only the last value of a repeated key, so later entries override.
 func (b *Backend) environ(extra map[string]string) []string {
-	env := hostenv.Inherited(hostenv.DefaultNames(), b.opts.InheritEnv)
+	env := hostenv.Inherited(hostenv.DefaultNames(), b.cfg.InheritEnv)
 	env = append(env, hostenv.Pairs(nonInteractiveEnv)...)
 	env = append(env, hostenv.Pairs(safeGitEnv)...)
-	env = append(env, hostenv.Pairs(b.opts.Env)...)
+	env = append(env, hostenv.Pairs(b.cfg.Env)...)
 	return append(env, hostenv.Pairs(extra)...)
 }
 
 func (b *Backend) timeout(opts backend.ExecOptions) time.Duration {
-	return firstPositive(opts.Timeout, b.opts.Timeout, DefaultTimeout)
+	return firstPositive(opts.Timeout, b.cfg.Timeout, DefaultTimeout)
 }
 
 func (b *Backend) maxOutput(opts backend.ExecOptions) int {
-	return firstPositive(opts.MaxOutputBytes, b.opts.MaxOutputBytes, DefaultMaxOutputBytes)
+	return firstPositive(opts.MaxOutputBytes, b.cfg.MaxOutputBytes, DefaultMaxOutputBytes)
 }
 
 // firstPositive returns the first value above zero, or the last value.
