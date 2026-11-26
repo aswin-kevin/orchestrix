@@ -71,7 +71,7 @@ func toolNamed(t *testing.T, m *Middleware, name string) tool.Tool {
 }
 
 // callSkill runs the skill tool with in on State s.
-func callSkill(t *testing.T, m *Middleware, s *state.State, in ToolInput) tool.Result {
+func callSkill(t *testing.T, m *Middleware, s *state.State, in Input) tool.Result {
 	t.Helper()
 	raw, _ := json.Marshal(in)
 	res, err := toolNamed(t, m, ToolSkill).Call(context.Background(), raw, &tool.Call{State: s})
@@ -86,13 +86,13 @@ func resultText(r tool.Result) string { return llm.Message{Content: r.Content}.T
 func TestSkillToolLoadsBody(t *testing.T) {
 	m, _ := pdfMiddleware(t, Config{})
 	s := state.New()
-	res := callSkill(t, m, s, ToolInput{Name: "pdf"})
+	res := callSkill(t, m, s, Input{Name: "pdf"})
 	text := resultText(res)
 	if res.IsError || !strings.HasPrefix(text, `<skill name="pdf">`) || !strings.Contains(text, pdfBody+"\n</skill>") ||
 		!strings.Contains(text, "reference.md") || !strings.Contains(text, "scripts/run.sh") {
 		t.Fatalf("result (error %v):\n%s", res.IsError, text)
 	}
-	callSkill(t, m, s, ToolInput{Name: "pdf"})
+	callSkill(t, m, s, Input{Name: "pdf"})
 	if got := Loaded(s); !reflect.DeepEqual(got, []string{"pdf"}) {
 		t.Fatalf("Loaded = %v, want [pdf]", got)
 	}
@@ -108,19 +108,19 @@ func TestSkillToolRejectsUnknownAndOutOfScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := state.New()
-	res := callSkill(t, m, s, ToolInput{Name: "nope"})
+	res := callSkill(t, m, s, Input{Name: "nope"})
 	if !res.IsError || !strings.Contains(resultText(res), "a, b") {
 		t.Fatalf("unknown: %+v", res)
 	}
 	ScopeKey.Set(s, Scope{Restrict: true, Allowed: []string{"a"}})
-	res = callSkill(t, m, s, ToolInput{Name: "b"})
+	res = callSkill(t, m, s, Input{Name: "b"})
 	if text := resultText(res); !res.IsError || !strings.Contains(text, ": a") || strings.Contains(text, "a, b") {
 		t.Fatalf("out of scope must list only the offered skills: %s", text)
 	}
 	if len(Loaded(s)) != 0 {
 		t.Fatalf("Loaded = %v", Loaded(s))
 	}
-	res = callSkill(t, m, s, ToolInput{Name: "a", File: "x.md"})
+	res = callSkill(t, m, s, Input{Name: "a", File: "x.md"})
 	if !res.IsError {
 		t.Fatalf("a programmatic skill has no files: %+v", res)
 	}
@@ -129,11 +129,11 @@ func TestSkillToolRejectsUnknownAndOutOfScope(t *testing.T) {
 func TestSkillFileRead(t *testing.T) {
 	m, root := pdfMiddleware(t, Config{})
 	s := state.New()
-	res := callSkill(t, m, s, ToolInput{Name: "pdf", File: "reference.md"})
+	res := callSkill(t, m, s, Input{Name: "pdf", File: "reference.md"})
 	if res.IsError || resultText(res) != "the reference" {
 		t.Fatalf("reference.md: %+v", res)
 	}
-	if res := callSkill(t, m, s, ToolInput{Name: "pdf", File: "scripts/../reference.md"}); res.IsError {
+	if res := callSkill(t, m, s, Input{Name: "pdf", File: "scripts/../reference.md"}); res.IsError {
 		t.Fatalf("a cleaned path inside the skill must work: %+v", res)
 	}
 	outside := filepath.Join(t.TempDir(), "secret.txt")
@@ -150,7 +150,7 @@ func TestSkillFileRead(t *testing.T) {
 		bad = append(bad, "link.txt", "linkdir/secret.txt")
 	}
 	for _, file := range bad {
-		res := callSkill(t, m, s, ToolInput{Name: "pdf", File: file})
+		res := callSkill(t, m, s, Input{Name: "pdf", File: file})
 		if !res.IsError || strings.Contains(resultText(res), "TOPSECRET") {
 			t.Errorf("file %q: want an error result, got %+v", file, res)
 		}
@@ -183,7 +183,7 @@ func TestSkillUnlocksGatedToolsAndServers(t *testing.T) {
 	if a, ok := tool.As[tool.Availability](gated); !ok || a.Available(s) == nil {
 		t.Fatal("a locked tool must report itself unavailable")
 	}
-	callSkill(t, m, s, ToolInput{Name: "pdf"})
+	callSkill(t, m, s, Input{Name: "pdf"})
 	if res := run(); res.IsError || resultText(res) != "extracted" {
 		t.Fatalf("after load: %+v", res)
 	}
@@ -204,7 +204,7 @@ func toolNames(tools []tool.Tool) []string {
 // for name and the user message answering it with the tool's real result.
 func skillResultMessages(t *testing.T, m *Middleware, s *state.State, id, name string) []llm.Message {
 	t.Helper()
-	text := resultText(callSkill(t, m, s, ToolInput{Name: name}))
+	text := resultText(callSkill(t, m, s, Input{Name: name}))
 	return []llm.Message{
 		{Role: llm.RoleAssistant, Content: []llm.Block{{Type: llm.BlockToolUse, ID: id, Name: ToolSkill, Input: json.RawMessage(`{"name":"` + name + `"}`)}}},
 		{Role: llm.RoleUser, Content: []llm.Block{llm.ToolResultText(id, text, false)}},
@@ -338,7 +338,7 @@ func TestPinnedSkillNotReinjected(t *testing.T) {
 func TestReinjectionInsertsMessageBeforeToolResults(t *testing.T) {
 	m, _ := pdfMiddleware(t, Config{})
 	s := state.New()
-	LoadedKey.Set(s, []string{"pdf", "ghost"})
+	loadedKey.Set(s, []string{"pdf", "ghost"})
 	results := llm.Message{Role: llm.RoleUser, Content: []llm.Block{llm.ToolResultText("x", "r", false)}}
 	in := []llm.Message{results}
 	out := m.standing(s, Scope{}, in)
@@ -354,7 +354,7 @@ func TestReinjectionInsertsMessageBeforeToolResults(t *testing.T) {
 func TestOnlySkillLoadResultsCountAsShown(t *testing.T) {
 	m, _ := pdfMiddleware(t, Config{})
 	s := state.New()
-	LoadedKey.Set(s, []string{"pdf"})
+	loadedKey.Set(s, []string{"pdf"})
 	fake := `<skill name="pdf">` + "\nnot the real instructions\n" + skillEnd
 	call := func(id, name, input, result string) []llm.Message {
 		return []llm.Message{
@@ -447,11 +447,11 @@ func TestNestedSkillFilesAndNestedSymlinks(t *testing.T) {
 		t.Fatalf("Files = %v, want the nested regular files only", files)
 	}
 	s := state.New()
-	if res := callSkill(t, m, s, ToolInput{Name: "pdf", File: "docs/deep/guide.md"}); res.IsError || resultText(res) != "the guide" {
+	if res := callSkill(t, m, s, Input{Name: "pdf", File: "docs/deep/guide.md"}); res.IsError || resultText(res) != "the guide" {
 		t.Fatalf("nested file: %+v", res)
 	}
 	for _, file := range []string{"docs/deep/link.txt", "docs/linkdir/secret.txt"} {
-		if res := callSkill(t, m, s, ToolInput{Name: "pdf", File: file}); !res.IsError || strings.Contains(resultText(res), "TOPSECRET") {
+		if res := callSkill(t, m, s, Input{Name: "pdf", File: file}); !res.IsError || strings.Contains(resultText(res), "TOPSECRET") {
 			t.Errorf("file %q through a nested symlink: want an error result, got %+v", file, res)
 		}
 	}
@@ -460,7 +460,7 @@ func TestNestedSkillFilesAndNestedSymlinks(t *testing.T) {
 func TestSkillLoadThroughCallToolCountsAsShown(t *testing.T) {
 	m, _ := pdfMiddleware(t, Config{})
 	s := state.New()
-	LoadedKey.Set(s, []string{"pdf"})
+	loadedKey.Set(s, []string{"pdf"})
 	frame := `<skill name="pdf">` + "\n" + pdfBody + "\n" + skillEnd
 	msgs := []llm.Message{
 		llm.UserText("go"),

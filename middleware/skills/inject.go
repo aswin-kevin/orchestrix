@@ -15,7 +15,7 @@ import (
 const StandingHeader = "Skill instructions loaded earlier in this conversation (still in effect):"
 
 // standing returns msgs with the instructions of every skill loaded in the
-// run (LoadedKey) that scope offers but msgs no longer show, for example
+// run (loadedKey) that scope offers but msgs no longer show, for example
 // because compaction summarized or cleared the skill tool's result. They are
 // joined under StandingHeader into one text block, appended to the first
 // message when it is a plain user message, else sent as a new first user
@@ -73,18 +73,18 @@ func shown(msgs []llm.Message, name string) bool {
 
 // skillInput returns the input of a tool_use block that calls the skill
 // tool, directly or through call_tool.
-func skillInput(use llm.Block) (ToolInput, bool) {
+func skillInput(use llm.Block) (Input, bool) {
 	raw := use.Input
 	if use.Name == deferred.ToolCall {
 		var call deferred.CallInput
 		if json.Unmarshal(raw, &call) != nil || call.Name != ToolSkill {
-			return ToolInput{}, false
+			return Input{}, false
 		}
 		raw = call.Input
 	} else if use.Name != ToolSkill {
-		return ToolInput{}, false
+		return Input{}, false
 	}
-	var in ToolInput
+	var in Input
 	return in, json.Unmarshal(raw, &in) == nil
 }
 

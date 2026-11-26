@@ -151,41 +151,44 @@ func validateSpec(s Subagent) error {
 
 // CheckSkills reports a name in s.Skills or s.PinnedSkills that the skills
 // middleware of the subagent's stack does not define, or the lack of a skills
-// middleware when either is set. That stack is s.Middleware when set, else
-// inherited: the Config.Middleware of the agent that delegates. New checks
-// the specs that set Middleware; the others are checked when the subagent is
-// first built, unless the host that assembles the delegating agent calls
-// CheckSkills with its stack first, as the orchestrix preset does.
+// middleware when either is set. The skills middleware is the one named
+// skills.Name; it must implement skills.Definer. That stack is s.Middleware
+// when set, else inherited: the Config.Middleware of the agent that
+// delegates. New checks the specs that set Middleware; the others are
+// checked when the subagent is first built, unless the host that assembles
+// the delegating agent calls CheckSkills with its stack first, as the
+// orchestrix preset does.
 func (s Subagent) CheckSkills(inherited []agent.Middleware) error {
 	stack := inherited
 	if s.Middleware != nil {
 		stack = s.Middleware
 	}
-	if err := checkSkills(s, stack); err != nil {
-		return fmt.Errorf("subagents: subagent %q: %w", s.Name, err)
-	}
-	return nil
+	return checkSkills(s, stack)
 }
 
 // checkSkills reports a skill named by spec.Skills or spec.PinnedSkills that
 // the skills middleware among mws, the subagent's stack, does not define.
+// That middleware is the one named skills.Name, queried as a skills.Definer.
 func checkSkills(spec Subagent, mws []agent.Middleware) error {
 	wanted := slices.Concat(spec.Skills, spec.PinnedSkills)
 	if len(wanted) == 0 {
 		return nil
 	}
-	var sk *skills.Middleware
+	var def skills.Definer
 	for _, mw := range mws {
-		if found, ok := mw.(*skills.Middleware); ok {
-			sk = found
+		if mw == nil || mw.Name() != skills.Name {
+			continue
+		}
+		if d, ok := mw.(skills.Definer); ok {
+			def = d
 		}
 	}
-	if sk == nil {
-		return errors.New("a skills middleware in the subagent's stack is required by Skills and PinnedSkills")
+	if def == nil {
+		return fmt.Errorf("subagents: subagent %q names skills, but no skills middleware implements skills.Definer", spec.Name)
 	}
 	for _, name := range wanted {
-		if !sk.Has(name) {
-			return fmt.Errorf("skill %q is not defined", name)
+		if !def.Has(name) {
+			return fmt.Errorf("subagents: subagent %q: skill %q is not defined", spec.Name, name)
 		}
 	}
 	return nil

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/checkpoint"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/permission"
@@ -36,18 +37,33 @@ type Launcher struct {
 	children sync.Map
 	// extra is appended to every child's middleware.
 	extra []agent.Middleware
+	// checkpointer picks the checkpointer of a parent's children; nil
+	// keeps every child unsaved.
+	checkpointer func(parent *agent.Agent) checkpoint.Checkpointer
 }
 
-// NewLauncher returns a Launcher that appends extra to every child's
-// middleware (after the spec's or the inherited list). An extra that is
-// already in that list as the very same value is not appended again; one
-// whose name clashes with a different value in the list makes Agent fail.
-// Identity needs a pointer or otherwise comparable middleware; a value that
-// is not comparable is never "the same" and so clashes by name. NewLauncher
-// does not check extra itself: two extras with the same name also make Agent
-// fail, when agent.New rejects the duplicate.
-func NewLauncher(extra ...agent.Middleware) *Launcher {
-	return &Launcher{extra: slices.Clone(extra)}
+// LauncherConfig configures a Launcher.
+type LauncherConfig struct {
+	// Extra is appended to every child's middleware (after the spec's or
+	// the inherited list). An extra that is already in that list as the
+	// very same value is not appended again; one whose name clashes with a
+	// different value in the list makes Agent fail. Identity needs a
+	// pointer or otherwise comparable middleware; a value that is not
+	// comparable is never "the same" and so clashes by name. NewLauncher
+	// does not check Extra itself: two extras with the same name also make
+	// Agent fail, when agent.New rejects the duplicate.
+	Extra []agent.Middleware
+	// Checkpointer, when set, returns the checkpointer the children of
+	// parent save with; nil (or a nil result) keeps children unsaved. The
+	// parent's own Config.Checkpointer is never inherited. It is called
+	// whenever the Launcher builds a child agent, which is normally once
+	// per (parent, subagent), so it must be safe for concurrent use.
+	Checkpointer func(parent *agent.Agent) checkpoint.Checkpointer
+}
+
+// NewLauncher returns a Launcher configured by cfg.
+func NewLauncher(cfg LauncherConfig) *Launcher {
+	return &Launcher{extra: slices.Clone(cfg.Extra), checkpointer: cfg.Checkpointer}
 }
 
 // childKey identifies a built subagent: specs are fixed up front, but the
@@ -74,6 +90,9 @@ func (l *Launcher) Agent(parent *agent.Agent, spec Subagent) (*agent.Agent, erro
 	cfg, err := childConfig(parent.Config(), spec)
 	if err != nil {
 		return nil, err
+	}
+	if l.checkpointer != nil {
+		cfg.Checkpointer = l.checkpointer(parent)
 	}
 	if cfg.Middleware, err = l.withExtra(cfg.Middleware); err != nil {
 		return nil, fmt.Errorf("subagents: subagent %q: %w", spec.Name, err)
@@ -169,8 +188,10 @@ func childMode(parent, child *agent.Agent, s *state.State) permission.Mode {
 }
 
 // childConfig derives a subagent's configuration from its parent's. The
-// subagent never checkpoints or syncs a workspace of its own: it runs inside
-// the parent's thread and shares the parent's backend.
+// subagent never syncs a workspace of its own and does not inherit the
+// parent's checkpointer: it runs inside the parent's thread and shares the
+// parent's backend. A Launcher may give it a checkpointer of its own
+// (LauncherConfig.Checkpointer).
 func childConfig(cfg agent.Config, spec Subagent) (agent.Config, error) {
 	system, err := childSystem(spec)
 	if err != nil {

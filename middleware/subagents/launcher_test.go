@@ -74,7 +74,7 @@ func TestLauncherMatchesTaskTool(t *testing.T) {
 	st := state.New()
 	mustSetMode(t, st, permission.ModePlan)
 	skills.ScopeKey.Set(st, skills.Scope{Restrict: true, Allowed: []string{"pdf", "style"}})
-	res := probeRun(t, NewLauncher(), researcher(), st, sk)
+	res := probeRun(t, NewLauncher(LauncherConfig{}), researcher(), st, sk)
 	if res.err != nil {
 		t.Fatal(res.err)
 	}
@@ -98,14 +98,14 @@ func TestLauncherMatchesTaskTool(t *testing.T) {
 }
 
 func TestLauncherInputNeedsRun(t *testing.T) {
-	l := NewLauncher()
+	l := NewLauncher(LauncherConfig{})
 	if _, err := l.Input(context.Background(), nil, researcher(), "x", "id", &tool.Call{State: state.New()}); err == nil {
 		t.Fatal("want an error outside a run")
 	}
 }
 
 func TestLauncherCachesPerParent(t *testing.T) {
-	l := NewLauncher()
+	l := NewLauncher(LauncherConfig{})
 	spec := Subagent{Name: "w", Description: "d", SystemPrompt: "p"}
 	mk := func() *agent.Agent {
 		a, err := agent.New(agent.Config{Provider: llmtest.New()})
@@ -142,7 +142,7 @@ func (c *countMW) BeforeModel(context.Context, *state.State) error {
 func TestLauncherExtraMiddleware(t *testing.T) {
 	var n atomic.Int32
 	extra := &countMW{name: "extra", n: &n}
-	l := NewLauncher(extra)
+	l := NewLauncher(LauncherConfig{Extra: []agent.Middleware{extra}})
 	spec := Subagent{Name: "w", Description: "d", SystemPrompt: "p", Provider: llmtest.New(llmtest.Turn{Text: "hi"})}
 	parent, _ := agent.New(agent.Config{Provider: llmtest.New()})
 	child, err := l.Agent(parent, spec)
@@ -165,7 +165,7 @@ func TestLauncherExtraMiddleware(t *testing.T) {
 func TestLauncherExtraAlreadyPresentByIdentity(t *testing.T) {
 	var n atomic.Int32
 	extra := &countMW{name: "extra", n: &n}
-	l := NewLauncher(extra)
+	l := NewLauncher(LauncherConfig{Extra: []agent.Middleware{extra}})
 	// The parent already carries extra, as a background child does.
 	parent, err := agent.New(agent.Config{Provider: llmtest.New(), Middleware: []agent.Middleware{extra}})
 	if err != nil {
@@ -199,7 +199,7 @@ type wrapped struct{ agent.Middleware }
 
 func TestLauncherUncomparableExtraDoesNotPanic(t *testing.T) {
 	mk := func() agent.Middleware { return wrapped{sliceMW{name: "extra", tags: []string{"a"}}} }
-	l := NewLauncher(mk())
+	l := NewLauncher(LauncherConfig{Extra: []agent.Middleware{mk()}})
 	parent, err := agent.New(agent.Config{Provider: llmtest.New(), Middleware: []agent.Middleware{mk()}})
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +213,7 @@ func TestLauncherUncomparableExtraDoesNotPanic(t *testing.T) {
 func TestLauncherInputNilCall(t *testing.T) {
 	var gotErr error
 	probe := tool.New("probe", "Probes.", func(ctx context.Context, _ struct{}, _ *tool.Call) (tool.Result, error) {
-		_, gotErr = NewLauncher().Input(ctx, nil, researcher(), "x", "id", nil)
+		_, gotErr = NewLauncher(LauncherConfig{}).Input(ctx, nil, researcher(), "x", "id", nil)
 		return tool.Text("ok"), nil
 	}, tool.WithReadOnly())
 	p := llmtest.New(
@@ -235,7 +235,7 @@ func TestLauncherInputStricterModeWins(t *testing.T) {
 	mustSetMode(t, st, permission.ModeDontAsk)
 	spec := researcher()
 	spec.Skills, spec.PermissionMode = nil, permission.ModeBypass
-	res := probeRun(t, NewLauncher(), spec, st)
+	res := probeRun(t, NewLauncher(LauncherConfig{}), spec, st)
 	if res.err != nil {
 		t.Fatal(res.err)
 	}
@@ -246,7 +246,7 @@ func TestLauncherInputStricterModeWins(t *testing.T) {
 
 func TestLauncherAgentValidatesSpec(t *testing.T) {
 	parent, _ := agent.New(agent.Config{Provider: llmtest.New()})
-	if _, err := NewLauncher().Agent(parent, Subagent{Name: "w", Description: "d"}); err == nil {
+	if _, err := NewLauncher(LauncherConfig{}).Agent(parent, Subagent{Name: "w", Description: "d"}); err == nil {
 		t.Fatal("want an error for a spec without SystemPrompt")
 	}
 }

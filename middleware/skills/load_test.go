@@ -333,7 +333,7 @@ func TestLoaded(t *testing.T) {
 	if got := Loaded(s); len(got) != 0 {
 		t.Fatalf("Loaded = %v", got)
 	}
-	LoadedKey.Set(s, []string{"a"})
+	loadedKey.Set(s, []string{"a"})
 	got := Loaded(s)
 	got[0] = "mutated"
 	if again := Loaded(s); again[0] != "a" {

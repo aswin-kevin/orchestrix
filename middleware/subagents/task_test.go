@@ -13,7 +13,7 @@ import (
 // TestTaskNilFinal settles a child run whose stream ended without a
 // KindFinal: the task call gets an error result rather than a panic.
 func TestTaskNilFinal(t *testing.T) {
-	m := newMiddleware(t, Config{}).(*middleware)
+	m := newMiddleware(t, Config{}).(*Middleware)
 	empty := func(func(agent.Event, error) bool) {}
 	final := drain(context.Background(), empty)
 	if final != nil {

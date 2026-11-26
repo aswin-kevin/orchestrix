@@ -201,7 +201,7 @@ func New(cfg Config) (*Middleware, error) {
 		// The inbox middleware is one pointer: every child, and their
 		// children, share it, and the Launcher dedupes it by identity.
 		boxes := newInboxes()
-		m.runner = &localRunner{specs: m.specs, launcher: subagents.NewLauncher(boxes), inboxes: boxes, timeout: positiveOr(cfg.TaskTimeout, DefaultTaskTimeout)}
+		m.runner = &localRunner{specs: m.specs, launcher: subagents.NewLauncher(subagents.LauncherConfig{Extra: []agent.Middleware{boxes}}), inboxes: boxes, timeout: positiveOr(cfg.TaskTimeout, DefaultTaskTimeout)}
 	}
 	if cfg.Prompt != nil {
 		m.prompt = *cfg.Prompt

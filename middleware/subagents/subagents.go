@@ -115,10 +115,14 @@ type Config struct {
 	Prompt *string
 }
 
-// middleware is the subagents middleware. Its configuration is fixed at New;
-// children caches built subagents, which are immutable agents rather than
-// per-run data, so sharing them between concurrent runs is safe.
-type middleware struct {
+// Name is the subagents middleware's name (agent.Middleware.Name).
+const Name = "subagents"
+
+// Middleware is the subagents middleware: it offers the task tool and the
+// delegation prompt. Its configuration is fixed at New; the subagents it
+// builds are cached by its Launcher, and since they are immutable agents
+// rather than per-run data, concurrent runs may share one Middleware.
+type Middleware struct {
 	specs    map[string]Subagent
 	maxDepth int
 	prompt   string
@@ -129,10 +133,17 @@ type middleware struct {
 	launcher *Launcher
 }
 
+var (
+	_ agent.Middleware   = (*Middleware)(nil)
+	_ agent.ToolProvider = (*Middleware)(nil)
+	_ agent.ModelWrapper = (*Middleware)(nil)
+	_ agent.BeforeAgent  = (*Middleware)(nil)
+)
+
 // New returns the subagents middleware. It fails for an invalid subagent
 // spec (see Subagent), a duplicated or reserved name, a negative MaxDepth, or
 // a configuration that leaves no subagent to start.
-func New(cfg Config) (agent.Middleware, error) {
+func New(cfg Config) (*Middleware, error) {
 	if cfg.MaxDepth < 0 {
 		return nil, errors.New("subagents: MaxDepth must not be negative")
 	}
@@ -145,7 +156,7 @@ func New(cfg Config) (agent.Middleware, error) {
 	for i, s := range list {
 		specs[s.Name], order[i] = s, s.Name
 	}
-	m := &middleware{specs: specs, maxDepth: DefaultMaxDepth, prompt: DefaultPrompt, fork: !cfg.DisableFork, launcher: NewLauncher()}
+	m := &Middleware{specs: specs, maxDepth: DefaultMaxDepth, prompt: DefaultPrompt, fork: !cfg.DisableFork, launcher: NewLauncher(LauncherConfig{})}
 	if m.fork {
 		order = append(order, Fork)
 	}
@@ -161,20 +172,20 @@ func New(cfg Config) (agent.Middleware, error) {
 
 // BeforeAgent implements agent.BeforeAgent: it drops suspended subagents
 // whose task call no longer awaits a decision (see pruneSuspended).
-func (m *middleware) BeforeAgent(_ context.Context, s *state.State) error {
+func (m *Middleware) BeforeAgent(_ context.Context, s *state.State) error {
 	pruneSuspended(s)
 	return nil
 }
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "subagents" }
+func (m *Middleware) Name() string { return Name }
 
 // Tools implements agent.ToolProvider.
-func (m *middleware) Tools() []tool.Tool { return []tool.Tool{m.task} }
+func (m *Middleware) Tools() []tool.Tool { return []tool.Tool{m.task} }
 
 // WrapModel implements agent.ModelWrapper. It appends the prompt after the
 // host's system segments, so it stays outside the cached prefix.
-func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
+func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, next agent.ModelHandler) (*llm.Response, error) {
 	if m.prompt != "" {
 		req.Request.System = append(slices.Clone(req.Request.System), m.prompt)
 	}

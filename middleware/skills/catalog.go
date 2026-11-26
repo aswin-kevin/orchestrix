@@ -40,7 +40,7 @@ func (m *Middleware) BeforeAgent(_ context.Context, s *state.State) error {
 		}
 	}
 	keep := slices.Concat(want, deferred.Searched(s))
-	loaded, _ := LoadedKey.Get(s)
+	loaded, _ := loadedKey.Get(s)
 	for _, name := range loaded {
 		if sk, ok := m.byName[name]; ok {
 			keep = append(keep, unlockPatterns(sk)...)

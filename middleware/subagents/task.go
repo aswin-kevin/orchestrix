@@ -23,7 +23,7 @@ type TaskInput struct {
 }
 
 // taskTool builds the task tool offering the subagents named in order.
-func (m *middleware) taskTool(order []string) tool.Tool {
+func (m *Middleware) taskTool(order []string) tool.Tool {
 	return tool.Build(tool.Spec{
 		Name:        ToolTask,
 		Description: m.describeTask(order),
@@ -59,7 +59,7 @@ func taskSchema(order []string) map[string]any {
 }
 
 // describe is the description of subagent_type name.
-func (m *middleware) describe(name string) string {
+func (m *Middleware) describe(name string) string {
 	if name == Fork {
 		return forkDescription
 	}
@@ -68,7 +68,7 @@ func (m *middleware) describe(name string) string {
 
 // describeTask lists every subagent with its description after the tool's
 // own description.
-func (m *middleware) describeTask(order []string) string {
+func (m *Middleware) describeTask(order []string) string {
 	var b strings.Builder
 	b.WriteString(taskDescription)
 	for _, name := range order {
@@ -91,7 +91,7 @@ type childRun struct {
 // runTask runs one task call: it starts the selected subagent, or continues
 // the one suspended under a resumed call, forwards its events, merges its
 // state back and turns its outcome into the result.
-func (m *middleware) runTask(ctx context.Context, raw json.RawMessage, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) runTask(ctx context.Context, raw json.RawMessage, c *tool.Call) (tool.Result, error) {
 	var in TaskInput
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return tool.Errorf("invalid input: %v", err), nil
@@ -121,7 +121,7 @@ func (m *middleware) runTask(ctx context.Context, raw json.RawMessage, c *tool.C
 }
 
 // offers reports whether typ is a subagent the task tool can start.
-func (m *middleware) offers(typ string) bool {
+func (m *Middleware) offers(typ string) bool {
 	if typ == Fork {
 		return m.fork
 	}
@@ -130,7 +130,7 @@ func (m *middleware) offers(typ string) bool {
 }
 
 // start prepares a fresh run of the subagent in selects.
-func (m *middleware) start(ctx context.Context, info agent.RunInfo, in TaskInput, c *tool.Call) (childRun, error) {
+func (m *Middleware) start(ctx context.Context, info agent.RunInfo, in TaskInput, c *tool.Call) (childRun, error) {
 	child, schema, err := m.subagent(info.Agent, in.SubagentType)
 	if err != nil {
 		return childRun{}, err
@@ -146,7 +146,7 @@ func (m *middleware) start(ctx context.Context, info agent.RunInfo, in TaskInput
 
 // subagent returns the agent that runs subagent_type typ when started from
 // parent, with its OutputSchema. A fork is the parent itself.
-func (m *middleware) subagent(parent *agent.Agent, typ string) (*agent.Agent, map[string]any, error) {
+func (m *Middleware) subagent(parent *agent.Agent, typ string) (*agent.Agent, map[string]any, error) {
 	if !m.offers(typ) {
 		return nil, nil, fmt.Errorf("unknown subagent type %q", typ)
 	}
@@ -163,7 +163,7 @@ func (m *middleware) subagent(parent *agent.Agent, typ string) (*agent.Agent, ma
 // child's state back. A suspended child's state is merged once it finishes.
 // A child whose stream ended without a Final (nil) gives an error result, or
 // the context's error when the call was cancelled.
-func (m *middleware) settle(ctx context.Context, c *tool.Call, run childRun, final *agent.Final) (tool.Result, error) {
+func (m *Middleware) settle(ctx context.Context, c *tool.Call, run childRun, final *agent.Final) (tool.Result, error) {
 	var structured *tool.Result
 	if run.schema != nil {
 		final, structured = structuredOutput(ctx, run.agent, run.in, final, run.schema)

@@ -18,8 +18,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-// ToolInput is the input of the skill tool.
-type ToolInput struct {
+// Input is the input of the skill tool.
+type Input struct {
 	// Name is the skill to load.
 	Name string `json:"name" desc:"The skill to load."`
 	// File is a file inside the skill directory to read instead of its
@@ -55,9 +55,9 @@ func (m *Middleware) skillTool() tool.Tool {
 }
 
 // runSkill loads the skill in.Name for the run, or reads in.File of it.
-// Loading records the name in LoadedKey and unlocks the skill's allowed tools
+// Loading records the name in loadedKey and unlocks the skill's allowed tools
 // and the tools of its MCP servers.
-func (m *Middleware) runSkill(_ context.Context, in ToolInput, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) runSkill(_ context.Context, in Input, c *tool.Call) (tool.Result, error) {
 	scope, _ := ScopeKey.Get(c.State)
 	s, ok := m.offered(scope, in.Name)
 	if !ok {
@@ -120,7 +120,7 @@ func (m *Middleware) offeredList(scope Scope) string {
 
 // markLoaded appends name to the run's loaded skills unless it is there.
 func markLoaded(s *state.State, name string) {
-	LoadedKey.Update(s, func(loaded []string) []string {
+	loadedKey.Update(s, func(loaded []string) []string {
 		if slices.Contains(loaded, name) {
 			return loaded
 		}

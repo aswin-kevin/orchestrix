@@ -111,7 +111,7 @@ func suspend(c *tool.Call, run childRun, final *agent.Final) (tool.Result, error
 // resumeTask continues the child suspended under c's task call with the
 // decision c was resumed with, then settles its outcome like a fresh run's;
 // it may suspend again.
-func (m *middleware) resumeTask(ctx context.Context, c *tool.Call) (tool.Result, error) {
+func (m *Middleware) resumeTask(ctx context.Context, c *tool.Call) (tool.Result, error) {
 	info, ok := agent.Info(ctx)
 	if !ok {
 		return tool.Errorf("the task tool can only run inside an agent run"), nil

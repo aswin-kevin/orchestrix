@@ -5,8 +5,9 @@
 // The model loads a skill with the skill tool, which returns the skill's
 // instructions framed by Marker and closing tag, and can read the skill's
 // other files through the tool's file parameter. Loading a skill records it
-// in LoadedKey and unlocks (deferred.Unlock) the tools its allowed-tools
-// names and the tools of its MCP servers (names.MCPPrefix(server) + "*").
+// in the run (see Loaded) and unlocks (deferred.Unlock) the tools its
+// allowed-tools names and the tools of its MCP servers
+// (names.MCPPrefix(server) + "*").
 // Config.Tools are offered gated (deferred.Gate), so they stay refused until
 // a loaded skill unlocks them; add the deferred middleware to also keep their
 // schemas out of the request until then.
@@ -60,6 +61,19 @@ const (
 	// ToolSkill is the name of the tool that loads a skill.
 	ToolSkill = "skill"
 )
+
+// Name is the skills middleware's name (agent.Middleware.Name). The
+// subagents middleware looks up the middleware of this name in a subagent's
+// stack and asks it, as a Definer, whether the skills the subagent names
+// exist.
+const Name = "skills"
+
+// Definer is what subagents need from the skills middleware: whether a
+// skill exists. A replacement skills middleware implements it.
+type Definer interface {
+	// Has reports whether a skill named name is defined.
+	Has(name string) bool
+}
 
 // Skill is one loaded skill.
 type Skill struct {
@@ -168,13 +182,14 @@ type Scope struct {
 	Pinned []string `json:"pinned,omitempty"`
 }
 
-// Keys of the run state. Both are private: they are not inherited blindly by
-// subagents, and the loaded list is bulky per-run data.
+// Keys of the run state. All are private: they are not inherited blindly by
+// subagents, and the loaded list is bulky per-run data. ScopeKey is exported
+// because hosts write it; read the loaded skills with Loaded.
 var (
 	// ScopeKey holds the run's Scope; absent means the zero Scope.
 	ScopeKey = state.NewKey[Scope]("skills.scope", state.Private[Scope]())
-	// LoadedKey holds the names of the skills loaded in the run, in load order.
-	LoadedKey = state.NewKey[[]string]("skills.loaded", state.Private[[]string]())
+	// loadedKey holds the names of the skills loaded in the run, in load order.
+	loadedKey = state.NewKey[[]string]("skills.loaded", state.Private[[]string]())
 	// pinnedUnlocksKey records the unlock patterns BeforeAgent granted for
 	// pinned skills, so a later run can take back those of pins that are gone.
 	pinnedUnlocksKey = state.NewKey[[]string]("skills.pinned_unlocks", state.Private[[]string]())
@@ -182,7 +197,7 @@ var (
 
 // Loaded returns the names of the skills loaded in the run, in load order.
 func Loaded(s *state.State) []string {
-	names, _ := LoadedKey.Get(s)
+	names, _ := loadedKey.Get(s)
 	return slices.Clone(names)
 }
 
@@ -223,6 +238,7 @@ var (
 	_ agent.ToolProvider = (*Middleware)(nil)
 	_ agent.ModelWrapper = (*Middleware)(nil)
 	_ agent.BeforeAgent  = (*Middleware)(nil)
+	_ Definer            = (*Middleware)(nil)
 )
 
 // New loads the sources and returns the middleware. It fails when a source is
@@ -270,13 +286,14 @@ func New(cfg Config) (*Middleware, error) {
 }
 
 // Name implements agent.Middleware.
-func (m *Middleware) Name() string { return "skills" }
+func (m *Middleware) Name() string { return Name }
 
 // Tools implements agent.ToolProvider: the skill tool, then every
 // Config.Tools entry wrapped by deferred.Gate.
 func (m *Middleware) Tools() []tool.Tool { return slices.Clone(m.tools) }
 
-// Has reports whether the middleware defines a skill named name.
+// Has implements Definer: it reports whether the middleware defines a skill
+// named name.
 func (m *Middleware) Has(name string) bool {
 	_, ok := m.byName[name]
 	return ok
