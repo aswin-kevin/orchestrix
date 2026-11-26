@@ -9,7 +9,7 @@
 
 You get a production-ready agent loop in a few lines of code, with two small dependencies beyond the Go standard library.
 
-> Orchestrix is under active development. Milestones 1 (the core), 2 (depth), 3 (knowledge and reach) and 4 (scale) are complete; the API may still change before 1.0.
+> Orchestrix is under active development. The API is being frozen for 1.0; until that release it may still change in the 0.x line.
 
 <p align="center">
   <img src="assets/architecture.png" alt="Orchestrix architecture: your app or the orx CLI runs the agent loop (build request, call model, run tools) inside a middleware stack (memory, skills, plan mode, subagents, background tasks, MCP, summarize, compress, rubric, profiles, hooks, web, ask user). A coordinator fans work out to parallel subagents. The loop calls Anthropic or OpenAI-compatible providers, and every tool call passes a permission gate before reaching files, shell, MCP servers, web and backends (memory, disk, key-value, sandbox, composite mounts). Everything is kept in typed, JSON-serializable state with threads and checkpoints." width="900">
@@ -63,6 +63,8 @@ go get github.com/aswin-kevin/orchestrix
 
 Requires Go 1.26 or newer.
 
+The satellite modules (`orxotel`, `orxpg`, `orxdocker`) are installed separately and stay on v0.x after the core reaches 1.0, because they track dependencies that still move, such as the OpenTelemetry GenAI conventions.
+
 ## Quick start
 
 ```go
@@ -107,7 +109,7 @@ func main() {
 }
 ```
 
-`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTotalTokens`, `WithModelTimeout`, `WithMaxTokens`, `WithLogger`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithJobs`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithOutputType`/`WithOutputSchema`, `WithFallback`/`WithFallbackConfig`, `WithProfiles`, `WithMount`). `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
+`orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTotalTokens`, `WithModelTimeout`, `WithMaxTokens`, `WithLogger`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithJobs`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithOutputType`/`WithOutputSchema`, `WithFallback`/`WithFallbackConfig`, `WithProfiles`, `WithMount`). `orchestrix.Options` bundles several options into one, for a preset you reuse. `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
 
 ## Examples
 
@@ -174,7 +176,7 @@ p, err := llm.New(llm.Config{
 	Format:            llm.FormatAnthropic,
 	Model:             "claude-sonnet-4-5",
 	APIKey:            os.Getenv("ANTHROPIC_API_KEY"),
-	StreamIdleTimeout: 2 * time.Minute, // default 5 minutes; negative disables
+	StreamIdleTimeout: 2 * time.Minute, // default 5 minutes; llm.NoIdleTimeout disables
 })
 if err != nil {
 	log.Fatal(err)
@@ -191,11 +193,15 @@ Every run is bounded. A run that reaches a limit ends with the matching reason o
 
 | Option | Limit | Reason |
 | --- | --- | --- |
-| `WithMaxTurns(n)` | Tool-calling model turns per run. Zero means `agent.DefaultMaxTurns` (100), a negative value unbounded. | `max_turns` |
+| `WithMaxTurns(n)` | Tool-calling model turns per run. Zero means `agent.DefaultMaxTurns` (100) and `agent.Unlimited` (-1) unbounded; any other negative value makes `New` fail. | `max_turns` |
 | `WithMaxTotalTokens(n)` | Input, output and cache tokens one run may spend in total; zero means no cap. The tools of the reply that reached the cap do not run. Nested subagent runs count only their own tokens. | `token_limit` |
 | `WithMaxDuration(d)` | Wall-clock time of one run. | `timeout` |
 | `WithModelTimeout(d)` | Each model call, retries included. | `model_error`, wrapping `context.DeadlineExceeded` |
 | `WithMaxTokens(n)` | Output tokens of each model response (default: the model profile's limit). | |
+
+The same rule holds for every numeric setting in the library: zero means the default, and a negative value makes the constructor fail, except the `-1` constants a field's documentation names (`agent.Unlimited`, `agent.NoOutputRetries`, `llm.NoRetries`, `llm.NoIdleTimeout`, `llm.NoCooldown`, `orxdocker.Unlimited`).
+
+A run can also end as `completed`, `interrupted` (a call awaits a decision; see "Human in the loop"), `refusal`, `invalid_output`, `invalid_resume`, `model_error`, `prompt_too_long`, `aborted_streaming`, `aborted_tools`, `hook_stopped`, `middleware_error`, `checkpoint_error`, `busy` or `internal_error`. `refusal` (`agent.ReasonRefusal`) means the model declined to answer: `Final.Text` holds its reply, and tool calls in that reply did not run. A refusal is not a success: a subagent that refuses gives its parent's `task` call an error result, and a background task that refuses is recorded as `failed` with an error starting "refused". The set of reasons may grow in a minor release, so treat a reason your code does not know as a failure, as subagents, background tasks and `orxotel` do.
 
 A provider stream that goes silent fails with `llm.ErrStreamIdle` after `llm.Config.StreamIdleTimeout` (default `llm.DefaultStreamIdleTimeout`, 5 minutes) without receiving any bytes; the error is retryable, so a fallback chain moves to its next entry when nothing has been shown yet. `agent.Config.TokenBudget` only nudges the model towards a token target; `MaxTotalTokens` is the hard stop.
 
@@ -246,8 +252,8 @@ orchestrix.WithFallbackConfig(llm.FallbackConfig{
 Behaviour:
 
 - **Triggers.** A call moves to the next entry when the error is retryable (HTTP 408, 409, 429, 5xx or 529, or a network error), or when a stream that started fine reports an overload, rate-limit or server error inside it (`overloaded_error`, `rate_limit_error`, `api_error`, `server_error` or `rate_limit_exceeded`), and the error is not a context overflow. A cancelled context, a 400 and an authentication error never switch and come back unchanged; once the call's context is done, no switch, `OnFallback` or cool-down happens. `ShouldFallback` replaces this rule. When every entry fails, the last entry's error is returned wrapped (`errors.As` and `errors.Is` still work).
-- **Retries.** Providers built with `llm.New` retry transient errors themselves (`llm.Config.MaxRetries`, default 3, honouring `Retry-After` up to one minute, and never starting a wait that would end after the call's deadline). Inside a fallback chain, every entry but the last returns an error that would trigger a switch at once, without retrying, so the backup is tried right away rather than after the primary's retries and `Retry-After` waits. The last entry keeps its retries, so a chain never gives up sooner than a single provider would. A custom `llm.Provider` that retries on its own is not affected by this and switches only once it returns.
-- **Cool-down.** An entry that failed with a fallback error is skipped for `Cooldown` (default 30 seconds; a negative value turns it off), so traffic stays on the backup for that long after an outage even if the primary has recovered. When every entry is cooling down, they are all tried again.
+- **Retries.** Providers built with `llm.New` retry transient errors themselves (`llm.Config.MaxRetries`, default 3, `llm.NoRetries` for none, honouring `Retry-After` up to one minute, and never starting a wait that would end after the call's deadline). Inside a fallback chain, every entry but the last returns an error that would trigger a switch at once, without retrying, so the backup is tried right away rather than after the primary's retries and `Retry-After` waits. The last entry keeps its retries, so a chain never gives up sooner than a single provider would. A custom `llm.Provider` that retries on its own is not affected by this and switches only once it returns.
+- **Cool-down.** An entry that failed with a fallback error is skipped for `Cooldown` (default 30 seconds; `llm.NoCooldown` turns it off), so traffic stays on the backup for that long after an outage even if the primary has recovered. When every entry is cooling down, they are all tried again.
 - **Model and `MaxTokens`.** A backup answers with the model it was built with, not the primary's. `MaxTokens` is lowered to the backup's output limit when `FallbackEntry.Model` matches a registered profile; otherwise it is left as is. `Model` is filled in for spec strings and for providers built by `llm.New`. A custom `llm.Provider` without `Model` is not clamped and may be sent the primary's larger limit: set `Model`, or set `WithMaxTokens` to a limit every backup accepts.
 - **Provenance.** Reply blocks are stamped with the name of the entry that answered, and a provider never receives another entry's signatures, thinking or provider data, so a conversation can move from one model to another and back. Stamps are keyed by entry name, so keep names stable across runs that share a conversation; `New`'s primary is always `primary`, so upgrading the primary model does not orphan its stamps.
 - **Streaming.** A stream switches only before the failing attempt has produced content. After the first content event an error is returned as it is, so text is never duplicated or mixed; `OnFallback` is not called, and the entry starts its cool-down only when the error is one that would have triggered a switch.
@@ -341,6 +347,38 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithMiddlewar
 
 An agent is shared by concurrent runs, so keep per-run data in `state.State` (see `state.NewKey`), not in the middleware's fields.
 
+A hook, wrapper or tool can add its own events to the run's stream with `agent.Emit(ctx, ev)`, typically an event of kind `agent.KindCustom` whose `Data` is a value of the emitting package's own type; `agent.ThreadID(ctx)` gives the run's thread. Never call `Emit` from the goroutine that reads the run's events: it waits until the event is taken.
+
+## Extending Orchestrix
+
+Every part of the harness that talks to the outside world is an interface you can implement. Where a conformance kit exists, run it from your own tests against your implementation: it checks the contract the library relies on.
+
+| Interface | Implement it to… | Conformance kit |
+| --- | --- | --- |
+| `llm.Provider`, registered with `llm.RegisterProvider` | add a model API, or wrap one | `llmtest.CheckProvider` |
+| `llm.Decider`, registered with `llm.RegisterDecider` | add a decision-model API | — (`llmtest.NewDecider` scripts one for tests) |
+| `llm.Transport` (a type, built with `llm.NewTransport`) | give your provider adapter the built-in retries, rate limit, SSE stream with idle timeout and credential redaction | — |
+| `tool.Tool`; optional `tool.ReadOnlyer`, `tool.ConcurrencySafer`, `tool.PermissionChecker`, `tool.PathAccessor`, `tool.Subjecter`, `tool.ShellSubjecter`, `tool.Editor`, `tool.Background`, `tool.Availability`, `tool.Dispatcher`, `tool.RawInputer` | add a tool the model can call (most tools are built with `tool.New` instead) | — |
+| `agent.Middleware` with any of `agent.BeforeAgent`, `agent.AfterAgent`, `agent.BeforeModel`, `agent.AfterModel`, `agent.BeforeStop`, `agent.ModelWrapper`, `agent.ToolWrapper`, `agent.RunWrapper`, `agent.ToolProvider`, `agent.DynamicToolProvider`, `agent.ToolHider`, `agent.MiddlewareExcluder`, `agent.OrphanResolver`, `agent.Drainer`, `agent.Binder`, `agent.Required` | add behaviour around runs, model calls and tool calls | `agenttest.Context` (a run context for calling a hook directly, recording what it emits) |
+| `backend.Backend`; optional `backend.Executor`, `backend.Starter`, `backend.Snapshotter`, `backend.MultiEditor`, `backend.Closer` | keep the agent's files somewhere else, or run its commands | `backendtest.Run`, `backendtest.RunExecutor`, `backendtest.RunStarter`, `backendtest.RunSnapshotter` |
+| `checkpoint.Checkpointer`; optional `checkpoint.Lister`, `checkpoint.Deleter`, `checkpoint.Leaser` | store threads in another database | `checkpointtest.Run` |
+| `kv.Store`; optional `kv.Stater` | keep `backend/kv` files in another store | `kvtest.Run`, `kvtest.RunWith` |
+| `async.Runner` and `async.Handle`; optional `async.Reattacher` (runner), `async.Continuer` and `async.Resolver` (handle) | run background tasks in another process or service | `asynctest.Run` |
+| `mcp.Transport`; optional `mcp.ProtocolVersionSetter` | reach MCP servers over another channel | `mcptest.Run` |
+| `web.Fetcher`, `web.SearchBackend` | read pages another way (a cache, a headless browser), or add a search service | — |
+| `memory.Store`; optional `memory.Pather` | keep long-term memories in a database or a vector index | — |
+| `summarize.Summarizer` (or `summarize.SummarizerFunc`) | write conversation summaries another way | — |
+| `rubric.Grader` (or `rubric.GraderFunc`) | grade final answers with your own code | — |
+| `askuser.Asker` (or `askuser.AskerFunc`) | answer `ask_user` questions from your own UI | — |
+| `permission.Approver` (a function type, passed to `WithApprover`) | decide approvals in your own UI | — |
+| `agent.Closer` | release what a middleware holds when `Agent.Close` runs | — |
+
+Three rules keep these contracts stable after 1.0:
+
+- An interface never gains a method; a new capability arrives as a new optional interface, found by type assertion.
+- A wrapper exposes what it wraps with `Unwrap`, and capabilities are looked up through it: `tool.As` for tools, `backend.AsExecutor`, `backend.AsStarter`, `backend.AsSnapshotter`, `backend.AsMultiEditor` and `backend.AsCloser` for backends, never a bare type assertion.
+- The value sets of enums (event kinds, terminal reasons, statuses) may grow in a minor release, so code that switches on them needs a default case.
+
 ## Permissions
 
 Every tool call is checked before it runs. Choose a mode with `WithPermissionMode`:
@@ -382,7 +420,7 @@ A backend is the file system the file tools operate on.
 - **`backend/shell`**: a disk backend that can also run commands; see "Shell and background jobs".
 - **`backend/kv`**: files kept in a namespaced key/value `kv.Store`, for state that must outlive a thread. `kv.NewMemoryStore` keeps it in memory; `kv.NewDirStore` keeps it on disk, where several processes can share it. A `DirStore` names each file by the hex SHA-256 of its key and keeps the key in a header inside the file, so no key can name a path outside the store and two keys never collide on a case-insensitive file system (macOS, Windows). Implement `kv.Store` to keep files in a database, add `Stat` (`kv.Stater`) so existence and size checks don't fetch the value, and run `kvtest.Run` against it.
 - **`backend/composite`**: routes each path to a backend by its longest mounted prefix and merges listings, globs and greps across them. `composite.New(def, composite.Route{Prefix: "/memories", Backend: kvb})` serves `/memories/a.md` from `kvb` as `/a.md` and every other path from `def`. Commands run only in `def`: files under a mount are invisible to them, and files of `def` that a mount shadows stay visible to them. Deleting a mount point, or any directory above one, is refused.
-- **`backend/sandbox`**: a backend for a remote container or VM whose only primitive is running a shell command. You supply a `backend.Executor` (only `Execute`); every file operation is a POSIX `sh` script sent through it, with paths single-quoted and content sent as base64. The sandbox needs `sh` with `base64` (and `base64 -d`), `find` (with `-H`, `-mindepth`, `-maxdepth` and `-exec ... {} +`), `wc`, `date -r FILE`, `mkdir`, `mv`, `rm`, `tail -c` and a `true` executable: GNU, busybox, macOS and FreeBSD userlands work; OpenBSD and NetBSD do not. File names that are not valid UTF-8 need tools that accept such arguments (`date -r` has no argument-free form): the Rust coreutils that recent Ubuntu ships by default refuse them, and the sandbox then reports `this userland cannot handle non-UTF-8 file names` for that path. The sandbox itself is the security boundary. When the executor also implements `backend.Starter`, `sandbox.NewStarter` returns a backend that can run background jobs too, for `WithJobs`. For development, `sandbox.New(shellBackend, sandbox.Options{Root: dir})` runs one on the host over a `backend/shell` backend. For a real boundary, use `orxdocker` (see "Untrusted tools in containers").
+- **`backend/sandbox`**: a backend for a remote container or VM whose only primitive is running a shell command. You supply a `backend.Executor` (only `Execute`); every file operation is a POSIX `sh` script sent through it, with paths single-quoted and content sent as base64. The sandbox needs `sh` with `base64` (and `base64 -d`), `find` (with `-H`, `-mindepth`, `-maxdepth` and `-exec ... {} +`), `wc`, `date -r FILE`, `mkdir`, `mv`, `rm`, `tail -c` and a `true` executable: GNU, busybox, macOS and FreeBSD userlands work; OpenBSD and NetBSD do not. File names that are not valid UTF-8 need tools that accept such arguments (`date -r` has no argument-free form): the Rust coreutils that recent Ubuntu ships by default refuse them, and the sandbox then reports `this userland cannot handle non-UTF-8 file names` for that path. The sandbox itself is the security boundary. When the executor also implements `backend.Starter`, `sandbox.NewStarter` returns a backend that can run background jobs too, for `WithJobs`. For development, `sandbox.New(shellBackend, sandbox.Config{Root: dir})` runs one on the host over a `backend/shell` backend. For a real boundary, use `orxdocker` (see "Untrusted tools in containers").
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -399,7 +437,7 @@ A sandbox backend over your own executor (imports omitted):
 
 ```go
 // Imports omitted; model and remote (your backend.Executor) come from surrounding code.
-sb, err := sandbox.New(remote, sandbox.Options{Root: "/workspace"})
+sb, err := sandbox.New(remote, sandbox.Config{Root: "/workspace"})
 if err != nil {
 	log.Fatal(err)
 }
@@ -407,7 +445,7 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithBackend(s
 _, _ = a, err
 ```
 
-`WithMount(prefix, b)` mounts `b` at `prefix` on top of whatever backend the agent uses: the per-thread default, `WithBackend`, every backend a `WithBackendFactory` returns, or `WithShell` (which keeps `execute`). It is repeatable, and an invalid or duplicate prefix, `/` included, makes `New` fail. With the default workspace and a checkpointer, checkpoints save the per-thread part only; mounted backends persist on their own. See "Memory" for the most common use.
+`WithMount(prefix, b)` mounts `b` at `prefix` on top of whatever backend the agent uses: the per-thread default, `WithBackend`, every backend a `WithBackendFactory` returns, or `WithShell` (which keeps `execute`). It is repeatable, and an invalid or duplicate prefix, `/` included, makes `New` fail. With the default workspace and a checkpointer, checkpoints save the per-thread part only; mounted backends persist on their own. With `WithBackend` or `WithShell`, `Agent.Close` also closes the mounted backends (each once), so do not mount there a backend that must outlive the agent; with the default workspace or `WithBackendFactory`, mounted backends are left to you. See "Memory" for the most common use.
 
 ## Human in the loop
 
@@ -476,6 +514,8 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 _, _ = a, err
 ```
 
+A nil `Allowed` offers `hitl.DefaultAllowed()` (`Approve`, `Edit` and `Reject`); an empty, non-nil one offers only `Reject`. `hitl` sits on top of the permission step and holds it to `Allowed`: a call a human already approved there (through `WithApprover`, or a resumed ask) is not asked about again, but only when `Approve` is allowed. Otherwise the approval does not count: the call is rejected when only `Reject` is allowed, and asked about again for a decision `hitl` allows. An approver can only allow (perhaps rewriting the input) or deny, so its allow runs the call when `Approve` is allowed, or when `Edit` is and it rewrote the input; with neither allowed, the call is rejected without asking it.
+
 ## Subagents
 
 The default stack gives the model a `task` tool that starts a subagent: a separate run that shares the parent's workspace, streams its events into the parent's, and returns its final answer as the tool result. Two kinds exist.
@@ -504,7 +544,7 @@ Approvals: with a `WithApprover`, subagents inherit it and ask it directly. With
 
 ## Background subagents
 
-`WithAsync` lets the model start subagents in the background and keep working while they run. It adds five tools: `start_task` starts a subagent (the same specs as the `task` tool), `check_task` shows a task's progress or waits for it, `update_task` sends a running task new instructions, `cancel_task` stops one and `list_tasks` lists the tasks of the conversation. When a task ends, the next turn of the thread starts with a message announcing it with an excerpt of its result, so the model does not have to poll. A run about to end while its tasks still run is reminded of them once; that reminder is one of the run's `agent.MaxStopContinuations` (3) continuations, shared with `rubric` and `Stop` hooks, and is consulted before them (see "Self-grading").
+`WithAsync` lets the model start subagents in the background and keep working while they run. It adds five tools: `start_task` starts a subagent (the same specs as the `task` tool), `check_task` shows a task's progress or waits for it, `update_task` sends a running task new instructions or an ended one a follow-up, `cancel_task` stops one and `list_tasks` lists the tasks of the conversation. When a task ends, the next turn of the thread starts with a message announcing it with an excerpt of its result, so the model does not have to poll. A run about to end while its tasks still run is reminded of them once; that reminder is one of the run's `agent.MaxStopContinuations` (3) continuations, shared with `rubric` and `Stop` hooks, and is consulted before them (see "Self-grading").
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -518,12 +558,49 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithAsync(tas
 _, _ = a, err
 ```
 
-- **Threads.** `start_task` needs a thread: run the agent with `Input.ThreadID` set (or through `agent.Thread`). In a run without one it fails with "background tasks need a thread id".
+- **Threads.** `start_task` needs a thread: run the agent with `Input.ThreadID` set (or through `agent.Thread`). In a run without one it fails with "background tasks need a thread id". Each task runs on a thread of its own, `<thread>/<task id>` (such as `ticket-42/async_1`), named in `TaskRecord.TaskThreadID`; never give a thread of your own a name of that shape.
+- **Statuses.** A task's record (`async.Tasks(state)`) shows it `running`, `waiting` (stopped for a decision, see below), `completed`, `failed` (a model refusal included, with an error starting "refused"), `cancelled`, `timed_out` or `lost`. `running` and `waiting` do not end a task; the others do. The set may grow, so treat a status you do not know as a failure.
+- **Stateful tasks.** A task keeps its history across episodes. `update_task` on a task that ended continues it with the follow-up as a new episode on the same thread (the runner's handle implements `async.Continuer`): the task keeps its id and is announced again when the episode ends.
 - **Ownership.** Tasks belong to a thread, not to a run: a top-level run may end while its tasks keep running, and a later run on the thread is told when they finish. A nested run's tasks are stopped when it ends, so a subagent's own tasks never outlive it.
-- **Approvals.** A background run has nobody to ask in-band. With a `WithApprover`, the subagent inherits it; without one, a subagent that needs a decision stops as `waiting`, with the pending actions in its record (`TaskRecord.Pending`). The model is told what the task waits for but cannot approve it; `cancel_task` ends a waiting task. A task's permission mode is fixed when it starts: switching the parent to plan mode or a stricter mode later does not change the mode of tasks already running.
-- **Runner.** By default tasks run as subagents in this process, with `TaskTimeout` (30 minutes) each and up to `MaxRunning` (4) at once per thread. Implement `async.Runner` to run them elsewhere, and check it with `asynctest.Run` (package `middleware/async/asynctest`).
-- **Restarts.** Task records are saved in the thread's state and each task's own thread is saved with the agent's checkpointer (as `<thread>/async_N`; those threads are never deleted for you). With a checkpointer, the first run of a thread in a new process takes over its running tasks: a task that was waiting for a decision waits again, any other continues where it was saved, told the process restarted. The host's `Resolve` also takes over a waiting task after a restart, through the agent the middleware was first bound to, so use one `async.Middleware` per top-level agent. Without a checkpointer, a task recorded as running that this process does not know is reported to the model as `lost`.
+- **Approvals.** A background run has nobody to ask in-band. With a `WithApprover`, the subagent inherits it; without one, a subagent that needs a decision stops as `waiting`, with the pending actions in its record (`TaskRecord.Pending`). The model is told what the task waits for but cannot approve it: `update_task` refuses a waiting task and `cancel_task` only ends it. The decision is the host's, through the middleware's `Resolve` (below). A task's permission mode is fixed when an episode starts: switching the parent to plan mode or a stricter mode later does not change an episode already running, but a follow-up or decision given after that runs in the stricter mode.
+- **Host hooks.** `Config.OnSettled` is called when an episode stops: the task ended, or it now waits (`rec.Pending` set). `Config.OnEvent` receives every event of every episode the built-in runner runs, with the starting thread and task id. Both run on the task's goroutine, so keep them quick.
+- **Runner.** By default tasks run as subagents in this process, with `TaskTimeout` (30 minutes) each and up to `MaxRunning` (4) at once per thread. Implement `async.Runner` to run them elsewhere (and `async.Reattacher`, `async.Continuer` and `async.Resolver` for restarts, follow-ups and decisions), and check it with `asynctest.Run` (package `middleware/async/asynctest`).
+- **Restarts.** Task records are saved in the thread's state and each task's own thread is saved with the agent's checkpointer (those threads are never deleted for you). With a checkpointer, the first run of a thread in a new process takes over its running tasks: a task that was waiting for a decision waits again, any other continues where it was saved, told the process restarted. `Resolve` also takes over a waiting task after a restart, through the agent the middleware was first bound to, so use one `async.Middleware` per top-level agent. Without a checkpointer, a task recorded as running that this process does not know is reported to the model as `lost`.
 - **Shutdown.** The host owns the `async.Middleware`; its `Close`, or `Close` of the agent (see "Shutting down"), stops every task and must be called before the program exits.
+
+A host that resolves waiting tasks itself, here by asking on the terminal (imports omitted):
+
+```go
+var tasks *async.Middleware
+tasks, err := async.New(async.Config{
+	OnSettled: func(ctx context.Context, threadID string, rec async.TaskRecord) {
+		if rec.Status != async.StatusWaiting {
+			return
+		}
+		go func() { // OnSettled should not block
+			var decisions []agent.Decision
+			for _, req := range rec.Pending.Requests {
+				fmt.Printf("task %s wants to run %s %s; allow? [y/N] ", rec.ID, req.Tool, req.Input)
+				var answer string
+				_, _ = fmt.Scanln(&answer)
+				d := agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Approve}
+				if answer != "y" {
+					d.Type, d.Message = agent.Reject, "the user declined"
+				}
+				decisions = append(decisions, d)
+			}
+			if err := tasks.Resolve(context.Background(), threadID, rec.ID, decisions); err != nil {
+				log.Printf("resolve %s: %v", rec.ID, err)
+			}
+		}()
+	},
+})
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+`Resolve` starts the task's next episode, nested in the run that started it; the parent's next turn shows it running again and its end is announced as usual. Only one decision per wait wins: once it is taken, a later `Resolve` fails with `async.ErrNotWaiting`, and `cancel_task` and `update_task` fail too, so the approved actions run at most once. A decision that does not answer every pending action exactly once leaves the task waiting.
 
 A background subagent's state is not merged into the parent's; files are shared through the backend.
 
@@ -559,6 +636,8 @@ for ev, err := range c.Run(ctx, in) {
 	}
 }
 ```
+
+Workers started with `start_task` run as background tasks (see "Background subagents"), so the same host hooks apply: `Config.OnSettled` and `Config.OnEvent` report each worker's episodes, `Config.Runner` runs workers with a custom `async.Runner`, and `Coordinator.Resolve` answers a worker that waits for a decision, with the contract of `async.Middleware.Resolve`.
 
 `New` fails when the options replace or remove the coordinator's async middleware, since its workers and `Close` depend on it. That check reads the configured stack, so it cannot see a model profile whose `ExcludeMiddleware` names `async`: for the matching models such a profile removes `start_task`, leaving the coordinator only the `task` tool.
 
@@ -632,7 +711,7 @@ The `cache` middleware asks providers that support prompt caching to cache the s
 
 ## Hooks
 
-Hooks run your code at fixed points: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop` and `SubagentStart`. A `PreToolUse` hook runs after the permission rules allowed a call and can block it, rewrite its input or add context to its result. Returning an error that wraps `agent.ErrStopRun` ends the run with reason `hook_stopped`. Hooks also fire inside subagent runs and resumed runs; every hook input carries `Depth` and `ParentToolID` to tell them apart. `SessionEnd` runs whatever the reason the run ended, but not when you stop reading the run's events early (break out of the loop). Each point takes a list of hook structs (`hooks.StopHook{Fn: ...}` and so on) whose `Fn` must be set. A tool hook's `Matcher.Tools` holds tool name patterns (`tool.MatchName`), so `"mcp__github__*"` matches every tool of that MCP server; an empty `Matcher` matches every tool.
+Hooks run your code at fixed points: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop` and `SubagentStart`. A `PreToolUse` hook runs after the permission rules allowed a call and can block it, rewrite its input or add context to its result. Returning an error that wraps `agent.ErrStopRun` ends the run with reason `hook_stopped`. Hooks also fire inside subagent runs and resumed runs; every hook input carries `Depth` and `ParentToolID` to tell them apart. `SessionEnd` runs whatever the reason the run ended, but not when you stop reading the run's events early (break out of the loop). Each point takes a list of hook structs (`hooks.StopHook{Fn: ...}` and so on) whose `Fn` must be set. A tool hook's `Matcher.Tools` holds tool name patterns (`tool.MatchName`), so `"mcp__github__*"` matches every tool of that MCP server; an empty `Matcher` matches every tool. `SubagentStart` fires for the `task` tool only, not for a background task `start_task` launches; to gate those, use a `PreToolUse` hook whose `Matcher` names `start_task`, which sees the same `subagent_type` and `description` input.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -698,7 +777,7 @@ invoke_agent <agent name>
 Names follow the OpenTelemetry GenAI semantic conventions, which are in Development status and may change in a later release; attributes the conventions do not define are prefixed `orchestrix.`. They are all declared in one file of the module.
 
 - **Content capture.** Off by default. `Config.CaptureContent` records tool call arguments and results (not prompts or model replies), each capped at `Config.MaxContentBytes` (default 4096) on a character boundary. Go error messages are exported only with capture on (the run span gets a status description; `chat` and `execute_tool` spans get a status description and an exception event). Without capture they carry the error's Go type and, for an `*llm.APIError`, its kind (for example `*llm.APIError (kind=rate_limit)`), because errors can echo prompt fragments. `Config.RedactError` replaces the exported text in either mode. A tool result with `IsError` sets status Error, with a description only when capture is on.
-- **Interrupts and stops are outcomes, not errors.** A tool call that pauses the run for approval, or ends it with `agent.ErrStopRun`, leaves its span status unset and sets `orchestrix.tool.outcome` to `interrupted` or `stopped`. A run ending as `completed`, `max_turns`, `timeout`, `interrupted` or `hook_stopped` is not an error either; every other reason sets status Error. A run resumed after an interrupt is a new trace: `gen_ai.conversation.id` joins the two.
+- **Interrupts and stops are outcomes, not errors.** A tool call that pauses the run for approval, or ends it with `agent.ErrStopRun`, leaves its span status unset and sets `orchestrix.tool.outcome` to `interrupted` or `stopped`. A run ending as `completed`, `max_turns`, `token_limit`, `timeout`, `interrupted` or `hook_stopped` is not an error either; every other reason, `refusal` and any reason added later included, sets status Error. A run resumed after an interrupt is a new trace: `gen_ai.conversation.id` joins the two.
 - **Subagents.** A child that copies the parent's middleware is traced, and its `invoke_agent` span is a child of the parent's `execute_tool` span for the `task` call, in the same trace. A subagent spec that sets its own `Middleware` list is traced only if the list includes the `otel` middleware.
 - **Background subagents.** A run started with `WithAsync` outlives the tool call that started it, so its spans are children of an `execute_tool` span that has already ended. OpenTelemetry allows this and backends show it.
 - **Fallback.** With `WithFallbackConfig`, pass `OnFallback: orxotel.RecordFallback`: each switch is added as an `orchestrix.fallback` event with the attributes `from`, `to` and `error` to the `chat` span that switched. While a failed entry cools down it is skipped without a switch, so that call has no event; `orchestrix.response.source`, set on each `chat` span a fallback provider answered, names the entry that answered.
@@ -719,7 +798,7 @@ With `WithCheckpointer`, the agent saves a thread's state after every change (ea
 ```go
 // Imports omitted; model comes from surrounding code.
 ctx := context.Background()
-cp, err := file.New("./checkpoints")
+cp, err := file.New("./checkpoints", file.Config{})
 if err != nil {
 	log.Fatal(err)
 }
@@ -772,7 +851,7 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithCheckpoin
 _, _, _ = a, store, err
 ```
 
-`orxpg.Checkpointer` implements `checkpoint.Leaser` across every process that shares the database, so two workers never run one thread at once. Each save is one conditional statement, and state is stored as the exact bytes of `State.MarshalJSON`. The tenant id is part of every key and query; when tenants reach a shared database with their own credentials, add row-level security too. `orxpg.Schema` returns the DDL for migration tools. The constructors take an `orxpg.DB`, which a `*pgxpool.Pool`, a `*pgx.Conn` and a `pgx.Tx` all satisfy, so a checkpointer can also write inside the host's own transaction. For another database, implement `checkpoint.Checkpointer` (and `kv.Store`) and run `checkpointtest.Run` (and `kvtest.Run`) against it.
+`orxpg.Checkpointer` implements `checkpoint.Leaser` across every process that shares the database, so two workers never run one thread at once. Each save is one conditional statement, and state is stored as the exact bytes of `State.MarshalJSON`. The tenant id is part of every key and query; when tenants reach a shared database with their own credentials, add row-level security too. `orxpg.Schema` returns the DDL for migration tools. The constructors take an `orxpg.DB`, which a `*pgxpool.Pool`, a `*pgx.Conn` and a `pgx.Tx` all satisfy, but a checkpointer used by an agent must sit over a pool: the agent renews its thread's lease from another goroutine while saves run, and a lease taken inside a transaction is invisible to other processes until it commits. A `*pgx.Conn` or a `pgx.Tx` suits direct, single-goroutine use only, such as tools, tests and migrations. For another database, implement `checkpoint.Checkpointer` (and `kv.Store`) and run `checkpointtest.Run` (and `kvtest.Run`) against it.
 
 A checkpointed workspace is stored whole in the thread's state, so for large workspaces prefer a disk or shell backend (which `WithCheckpointer` leaves alone).
 
@@ -859,13 +938,13 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 _, _ = a, err
 ```
 
-To keep memories somewhere else, such as a database or a vector index, implement `memory.Store` (`Record`, `Recall`, `Index`) and pass it as `Store`; the middleware still validates entries and renders the index and the recall results. Permission path rules reach a store's tools only when it implements `memory.Pather`, as `FileStore` does; any other store is not path-checked, so `record_memory` still needs an allow rule, an approval or acceptEdits, but a deny rule on paths does not stop it.
+To keep memories somewhere else, such as a database or a vector index, implement `memory.Store` (`Record`, `Recall`, `Index`) and pass it as `Store`; the middleware still validates entries and renders the index and the recall results. Permission path rules reach a store's tools only when it implements `memory.Pather`, as `FileStore` does: its `RecallPaths`, `RecordPaths` (given the entry being recorded) and `EntryPath` return absolute, clean backend paths, which the rules match. Any other store is not path-checked, so `record_memory` still needs an allow rule, an approval or acceptEdits, but a deny rule on paths does not stop it.
 
 The store is kept in the workspace under `memory.DefaultDir` (`/.orchestrix/memories`), so by itself it lasts as long as that workspace does: across the runs of a thread, and across restarts with a disk or shell backend or a checkpointer. To keep memories across threads and restarts while the rest of the workspace stays per thread, mount that directory on a persistent backend:
 
 ```go
 // Imports omitted; model comes from surrounding code.
-store, err := kv.NewDirStore("./memories") // survives restarts
+store, err := kv.NewDirStore("./memories", kv.DirStoreConfig{}) // survives restarts
 if err != nil {
 	log.Fatal(err)
 }
@@ -943,7 +1022,7 @@ _, _ = a, err
 
 ## MCP
 
-`mcp.Connect` starts or dials Model Context Protocol servers and returns a middleware for `WithMCP`. Each server tool becomes a tool named `mcp__<server>__<tool>`, the servers' instructions are added to the system prompt, and servers with resources add `list_mcp_resources` and `read_mcp_resource`. A server that announces a changed tool list is picked up from the next turn. You own the connections: call `m.Close(ctx)` when you are done, or `Close` the agent, which closes its MCP, tasks and async middleware too.
+`mcp.Connect` starts or dials Model Context Protocol servers and returns a middleware for `WithMCP`. Each server tool becomes a tool named `mcp__<server>__<tool>`, the servers' instructions are added to the system prompt, and servers with resources add `list_mcp_resources` and `read_mcp_resource`. A server that announces a changed tool list is picked up from the next turn. You own the connections: call `m.Close(ctx)` when you are done, or `Close` the agent, which closes its MCP, jobs and async middleware too.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -951,7 +1030,7 @@ ctx := context.Background()
 m, err := mcp.Connect(ctx, []mcp.ServerConfig{
 	{Name: "repo", Command: "./bin/repo-server", Args: []string{"--root", "."}},
 	{Name: "docs", URL: "https://mcp.example.com/mcp", BearerToken: os.Getenv("DOCS_TOKEN"), Defer: true},
-})
+}, mcp.ConnectConfig{})
 if err != nil {
 	log.Fatal(err)
 }
@@ -964,7 +1043,7 @@ a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 _, _ = a, err
 ```
 
-A server sets exactly one of `Command` (a child process speaking stdio, which gets a small allowlist of your environment unless `InheritEnv` is set), `URL` (streamable HTTP) or `Transport` (for example `mcp.InProcess` for a server in the same program). `Defer` offers the server's tools by name only, to be found with `search_tools`; `Gated` hides and refuses them until a skill that lists the server in `mcp-servers` is loaded. Either one adds the deferred middleware. `Optional` records a failed connection in `Status()` instead of failing `Connect`.
+A server sets exactly one of `Command` (a child process speaking stdio, which gets a small allowlist of your environment unless `InheritEnv` is set), `URL` (streamable HTTP) or `Transport` (for example `mcp.InProcess` for a server in the same program). `Defer` offers the server's tools by name only, to be found with `search_tools`; `Gated` hides and refuses them until a skill that lists the server in `mcp-servers` is loaded. Either one adds the deferred middleware. `Optional` records a failed connection in `Status()` instead of failing `Connect`. `mcp.ConnectConfig` sets the client info sent to every server, an `OnNotification` observer for server notifications and a `Logger`.
 
 Server tools ask for approval by default, whatever their read-only hints say; set `TrustReadOnlyHints` to believe them, or write allow rules for the tool names. A server's instructions can steer the agent, so connect only servers you trust or set `IgnoreInstructions`.
 
@@ -983,7 +1062,7 @@ The client speaks protocol revision 2025-06-18 (and accepts servers on 2025-03-2
 
 Images from tool results and resources are checked before the model sees them: the data must be valid base64, at most `filesystem.MaxMediaBytes` once decoded, and a PNG, JPEG, GIF or WebP image by its content. The type found in the content wins over the declared one. An image that fails a check, or any image for a model that does not take images, becomes an `[image omitted: …]` note, so one bad block cannot break the thread.
 
-The package also has a small `mcp.Server` you can serve over stdio, HTTP or in process. Its HTTP handler refuses (403) a request whose `Host` is not in `HandlerOptions.AllowedHosts`, which defaults to `localhost`, `127.0.0.1` and `[::1]` on any port; this stops DNS rebinding. List the names the server is really reached by, such as a LAN address or a public name behind a proxy. It also refuses a request whose `Origin` names another host, which stops cross-origin browser requests. Any other authentication is up to your program.
+The package also has a small `mcp.Server` you can serve over stdio, HTTP or in process. Its HTTP handler (`Server.Handler(mcp.HandlerConfig{})`) answers each request with an SSE stream that carries the handler's notifications before its response, where the MCP specification puts them; `HandlerConfig.JSONResponses` switches to plain JSON replies, whose notifications go only to the session's GET stream. The handler refuses (403) a request whose `Host` is not in `HandlerConfig.AllowedHosts`, which defaults to `localhost`, `127.0.0.1` and `[::1]` on any port; this stops DNS rebinding. List the names the server is really reached by, such as a LAN address or a public name behind a proxy. It also refuses a request whose `Origin` names another host, which stops cross-origin browser requests. Any other authentication is up to your program.
 
 ## Plan mode
 
@@ -992,7 +1071,7 @@ The package also has a small `mcp.Server` you can serve over stdio, HTTP or in p
 - With `WithApprover`, the approver is asked. The request has `DisableRemember` set, so an approver must not answer it from an "always allow" it remembered; `orx` asks with `[y/N]` every time.
 - Without one, the run pauses with an interrupt for `exit_plan_mode`. Resume it with `Approve`, `Edit` (a revised plan as the new input), `Reject` or `Respond` (see "Human in the loop").
 
-Approval restores the mode the run had before it entered plan mode (or `planmode.Config.ApproveMode`, when set), and the approved plan is kept in state under `planmode.PlanKey`. A rejection or a response keeps plan mode and hands the feedback to the model, so it can revise the plan. A run started in `plan` mode can use `exit_plan_mode` directly; set `DisableEnter` to offer only that tool. Subagents cannot enter or leave plan mode: a planning parent's subagents plan too.
+Approval restores the mode the run had before it entered plan mode (or `planmode.Config.ApproveMode`, when set), and the approved plan is kept in state, read with `planmode.Plan(state)`. A rejection or a response keeps plan mode and hands the feedback to the model, so it can revise the plan. A run started in `plan` mode can use `exit_plan_mode` directly; set `DisableEnter` to offer only that tool. Subagents cannot enter or leave plan mode: a planning parent's subagents plan too.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -1056,10 +1135,10 @@ _, _ = a, err
 ```
 
 - **Network guard.** By default every `web_fetch` connection to a loopback, private, link-local or otherwise non-public address is refused when it is made, for each redirect hop and each DNS answer, so a page cannot lead the agent into your internal network. `AllowPrivateNetworks` turns this off.
-- **Proxy and certificates.** `ProxyURL` sends `web_fetch` requests through an http or https proxy (the proxy environment variables are ignored), and `CACertFiles` adds root certificates for them. A bad proxy URL or an unreadable CA file makes `New` fail. These settings, like the network guard, cover `web_fetch` only (see below for search). Through a proxy, the agent connects only to the proxy, so the guard resolves each target host itself and refuses a blocked answer before sending the request; the proxy then resolves the host again for its own connection,, so a DNS answer that changes in between is not caught.
+- **Proxy and certificates.** `ProxyURL` sends `web_fetch` requests through an http or https proxy (the proxy environment variables are ignored), and `CACertFiles` adds root certificates for them. A bad proxy URL or an unreadable CA file makes `New` fail. These settings, like the network guard, cover `web_fetch` only (see below for search). Through a proxy, the agent connects only to the proxy, so the guard resolves each target host itself and refuses a blocked answer before sending the request; the proxy then resolves the host again for its own connection, so a DNS answer that changes in between is not caught.
 - **Permissions.** The tools need an allow rule or an approval, unless `ReadOnly` is set, which allows them without one. `web_fetch(pattern)` rules match the URL in a canonical form: lowercase scheme and host, no default port, `.` and `..` segments resolved, escaped unreserved characters decoded, no fragment. URLs with a user name or password are refused. Rules see only the URL the model asked for: redirects are followed without checking the rules again, though the network guard checks every hop.
 - **Search backends.** `web.NewDuckDuckGo` (no key), `web.NewBrave` and `web.NewTavily` (API key required; an empty key fails with an error wrapping `web.ErrNoAPIKey`). Each constructor returns its concrete backend type and takes an optional `Client`; pass one from `web.NewHTTPClient` to search through a proxy or with extra certificates. Search requests never follow redirects. Implement `web.SearchBackend` for any other service.
-- **Custom fetcher.** `Fetcher` replaces how `web_fetch` reads pages (a cache, a headless browser, a test double); the default is `web.HTTPFetcher`. A custom fetcher owns its network policy: the private-address guard lives in `HTTPFetcher` only, so a fetcher that reaches the network must refuse internal addresses itself. Setting `Fetcher` together with an HTTP client setting (`MaxRedirects`, `AllowPrivateNetworks`, `ProxyURL`, `CACertFiles`, `UserAgent`) makes `New` fail; `Timeout`, `MaxBytes` and `MaxChars` still apply.
+- **Custom fetcher.** `Fetcher` (a `web.Fetcher`) replaces how `web_fetch` reads pages (a cache, a headless browser, a test double); the default is a `web.HTTPFetcher`, built with `web.NewHTTPFetcher` when you need one yourself. A custom fetcher owns its network policy: the private-address guard lives in `HTTPFetcher` only, so a fetcher that reaches the network must refuse internal addresses itself. Setting `Fetcher` together with `DisableFetch` or an HTTP client setting (`MaxRedirects`, `AllowPrivateNetworks`, `ProxyURL`, `CACertFiles`, `UserAgent`) makes `New` fail, and so does a nil pointer as `Fetcher` or `Search`; `Timeout`, `MaxBytes` and `MaxChars` still apply.
 
 A search backend sends its requests with its own `Client`. Without one it uses a plain client: no proxy, no extra certificates, and private addresses allowed, since the endpoint is fixed by you and not chosen by the model. To send search through the same proxy as `web_fetch`, build its client from the same settings:
 
@@ -1082,7 +1161,7 @@ Page content and search results are untrusted text written by third parties; the
 
 ## Asking the user
 
-`WithAskUser` gives the model `ask_user`, which asks one to four multiple-choice questions at once; the user may always answer in their own words. With `askuser.Config.Ask`, your callback answers synchronously. Without it, the run pauses with an interrupt: show the questions (`askuser.Questions` decodes them) and resume with `askuser.Respond`, or with a `Reject` decision to decline.
+`WithAskUser` gives the model `ask_user`, which asks one to four multiple-choice questions at once; the user may always answer in their own words. With `askuser.Config.Asker` (an `askuser.Asker`, or a function wrapped in `askuser.AskerFunc`), your code answers synchronously. Without it, the run pauses with an interrupt: show the questions (`askuser.Questions` decodes them) and resume with `askuser.Respond`, or with a `Reject` decision to decline.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -1135,7 +1214,7 @@ for ev, err := range a.Resume(ctx, "setup", final.State, decisions) {
 }
 ```
 
-`ask_user` is read-only, so it works in `plan` mode and in `dontAsk` mode, which governs permission prompts, not questions. A subagent cannot pause for a human: inside one, `ask_user` returns an error unless `Config.Ask` is set, so give the agent a callback if its subagents should be able to ask. Parallel subagents may call it at the same time, so the callback must be safe for concurrent use.
+`ask_user` is read-only, so it works in `plan` mode and in `dontAsk` mode, which governs permission prompts, not questions. A subagent cannot pause for a human: inside one, `ask_user` returns an error unless `Config.Asker` is set, so give the agent an `Asker` if its subagents should be able to ask. Parallel subagents may call it at the same time, so the `Asker` must be safe for concurrent use. One UI object can serve both approvals and questions: pass its approve method to `WithApprover` and the object itself as `Asker`.
 
 ## Self-grading
 
@@ -1213,7 +1292,7 @@ The `orx` CLI has no flag for this yet. See [`structured-output`](examples/struc
 
 ## Model profiles
 
-`WithProfiles` adjusts the agent for the model it runs. Each `profiles.Adjustment` names the models it applies to and can append a prompt suffix, replace tool descriptions, and leave out tools (`ExcludeTools`) or whole middleware (`ExcludeMiddleware`; a middleware that implements `agent.Required`, such as `hitl`, `hooks` and `planmode`, cannot be excluded: building the agent for a matching model fails). An adjustment describes how this agent treats a model; what the model can do (context window, output limit, thinking, images) is its `llm.Profile`, registered with `llm.RegisterProfile`.
+`WithProfiles` adjusts the agent for the model it runs. Each `profiles.Adjustment` names the models it applies to and can append a prompt suffix, replace tool descriptions, and leave out tools (`ExcludeTools`) or whole middleware (`ExcludeMiddleware`; a middleware that implements `agent.Required`, such as `guard`, `hitl`, `hooks` and `planmode`, cannot be excluded: building the agent for a matching model fails). An adjustment describes how this agent treats a model; what the model can do (context window, output limit, thinking, images) is its `llm.Profile`, registered with `llm.RegisterProfile`.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -1255,10 +1334,10 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 | `-mode` | Permission mode name; wins over `-yes`. |
 | `-system` | File holding the system prompt. |
 | `-dir` | Root directory of the workspace (default `.`). |
-| `-no-shell` | Use the plain disk workspace: no `execute` tool and no background tasks. Commands need `/bin/sh`, so on Windows pass it. |
+| `-no-shell` | Use the plain disk workspace: no `execute` tool and no background jobs. Commands need `/bin/sh`, so on Windows pass it. |
 | `-store` | Directory for saved conversations (file checkpointer); enables persistence. |
 | `-thread` | Conversation name inside `-store` (default `cli`); the same name continues an earlier session. |
-| `-max-turns` | Maximum model turns per prompt (default 50). |
+| `-max-turns` | Maximum tool-calling model turns per prompt (default 50; `0` is the agent default, `-1` unbounded). |
 | `-base-url` | Override the provider base URL. |
 | `-thinking`, `-effort` | Thinking and reasoning-effort settings passed to the provider. |
 | `-skills` | Directory of skills, one subdirectory with a `SKILL.md` per skill (repeatable). Skills that fail to load are skipped with a warning. |
@@ -1275,9 +1354,9 @@ orx -model openai:gpt-4o            # interactive session; /exit to quit
 
 ## Roadmap
 
-Milestone 1 (core) shipped the three providers, the agent loop with middleware, events and budgets, permissions, memory and disk backends, file and planning tools, the preset and a minimal CLI. Milestone 2 (depth) added subagents (isolated and forked), summarization, prompt caching, hooks, checkpointed threads and resume, a human-approval middleware, the shell backend and background tasks. Milestone 3 (knowledge and reach) added memory files and a memory store, skills, MCP servers, plan mode, deferred tools, web fetch and search, and questions to the user. Milestone 4 (scale) added background subagents, a coordinator and parallel runs, self-grading with a rubric, model profiles, key-value, composite and sandbox backends with `WithMount`, and model-directed context compression.
+Milestone 1 (core) shipped the three providers, the agent loop with middleware, events and budgets, permissions, memory and disk backends, file and planning tools, the preset and a minimal CLI. Milestone 2 (depth) added subagents (isolated and forked), summarization, prompt caching, hooks, checkpointed threads and resume, a human-approval middleware, the shell backend and background jobs. Milestone 3 (knowledge and reach) added memory files and a memory store, skills, MCP servers, plan mode, deferred tools, web fetch and search, and questions to the user. Milestone 4 (scale) added background subagents, a coordinator and parallel runs, self-grading with a rubric, model profiles, key-value, composite and sandbox backends with `WithMount`, and model-directed context compression.
 
-Next is a stabilization pass toward v1.0.0: settling the public API (the contracts added in Milestone 4, such as `kv.Store`, `async.Runner` and `rubric.Grader`, are v0.x until then) and hardening what exists rather than adding features.
+The current work freezes the public API for v1.0.0: every extension point (see "Extending Orchestrix") has its final shape, background tasks are stateful (follow-ups, host decisions, reattach after a restart), and the main ones have conformance kits. Until 1.0 is tagged the API may still change in the 0.x line; [CHANGELOG.md](CHANGELOG.md) lists every break.
 
 ## Contributing
 
