@@ -76,7 +76,8 @@ type Config struct {
 
 	// Backend is the workspace tools operate on. BackendFactory, when set,
 	// takes precedence and builds one backend per thread. Agent.Close
-	// closes it when it implements Closer, or else io.Closer.
+	// closes it when it, or a backend it wraps (found with
+	// backend.AsCloser), implements Closer or io.Closer.
 	Backend backend.Backend
 	// BackendFactory builds the backend for a thread from its ThreadID; when
 	// set it takes precedence over Backend.

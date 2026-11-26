@@ -129,6 +129,10 @@ func New(cfg Config) (*Middleware, error) {
 // Name implements agent.Middleware.
 func (m *Middleware) Name() string { return Name }
 
+// Required implements agent.Required: plan mode is a safety check, so a
+// MiddlewareExcluder may not remove it.
+func (m *Middleware) Required() bool { return true }
+
 // Tools implements agent.ToolProvider.
 func (m *Middleware) Tools() []tool.Tool {
 	exit := tool.New(ToolExit,

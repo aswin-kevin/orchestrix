@@ -27,7 +27,10 @@
 //
 // ExcludeMiddleware is applied when the agent is built (see
 // agent.MiddlewareExcluder), for Config.Model. Subagents with another model
-// are filtered for their own model.
+// are filtered for their own model. A middleware that is agent.Required
+// (hitl, hooks, planmode) cannot be excluded: agent.New fails for a model
+// whose adjustment names it, so a subagent with such a model fails when it
+// is built.
 package profiles
 
 import (
@@ -42,8 +45,8 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-// MiddlewareName is the name of the profiles middleware.
-const MiddlewareName = "profiles"
+// Name is the name of the profiles middleware.
+const Name = "profiles"
 
 // ExcludedText is the refusal given for a call to an excluded tool; its
 // arguments are the tool name and the model name.
@@ -69,13 +72,12 @@ type Adjustment struct {
 	// before the refusal. Nil excludes none.
 	ExcludeTools []string
 	// ExcludeMiddleware names middleware removed when the agent is built;
-	// names matching nothing are ignored. "profiles" is rejected, and so are
-	// the safety middleware "hitl", "hooks" and "planmode": removing them
-	// for a model would silently drop its approvals, PreToolUse hooks or
-	// plan mode. No
-	// dependency check is made: excluding a middleware that others rely on
-	// (filesystem, for instance) leaves them configured and the agent still
-	// runs. Nil removes none.
+	// names matching nothing are ignored. "profiles" is rejected by New.
+	// Naming a middleware that is agent.Required (hitl, hooks, planmode)
+	// makes agent.New fail for a matching model: removing it would silently
+	// drop its approvals, hooks or plan mode. No dependency check is made:
+	// excluding a middleware that others rely on (filesystem, for instance)
+	// leaves them configured and the agent still runs. Nil removes none.
 	ExcludeMiddleware []string
 }
 
@@ -93,14 +95,11 @@ type Middleware struct {
 	adjustments []Adjustment
 }
 
-// safetyMiddleware are the middleware ExcludeMiddleware must not name: they
-// gate what the agent may do.
-var safetyMiddleware = []string{"hitl", "hooks", "planmode"}
-
 // New validates cfg and returns the middleware. It fails for an adjustment
 // without Models, a pattern that is empty, blank or holds a NUL byte, or an
-// ExcludeMiddleware naming the profiles middleware itself or a safety
-// middleware (hitl, hooks, planmode).
+// ExcludeMiddleware naming the profiles middleware itself. Excluding a
+// middleware that is agent.Required is refused by agent.New instead, for
+// the models the adjustment matches.
 func New(cfg Config) (*Middleware, error) {
 	adjs := make([]Adjustment, len(cfg.Adjustments))
 	for i, a := range cfg.Adjustments {
@@ -112,13 +111,8 @@ func New(cfg Config) (*Middleware, error) {
 				return nil, fmt.Errorf("profiles: adjustment %d has an invalid pattern %q: %w", i, p, err)
 			}
 		}
-		if slices.Contains(a.ExcludeMiddleware, MiddlewareName) {
+		if slices.Contains(a.ExcludeMiddleware, Name) {
 			return nil, errors.New("profiles: ExcludeMiddleware must not name profiles")
-		}
-		for _, name := range a.ExcludeMiddleware {
-			if slices.Contains(safetyMiddleware, name) {
-				return nil, fmt.Errorf("profiles: adjustment %d excludes the safety middleware %q", i, name)
-			}
 		}
 		a.Models = slices.Clone(a.Models)
 		a.ExcludeTools = slices.Clone(a.ExcludeTools)
@@ -130,7 +124,7 @@ func New(cfg Config) (*Middleware, error) {
 }
 
 // Name implements agent.Middleware.
-func (m *Middleware) Name() string { return MiddlewareName }
+func (m *Middleware) Name() string { return Name }
 
 // Match returns copies of the adjustments whose Models match model, in order.
 func (m *Middleware) Match(model string) []Adjustment {

@@ -457,7 +457,7 @@ Pass the same thread ID to `Resume` so the run keeps using the same backend.
 
 `Final.State` can be serialized with `encoding/json` and resumed later. It holds the conversation and run state, not the workspace: to continue in a new process with the files intact, use a checkpointer (see "Checkpoints and threads").
 
-To pause for a human before specific tools regardless of the permission mode, use `WithInterruptOn`; `WithInterruptConfig` narrows the decisions allowed or which calls pause:
+To pause for a human before specific tools regardless of the permission mode, use `WithInterruptOn`; `WithInterruptConfig` narrows the decisions allowed or which calls pause. Both take tool name patterns (`tool.MatchName`), so `"mcp__*"` pauses every MCP tool; a key equal to the tool's name wins over a pattern, and otherwise the first matching key in sorted order applies:
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -632,7 +632,7 @@ The `cache` middleware asks providers that support prompt caching to cache the s
 
 ## Hooks
 
-Hooks run your code at fixed points: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop` and `SubagentStart`. A `PreToolUse` hook runs after the permission rules allowed a call and can block it, rewrite its input or add context to its result. Returning an error that wraps `agent.ErrStopRun` ends the run with reason `hook_stopped`. Hooks also fire inside subagent runs and resumed runs; every hook input carries `Depth` and `ParentToolID` to tell them apart. `SessionEnd` runs whatever the reason the run ended, but not when you stop reading the run's events early (break out of the loop).
+Hooks run your code at fixed points: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop` and `SubagentStart`. A `PreToolUse` hook runs after the permission rules allowed a call and can block it, rewrite its input or add context to its result. Returning an error that wraps `agent.ErrStopRun` ends the run with reason `hook_stopped`. Hooks also fire inside subagent runs and resumed runs; every hook input carries `Depth` and `ParentToolID` to tell them apart. `SessionEnd` runs whatever the reason the run ended, but not when you stop reading the run's events early (break out of the loop). Each point takes a list of hook structs (`hooks.StopHook{Fn: ...}` and so on) whose `Fn` must be set. A tool hook's `Matcher.Tools` holds tool name patterns (`tool.MatchName`), so `"mcp__github__*"` matches every tool of that MCP server; an empty `Matcher` matches every tool.
 
 ```go
 // Imports omitted; model comes from surrounding code.
@@ -1196,7 +1196,7 @@ The `orx` CLI has no flag for this yet. See [`structured-output`](examples/struc
 
 ## Model profiles
 
-`WithProfiles` adjusts the agent for the model it runs. Each `profiles.Adjustment` names the models it applies to and can append a prompt suffix, replace tool descriptions, and leave out tools (`ExcludeTools`) or whole middleware (`ExcludeMiddleware`, which refuses the safety middleware `hitl`, `hooks` and `planmode`). An adjustment describes how this agent treats a model; what the model can do (context window, output limit, thinking, images) is its `llm.Profile`, registered with `llm.RegisterProfile`.
+`WithProfiles` adjusts the agent for the model it runs. Each `profiles.Adjustment` names the models it applies to and can append a prompt suffix, replace tool descriptions, and leave out tools (`ExcludeTools`) or whole middleware (`ExcludeMiddleware`; a middleware that implements `agent.Required`, such as `hitl`, `hooks` and `planmode`, cannot be excluded: building the agent for a matching model fails). An adjustment describes how this agent treats a model; what the model can do (context window, output limit, thinking, images) is its `llm.Profile`, registered with `llm.RegisterProfile`.
 
 ```go
 // Imports omitted; model comes from surrounding code.

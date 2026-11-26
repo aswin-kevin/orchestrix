@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"slices"
 )
 
@@ -9,7 +10,8 @@ import (
 // middleware for some models. New calls ExcludeMiddleware(Config.Model) on
 // every excluder of the composed stack and removes the named middleware;
 // names matching nothing are ignored and an excluder never removes itself.
-// A subagent built with another Model is filtered for its own model.
+// Naming a middleware that is Required makes New fail. A subagent built
+// with another Model is filtered for its own model.
 //
 // Only the composed stack is filtered: Config.Middleware, as returned by
 // Agent.Config, stays whole. Subagents and launchers build children from it
@@ -20,9 +22,17 @@ type MiddlewareExcluder interface {
 	ExcludeMiddleware(model string) []string
 }
 
+// Required is implemented by middleware that a MiddlewareExcluder must not
+// remove, such as approval and plan-mode middleware: removing them for one
+// model would silently drop a safety check. New fails when an excluder
+// names a middleware whose Required reports true. Exclusion the host asks
+// for (Compose's exclude list) is not affected.
+type Required interface{ Required() bool }
+
 // filterExcluded returns stack without the middleware its excluders name for
 // model. The input is not modified; without excluders it is returned as is.
-func filterExcluded(stack []Middleware, model string) []Middleware {
+// It fails when an excluder names a middleware of stack that is Required.
+func filterExcluded(stack []Middleware, model string) ([]Middleware, error) {
 	var drop []string
 	for _, m := range stack {
 		ex, ok := m.(MiddlewareExcluder)
@@ -30,13 +40,17 @@ func filterExcluded(stack []Middleware, model string) []Middleware {
 			continue
 		}
 		for _, name := range ex.ExcludeMiddleware(model) {
-			if name != m.Name() {
-				drop = append(drop, name)
+			if name == m.Name() {
+				continue
 			}
+			if required(stack, name) {
+				return nil, fmt.Errorf("agent: middleware %q cannot be excluded (named by %q)", name, m.Name())
+			}
+			drop = append(drop, name)
 		}
 	}
 	if len(drop) == 0 {
-		return stack
+		return stack, nil
 	}
 	out := make([]Middleware, 0, len(stack))
 	for _, m := range stack {
@@ -44,7 +58,15 @@ func filterExcluded(stack []Middleware, model string) []Middleware {
 			out = append(out, m)
 		}
 	}
-	return out
+	return out, nil
+}
+
+// required reports whether a middleware of stack called name is Required.
+func required(stack []Middleware, name string) bool {
+	return slices.ContainsFunc(stack, func(m Middleware) bool {
+		r, ok := m.(Required)
+		return ok && m.Name() == name && r.Required()
+	})
 }
 
 // ToolHider is implemented by middleware that hides tools from the model for

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -17,13 +16,12 @@ import (
 // records what the hook added.
 const ContextMetaKey = "orchestrix.hook"
 
-// SubagentToolName is the tool name SubagentStart hooks fire for. It is
-// agent.SubagentToolName, shared with the subagents package.
-const SubagentToolName = agent.SubagentToolName
-
 // Matcher selects the tools a hook applies to.
 type Matcher struct {
-	// Tools lists tool names. Empty, or containing "*", matches every tool.
+	// Tools lists tool name patterns (tool.MatchName: * matches any run of
+	// characters, ? exactly one); the hook applies to a tool any of them
+	// matches. Empty matches every tool. A pattern must not be empty, blank
+	// or hold a NUL byte (tool.ValidPattern).
 	Tools []string
 }
 
@@ -214,6 +212,43 @@ type PostToolUseHook struct {
 	Fn func(context.Context, ToolInput, tool.Result) (PostToolUseOutput, error)
 }
 
+// UserPromptSubmitHook runs at the start of a run that has input messages.
+type UserPromptSubmitHook struct {
+	// Fn judges the run's input. A returned error stops the run (see
+	// Config).
+	Fn func(context.Context, PromptInput) (PromptOutput, error)
+}
+
+// SessionStartHook runs at the start of every run.
+type SessionStartHook struct {
+	// Fn may add context to the conversation. A returned error stops the
+	// run (see Config).
+	Fn func(context.Context, SessionInput) (SessionOutput, error)
+}
+
+// SessionEndHook runs when a run ends.
+type SessionEndHook struct {
+	// Fn sees the run as it ends. A returned error is the run's middleware
+	// error (see Config).
+	Fn func(context.Context, SessionInput) error
+}
+
+// StopHook runs when the model's reply would complete the run.
+type StopHook struct {
+	// Fn may keep the run going with StopOutput.Continue. A returned error
+	// stops the run (see Config).
+	Fn func(context.Context, StopInput) (StopOutput, error)
+}
+
+// SubagentStartHook runs before the subagent tool (agent.SubagentToolName)
+// is called.
+type SubagentStartHook struct {
+	// Fn may block the launch or extend its task description. A returned
+	// error fails the call, or stops the run when it wraps
+	// agent.ErrStopRun.
+	Fn func(context.Context, SubagentInput) (SubagentOutput, error)
+}
+
 // Config lists the hooks of each lifecycle point; a nil list has none. Hooks
 // of one point run in order. The tool hooks (PreToolUse, PostToolUse,
 // PostToolUseFailure, SubagentStart) may run concurrently for the
@@ -240,17 +275,17 @@ type Config struct {
 	// PostToolUseFailure runs after a call whose result is an error.
 	PostToolUseFailure []PostToolUseHook
 	// UserPromptSubmit runs at the start of a run that has input messages.
-	UserPromptSubmit []func(context.Context, PromptInput) (PromptOutput, error)
+	UserPromptSubmit []UserPromptSubmitHook
 	// SessionStart runs at the start of every run, resumed or not: each
 	// Resume and each turn of a Thread runs it again, and the Context it
 	// returns is appended to State every time, so it accumulates over a
 	// conversation. A hook that should inject only once must track that
 	// itself (for example in State).
-	SessionStart []func(context.Context, SessionInput) (SessionOutput, error)
+	SessionStart []SessionStartHook
 	// SessionEnd runs when a run ends, whatever the reason, unless the
 	// consumer stopped reading the run's events before the end (broke out of
 	// the range loop): then the run stops without running it.
-	SessionEnd []func(context.Context, SessionInput) error
+	SessionEnd []SessionEndHook
 	// Stop runs when the model's reply would complete the run, unless a
 	// BeforeStop middleware consulted before hooks kept the run going, or
 	// the run has used its agent.MaxStopContinuations continuations: those
@@ -258,8 +293,8 @@ type Config struct {
 	// consults hooks last (after the async inbox and reminder and rubric),
 	// so a Stop hook used as a quality gate is not guaranteed to see the
 	// answer the run returns.
-	Stop []func(context.Context, StopInput) (StopOutput, error)
-	// SubagentStart runs before the SubagentToolName tool is called, and
-	// again for a call resumed after an interrupt (see PreToolUse).
-	SubagentStart []func(context.Context, SubagentInput) (SubagentOutput, error)
+	Stop []StopHook
+	// SubagentStart runs before the agent.SubagentToolName tool is called,
+	// and again for a call resumed after an interrupt (see PreToolUse).
+	SubagentStart []SubagentStartHook
 }

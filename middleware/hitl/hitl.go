@@ -1,6 +1,6 @@
 // Package hitl adds human-in-the-loop approval to chosen tools, configured
-// per tool: which decisions a human may answer with, and an optional
-// predicate narrowing which calls need one.
+// per tool name or name pattern: which decisions a human may answer with,
+// and an optional predicate narrowing which calls need one.
 //
 // It sits on top of the permission pipeline and does not replace it: a
 // configured call pauses even in bypass mode, but a deny rule still refuses
@@ -12,6 +12,8 @@ package hitl
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -20,9 +22,14 @@ import (
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
-// DefaultAllowed is the set of decisions an InterruptConfig offers when its
-// Allowed is nil.
-var DefaultAllowed = []agent.DecisionType{agent.Approve, agent.Edit, agent.Reject}
+// Name is the name of the hitl middleware.
+const Name = "hitl"
+
+// DefaultAllowed returns the decisions an InterruptConfig offers when its
+// Allowed is nil: Approve, Edit and Reject. Each call returns a fresh copy.
+func DefaultAllowed() []agent.DecisionType {
+	return []agent.DecisionType{agent.Approve, agent.Edit, agent.Reject}
+}
 
 // approvedKey holds the tool_use ids hitl already cleared in this run. A tool
 // resumed after that is answering an interrupt it raised itself, and must
@@ -36,8 +43,8 @@ var askedKey = state.NewKey[[]string]("hitl.asked", state.Private[[]string]())
 
 // InterruptConfig describes when and how one tool needs a human decision.
 type InterruptConfig struct {
-	// Allowed lists the decisions the host may answer with. Nil means
-	// DefaultAllowed.
+	// Allowed lists the decisions the host may answer with: Approve, Edit,
+	// Reject or Respond. Nil means DefaultAllowed.
 	Allowed []agent.DecisionType
 	// When reports whether a call needs a decision, judging by its Input. Nil
 	// means every call does.
@@ -49,28 +56,77 @@ type InterruptConfig struct {
 
 // Config configures the middleware.
 type Config struct {
-	// InterruptOn maps a tool name to its InterruptConfig. A tool that is not
-	// listed is left alone; nil lists none.
+	// InterruptOn maps a tool name pattern (tool.MatchName: * matches any
+	// run of characters, ? exactly one) to its InterruptConfig. A key equal
+	// to the tool's name wins; otherwise the first matching key in sorted
+	// order applies. A tool no key matches is left alone; nil lists none.
 	InterruptOn map[string]InterruptConfig
 }
 
-// middleware is the hitl middleware. It is immutable after New, so it is
+// Middleware is the hitl middleware. It is immutable after New, so it is
 // safe to share between concurrent runs.
-type middleware struct{ cfg Config }
+type Middleware struct {
+	// on is a copy of Config.InterruptOn.
+	on map[string]InterruptConfig
+	// keys are the keys of on, sorted.
+	keys []string
+}
 
-// New returns the hitl middleware for cfg.
-func New(cfg Config) agent.Middleware { return &middleware{cfg: cfg} }
+// New validates cfg and returns the hitl middleware. It fails for an
+// InterruptOn key that is empty, blank or holds a NUL byte
+// (tool.ValidPattern), and for an Allowed decision other than Approve, Edit,
+// Reject and Respond. cfg is copied: changing it afterwards has no effect.
+func New(cfg Config) (*Middleware, error) {
+	on := make(map[string]InterruptConfig, len(cfg.InterruptOn))
+	for key, ic := range cfg.InterruptOn {
+		if err := tool.ValidPattern(key); err != nil {
+			return nil, fmt.Errorf("hitl: InterruptOn key %q: %w", key, err)
+		}
+		for _, d := range ic.Allowed {
+			if !slices.Contains(knownDecisions, d) {
+				return nil, fmt.Errorf("hitl: InterruptOn[%q] allows the unknown decision %q", key, d)
+			}
+		}
+		if ic.Allowed != nil {
+			ic.Allowed = slices.Clone(ic.Allowed)
+		}
+		on[key] = ic
+	}
+	return &Middleware{on: on, keys: slices.Sorted(maps.Keys(on))}, nil
+}
+
+// knownDecisions are the decisions an InterruptConfig may allow.
+var knownDecisions = []agent.DecisionType{agent.Approve, agent.Edit, agent.Reject, agent.Respond}
 
 // Name implements agent.Middleware.
-func (m *middleware) Name() string { return "hitl" }
+func (m *Middleware) Name() string { return Name }
+
+// Required implements agent.Required: approvals are a safety check, so a
+// MiddlewareExcluder may not remove them.
+func (m *Middleware) Required() bool { return true }
+
+// configFor returns the InterruptConfig for the tool called name: the one of
+// a key equal to name, else of the first key in sorted order that matches
+// it. ok is false when no key matches.
+func (m *Middleware) configFor(name string) (cfg InterruptConfig, ok bool) {
+	if cfg, ok := m.on[name]; ok {
+		return cfg, true
+	}
+	for _, key := range m.keys {
+		if tool.MatchName(key, name) {
+			return m.on[key], true
+		}
+	}
+	return InterruptConfig{}, false
+}
 
 // WrapTool implements agent.ToolWrapper.
 //
 // A configured Approver may be called concurrently for parallel tool calls,
 // and the call holds its concurrency slot while it waits, so it must be safe
 // for concurrent use and should not block indefinitely.
-func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
-	cfg, ok := m.cfg.InterruptOn[call.Name]
+func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
+	cfg, ok := m.configFor(call.Name)
 	switch {
 	case !ok || cleared(call):
 		return next(ctx, call)
@@ -189,7 +245,7 @@ func interruptFor(cfg InterruptConfig, name string) *agent.Interrupt {
 // allowedOf returns the decisions cfg offers.
 func allowedOf(cfg InterruptConfig) []agent.DecisionType {
 	if cfg.Allowed == nil {
-		return DefaultAllowed
+		return DefaultAllowed()
 	}
 	return cfg.Allowed
 }

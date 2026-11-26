@@ -91,7 +91,8 @@ type Input struct {
 // "type" is not "object" or that cannot be encoded as JSON.
 //
 // The composed stack is then filtered by every MiddlewareExcluder for
-// Config.Model. Only the stack is filtered: Config().Middleware stays
+// Config.Model; New fails when an excluder names a middleware that is
+// Required. Only the stack is filtered: Config().Middleware stays
 // unfiltered, so a child built from it re-filters for its own model.
 func New(cfg Config) (*Agent, error) {
 	if cfg.Provider == nil {
@@ -121,7 +122,9 @@ func New(cfg Config) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	stack = filterExcluded(stack, cfg.Model)
+	if stack, err = filterExcluded(stack, cfg.Model); err != nil {
+		return nil, err
+	}
 	registry, err := buildRegistry(cfg.Tools, stack)
 	if err != nil {
 		return nil, err

@@ -90,7 +90,7 @@ func call(id, name string, input any) llmtest.Call {
 func newAgent(t *testing.T, cfg Config, ac agent.Config, turns ...llmtest.Turn) *agent.Agent {
 	t.Helper()
 	ac.Provider = llmtest.New(turns...)
-	ac.Middleware = append(ac.Middleware, New(cfg))
+	ac.Middleware = append(ac.Middleware, mustNew(t, cfg))
 	a, err := agent.New(ac)
 	if err != nil {
 		t.Fatal(err)
@@ -190,8 +190,8 @@ func writeTurns(path string) []llmtest.Turn {
 }
 
 func TestName(t *testing.T) {
-	if got := New(Config{}).Name(); got != "hitl" {
-		t.Fatalf("Name() = %q, want hitl", got)
+	if Name != "hitl" || mustNew(t, Config{}).Name() != Name {
+		t.Fatalf("Name = %q, want hitl", Name)
 	}
 }
 
@@ -208,8 +208,8 @@ func TestInterruptOnPausesEvenInBypass(t *testing.T) {
 	if req.ToolUseID != "w" || req.Tool != "write_file" {
 		t.Fatalf("request = %+v, want write_file call w", req)
 	}
-	if !slices.Equal(req.Allowed, DefaultAllowed) {
-		t.Fatalf("Allowed = %v, want %v", req.Allowed, DefaultAllowed)
+	if !slices.Equal(req.Allowed, DefaultAllowed()) {
+		t.Fatalf("Allowed = %v, want %v", req.Allowed, DefaultAllowed())
 	}
 	if req.Reason != "Approval required for write_file" {
 		t.Fatalf("Reason = %q, want the default reason", req.Reason)
@@ -564,5 +564,148 @@ func TestRejectedWithoutMessage(t *testing.T) {
 	_, final := run(t, a)
 	if text, isErr := result(t, final.State, "w"); !isErr || text != "Rejected." {
 		t.Fatalf("result = %q (error %v), want Rejected.", text, isErr)
+	}
+}
+
+// named is a tool called name that logs its calls.
+func named(l *log, name string) tool.Tool {
+	return tool.New(name, "A tool.",
+		func(_ context.Context, in pathInput, c *tool.Call) (tool.Result, error) {
+			l.add(in.Path, c)
+			return tool.Text("ran " + in.Path), nil
+		})
+}
+
+func callTurns(name string) []llmtest.Turn {
+	return []llmtest.Turn{
+		{ToolCalls: []llmtest.Call{call("c", name, obj{"path": "/a"})}},
+		{Text: "done"},
+	}
+}
+
+func TestInterruptOnPattern(t *testing.T) {
+	for _, tc := range []struct {
+		tool  string
+		pause bool
+	}{
+		{"mcp__srv__write", true},
+		{"mcp__other__x", true},
+		{"read_file", false},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			l := &log{}
+			a := newAgent(t, on("mcp__*"), withTools(bypass, named(l, tc.tool)), callTurns(tc.tool)...)
+			events, final := run(t, a)
+			if !tc.pause {
+				mustComplete(t, final)
+				if hasInterrupt(events) || len(l.all()) != 1 {
+					t.Fatalf("interrupted %v, ran %v; want one unpaused call", hasInterrupt(events), l.all())
+				}
+				return
+			}
+			intr := mustInterrupt(t, events, final)
+			if len(l.all()) != 0 {
+				t.Fatalf("ran %v before approval", l.all())
+			}
+			if got := intr.Requests[0].Reason; got != "Approval required for "+tc.tool {
+				t.Fatalf("Reason = %q", got)
+			}
+		})
+	}
+}
+
+func TestExactKeyBeatsPattern(t *testing.T) {
+	cfg := Config{InterruptOn: map[string]InterruptConfig{
+		"mcp__*":          {Reason: "A"},
+		"mcp__srv__write": {Reason: "B"},
+		"mcp__srv__*":     {Reason: "C"},
+	}}
+	for _, tc := range []struct{ tool, reason string }{
+		{"mcp__srv__write", "B"},
+		// No exact key: the first matching key in sorted order.
+		{"mcp__srv__read", "A"},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			a := newAgent(t, cfg, withTools(bypass, named(&log{}, tc.tool)), callTurns(tc.tool)...)
+			events, final := run(t, a)
+			if got := mustInterrupt(t, events, final).Requests[0].Reason; got != tc.reason {
+				t.Fatalf("Reason = %q, want %q", got, tc.reason)
+			}
+		})
+	}
+}
+
+func TestExactKeyStillPauses(t *testing.T) {
+	// An exact key pauses the tool it names, beside patterns that do not
+	// match it.
+	for _, name := range []string{"write_file", "mcp__srv__write", "a-b"} {
+		t.Run(name, func(t *testing.T) {
+			l := &log{}
+			a := newAgent(t, on(name, "zz*", "other"), withTools(bypass, named(l, name)), callTurns(name)...)
+			events, final := run(t, a)
+			mustInterrupt(t, events, final)
+			if len(l.all()) != 0 {
+				t.Fatalf("ran %v before approval", l.all())
+			}
+		})
+	}
+}
+
+func TestDefaultAllowedIsCopy(t *testing.T) {
+	want := []agent.DecisionType{agent.Approve, agent.Edit, agent.Reject}
+	got := DefaultAllowed()
+	if !slices.Equal(got, want) {
+		t.Fatalf("DefaultAllowed() = %v, want %v", got, want)
+	}
+	got[0] = agent.Respond
+	if again := DefaultAllowed(); !slices.Equal(again, want) {
+		t.Fatalf("DefaultAllowed() after mutating a result = %v, want %v", again, want)
+	}
+}
+
+func TestNewValidates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		on   map[string]InterruptConfig
+		want string
+	}{
+		{"empty key", map[string]InterruptConfig{"": {}}, "hitl: "},
+		{"blank key", map[string]InterruptConfig{"  ": {}}, "hitl: "},
+		{"NUL key", map[string]InterruptConfig{"a\x00": {}}, "hitl: "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := New(Config{InterruptOn: tc.on}); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestUnknownAllowedIsError(t *testing.T) {
+	_, err := New(Config{InterruptOn: map[string]InterruptConfig{
+		"write_file": {Allowed: []agent.DecisionType{agent.Approve, "maybe"}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "maybe") || !strings.Contains(err.Error(), "write_file") {
+		t.Fatalf("err = %v, want one naming the decision and the key", err)
+	}
+	for _, d := range []agent.DecisionType{agent.Approve, agent.Edit, agent.Reject, agent.Respond} {
+		if _, err := New(Config{InterruptOn: map[string]InterruptConfig{"x": {Allowed: []agent.DecisionType{d}}}}); err != nil {
+			t.Fatalf("Allowed %q: %v", d, err)
+		}
+	}
+}
+
+func TestNewCopiesConfig(t *testing.T) {
+	on := map[string]InterruptConfig{"write_file": {}}
+	l := &log{}
+	a := newAgent(t, Config{InterruptOn: on}, withTools(bypass, writeFile(l)), writeTurns("/a.txt")...)
+	delete(on, "write_file")
+	events, final := run(t, a)
+	mustInterrupt(t, events, final)
+}
+
+func TestRequired(t *testing.T) {
+	if !mustNew(t, Config{}).Required() {
+		t.Fatal("Required() = false, want true")
 	}
 }

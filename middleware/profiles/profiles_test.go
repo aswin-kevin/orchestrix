@@ -11,6 +11,9 @@ import (
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/middleware/filesystem"
+	"github.com/aswin-kevin/orchestrix/middleware/hitl"
+	"github.com/aswin-kevin/orchestrix/middleware/hooks"
+	"github.com/aswin-kevin/orchestrix/middleware/planmode"
 	"github.com/aswin-kevin/orchestrix/middleware/planning"
 	"github.com/aswin-kevin/orchestrix/middleware/skills"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
@@ -233,9 +236,6 @@ func TestNewValidation(t *testing.T) {
 		{"nul pattern", Adjustment{Models: []string{"a\x00b"}}, "invalid pattern"},
 		{"bad tool pattern", Adjustment{Models: []string{"x"}, ExcludeTools: []string{""}}, "invalid pattern"},
 		{"excludes itself", Adjustment{Models: []string{"x"}, ExcludeMiddleware: []string{"profiles"}}, "profiles"},
-		{"excludes hitl", Adjustment{Models: []string{"x"}, ExcludeMiddleware: []string{"hitl"}}, "safety"},
-		{"excludes hooks", Adjustment{Models: []string{"x"}, ExcludeMiddleware: []string{"hooks"}}, "safety"},
-		{"excludes planmode", Adjustment{Models: []string{"x"}, ExcludeMiddleware: []string{"planmode"}}, "safety"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -438,5 +438,60 @@ func TestWrapToolOutsideRunPassesThrough(t *testing.T) {
 	}
 	if m.HidesTool(context.Background(), "execute") {
 		t.Fatal("HidesTool true outside a run")
+	}
+}
+
+// safetyStack builds the hitl, hooks and planmode middleware.
+func safetyStack(t *testing.T) []agent.Middleware {
+	t.Helper()
+	h, err := hitl.New(hitl.Config{InterruptOn: map[string]hitl.InterruptConfig{"write_file": {}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := hooks.New(hooks.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := planmode.New(planmode.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []agent.Middleware{h, k, p}
+}
+
+func TestExcludeSafetyFailsAtAgentNew(t *testing.T) {
+	for _, name := range []string{hitl.Name, hooks.Name, planmode.Name} {
+		t.Run(name, func(t *testing.T) {
+			m := mustProfiles(t, Adjustment{Models: []string{"small-*"}, ExcludeMiddleware: []string{name}})
+			stack := append(safetyStack(t), m)
+			_, err := agent.New(agent.Config{Provider: llmtest.New(), Model: "small-1", Middleware: stack})
+			if err == nil || !strings.Contains(err.Error(), `"`+name+`"`) || !strings.Contains(err.Error(), `"`+Name+`"`) {
+				t.Fatalf("err = %v, want one naming %s and profiles", err, name)
+			}
+			// A model the adjustment does not match builds.
+			if _, err := agent.New(agent.Config{Provider: llmtest.New(), Model: "big-1", Middleware: stack}); err != nil {
+				t.Fatalf("unmatched model: %v", err)
+			}
+		})
+	}
+}
+
+// requiredMW is a user middleware that must not be excluded.
+type requiredMW struct{}
+
+func (requiredMW) Name() string   { return "audit" }
+func (requiredMW) Required() bool { return true }
+
+func TestCustomRequiredProtected(t *testing.T) {
+	m := mustProfiles(t, Adjustment{Models: []string{"*"}, ExcludeMiddleware: []string{"audit"}})
+	_, err := agent.New(agent.Config{Provider: llmtest.New(), Model: "any", Middleware: []agent.Middleware{requiredMW{}, m}})
+	if err == nil || !strings.Contains(err.Error(), `"audit"`) {
+		t.Fatalf("err = %v, want one naming audit", err)
+	}
+}
+
+func TestName(t *testing.T) {
+	if Name != "profiles" || mustProfiles(t).Name() != Name {
+		t.Fatalf("Name = %q, want profiles", Name)
 	}
 }

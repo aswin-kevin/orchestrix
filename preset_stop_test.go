@@ -44,7 +44,7 @@ func TestStopConsultationOrderAndSharedSlots(t *testing.T) {
 		llmtest.Turn{Text: "spare: must stay unused"},
 	)
 	a, err := orchestrix.NewWithProvider(p,
-		orchestrix.WithHooks(hooks.Config{Stop: []func(context.Context, hooks.StopInput) (hooks.StopOutput, error){gate}}),
+		orchestrix.WithHooks(hooks.Config{Stop: []hooks.StopHook{{Fn: gate}}}),
 		orchestrix.WithAsync(am),
 		orchestrix.WithRubric(rubric.Config{Criteria: []string{"Cites a source."}, Grader: grader}),
 	)

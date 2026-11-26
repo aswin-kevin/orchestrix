@@ -3,7 +3,6 @@ package orchestrix
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -71,9 +70,12 @@ func WithSummarize(cfg summarize.Config) Option {
 	return func(s *settings) { s.summarize = cfg }
 }
 
-// WithInterruptOn pauses the run for a human decision before each of the
-// named tools runs, with hitl's default decisions (approve, edit, reject). Use
-// WithInterruptConfig to narrow the decisions or the calls that pause.
+// WithInterruptOn pauses the run for a human decision before each tool that
+// one of tools names, with hitl's default decisions (approve, edit, reject).
+// Each entry is a tool name pattern (tool.MatchName: * matches any run of
+// characters, ? exactly one), so "mcp__*" pauses every MCP tool; a pattern
+// must not be empty, blank or hold a NUL byte. Use WithInterruptConfig to
+// narrow the decisions or the calls that pause.
 func WithInterruptOn(tools ...string) Option {
 	return func(s *settings) {
 		for _, name := range tools {
@@ -83,8 +85,10 @@ func WithInterruptOn(tools ...string) Option {
 }
 
 // WithInterruptConfig pauses the run for tools according to on, keyed by tool
-// name. It combines with WithInterruptOn; the later option wins for a tool
-// named by both.
+// name pattern as in WithInterruptOn (see hitl.Config.InterruptOn: a key equal
+// to the tool's name wins, otherwise the first matching key in sorted order).
+// It combines with WithInterruptOn; the later option wins for a key given to
+// both.
 func WithInterruptConfig(on map[string]hitl.InterruptConfig) Option {
 	return func(s *settings) {
 		for name, cfg := range on {
@@ -181,10 +185,12 @@ func (s *settings) baseStack() []agent.Middleware {
 	}
 	stack = s.appendBuilt(stack, "cache", func() (agent.Middleware, error) { return cache.New(cache.Config{}) })
 	if s.hooks != nil {
-		stack = append(stack, hooks.New(*s.hooks))
+		stack = s.appendBuilt(stack, "WithHooks", func() (agent.Middleware, error) { return hooks.New(*s.hooks) })
 	}
 	if len(s.interruptOn) > 0 {
-		stack = append(stack, hitl.New(hitl.Config{InterruptOn: maps.Clone(s.interruptOn)}))
+		stack = s.appendBuilt(stack, "WithInterruptOn or WithInterruptConfig", func() (agent.Middleware, error) {
+			return hitl.New(hitl.Config{InterruptOn: s.interruptOn})
+		})
 	}
 	if s.rubric != nil {
 		// Early, so that BeforeStop (reverse order) consults the async

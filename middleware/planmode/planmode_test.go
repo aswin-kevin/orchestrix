@@ -676,3 +676,9 @@ func TestName(t *testing.T) {
 		t.Fatalf("Name = %q", Name)
 	}
 }
+
+func TestRequired(t *testing.T) {
+	if !mustNew(t, Config{}).Required() {
+		t.Fatal("Required() = false, want true")
+	}
+}

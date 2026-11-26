@@ -21,14 +21,14 @@ const (
 
 // matches reports whether the hook applies to the tool called name.
 func (m Matcher) matches(name string) bool {
-	return len(m.Tools) == 0 || slices.Contains(m.Tools, "*") || slices.Contains(m.Tools, name)
+	return len(m.Tools) == 0 || slices.ContainsFunc(m.Tools, func(p string) bool { return tool.MatchName(p, name) })
 }
 
 // WrapTool implements agent.ToolWrapper: SubagentStart for the subagent
 // tool, then the PreToolUse hooks, the call itself, and the PostToolUse or
 // PostToolUseFailure hooks.
-func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
-	if call.Name == SubagentToolName {
+func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
+	if call.Name == agent.SubagentToolName {
 		if res, err := m.startSubagent(ctx, call); res != nil || err != nil {
 			return derefResult(res), err
 		}
@@ -51,7 +51,7 @@ func (m *middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 // preToolUse runs the PreToolUse hooks. It returns the context they added, or
 // the result that ends the call early (a block, or a rewrite that no longer
 // passes validation or permission).
-func (m *middleware) preToolUse(ctx context.Context, call *agent.ToolCall) (extra []string, early *tool.Result, err error) {
+func (m *Middleware) preToolUse(ctx context.Context, call *agent.ToolCall) (extra []string, early *tool.Result, err error) {
 	for _, hook := range m.cfg.PreToolUse {
 		if !hook.matches(call.Name) {
 			continue
@@ -82,7 +82,7 @@ func (m *middleware) preToolUse(ctx context.Context, call *agent.ToolCall) (extr
 // postToolUse runs the PostToolUseFailure hooks for an error result and the
 // PostToolUse hooks otherwise. It returns the possibly replaced result and
 // the context the hooks added.
-func (m *middleware) postToolUse(ctx context.Context, call *agent.ToolCall, res tool.Result) (tool.Result, []string, error) {
+func (m *Middleware) postToolUse(ctx context.Context, call *agent.ToolCall, res tool.Result) (tool.Result, []string, error) {
 	hooks := m.cfg.PostToolUse
 	if res.IsError {
 		hooks = m.cfg.PostToolUseFailure
@@ -113,7 +113,7 @@ func (m *middleware) postToolUse(ctx context.Context, call *agent.ToolCall, res 
 // startSubagent runs the SubagentStart hooks for a launch of the subagent
 // tool, extending call.Input's description with the context they add. It
 // returns the result that ends the call when a hook blocks the launch.
-func (m *middleware) startSubagent(ctx context.Context, call *agent.ToolCall) (*tool.Result, error) {
+func (m *Middleware) startSubagent(ctx context.Context, call *agent.ToolCall) (*tool.Result, error) {
 	if len(m.cfg.SubagentStart) == 0 {
 		return nil, nil
 	}
@@ -135,7 +135,7 @@ func (m *middleware) startSubagent(ctx context.Context, call *agent.ToolCall) (*
 	}
 	description := in.Description
 	for _, hook := range m.cfg.SubagentStart {
-		out, err := hook(ctx, in)
+		out, err := hook.Fn(ctx, in)
 		if err != nil {
 			return nil, err
 		}

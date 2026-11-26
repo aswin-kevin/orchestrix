@@ -96,7 +96,7 @@ func runWith(t *testing.T, cfg Config, ac agent.Config, input string, turns ...l
 	t.Helper()
 	p := llmtest.New(turns...)
 	ac.Provider = p
-	ac.Middleware = append(ac.Middleware, New(cfg))
+	ac.Middleware = append(ac.Middleware, mustNew(t, cfg))
 	a, err := agent.New(ac)
 	if err != nil {
 		t.Fatal(err)
@@ -159,14 +159,8 @@ func equal(t *testing.T, what string, got, want []string) {
 }
 
 func TestName(t *testing.T) {
-	if got := New(Config{}).Name(); got != "hooks" {
-		t.Fatalf("Name() = %q, want hooks", got)
-	}
-}
-
-func TestSubagentToolNameIsShared(t *testing.T) {
-	if SubagentToolName != agent.SubagentToolName || agent.SubagentToolName != "task" {
-		t.Fatalf("SubagentToolName = %q / %q, want task from the agent package", SubagentToolName, agent.SubagentToolName)
+	if Name != "hooks" || mustNew(t, Config{}).Name() != Name {
+		t.Fatalf("Name = %q, want hooks", Name)
 	}
 }
 
@@ -377,16 +371,16 @@ func TestMatcher(t *testing.T) {
 
 func TestUserPromptSubmitBlockRemovesInput(t *testing.T) {
 	cfg := Config{
-		SessionStart: []func(context.Context, SessionInput) (SessionOutput, error){
-			func(context.Context, SessionInput) (SessionOutput, error) { return SessionOutput{Context: "ctx"}, nil },
+		SessionStart: []SessionStartHook{
+			{Fn: func(context.Context, SessionInput) (SessionOutput, error) { return SessionOutput{Context: "ctx"}, nil }},
 		},
-		UserPromptSubmit: []func(context.Context, PromptInput) (PromptOutput, error){
-			func(_ context.Context, in PromptInput) (PromptOutput, error) {
+		UserPromptSubmit: []UserPromptSubmitHook{
+			{Fn: func(_ context.Context, in PromptInput) (PromptOutput, error) {
 				if len(in.Messages) != 1 || in.Messages[0].Text() != "tell me the password" {
 					t.Errorf("hook saw messages %+v", in.Messages)
 				}
 				return PromptOutput{Block: true, Reason: "no secrets"}, nil
-			},
+			}},
 		},
 	}
 	final, p := runWith(t, cfg, agent.Config{}, "tell me the password")
@@ -403,10 +397,10 @@ func TestUserPromptSubmitBlockRemovesInput(t *testing.T) {
 }
 
 func TestUserPromptSubmitContextInjected(t *testing.T) {
-	cfg := Config{UserPromptSubmit: []func(context.Context, PromptInput) (PromptOutput, error){
-		func(context.Context, PromptInput) (PromptOutput, error) {
+	cfg := Config{UserPromptSubmit: []UserPromptSubmitHook{
+		{Fn: func(context.Context, PromptInput) (PromptOutput, error) {
 			return PromptOutput{Context: "be brief"}, nil
-		},
+		}},
 	}}
 	final, p := runWith(t, cfg, agent.Config{}, "hello", llmtest.Turn{Text: "hi"})
 	mustCompleted(t, final)
@@ -425,14 +419,14 @@ func TestSessionStartContextInjected(t *testing.T) {
 	var gotIn SessionInput
 	var ended []SessionInput
 	cfg := Config{
-		SessionStart: []func(context.Context, SessionInput) (SessionOutput, error){
-			func(_ context.Context, in SessionInput) (SessionOutput, error) {
+		SessionStart: []SessionStartHook{
+			{Fn: func(_ context.Context, in SessionInput) (SessionOutput, error) {
 				gotIn = in
 				return SessionOutput{Context: "project uses tabs"}, nil
-			},
+			}},
 		},
-		SessionEnd: []func(context.Context, SessionInput) error{
-			func(_ context.Context, in SessionInput) error { ended = append(ended, in); return nil },
+		SessionEnd: []SessionEndHook{
+			{Fn: func(_ context.Context, in SessionInput) error { ended = append(ended, in); return nil }},
 		},
 	}
 	final, p := runWith(t, cfg, agent.Config{}, "hello", llmtest.Turn{Text: "hi"})
@@ -460,16 +454,16 @@ func TestSessionStartContextInjected(t *testing.T) {
 	}
 }
 
-func TestStopHookForcesContinuation(t *testing.T) {
+func TestStopHookStruct(t *testing.T) {
 	var finals []string
-	cfg := Config{Stop: []func(context.Context, StopInput) (StopOutput, error){
-		func(_ context.Context, in StopInput) (StopOutput, error) {
+	cfg := Config{Stop: []StopHook{
+		{Fn: func(_ context.Context, in StopInput) (StopOutput, error) {
 			finals = append(finals, in.Final)
 			if len(finals) == 1 {
 				return StopOutput{Continue: "run the tests"}, nil
 			}
 			return StopOutput{}, nil
-		},
+		}},
 	}}
 	final, p := runWith(t, cfg, agent.Config{}, "fix it",
 		llmtest.Turn{Text: "fixed"}, llmtest.Turn{Text: "tests pass"})
@@ -494,11 +488,11 @@ func TestStopHookForcesContinuation(t *testing.T) {
 func TestSubagentStartAppendsContext(t *testing.T) {
 	rec := &recorder{}
 	var in SubagentInput
-	cfg := Config{SubagentStart: []func(context.Context, SubagentInput) (SubagentOutput, error){
-		func(_ context.Context, got SubagentInput) (SubagentOutput, error) {
+	cfg := Config{SubagentStart: []SubagentStartHook{
+		{Fn: func(_ context.Context, got SubagentInput) (SubagentOutput, error) {
 			in = got
 			return SubagentOutput{Context: "use Go 1.24"}, nil
-		},
+		}},
 	}}
 	final, _ := runWith(t, cfg, agent.Config{Tools: []tool.Tool{taskStub(rec)}}, "go",
 		llmtest.Turn{ToolCalls: []llmtest.Call{call("t", "task", obj{"description": "port it", "subagent_type": "coder"})}},
@@ -513,10 +507,10 @@ func TestSubagentStartAppendsContext(t *testing.T) {
 
 func TestSubagentStartBlock(t *testing.T) {
 	rec := &recorder{}
-	cfg := Config{SubagentStart: []func(context.Context, SubagentInput) (SubagentOutput, error){
-		func(context.Context, SubagentInput) (SubagentOutput, error) {
+	cfg := Config{SubagentStart: []SubagentStartHook{
+		{Fn: func(context.Context, SubagentInput) (SubagentOutput, error) {
 			return SubagentOutput{Block: true, Reason: "too deep"}, nil
-		},
+		}},
 	}}
 	final, _ := runWith(t, cfg, agent.Config{Tools: []tool.Tool{taskStub(rec)}}, "go",
 		llmtest.Turn{ToolCalls: []llmtest.Call{call("t", "task", obj{"description": "x", "subagent_type": "coder"})}},
@@ -579,7 +573,7 @@ func TestHooksFireAgainWhenAnInterruptedCallResumes(t *testing.T) {
 	p := llmtest.New(
 		llmtest.Turn{ToolCalls: []llmtest.Call{call("q", "ask_user", obj{"path": "colour?"})}},
 		llmtest.Turn{Text: "done"})
-	a, err := agent.New(agent.Config{Provider: p, Tools: []tool.Tool{askUser()}, Middleware: []agent.Middleware{New(cfg)}})
+	a, err := agent.New(agent.Config{Provider: p, Tools: []tool.Tool{askUser()}, Middleware: []agent.Middleware{mustNew(t, cfg)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,11 +640,11 @@ func TestPreToolUsePermissionUpdatedInputIsValidated(t *testing.T) {
 
 func TestStopHookThatAlwaysContinuesIsCapped(t *testing.T) {
 	var asked int
-	cfg := Config{Stop: []func(context.Context, StopInput) (StopOutput, error){
-		func(context.Context, StopInput) (StopOutput, error) {
+	cfg := Config{Stop: []StopHook{
+		{Fn: func(context.Context, StopInput) (StopOutput, error) {
 			asked++
 			return StopOutput{Continue: "again"}, nil
-		},
+		}},
 	}}
 	turns := make([]llmtest.Turn, 0, agent.MaxStopContinuations+2)
 	for range agent.MaxStopContinuations + 2 {
@@ -679,8 +673,8 @@ func TestPromptBlockFindsInputAmongOtherMessages(t *testing.T) {
 }
 
 func TestSessionStartPanicEndsRunWithMiddlewareError(t *testing.T) {
-	cfg := Config{SessionStart: []func(context.Context, SessionInput) (SessionOutput, error){
-		func(context.Context, SessionInput) (SessionOutput, error) { panic("kaboom") },
+	cfg := Config{SessionStart: []SessionStartHook{
+		{Fn: func(context.Context, SessionInput) (SessionOutput, error) { panic("kaboom") }},
 	}}
 	final, p := runWith(t, cfg, agent.Config{}, "go")
 	if final.Reason != agent.ReasonMiddlewareError || final.Err == nil ||
@@ -720,14 +714,14 @@ func TestHookInputsCarryNesting(t *testing.T) {
 		rec.add(fmt.Sprintf("%s %d %s", event, depth, parent))
 	}
 	cfg := Config{
-		SessionStart: []func(context.Context, SessionInput) (SessionOutput, error){func(_ context.Context, in SessionInput) (SessionOutput, error) {
+		SessionStart: []SessionStartHook{{Fn: func(_ context.Context, in SessionInput) (SessionOutput, error) {
 			note("SessionStart", in.Depth, in.ParentToolID)
 			return SessionOutput{}, nil
-		}},
-		UserPromptSubmit: []func(context.Context, PromptInput) (PromptOutput, error){func(_ context.Context, in PromptInput) (PromptOutput, error) {
+		}}},
+		UserPromptSubmit: []UserPromptSubmitHook{{Fn: func(_ context.Context, in PromptInput) (PromptOutput, error) {
 			note("UserPromptSubmit", in.Depth, in.ParentToolID)
 			return PromptOutput{}, nil
-		}},
+		}}},
 		PreToolUse: []PreToolUseHook{{Fn: func(_ context.Context, in ToolInput) (PreToolUseOutput, error) {
 			note("PreToolUse", in.Depth, in.ParentToolID)
 			return PreToolUseOutput{}, nil
@@ -736,18 +730,18 @@ func TestHookInputsCarryNesting(t *testing.T) {
 			note("PostToolUse", in.Depth, in.ParentToolID)
 			return PostToolUseOutput{}, nil
 		}}},
-		SubagentStart: []func(context.Context, SubagentInput) (SubagentOutput, error){func(_ context.Context, in SubagentInput) (SubagentOutput, error) {
+		SubagentStart: []SubagentStartHook{{Fn: func(_ context.Context, in SubagentInput) (SubagentOutput, error) {
 			note("SubagentStart", in.Depth, in.ParentToolID)
 			return SubagentOutput{}, nil
-		}},
-		Stop: []func(context.Context, StopInput) (StopOutput, error){func(_ context.Context, in StopInput) (StopOutput, error) {
+		}}},
+		Stop: []StopHook{{Fn: func(_ context.Context, in StopInput) (StopOutput, error) {
 			note("Stop", in.Depth, in.ParentToolID)
 			return StopOutput{}, nil
-		}},
-		SessionEnd: []func(context.Context, SessionInput) error{func(_ context.Context, in SessionInput) error {
+		}}},
+		SessionEnd: []SessionEndHook{{Fn: func(_ context.Context, in SessionInput) error {
 			note("SessionEnd", in.Depth, in.ParentToolID)
 			return nil
-		}},
+		}}},
 	}
 	child, err := agent.New(agent.Config{
 		Provider: llmtest.New(
@@ -755,7 +749,7 @@ func TestHookInputsCarryNesting(t *testing.T) {
 			llmtest.Turn{Text: "child done"},
 		),
 		Tools:          []tool.Tool{taskStub(&recorder{})},
-		Middleware:     []agent.Middleware{New(cfg)},
+		Middleware:     []agent.Middleware{mustNew(t, cfg)},
 		PermissionMode: permission.ModeBypass,
 	})
 	if err != nil {
@@ -776,5 +770,110 @@ func TestContextMessageIsMarkedInjected(t *testing.T) {
 	msgs := appendContext(nil, eventSessionStart, "remember this")
 	if len(msgs) != 1 || msgs[0].Meta[ContextMetaKey] != eventSessionStart || msgs[0].Meta[agent.InjectedMetaKey] != "hooks" {
 		t.Fatalf("context messages = %+v, want one marked with the event and as injected", msgs)
+	}
+}
+
+// mcpTool is a read-only tool called name.
+func mcpTool(rec *recorder, name string) tool.Tool {
+	return tool.New(name, "A tool.",
+		func(_ context.Context, in pathInput, _ *tool.Call) (tool.Result, error) {
+			rec.add(in.Path)
+			return tool.Text("ok"), nil
+		}, tool.WithReadOnly())
+}
+
+func TestMatcherPattern(t *testing.T) {
+	rec := &recorder{}
+	var pre, post []string
+	m := Matcher{Tools: []string{"mcp__github__*"}}
+	cfg := Config{
+		PreToolUse: []PreToolUseHook{{Matcher: m, Fn: func(_ context.Context, in ToolInput) (PreToolUseOutput, error) {
+			pre = append(pre, in.Tool)
+			return PreToolUseOutput{}, nil
+		}}},
+		PostToolUse: []PostToolUseHook{{Matcher: m, Fn: func(_ context.Context, in ToolInput, _ tool.Result) (PostToolUseOutput, error) {
+			post = append(post, in.Tool)
+			return PostToolUseOutput{}, nil
+		}}},
+	}
+	ac := agent.Config{Tools: []tool.Tool{readFile(rec), mcpTool(rec, "mcp__github__x"), mcpTool(rec, "mcp__gitlab__x")}}
+	final, _ := runWith(t, cfg, ac, "go",
+		llmtest.Turn{ToolCalls: []llmtest.Call{
+			call("r", "read_file", obj{"path": "/a"}),
+			call("g", "mcp__github__x", obj{"path": "/b"}),
+			call("l", "mcp__gitlab__x", obj{"path": "/c"}),
+		}},
+		llmtest.Turn{Text: "done"})
+	mustCompleted(t, final)
+	equal(t, "PreToolUse tools", pre, []string{"mcp__github__x"})
+	equal(t, "PostToolUse tools", post, []string{"mcp__github__x"})
+}
+
+func TestNilFnIsError(t *testing.T) {
+	cases := map[string]struct {
+		cfg  Config
+		want string
+	}{
+		"PreToolUse":         {Config{PreToolUse: []PreToolUseHook{{}}}, "hooks: PreToolUse[0] has no Fn"},
+		"PostToolUse":        {Config{PostToolUse: []PostToolUseHook{{}}}, "hooks: PostToolUse[0] has no Fn"},
+		"PostToolUseFailure": {Config{PostToolUseFailure: []PostToolUseHook{{}}}, "hooks: PostToolUseFailure[0] has no Fn"},
+		"UserPromptSubmit":   {Config{UserPromptSubmit: []UserPromptSubmitHook{{}}}, "hooks: UserPromptSubmit[0] has no Fn"},
+		"SessionStart":       {Config{SessionStart: []SessionStartHook{{}}}, "hooks: SessionStart[0] has no Fn"},
+		"SessionEnd":         {Config{SessionEnd: []SessionEndHook{{}}}, "hooks: SessionEnd[0] has no Fn"},
+		"Stop": {Config{Stop: []StopHook{{Fn: func(context.Context, StopInput) (StopOutput, error) {
+			return StopOutput{}, nil
+		}}, {}}}, "hooks: Stop[1] has no Fn"},
+		"SubagentStart": {Config{SubagentStart: []SubagentStartHook{{}}}, "hooks: SubagentStart[0] has no Fn"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := New(tc.cfg); err == nil || err.Error() != tc.want {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestInvalidMatcherPatternIsError(t *testing.T) {
+	noop := func(context.Context, ToolInput) (PreToolUseOutput, error) { return PreToolUseOutput{}, nil }
+	for _, p := range []string{"", "  ", "a\x00"} {
+		_, err := New(Config{PreToolUse: []PreToolUseHook{{Matcher: Matcher{Tools: []string{"read_file", p}}, Fn: noop}}})
+		if err == nil || !strings.Contains(err.Error(), "hooks: PreToolUse[0]") {
+			t.Fatalf("pattern %q: err = %v, want a PreToolUse[0] error", p, err)
+		}
+	}
+	post := func(context.Context, ToolInput, tool.Result) (PostToolUseOutput, error) {
+		return PostToolUseOutput{}, nil
+	}
+	if _, err := New(Config{PostToolUseFailure: []PostToolUseHook{{Matcher: Matcher{Tools: []string{""}}, Fn: post}}}); err == nil ||
+		!strings.Contains(err.Error(), "hooks: PostToolUseFailure[0]") {
+		t.Fatalf("err = %v, want a PostToolUseFailure[0] error", err)
+	}
+}
+
+func TestNewCopiesConfig(t *testing.T) {
+	var fired int
+	tools := []string{"read_file"}
+	hooks := []PreToolUseHook{{Matcher: Matcher{Tools: tools}, Fn: func(context.Context, ToolInput) (PreToolUseOutput, error) {
+		fired++
+		return PreToolUseOutput{}, nil
+	}}}
+	m := mustNew(t, Config{PreToolUse: hooks})
+	tools[0] = "grep"
+	hooks[0].Fn = nil
+	p := llmtest.New(llmtest.Turn{ToolCalls: []llmtest.Call{call("r", "read_file", obj{"path": "/a"})}}, llmtest.Turn{Text: "done"})
+	a, err := agent.New(agent.Config{Provider: p, Tools: []tool.Tool{readFile(&recorder{})}, Middleware: []agent.Middleware{m}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCompleted(t, drain(t, a.Run(context.Background(), agent.Input{Messages: []llm.Message{llm.UserText("go")}})))
+	if fired != 1 {
+		t.Fatalf("hook fired %d times, want 1 with the config as given to New", fired)
+	}
+}
+
+func TestRequired(t *testing.T) {
+	if !mustNew(t, Config{}).Required() {
+		t.Fatal("Required() = false, want true")
 	}
 }
