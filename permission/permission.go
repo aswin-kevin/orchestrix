@@ -50,10 +50,13 @@ const (
 	ModeBypass Mode = "bypassPermissions"
 	// ModePlan denies everything that is not read-only.
 	ModePlan Mode = "plan"
-	// ModeDontAsk never prompts: whatever is not explicitly allowed is denied,
-	// and a tool's own allow verdict is not trusted.
+	// ModeDontAsk never prompts: read-only calls run, anything else is
+	// denied unless an allow rule allows it, and a tool's own allow verdict
+	// is not trusted. Deny rules such as read(...) keep it from reading.
 	ModeDontAsk Mode = "dontAsk"
-	// ModeAuto never prompts either, but honors a tool's own allow verdict.
+	// ModeAuto never prompts either, but honors a tool's own allow verdict:
+	// read-only calls run, and anything else is denied unless a rule or the
+	// tool allows it.
 	ModeAuto Mode = "auto"
 )
 
