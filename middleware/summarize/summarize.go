@@ -141,6 +141,14 @@ type Config struct {
 }
 
 // Boundary marks how much of the history a summary replaces in the view.
+// Its fields: Index, the number of leading State messages, [0, Index), that
+// Summary represents; Summary, the summarizer's text; Path, the backend file
+// holding the transcript of the messages the last compaction summarized
+// (empty when none was written); Compactions, how many compactions led to
+// it (zero for none); and LastError, the error of the last failed
+// compaction attempt (empty when the last attempt succeeded or none
+// failed), recorded there because compaction runs outside any tool call
+// and the turn goes on uncompacted.
 type Boundary = summary.Boundary
 
 // boundaryKey holds the current Boundary, private to the run that owns it.

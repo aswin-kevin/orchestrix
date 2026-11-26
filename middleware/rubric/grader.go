@@ -43,10 +43,13 @@ type GradeRequest struct {
 	// Iteration counts the earlier gradings of this run: 0 for the first
 	// answer.
 	Iteration int
-	// Messages is the run's history when the answer was given, oldest
-	// first, the answer's assistant message last. It is a copy. ModelGrader
-	// and DecisionGrader ignore it; a custom Grader may use it to judge the
-	// answer against the whole conversation.
+	// Messages is the run's full history in State when the answer was
+	// given, oldest first, the answer's assistant message last: not the
+	// view the model was sent, which summarize or compress may have
+	// shortened. The slice is the Grader's own, but the messages' content
+	// is shared with the State and must be treated as read-only.
+	// ModelGrader and DecisionGrader ignore it; a custom Grader may use it
+	// to judge the answer against the whole conversation.
 	Messages []llm.Message
 }
 

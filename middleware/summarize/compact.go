@@ -123,7 +123,11 @@ func (m *Middleware) fail(s *state.State, cause error) {
 	failuresKey.Set(s, failures)
 	msg := cause.Error()
 	if failures >= m.cfg.MaxFailures {
-		msg = fmt.Sprintf("automatic compaction stopped after %d failures: %s", failures, msg)
+		noun := "failures"
+		if failures == 1 {
+			noun = "failure"
+		}
+		msg = fmt.Sprintf("automatic compaction stopped after %d %s: %s", failures, noun, msg)
 	}
 	boundaryKey.Update(s, func(b Boundary) Boundary {
 		b.LastError = msg

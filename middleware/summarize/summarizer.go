@@ -19,8 +19,9 @@ type SummaryRequest struct {
 	// summary replaces together with Messages; "" when none.
 	Previous string
 	// Transcript is Messages rendered as by Transcript, each block cut to
-	// DefaultMaxBlockChars and, for a long span, only the newest part, under
-	// a first line saying how many messages were left out.
+	// DefaultMaxBlockChars. A span whose rendering exceeds about 400,000
+	// bytes keeps only its newest messages that fit, under a first line
+	// saying how many were left out, so a summarizer request stays bounded.
 	Transcript string
 }
 
@@ -60,7 +61,12 @@ type ModelSummarizer struct {
 	// (agent.Info), which ctx must then belong to.
 	Provider llm.Provider
 	// Model is the model asked; "" means the run agent's Config.Model when
-	// Provider is nil, and the provider's default model otherwise.
+	// Provider is nil, and the provider's default model otherwise. The
+	// summarize middleware's own default differs: with Config.Summarizer
+	// nil it builds a ModelSummarizer per request whose Provider and Model
+	// default to the request's (Config.Provider, Config.Model), so a
+	// ModelSummarizer set as Config.Summarizer with a Provider but no Model
+	// asks that provider's default model, not the request's.
 	Model string
 	// Prompt is the whole system prompt; "" means DefaultSummaryPrompt.
 	Prompt string

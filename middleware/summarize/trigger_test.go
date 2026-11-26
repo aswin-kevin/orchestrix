@@ -180,8 +180,8 @@ func TestCircuitBreakerOpensAfterFailures(t *testing.T) {
 		t.Fatalf("summarizer called %d times, want exactly MaxFailures (3)", summarizer.Calls())
 	}
 	bd, _ := boundaryKey.Get(final.State)
-	if !strings.Contains(bd.LastError, "stopped after 3 failures") || !strings.Contains(bd.LastError, "summarizer down") {
-		t.Fatalf("LastError = %q, want the open breaker and the cause", bd.LastError)
+	if want := "automatic compaction stopped after 3 failures: summarize conversation: summarizer down"; bd.LastError != want {
+		t.Fatalf("LastError = %q, want %q", bd.LastError, want)
 	}
 }
 
@@ -214,8 +214,8 @@ func TestNoProgressCountsAsFailure(t *testing.T) {
 	if failures, _ := failuresKey.Get(final.State); failures != 1 {
 		t.Fatalf("failures = %d, want 1", failures)
 	}
-	if bd, _ := boundaryKey.Get(final.State); !strings.Contains(bd.LastError, "no progress") {
-		t.Fatalf("LastError = %q, want the no-progress failure", bd.LastError)
+	if bd, _ := boundaryKey.Get(final.State); bd.LastError != "automatic compaction stopped after 1 failure: compaction made no progress" {
+		t.Fatalf("LastError = %q, want %q", bd.LastError, "automatic compaction stopped after 1 failure: compaction made no progress")
 	}
 }
 

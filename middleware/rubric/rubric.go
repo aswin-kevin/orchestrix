@@ -40,7 +40,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
@@ -158,7 +157,7 @@ func (m *Middleware) BeforeStop(ctx context.Context, s *state.State, resp *llm.R
 		Answer:    resp.Message.Text(),
 		Criteria:  m.criteria,
 		Iteration: iter,
-		Messages:  slices.Clone(s.Messages()),
+		Messages:  s.Messages(), // already a copy of the slice
 	})
 	rec := Record{Iteration: iter, Pass: grade.Pass, Feedback: grade.Feedback}
 	if err != nil {

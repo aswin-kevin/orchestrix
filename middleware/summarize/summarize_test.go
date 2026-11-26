@@ -272,8 +272,8 @@ func TestFailedCompactionRecordedAndRequestUncompacted(t *testing.T) {
 		t.Fatalf("failures = %d, want the requested compaction's summarizer error counted", failures)
 	}
 	bd, _ := boundaryKey.Get(final.State)
-	if !strings.Contains(bd.LastError, "summarizer down") {
-		t.Fatalf("LastError = %q, want the summarizer error", bd.LastError)
+	if want := "summarize conversation: summarizer down"; bd.LastError != want {
+		t.Fatalf("LastError = %q, want %q", bd.LastError, want)
 	}
 	if next := main.Requests[1].Messages; len(next) != 7 || strings.Contains(next[0].Text(), "<summary>") {
 		t.Fatalf("next request has %d messages, want the uncompacted 7", len(next))
@@ -414,8 +414,8 @@ func TestCustomSummarizerFailureRecorded(t *testing.T) {
 				t.Fatal("a failed compaction set a boundary")
 			}
 			bd, _ := boundaryKey.Get(final.State)
-			if bd.LastError == "" {
-				t.Fatal("the failure was not recorded in LastError")
+			if want := map[string]string{"error": "summarize conversation: custom down", "blank": "summarize conversation: summarizer returned no text"}[name]; bd.LastError != want {
+				t.Fatalf("LastError = %q, want %q", bd.LastError, want)
 			}
 			if failures, _ := failuresKey.Get(final.State); failures != 1 {
 				t.Fatalf("failures = %d, want 1", failures)
