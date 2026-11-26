@@ -213,7 +213,8 @@ func (m *Middleware) WrapTool(ctx context.Context, call *agent.ToolCall, next ag
 	// Respond), so it is asked again below; an Approver is asked only when
 	// Edit is allowed, the one such decision it can give.
 	if a, approver := approverOf(ctx); approver != nil {
-		if call.Approved && !slices.Contains(allowedOf(cfg), agent.Edit) {
+		if allowed := allowedOf(cfg); !slices.Contains(allowed, agent.Approve) && !slices.Contains(allowed, agent.Edit) {
+			// An Approver can only allow or deny; neither can run the call.
 			return rejected("approval is not an allowed decision for " + call.Name), nil
 		}
 		return ask(ctx, a, approver, cfg, call, next)

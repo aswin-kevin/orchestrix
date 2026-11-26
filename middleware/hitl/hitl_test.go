@@ -1063,3 +1063,29 @@ func TestResumedPermissionApprovalAsksHitlForRespond(t *testing.T) {
 		t.Fatalf("tool ran %v, want no run before a human decides", l.all())
 	}
 }
+
+func TestApproverNotAskedWhenNoApprovingDecisionAllowed(t *testing.T) {
+	for _, allowed := range [][]agent.DecisionType{
+		{agent.Reject},
+		{agent.Respond},
+		{agent.Respond, agent.Reject},
+	} {
+		t.Run(fmt.Sprint(allowed), func(t *testing.T) {
+			var asked atomic.Int32
+			ran, text, isErr := approverRun(t, allowedOn("write_file", allowed...), "write_file",
+				func(context.Context, permission.Request, string) permission.Decision {
+					asked.Add(1)
+					return permission.Allowed()
+				})
+			if asked.Load() != 0 {
+				t.Fatalf("approver asked %d times, want 0", asked.Load())
+			}
+			if len(ran) != 0 {
+				t.Fatalf("tool ran %v, want it rejected", ran)
+			}
+			if want := "Rejected: approval is not an allowed decision for write_file"; !isErr || text != want {
+				t.Fatalf("result = %q (error %v), want %q", text, isErr, want)
+			}
+		})
+	}
+}
