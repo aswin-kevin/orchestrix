@@ -178,6 +178,11 @@ func New(cfg Config) (*Middleware, error) {
 // Name implements agent.Middleware.
 func (m *Middleware) Name() string { return Name }
 
+// Required implements agent.Required: the guard is a fail-closed safety
+// control, so a MiddlewareExcluder (such as a profiles adjustment) may not
+// remove it.
+func (m *Middleware) Required() bool { return true }
+
 // BeforeAgent clears the verdicts of the run and checks its input.
 func (m *Middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 	verdictsKey.Set(s, nil)

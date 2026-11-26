@@ -588,3 +588,21 @@ func TestName(t *testing.T) {
 		t.Fatalf("Name = %q, middleware name = %q", Name, m.Name())
 	}
 }
+
+// excludeGuard is a MiddlewareExcluder that names the guard for every model.
+type excludeGuard struct{}
+
+func (excludeGuard) Name() string                      { return "exclude-guard" }
+func (excludeGuard) ExcludeMiddleware(string) []string { return []string{Name} }
+
+func TestRequiredGuardCannotBeExcluded(t *testing.T) {
+	mw := mustNew(t, Config{Decider: &fakeDecider{}, Checks: []Check{{Name: "c", Question: "q?", On: Input}}})
+	var _ agent.Required = mw
+	if !mw.Required() {
+		t.Fatal("Required() = false, want true")
+	}
+	_, err := agent.New(agent.Config{Provider: llmtest.New(), Middleware: []agent.Middleware{mw, excludeGuard{}}})
+	if err == nil || !strings.Contains(err.Error(), Name) {
+		t.Fatalf("agent.New = %v, want an error refusing to exclude the guard", err)
+	}
+}

@@ -28,9 +28,9 @@
 // ExcludeMiddleware is applied when the agent is built (see
 // agent.MiddlewareExcluder), for Config.Model. Subagents with another model
 // are filtered for their own model. A middleware that is agent.Required
-// (hitl, hooks, planmode) cannot be excluded: agent.New fails for a model
-// whose adjustment names it, so a subagent with such a model fails when it
-// is built.
+// (guard, hitl, hooks, planmode) cannot be excluded: agent.New fails for a
+// model whose adjustment names it, so a subagent with such a model fails
+// when it is built.
 package profiles
 
 import (
@@ -73,9 +73,9 @@ type Adjustment struct {
 	ExcludeTools []string
 	// ExcludeMiddleware names middleware removed when the agent is built;
 	// names matching nothing are ignored. "profiles" is rejected by New.
-	// Naming a middleware that is agent.Required (hitl, hooks, planmode)
-	// makes agent.New fail for a matching model: removing it would silently
-	// drop its approvals, hooks or plan mode. No dependency check is made:
+	// Naming a middleware that is agent.Required (guard, hitl, hooks,
+	// planmode) makes agent.New fail for a matching model: removing it would
+	// silently drop its checks, approvals, hooks or plan mode. No dependency check is made:
 	// excluding a middleware that others rely on (filesystem, for instance)
 	// leaves them configured and the agent still runs. Nil removes none.
 	ExcludeMiddleware []string

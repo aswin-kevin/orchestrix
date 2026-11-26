@@ -27,8 +27,9 @@ type MiddlewareExcluder interface {
 // model would silently drop a safety check. New fails when an excluder
 // names a middleware whose Required reports true. Exclusion the host asks
 // for (Compose's exclude list) is not affected. Protection follows the
-// implementation, not the name: a middleware that replaces hitl, hooks or
-// planmode by name must implement Required itself to stay protected.
+// implementation, not the name: a middleware that replaces guard, hitl,
+// hooks or planmode by name must implement Required itself to stay
+// protected.
 type Required interface{ Required() bool }
 
 // filterExcluded returns stack without the middleware its excluders name for
