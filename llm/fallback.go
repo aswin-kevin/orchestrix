@@ -110,9 +110,34 @@ func NewFallback(cfg FallbackConfig) (*Fallback, error) {
 	if cfg.Cooldown < 0 && cfg.Cooldown != NoCooldown {
 		return nil, errors.New("llm: Cooldown is negative")
 	}
-	entries := make([]FallbackEntry, len(cfg.Entries))
+	entries, err := nameEntries(cfg.Entries)
+	if err != nil {
+		return nil, err
+	}
+	f := &Fallback{
+		entries:  entries,
+		cooldown: cfg.Cooldown,
+		should:   cfg.ShouldFallback,
+		notify:   cfg.OnFallback,
+		now:      time.Now,
+		downTill: make([]time.Time, len(entries)),
+	}
+	if f.cooldown == 0 {
+		f.cooldown = DefaultFallbackCooldown
+	}
+	if f.should == nil {
+		f.should = DefaultShouldFallback
+	}
+	return f, nil
+}
+
+// nameEntries returns a copy of in with every backup's Model filled from its
+// provider and every entry named: explicit names must be unique, the rest
+// default to the model name, or "fallback-<i>" without one.
+func nameEntries(in []FallbackEntry) ([]FallbackEntry, error) {
+	entries := make([]FallbackEntry, len(in))
 	taken := make(map[string]bool, len(entries))
-	for i, e := range cfg.Entries {
+	for i, e := range in {
 		if e.Provider == nil {
 			return nil, fmt.Errorf("llm: fallback entry %d has no provider", i)
 		}
@@ -146,21 +171,7 @@ func NewFallback(cfg FallbackConfig) (*Fallback, error) {
 		taken[name] = true
 		entries[i].Name = name
 	}
-	f := &Fallback{
-		entries:  entries,
-		cooldown: cfg.Cooldown,
-		should:   cfg.ShouldFallback,
-		notify:   cfg.OnFallback,
-		now:      time.Now,
-		downTill: make([]time.Time, len(entries)),
-	}
-	if f.cooldown == 0 {
-		f.cooldown = DefaultFallbackCooldown
-	}
-	if f.should == nil {
-		f.should = DefaultShouldFallback
-	}
-	return f, nil
+	return entries, nil
 }
 
 // modelReporter is implemented by the providers New builds, so NewFallback
