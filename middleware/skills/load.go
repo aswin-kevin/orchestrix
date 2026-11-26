@@ -130,7 +130,7 @@ func loadSkill(fsys fs.FS, dir, dirName string) (s Skill, ok bool, err error) {
 		Dir:           dir,
 		Files:         listFiles(fsys, dir),
 	}
-	if err := Validate(s, dirName); err != nil {
+	if err := validate(s, dirName); err != nil {
 		return Skill{}, false, err
 	}
 	return s, true, nil

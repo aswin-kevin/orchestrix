@@ -69,7 +69,11 @@ const (
 const Name = "skills"
 
 // Definer is what subagents need from the skills middleware: whether a
-// skill exists. A replacement skills middleware implements it.
+// skill exists. A replacement skills middleware (one named Name) implements
+// it, and must also honour ScopeKey: the subagents middleware narrows a
+// subagent's skills (Subagent.Skills and PinnedSkills) only by writing the
+// child run's Scope there, so a replacement that ignores it offers the
+// subagent every skill.
 type Definer interface {
 	// Has reports whether a skill named name is defined.
 	Has(name string) bool
@@ -114,8 +118,18 @@ type Skill struct {
 // most MaxCompatibilityLen bytes; and no allowed-tools pattern may be made
 // only of the wildcards "*" and "?" (such as "*" or "**"), which would unlock
 // every gated tool. A broad prefix such as "mcp__*" is legal but unlocks
-// every tool it matches, here every MCP server's.
+// every tool it matches, here every MCP server's. The error starts with
+// "skills: ".
 func Validate(s Skill, dirName string) error {
+	if err := validate(s, dirName); err != nil {
+		return fmt.Errorf("skills: %w", err)
+	}
+	return nil
+}
+
+// validate is Validate without the package prefix, for callers that wrap
+// the error with their own.
+func validate(s Skill, dirName string) error {
 	if err := validateName(s.Name); err != nil {
 		return err
 	}
@@ -254,7 +268,7 @@ func New(cfg Config) (*Middleware, error) {
 		byName[s.Name] = s
 	}
 	for _, s := range cfg.Skills {
-		if err := Validate(s, ""); err != nil {
+		if err := validate(s, ""); err != nil {
 			return nil, fmt.Errorf("skills: programmatic skill %q: %w", s.Name, err)
 		}
 		s.Body, _ = promptsafe.CapBytes(s.Body, MaxBodyBytes)

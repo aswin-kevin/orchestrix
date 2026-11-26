@@ -94,7 +94,7 @@ func TestSkillsWithoutDefinerFails(t *testing.T) {
 		Middleware: []agent.Middleware{namedMW{}}, Skills: []string{"x"},
 	}
 	_, err := New(Config{Subagents: []Subagent{spec}})
-	want := `subagents: subagent "a" names skills, but no skills middleware implements skills.Definer`
+	want := `subagents: subagent "a" names skills or pinned skills, but no skills middleware implements skills.Definer`
 	if err == nil || err.Error() != want {
 		t.Fatalf("New = %v, want %q", err, want)
 	}

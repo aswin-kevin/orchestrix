@@ -184,7 +184,7 @@ func checkSkills(spec Subagent, mws []agent.Middleware) error {
 		}
 	}
 	if def == nil {
-		return fmt.Errorf("subagents: subagent %q names skills, but no skills middleware implements skills.Definer", spec.Name)
+		return fmt.Errorf("subagents: subagent %q names skills or pinned skills, but no skills middleware implements skills.Definer", spec.Name)
 	}
 	for _, name := range wanted {
 		if !def.Has(name) {

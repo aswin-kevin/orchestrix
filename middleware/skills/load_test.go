@@ -371,3 +371,14 @@ func TestSkillsReturnsDeepCopies(t *testing.T) {
 		t.Fatalf("mutating a returned skill changed the middleware's copy: %+v", again)
 	}
 }
+
+func TestValidateErrorsArePrefixed(t *testing.T) {
+	for _, s := range []Skill{{}, {Name: "a"}, {Name: "a", Description: "d", AllowedTools: []string{"*"}}} {
+		if err := Validate(s, ""); err == nil || !strings.HasPrefix(err.Error(), "skills: ") {
+			t.Errorf("Validate(%+v) = %v, want an error starting with skills: ", s, err)
+		}
+	}
+	if err := Validate(Skill{Name: "a", Description: "d"}, "b"); err == nil || !strings.HasPrefix(err.Error(), "skills: ") {
+		t.Errorf("Validate with another directory = %v, want an error starting with skills: ", err)
+	}
+}
