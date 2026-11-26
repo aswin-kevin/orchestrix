@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"os"
 	"os/signal"
@@ -148,7 +149,7 @@ func TestCtrlCAtIdleAfterPendingQuestionEndsRun(t *testing.T) {
 			stderr := newSyncBuffer()
 			childResult := make(chan string, 1)
 			provider := pendingAtTurnEnd(stderr, tt.call, tt.shown, childResult)
-			s := startREPLWith(t, t.Context(), stderr, provider, "-model", "openai:test", "-dir", t.TempDir(), "-async")
+			s := startREPLWith(t, context.WithoutCancel(t.Context()), stderr, provider, "-model", "openai:test", "-dir", t.TempDir(), "-async")
 
 			s.send("start it")
 			// readIdle watches for Ctrl-C before it prints the prompt.

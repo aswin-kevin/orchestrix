@@ -106,7 +106,7 @@ type replSession struct {
 
 func startREPL(t *testing.T, provider llm.Provider, args ...string) *replSession {
 	t.Helper()
-	return startREPLWith(t, t.Context(), newSyncBuffer(), provider, args...)
+	return startREPLWith(t, context.WithoutCancel(t.Context()), newSyncBuffer(), provider, args...)
 }
 
 // startREPLWith is startREPL with run's context and stderr given.
