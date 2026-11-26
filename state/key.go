@@ -8,7 +8,7 @@ import (
 )
 
 // keyMeta is the type-erased description of a Key, kept in the package-level
-// registry so that ChildFor and MergeChild honor a key's options even for
+// registry so that Child and MergeChild honor a key's options even for
 // States restored from JSON, which hold only untyped data.
 type keyMeta struct {
 	typ     reflect.Type
@@ -78,7 +78,7 @@ type Key[T any] struct {
 // KeyOption configures a Key at construction time.
 type KeyOption[T any] func(*Key[T])
 
-// Private marks a key as private: ChildFor does not copy it to children and
+// Private marks a key as private: Child does not copy it to children and
 // MergeChild never merges it back into the parent.
 func Private[T any]() KeyOption[T] {
 	return func(k *Key[T]) { k.private = true }
@@ -96,7 +96,7 @@ func RunLocal[T any]() KeyOption[T] {
 // MergeWith sets how MergeChild combines the parent's and the child's values
 // for this key. Without it the child's value replaces the parent's.
 //
-// ChildFor copies the parent's value into the child, so the child's value
+// Child copies the parent's value into the child, so the child's value
 // usually already contains the parent's: a merge func must not blindly
 // concatenate or sum the two, or the parent's share is counted twice. The
 // function runs while the parent State is locked and must not use any State.
@@ -105,11 +105,14 @@ func MergeWith[T any](f func(parent, child T) T) KeyOption[T] {
 }
 
 // NewKey declares a key with the given name and records it in a package-level
-// registry that ChildFor and MergeChild consult, so declare keys as
+// registry that Child and MergeChild consult, so declare keys as
 // package-level variables. It panics if name is empty, or if the name was
 // already declared with a different type or privacy; both are programming
 // errors. Declaring the same key again is harmless; the last declaration's
 // merge function wins.
+//
+// Prefix names with your package path or name (the agent package uses
+// "agent.") so keys of different libraries cannot collide.
 func NewKey[T any](name string, opts ...KeyOption[T]) Key[T] {
 	if name == "" {
 		panic("state: NewKey requires a non-empty name")

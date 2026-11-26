@@ -145,7 +145,7 @@ func TestGetDecodeFailureKeepsRaw(t *testing.T) {
 	}
 }
 
-func TestChildForSkipsPrivate(t *testing.T) {
+func TestChildCopiesNonPrivate(t *testing.T) {
 	shared := NewKey[string]("shared")
 	secret := NewKey[string]("secret", Private[string]())
 	s := New()
@@ -153,7 +153,7 @@ func TestChildForSkipsPrivate(t *testing.T) {
 	shared.Set(s, "visible")
 	secret.Set(s, "hidden")
 
-	child := s.ChildFor()
+	child := s.Child()
 
 	if got, ok := shared.Get(child); !ok || got != "visible" {
 		t.Fatalf("shared in child = %q, %v", got, ok)
@@ -166,19 +166,19 @@ func TestChildForSkipsPrivate(t *testing.T) {
 	}
 }
 
-func TestChildForCopiesUntouchedRawAndIsIndependent(t *testing.T) {
+func TestChildCopiesUntouchedRawAndIsIndependent(t *testing.T) {
 	todos := NewKey[[]todo]("todos")
 	s := New()
 	if err := json.Unmarshal([]byte(`{"version":1,"messages":[],"values":{"todos":[{"title":"a","done":false}],"other":1}}`), s); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	child := s.ChildFor()
+	child := s.Child()
 	todos.Set(child, nil)
 
 	if got, ok := todos.Get(s); !ok || len(got) != 1 {
 		t.Fatalf("parent changed by child write: %+v, %v", got, ok)
 	}
-	if _, ok := s.ChildFor().raw["other"]; !ok {
+	if _, ok := s.Child().raw["other"]; !ok {
 		t.Fatal("unregistered raw key not copied to child")
 	}
 }
@@ -188,7 +188,7 @@ func TestMergeChildCustomMerge(t *testing.T) {
 	s := New()
 	notes.Set(s, []string{"parent"})
 
-	child := s.ChildFor()
+	child := s.Child()
 	notes.Update(child, func(n []string) []string { return append(slices.Clone(n), "child") })
 	s.MergeChild(child)
 
@@ -204,7 +204,7 @@ func TestMergeChildDefaultChildWins(t *testing.T) {
 	name := NewKey[string]("name")
 	s := New()
 	name.Set(s, "parent")
-	child := s.ChildFor()
+	child := s.Child()
 	name.Set(child, "child")
 	NewKey[int]("extra").Set(child, 5)
 
@@ -308,7 +308,7 @@ func TestPrivateKeySurvivesCheckpointResume(t *testing.T) {
 	if err := json.Unmarshal(data, restored); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	child := restored.ChildFor() // secret never touched on restored
+	child := restored.Child() // secret never touched on restored
 
 	if _, leaked := child.raw["resume-secret"]; leaked {
 		t.Fatal("private key copied to child after resume")
@@ -389,8 +389,8 @@ func TestForkDropsRunLocalKeys(t *testing.T) {
 	if _, ok := local.Get(f); ok {
 		t.Fatal("fork kept a run-local value")
 	}
-	if _, ok := local.Get(s.ChildFor()); ok {
-		t.Fatal("ChildFor copied a run-local value")
+	if _, ok := local.Get(s.Child()); ok {
+		t.Fatal("Child copied a run-local value")
 	}
 	if got, _ := local.Get(s.Clone()); got != "c" {
 		t.Fatalf("Clone dropped the run-local value: %q", got)

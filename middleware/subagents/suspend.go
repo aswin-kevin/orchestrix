@@ -201,7 +201,7 @@ func relayable(requests []agent.ActionRequest) []agent.DecisionType {
 // the child: approve all, or reject all with the parent's message. It fails
 // when a request does not accept the decision.
 func childDecisions(resume tool.ResumeValue, requests []agent.ActionRequest) ([]agent.Decision, error) {
-	typ := agent.DecisionType(resume.Type)
+	typ := resume.Type
 	if !slices.Contains(suspendDecisions, typ) {
 		return nil, fmt.Errorf("unsupported decision %q", resume.Type)
 	}

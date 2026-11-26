@@ -28,7 +28,10 @@ var (
 var errResumeMessages = errors.New("agent: a resumed run takes no Input.Messages")
 
 // DecisionType is how a human answers a pending action.
-type DecisionType string
+//
+// It is an alias of tool.ResumeType, so a decision relayed to a tool needs no
+// conversion.
+type DecisionType = tool.ResumeType
 
 // The ways to answer an ActionRequest.
 const (

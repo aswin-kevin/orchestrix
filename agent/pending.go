@@ -244,7 +244,7 @@ func (c *toolCall) applyDecision() *tool.Result {
 		c.input = d.Input
 	}
 	if c.resumed.origin == originTool {
-		c.resume = &tool.ResumeValue{Type: string(d.Type), Input: d.Input, Message: d.Message}
+		c.resume = &tool.ResumeValue{Type: d.Type, Input: d.Input, Message: d.Message}
 	}
 	return nil
 }

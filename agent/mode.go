@@ -14,7 +14,7 @@ import (
 //
 // It is part of State, so it is checkpointed and restored with the thread,
 // and State.Fork copies it, so a fork continues in the same mode. It is
-// private: State.ChildFor does not copy it, so a subagent does not inherit it
+// private: State.Child does not copy it, so a subagent does not inherit it
 // implicitly (the subagents middleware derives the subagent's mode from it).
 //
 // Any code that can write the run's State, a tool or middleware included,

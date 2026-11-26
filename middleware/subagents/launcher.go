@@ -18,7 +18,7 @@ import (
 
 // Launcher builds subagent agents from a parent agent and prepares isolated
 // runs exactly as the task tool does: the parent's Config with the spec's
-// overrides, a State from ChildFor, the stricter permission mode (childMode),
+// overrides, a State from Child, the stricter permission mode (childMode),
 // the narrowed skills scope (childScope), the call's backend, Ephemeral. One
 // agent per (parent, spec name) is cached; safe for concurrent use. The zero
 // value is not usable; create one with NewLauncher.
@@ -133,9 +133,9 @@ func (l *Launcher) Input(ctx context.Context, child *agent.Agent, spec Subagent,
 	if c == nil || c.State == nil {
 		return agent.Input{}, errors.New("subagents: Input needs the run's current tool call")
 	}
-	s := c.State.ChildFor()
+	s := c.State.Child()
 	agent.PermissionModeKey.Set(s, childMode(info.Agent, child, c.State))
-	// skills.ScopeKey is private, so ChildFor dropped it: without this a
+	// skills.ScopeKey is private, so Child dropped it: without this a
 	// subagent (or its own subagents) would see skills its parent may not.
 	if parent, ok := skills.ScopeKey.Get(c.State); ok || spec.Skills != nil || spec.PinnedSkills != nil {
 		skills.ScopeKey.Set(s, childScope(parent, spec))

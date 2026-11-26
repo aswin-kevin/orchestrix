@@ -210,7 +210,7 @@ func ExampleWithPlanMode() {
 	a, err := orchestrix.NewWithProvider(model,
 		orchestrix.WithPlanMode(planmode.Config{}),
 		orchestrix.WithApprover(func(ctx context.Context, req permission.Request, reason string) permission.Decision {
-			// For exit_plan_mode, req.Input holds the plan and req.NoRemember
+			// For exit_plan_mode, req.Input holds the plan and req.DisableRemember
 			// is set: never answer it from an "always allow" cache.
 			fmt.Printf("%s: %s\n%s\napprove? [y/N] ", req.Tool, reason, req.Input)
 			var answer string

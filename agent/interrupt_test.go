@@ -322,7 +322,7 @@ func rejectAwareTool(log *callLog, flag bool) tool.Tool {
 			if c.Resume == nil {
 				return tool.Result{}, &Interrupt{ReinvokeOnReject: flag}
 			}
-			return tool.Text("tool saw " + c.Resume.Type + ": " + c.Resume.Message), nil
+			return tool.Text("tool saw " + string(c.Resume.Type) + ": " + c.Resume.Message), nil
 		},
 		tool.WithReadOnly())
 }

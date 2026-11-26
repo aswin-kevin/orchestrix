@@ -157,27 +157,30 @@ type Background interface {
 	Start(ctx context.Context, c *Call, command string, timeout time.Duration) (id string, err error)
 }
 
-// The values of ResumeValue.Type: how the human answered the interrupt. They
-// are the strings of the agent package's decision types.
+// ResumeType is how the human answered an interrupt. The agent package's
+// DecisionType is an alias of it.
+type ResumeType string
+
+// The values of ResumeValue.Type.
 const (
 	// ResumeApprove: run the call as requested.
-	ResumeApprove = "approve"
+	ResumeApprove ResumeType = "approve"
 	// ResumeEdit: run the call with ResumeValue.Input instead.
-	ResumeEdit = "edit"
+	ResumeEdit ResumeType = "edit"
 	// ResumeReject: the call was refused, with ResumeValue.Message as the
 	// reason. The agent answers a rejected call itself without re-invoking
 	// the tool, unless the tool's interrupt set ReinvokeOnReject (see the
 	// agent package's Interrupt); only such a tool sees this type.
-	ResumeReject = "reject"
+	ResumeReject ResumeType = "reject"
 	// ResumeRespond: ResumeValue.Message is the human's answer.
-	ResumeRespond = "respond"
+	ResumeRespond ResumeType = "respond"
 )
 
 // ResumeValue is the answer to an interrupt a tool raised earlier.
 type ResumeValue struct {
 	// Type is one of ResumeApprove, ResumeEdit, ResumeReject or
 	// ResumeRespond.
-	Type string
+	Type ResumeType
 	// Input is the replacement input, set for ResumeEdit.
 	Input json.RawMessage
 	// Message is the rejection reason for ResumeReject or the answer for

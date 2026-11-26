@@ -1,13 +1,37 @@
 package tool
 
 import (
+	"encoding"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
+	"time"
 )
 
-var rawMessageType = reflect.TypeOf(json.RawMessage(nil))
+var (
+	rawMessageType    = reflect.TypeOf(json.RawMessage(nil))
+	timeType          = reflect.TypeFor[time.Time]()
+	byteSliceType     = reflect.TypeFor[[]byte]()
+	textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
+	schemaHookType    = reflect.TypeFor[interface{ JSONSchema() map[string]any }]()
+)
+
+// schemaHook returns the schema a type declares through a JSONSchema method
+// on the type or its pointer, called on the zero value, and a copy of it so
+// callers may add keys.
+func schemaHook(t reflect.Type) (map[string]any, bool) {
+	if t.Kind() != reflect.Pointer && t.Implements(schemaHookType) {
+		h := reflect.Zero(t).Interface().(interface{ JSONSchema() map[string]any })
+		return maps.Clone(h.JSONSchema()), true
+	}
+	if reflect.PointerTo(t).Implements(schemaHookType) {
+		h := reflect.New(t).Interface().(interface{ JSONSchema() map[string]any })
+		return maps.Clone(h.JSONSchema()), true
+	}
+	return nil, false
+}
 
 // SchemaFor generates the JSON schema of the struct type T from its fields:
 //
@@ -16,11 +40,20 @@ var rawMessageType = reflect.TypeOf(json.RawMessage(nil))
 //   - a field is required unless it is a pointer or tagged omitempty;
 //   - embedded structs without a json name are flattened into their parent.
 //
+// A type may declare its own schema: when the type or its pointer has a
+// JSONSchema() map[string]any method, its result for the zero value is used
+// as is (a copy is taken). Otherwise time.Time is a date-time string, []byte
+// is a base64 string, and any encoding.TextMarshaler is a string; the enum
+// tag may narrow the latter. The desc and enum tags apply on top.
+//
 // It panics when T is not a struct or contains a kind JSON cannot express
 // (chan, func, complex), naming the offending field path, because that is a
 // programming error.
 func SchemaFor[T any]() map[string]any {
 	t := reflect.TypeFor[T]()
+	if s, ok := schemaHook(t); ok {
+		return s
+	}
 	if t.Kind() != reflect.Struct {
 		panic(fmt.Sprintf("tool.SchemaFor: %s is not a struct", t))
 	}
@@ -125,6 +158,17 @@ func splitEnum(tag string) []any {
 func typeSchema(t reflect.Type, path string, stack []reflect.Type) map[string]any {
 	if t == rawMessageType {
 		return map[string]any{}
+	}
+	if s, ok := schemaHook(t); ok {
+		return s
+	}
+	switch {
+	case t == timeType:
+		return map[string]any{"type": "string", "format": "date-time"}
+	case t == byteSliceType:
+		return map[string]any{"type": "string", "contentEncoding": "base64"}
+	case t.Kind() != reflect.Pointer && (t.Implements(textMarshalerType) || reflect.PointerTo(t).Implements(textMarshalerType)):
+		return map[string]any{"type": "string"}
 	}
 	switch t.Kind() {
 	case reflect.Pointer:

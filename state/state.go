@@ -85,10 +85,10 @@ func (s *State) Fork() *State {
 	return fork
 }
 
-// ChildFor returns a State for a subagent: it carries a deep copy of every
+// Child returns a State for a subagent: it carries a deep copy of every
 // non-private value and no messages. Keys the State has never seen are
 // treated as non-private.
-func (s *State) ChildFor() *State {
+func (s *State) Child() *State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.copyLocked(func(name string) bool { return !lookupKey(name).private })
@@ -140,7 +140,7 @@ func (s *State) mustSerializedLocked(name string) json.RawMessage {
 // MergeChild folds a child's values back into s. For each key the child
 // holds: private keys are skipped; a key declared with a MergeWith function gets merge(parentValue, childValue); every other key takes the child's
 // value. A key whose merge inputs cannot be decoded is left unchanged. The
-// child's value already contains what ChildFor copied from s, which MergeWith
+// child's value already contains what Child copied from s, which MergeWith
 // funcs must account for. Merge
 // functions run while s is locked and must not use any State. The child is
 // not modified.

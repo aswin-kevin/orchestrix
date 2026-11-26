@@ -311,7 +311,7 @@ func TestWorkspaceNotSyncedForInputBackend(t *testing.T) {
 func TestWorkspaceKeyIsPrivate(t *testing.T) {
 	s := state.New()
 	WorkspaceKey.Set(s, json.RawMessage(`{}`))
-	if _, ok := WorkspaceKey.Get(s.ChildFor()); ok {
+	if _, ok := WorkspaceKey.Get(s.Child()); ok {
 		t.Fatal("a subagent inherited the workspace snapshot")
 	}
 	if got := WorkspaceKey.Name(); got != "agent.workspace" {

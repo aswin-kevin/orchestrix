@@ -139,11 +139,11 @@ func TestPromptNamesSubagent(t *testing.T) {
 	}
 }
 
-func TestApproverNeverRemembersNoRememberRequests(t *testing.T) {
+func TestApproverNeverRemembersDisableRememberRequests(t *testing.T) {
 	out := &promptLog{}
 	ap := activeApprover(newLineReader(strings.NewReader("y\ny\na\n")), out)
 	// A tool other than exit_plan_mode, which has a prompt of its own.
-	req := permission.Request{Tool: "deploy", NoRemember: true}
+	req := permission.Request{Tool: "deploy", DisableRemember: true}
 
 	if d := ap.decide(context.Background(), req, ""); d.Behavior != permission.Allow {
 		t.Fatalf("first = %+v, want allow", d)
@@ -158,7 +158,7 @@ func TestApproverNeverRemembersNoRememberRequests(t *testing.T) {
 		t.Fatalf("prompts = %d, want 3", got)
 	}
 	if strings.Contains(out.buf.String(), "/a]") {
-		t.Fatalf("prompt offers always for a NoRemember request: %q", out.buf.String())
+		t.Fatalf("prompt offers always for a DisableRemember request: %q", out.buf.String())
 	}
 	if ap.isAlways("deploy") {
 		t.Fatal("always recorded")
@@ -176,10 +176,10 @@ func TestApproverAlwaysStillWorksForOrdinaryRequests(t *testing.T) {
 	}
 }
 
-func TestApproverIgnoresEarlierAlwaysForNoRemember(t *testing.T) {
+func TestApproverIgnoresEarlierAlwaysForDisableRemember(t *testing.T) {
 	ap := activeApprover(newLineReader(strings.NewReader("n\n")), &promptLog{})
 	ap.allowAlways("exit_plan_mode")
-	d := ap.decide(context.Background(), permission.Request{Tool: "exit_plan_mode", NoRemember: true}, "")
+	d := ap.decide(context.Background(), permission.Request{Tool: "exit_plan_mode", DisableRemember: true}, "")
 	if d.Behavior != permission.Deny {
 		t.Fatalf("decision = %+v, want the prompt to run and deny", d)
 	}
@@ -202,7 +202,7 @@ func TestApproverEscapesSubject(t *testing.T) {
 
 // planRequest is the request planmode sends for exit_plan_mode.
 func planRequest(plan string) permission.Request {
-	return permission.Request{Tool: "exit_plan_mode", Subject: plan, NoRemember: true}
+	return permission.Request{Tool: "exit_plan_mode", Subject: plan, DisableRemember: true}
 }
 
 func TestPlanPromptShowsFullPlan(t *testing.T) {

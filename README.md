@@ -967,7 +967,7 @@ The package also has a small `mcp.Server` you can serve over stdio, HTTP or in p
 
 `WithPlanMode` gives the model `enter_plan_mode` and `exit_plan_mode`. Entering switches the run to the read-only `plan` permission mode, where nothing that changes files or runs commands is allowed. The model investigates, then calls `exit_plan_mode` with its plan, which needs a human's approval:
 
-- With `WithApprover`, the approver is asked. The request has `NoRemember` set, so an approver must not answer it from an "always allow" it remembered; `orx` asks with `[y/N]` every time.
+- With `WithApprover`, the approver is asked. The request has `DisableRemember` set, so an approver must not answer it from an "always allow" it remembered; `orx` asks with `[y/N]` every time.
 - Without one, the run pauses with an interrupt for `exit_plan_mode`. Resume it with `Approve`, `Edit` (a revised plan as the new input), `Reject` or `Respond` (see "Human in the loop").
 
 Approval restores the mode the run had before it entered plan mode (or `planmode.Config.ApproveMode`, when set), and the approved plan is kept in state under `planmode.PlanKey`. A rejection or a response keeps plan mode and hands the feedback to the model, so it can revise the plan. A run started in `plan` mode can use `exit_plan_mode` directly; set `DisableEnter` to offer only that tool. Subagents cannot enter or leave plan mode: a planning parent's subagents plan too.
@@ -977,7 +977,7 @@ Approval restores the mode the run had before it entered plan mode (or `planmode
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
 	orchestrix.WithPlanMode(planmode.Config{}),
 	orchestrix.WithApprover(func(ctx context.Context, req permission.Request, reason string) permission.Decision {
-		// For exit_plan_mode, req.Input holds the plan and req.NoRemember
+		// For exit_plan_mode, req.Input holds the plan and req.DisableRemember
 		// is set: never answer it from an "always allow" cache.
 		fmt.Printf("%s: %s\n%s\napprove? [y/N] ", req.Tool, reason, req.Input)
 		var answer string

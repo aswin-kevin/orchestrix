@@ -60,7 +60,7 @@ type Spec struct {
 // every optional capability interface of this package, except Dispatcher,
 // which it implements only when Spec.Dispatch is set.
 func Build(s Spec) Tool {
-	if err := names.Validate(s.Name); err != nil {
+	if err := ValidName(s.Name); err != nil {
 		panic(fmt.Sprintf("tool.Build: %v", err))
 	}
 	if s.Run == nil {
@@ -189,3 +189,15 @@ var (
 	_ Availability      = (*built)(nil)
 	_ Dispatcher        = (*builtDispatcher)(nil)
 )
+
+// ValidName reports why name is not a legal tool name: it must be non-empty
+// and use only letters, digits and the characters "_.:-", which covers
+// MCP-style names such as "mcp__srv__tool". Build panics on an invalid name;
+// ValidName lets a caller that registers tools from untrusted input check
+// first.
+func ValidName(name string) error {
+	if err := names.Validate(name); err != nil {
+		return fmt.Errorf("tool: invalid name %q: %w", name, err)
+	}
+	return nil
+}

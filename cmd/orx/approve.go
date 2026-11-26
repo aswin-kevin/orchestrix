@@ -91,7 +91,7 @@ func (a *approver) decide(ctx context.Context, req permission.Request, _ string)
 	if req.Tool == planmode.ToolExit {
 		return a.decidePlan(ctx, req)
 	}
-	remember := !req.NoRemember
+	remember := !req.DisableRemember
 	if remember && a.isAlways(req.Tool) {
 		return permission.Allowed()
 	}

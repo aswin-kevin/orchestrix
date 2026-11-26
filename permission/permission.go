@@ -171,11 +171,11 @@ type Request struct {
 	Paths []PathAccess
 	// SelfCheck is the tool's own CheckPermission verdict.
 	SelfCheck Decision
-	// NoRemember tells the Approver to ask every time: it must never cache
+	// DisableRemember tells the Approver to ask every time: it must never cache
 	// an "always allow" answer for this request, nor apply one given
 	// earlier. A tool sets it on the request for a decision that must be a
 	// fresh human choice each time. False lets an Approver remember.
-	NoRemember bool
+	DisableRemember bool
 }
 
 // Approver resolves an Ask decision, typically by prompting a human.
@@ -185,6 +185,9 @@ type Request struct {
 // from their own goroutines. An Approver that prompts a human must pair each
 // answer with its question, for instance by holding a lock across the
 // prompt. agent.Info(ctx) tells which run, and so which subagent, asks.
+//
+// It returns no error: an Approver backed by a network service that fails
+// must Deny.
 type Approver func(ctx context.Context, req Request, reason string) Decision
 
 // Context carries the session's permission configuration.

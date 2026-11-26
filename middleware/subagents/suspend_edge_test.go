@@ -44,7 +44,7 @@ func confirmTool(allowed ...agent.DecisionType) tool.Tool {
 		if c.Resume == nil {
 			return tool.Result{}, &agent.Interrupt{Requests: []agent.ActionRequest{{Reason: "confirm?", Allowed: allowed}}}
 		}
-		return tool.Text("confirmed: " + c.Resume.Type), nil
+		return tool.Text("confirmed: " + string(c.Resume.Type)), nil
 	}, tool.WithReadOnly())
 }
 

@@ -380,8 +380,8 @@ func TestElisionSurvivesCheckpoint(t *testing.T) {
 	if got, _ := ElisionsKey.Get(s.Fork()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Fork = %+v, want %+v", got, want)
 	}
-	if _, ok := ElisionsKey.Get(s.ChildFor()); ok {
-		t.Fatal("ChildFor copied the elisions")
+	if _, ok := ElisionsKey.Get(s.Child()); ok {
+		t.Fatal("Child copied the elisions")
 	}
 }
 

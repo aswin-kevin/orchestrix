@@ -486,8 +486,8 @@ func TestApproverRequestShowsPlanAndForbidsRemembering(t *testing.T) {
 		t.Fatalf("approver asked %d times, want 2 (an always-allow must not skip it)", len(rec.reqs))
 	}
 	for i, req := range rec.reqs {
-		if !req.NoRemember {
-			t.Errorf("request %d: NoRemember = false", i)
+		if !req.DisableRemember {
+			t.Errorf("request %d: DisableRemember = false", i)
 		}
 	}
 	if rec.reqs[0].Subject != "short plan" {
