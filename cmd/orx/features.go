@@ -232,7 +232,7 @@ func featureOptions(o options, stderr io.Writer) ([]orchestrix.Option, int, erro
 		opts = append(opts, orchestrix.WithSystemPrompt(string(text)))
 	}
 	if opt, err := memoryOption(o, stderr); err != nil {
-		return nil, exitUsage, fmt.Errorf("memory: %v", err)
+		return nil, exitUsage, err
 	} else if opt != nil {
 		opts = append(opts, opt)
 	}
