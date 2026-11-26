@@ -29,10 +29,9 @@
 // and the core module otherwise (orxdocker needs nothing beyond the core,
 // so the core test compiles its blocks). The scratch module requires the
 // core and that satellite through replace directives to the working tree,
-// uses the go.sum of the module whose test runs, and is checked with
-// go vet with GOPROXY=off, so it needs no network. The dependencies must
-// already be in the module cache: go test ./... puts them there, but run
-// alone on an empty cache the check fails with "module lookup disabled by
-// GOPROXY=off"; run go mod download first. Check skips in short mode and
-// outside a repository checkout.
+// uses the requirements and go.sum of the module whose test runs, and is
+// checked with go vet. It loads the module graph that module's own build
+// uses, so with a warm module cache it needs no network; on a cold cache
+// the go command fetches what is missing through GOPROXY, as go test does.
+// Check skips in short mode and outside a repository checkout.
 package snippets

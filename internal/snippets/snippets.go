@@ -581,6 +581,16 @@ func Check(t *testing.T, root, module string) {
 		modRoot = filepath.Join(root, module)
 		deps[core+"/"+module] = modRoot
 	}
+	// The scratch module requires what the tested module requires, so the
+	// go command loads the same pruned module graph the tested module's own
+	// build already put in the module cache; without them it would resolve
+	// the replaced modules' graphs afresh and need go.mod files that a cache
+	// filled by go test ./... does not hold.
+	for _, req := range readRequires(t, filepath.Join(modRoot, "go.mod")) {
+		if _, ok := deps[req.path]; !ok {
+			gomod += fmt.Sprintf("require %s %s\n", req.path, req.version)
+		}
+	}
 	for _, p := range slices.Sorted(maps.Keys(deps)) {
 		gomod += fmt.Sprintf("require %s v0.0.0\nreplace %s => %s\n", p, p, filepath.ToSlash(deps[p]))
 	}
@@ -597,7 +607,7 @@ func Check(t *testing.T, root, module string) {
 
 	cmd := exec.CommandContext(t.Context(), goCmd, "vet", "./...")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOPROXY=off", "GOWORK=off", "GOTOOLCHAIN=local")
+	cmd.Env = append(os.Environ(), "GOFLAGS=-mod=mod", "GOWORK=off", "GOTOOLCHAIN=local")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		reportFailures(t, units, out)
@@ -631,6 +641,45 @@ func reportFailures(t *testing.T, units []unit, out []byte) {
 		}
 		t.Errorf("%s does not compile (package s%03d):\n%s", u.snip, i+1, b.String())
 	}
+}
+
+// requirement is one module path and version from a go.mod require line.
+type requirement struct {
+	path, version string
+}
+
+// readRequires returns the requirements of a go.mod file, from single
+// require lines and require blocks alike.
+func readRequires(t *testing.T, path string) []requirement {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reqs []requirement
+	inBlock := false
+	for line := range strings.Lines(string(b)) {
+		line, _, _ = strings.Cut(line, "//")
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "require (":
+			inBlock = true
+			continue
+		case inBlock && line == ")":
+			inBlock = false
+			continue
+		case !inBlock:
+			rest, ok := strings.CutPrefix(line, "require ")
+			if !ok {
+				continue
+			}
+			line = strings.TrimSpace(rest)
+		}
+		if f := strings.Fields(line); len(f) == 2 {
+			reqs = append(reqs, requirement{path: f[0], version: f[1]})
+		}
+	}
+	return reqs
 }
 
 // readGoMod returns the module path and the go line of a go.mod file.
