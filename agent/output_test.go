@@ -63,7 +63,7 @@ func TestOutputPromptSegment(t *testing.T) {
 	a := mustNew(t, Config{Provider: p, System: []string{"base"}, CacheBoundary: 1, OutputSchema: answerSchema})
 	collect(t, a.Run(context.Background(), userInput("go")))
 	req := p.Requests[0]
-	want := []string{"base", OutputFormatPrompt + compactSchema(t)}
+	want := []string{"base", defaultOutputPrompt + compactSchema(t)}
 	if !slices.Equal(req.System, want) {
 		t.Errorf("System = %q, want %q", req.System, want)
 	}
@@ -77,7 +77,7 @@ func TestOutputPromptKeepsShorterCacheBoundary(t *testing.T) {
 	a := mustNew(t, Config{Provider: p, System: []string{"a", "b"}, CacheBoundary: 1, OutputSchema: answerSchema})
 	collect(t, a.Run(context.Background(), userInput("go")))
 	req := p.Requests[0]
-	want := []string{"a", "b", OutputFormatPrompt + compactSchema(t)}
+	want := []string{"a", "b", defaultOutputPrompt + compactSchema(t)}
 	if !slices.Equal(req.System, want) {
 		t.Errorf("System = %q, want %q", req.System, want)
 	}
@@ -157,8 +157,8 @@ func TestOutputRetriesSpent(t *testing.T) {
 	if final.Output != nil || final.Text != "c" {
 		t.Errorf("Output = %q, Text = %q; want nil and %q", final.Output, final.Text, "c")
 	}
-	if n := p.Calls(); n != OutputRetries+1 {
-		t.Errorf("model calls = %d, want %d", n, OutputRetries+1)
+	if n := p.Calls(); n != DefaultOutputRetries+1 {
+		t.Errorf("model calls = %d, want %d", n, DefaultOutputRetries+1)
 	}
 }
 
@@ -252,5 +252,40 @@ func TestOutputNilWhenAfterAgentFails(t *testing.T) {
 	_, final := runOutput(t, Config{Middleware: []Middleware{failingAfterAgent{}}}, llmtest.Turn{Text: `{"n":1}`})
 	if final.Reason != ReasonMiddlewareError || final.Output != nil {
 		t.Fatalf("final = %+v, want middleware_error without Output", final)
+	}
+}
+
+func TestCustomOutputPrompts(t *testing.T) {
+	p, final := runOutput(t, Config{OutputPrompt: "JSON please:\n", InvalidOutputPrompt: "fix: %v"},
+		llmtest.Turn{Text: "nope"}, llmtest.Turn{Text: `{"n":1}`})
+	wantOutput(t, final, `{"n":1}`)
+	if sys := p.Requests[0].System; len(sys) != 1 || sys[0] != "JSON please:\n"+compactSchema(t) {
+		t.Errorf("System = %q, want the custom prompt then the schema", sys)
+	}
+	if got := lastText(p.Requests[1]); !strings.HasPrefix(got, "fix: ") {
+		t.Errorf("correction = %q, want prefix %q", got, "fix: ")
+	}
+}
+
+func TestOutputRetriesConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		retries int
+		calls   int
+	}{
+		{"one", 1, 2},
+		{"none", NoOutputRetries, 1},
+		{"default", 0, DefaultOutputRetries + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, final := runOutput(t, Config{OutputRetries: tc.retries},
+				llmtest.Turn{Text: "a"}, llmtest.Turn{Text: "b"}, llmtest.Turn{Text: "c"}, llmtest.Turn{Text: "d"})
+			if final.Reason != ReasonInvalidOutput {
+				t.Fatalf("reason = %v, want invalid_output", final.Reason)
+			}
+			if p.Calls() != tc.calls {
+				t.Fatalf("calls = %d, want %d", p.Calls(), tc.calls)
+			}
+		})
 	}
 }

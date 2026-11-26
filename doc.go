@@ -37,7 +37,7 @@
 //
 // WithOutputType and WithOutputSchema make the final answer a validated JSON
 // object: the agent asks for it, checks the reply and asks again (up to
-// agent.OutputRetries times) when it does not match. RunTyped runs an agent to
+// Config.OutputRetries times) when it does not match. RunTyped runs an agent to
 // completion and returns the answer decoded into a Go struct, and Decode does
 // the same for any agent.Final, such as the one ending a Thread stream.
 //

@@ -1179,7 +1179,7 @@ for ev, err := range th.Prompt(ctx, "Triage: the build fails on Windows.") {
 How it behaves:
 
 - **Checking.** A reply may be wrapped in one code fence. It is checked against the schema and normalized (`1e2` becomes `100` for an integer field, optional properties that are `null` are dropped).
-- **Corrections.** An invalid reply goes back to the model with the validation error, up to `agent.OutputRetries` (2) times per run. These corrections do not use the `agent.MaxStopContinuations` slots. A run resumed after an interrupt gets the full allowance again.
+- **Corrections.** An invalid reply goes back to the model with the validation error, up to `Config.OutputRetries` (default `agent.DefaultOutputRetries`, 2) times per run. These corrections do not use the `agent.MaxStopContinuations` slots. A run resumed after an interrupt gets the full allowance again.
 - **Failure.** When the corrections are spent, the run ends with reason `invalid_output` (`agent.ReasonInvalidOutput`). `Final.Err` wraps `agent.ErrInvalidOutput` with the last validation error, `Final.Text` keeps the raw reply and `Final.Output` is nil. `Output` is non-nil exactly when the run completed; `Decode` returns an error naming any other reason.
 - **Top-level only.** Only top-level runs are held to the schema. Forks and subagents answer in free text; a subagent that should return an object has its own `Subagent.OutputSchema`.
 - **With rubric and hooks.** The reply is validated before `rubric` grades it and before `Stop` hooks and the background-task reminder are consulted, so a malformed answer is never graded. If one of them continues the run, the revised answer is validated again and `Output` is the last answer. Validation still runs when the three continuation slots are spent.

@@ -4,24 +4,26 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/llm"
 )
 
-// Prompts and limits of the run budgets (Config.MaxTurns, MaxDuration,
+// Defaults and limits of the run budgets (Config.MaxTurns, MaxDuration,
 // TokenBudget, MaxTotalTokens, EscalateMaxTokens and Settlement).
 const (
-	// EscalatedMaxTokens is the output limit a reply cut off at MaxTokens is
-	// retried with when Config.EscalateMaxTokens is set, capped at the
-	// profile's MaxOutput.
-	EscalatedMaxTokens = 64_000
-	// DefaultBudgetNudge is sent, with the number of tokens left, when the
+	// DefaultEscalatedMaxTokens is the value to pass as
+	// Config.EscalateMaxTokens for the usual escalation of a reply cut off
+	// at MaxTokens; the retry limit is capped at the profile's MaxOutput.
+	DefaultEscalatedMaxTokens = 64_000
+
+	// defaultBudgetNudge is sent, with the number of tokens left, when the
 	// model stops well short of Config.TokenBudget.
-	DefaultBudgetNudge = "Keep working — about %d tokens of budget remain. Continue the task; stop only when it is genuinely complete."
-	// DefaultResumePrompt asks the model to continue a reply cut off at the
+	defaultBudgetNudge = "Keep working — about %d tokens of budget remain. Continue the task; stop only when it is genuinely complete."
+	// defaultResumePrompt asks the model to continue a reply cut off at the
 	// output limit.
-	DefaultResumePrompt = "Output token limit hit. Resume exactly where you left off — no apology, no recap."
+	defaultResumePrompt = "Output token limit hit. Resume exactly where you left off — no apology, no recap."
 
 	// maxResumeAttempts bounds how many truncated replies a run resumes
 	// before it settles for what it has.
@@ -104,7 +106,7 @@ func (b *budget) settling() bool {
 // nudge returns the prompt that keeps a model going when it stopped with
 // output tokens spent out of limit, or false when the run should end: the
 // budget is (nearly) spent, or nudging stopped paying off.
-func (b *budget) nudge(limit, output int) (string, bool) {
+func (b *budget) nudge(nudge string, limit, output int) (string, bool) {
 	if b.nudged && output-b.outputAtNudge < diminishingReturnsTokens {
 		b.unproductiveNudges++
 	} else {
@@ -115,7 +117,7 @@ func (b *budget) nudge(limit, output int) (string, bool) {
 		return "", false
 	}
 	b.nudged, b.outputAtNudge = true, output
-	return fmt.Sprintf(DefaultBudgetNudge, limit-output), true
+	return formatPrompt(nudge, limit-output), true
 }
 
 // escalate handles a tool-less reply cut off at the output limit by retrying
@@ -123,7 +125,7 @@ func (b *budget) nudge(limit, output int) (string, bool) {
 // was discarded for that retry.
 func (r *run) escalate(resp *llm.Response) bool {
 	b := r.budget
-	if !r.agent.cfg.EscalateMaxTokens || b.maxTokens > 0 || b.settling() || b.expired() ||
+	if r.agent.cfg.EscalateMaxTokens <= 0 || b.maxTokens > 0 || b.settling() || b.expired() ||
 		resp.StopReason != llm.StopMaxTokens || len(resp.Message.ToolUses()) > 0 || r.tokenLimitReached() {
 		return false
 	}
@@ -138,10 +140,11 @@ func (r *run) escalate(resp *llm.Response) bool {
 }
 
 func (r *run) escalatedMaxTokens() int {
+	limit := r.agent.cfg.EscalateMaxTokens
 	if profileMax := r.agent.cfg.Profile.MaxOutput; profileMax > 0 {
-		return min(EscalatedMaxTokens, profileMax)
+		return min(limit, profileMax)
 	}
-	return EscalatedMaxTokens
+	return limit
 }
 
 // maxTokens is the output limit of the next model request.
@@ -201,9 +204,9 @@ func (r *run) afterNoToolTurn(resp *llm.Response) *Final {
 			return r.complete(resp)
 		}
 		b.resumes++
-		return r.continueWith(DefaultResumePrompt)
+		return r.continueWith(r.agent.cfg.ResumePrompt)
 	}
-	if prompt, ok := b.nudge(r.agent.cfg.TokenBudget, r.usage.Output); ok {
+	if prompt, ok := b.nudge(r.agent.cfg.BudgetNudge, r.agent.cfg.TokenBudget, r.usage.Output); ok {
 		return r.continueWith(prompt)
 	}
 	return r.complete(resp)
@@ -293,4 +296,20 @@ func (r *run) toolSchemas() []llm.ToolSchema {
 // disabled reports whether the named tool is withheld right now.
 func (r *run) disabled(name string) bool {
 	return r.budget.settling() && slices.Contains(r.agent.cfg.Settlement.DisabledTools, name)
+}
+
+// formatPrompt formats a Config prompt that takes one argument. A prompt
+// without a verb is returned as is.
+func formatPrompt(prompt string, arg any) string {
+	if out, extra := strings.CutSuffix(fmt.Sprintf(prompt, 0), "%!(EXTRA int=0)"); extra {
+		return out
+	}
+	return fmt.Sprintf(prompt, arg)
+}
+
+// badPromptVerbs reports whether prompt, which takes one argument, has a
+// malformed verb or more than one. A prompt without a verb is fine.
+func badPromptVerbs(prompt string) bool {
+	out, _, _ := strings.Cut(fmt.Sprintf(prompt, 0), "%!(EXTRA")
+	return strings.Contains(out, "%!")
 }

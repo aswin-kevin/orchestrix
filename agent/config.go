@@ -208,9 +208,33 @@ type Config struct {
 	// TokenBudget is the total output-token target for a run; zero disables
 	// budget continuation.
 	TokenBudget int
-	// EscalateMaxTokens retries a response cut off at MaxTokens with a larger
-	// limit.
-	EscalateMaxTokens bool
+	// EscalateMaxTokens, when positive, retries a response cut off at
+	// MaxTokens once with this larger limit, capped at the profile's
+	// MaxOutput; zero turns escalation off and a negative value is an error.
+	// Pass DefaultEscalatedMaxTokens for the usual escalation.
+	EscalateMaxTokens int
+	// BudgetNudge is sent when the model stops well short of TokenBudget;
+	// %d is the number of tokens left. Empty means the built-in text. The
+	// text may omit the verb.
+	BudgetNudge string
+	// ResumePrompt asks the model to continue a reply cut off at the output
+	// limit. Empty means the built-in text.
+	ResumePrompt string
+	// OutputPrompt introduces the JSON schema in the system segment built
+	// from OutputSchema; the compact schema is appended to it. Empty means
+	// the built-in text. Unlike other prompt segments it is a string, not
+	// a *string: no prompt makes no sense, because the schema is always
+	// appended.
+	OutputPrompt string
+	// InvalidOutputPrompt asks the model to correct an answer that failed
+	// OutputSchema; %v is the validation error. Empty means the built-in
+	// text. The text may omit the verb.
+	InvalidOutputPrompt string
+	// OutputRetries is how many times an answer that fails OutputSchema is
+	// sent back for correction. Zero means DefaultOutputRetries and
+	// NoOutputRetries (-1) means none; any other negative value is an
+	// error.
+	OutputRetries int
 	// Settlement configures the wrap-up phase; nil disables it.
 	Settlement *Settlement
 	// OutputSchema, when non-nil, is the JSON schema the final answer of a

@@ -13,7 +13,7 @@ import (
 
 // WithOutputSchema makes the agent's final answer a JSON object valid against
 // schema. The agent asks for that format, checks the reply, and asks again
-// (up to agent.OutputRetries times) when it does not match. A completed run
+// (up to Config.OutputRetries times) when it does not match. A completed run
 // carries the normalized answer in Final.Output. New fails when the schema's
 // top-level "type" is not "object".
 //

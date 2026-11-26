@@ -99,7 +99,7 @@ const (
 	// checkpoint.ErrLeaseHeld; Final.State is the input State). Nothing ran.
 	ReasonBusy TerminalReason = "busy"
 	// ReasonInvalidOutput: the final answer failed Config.OutputSchema after
-	// OutputRetries corrections (Final.Err wraps ErrInvalidOutput). Final.Text
+	// Config.OutputRetries corrections (Final.Err wraps ErrInvalidOutput). Final.Text
 	// is the last reply.
 	ReasonInvalidOutput TerminalReason = "invalid_output"
 	// ReasonRefusal: the model declined to answer (llm.StopRefusal).

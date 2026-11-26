@@ -211,7 +211,7 @@ func TestTokenBudgetNudgesThenStops(t *testing.T) {
 		t.Fatalf("final = %+v after %d calls, want completed after 3", final, p.Calls())
 	}
 	for i, remaining := range []int{9_900, 9_800} {
-		want := fmt.Sprintf(DefaultBudgetNudge, remaining)
+		want := fmt.Sprintf(defaultBudgetNudge, remaining)
 		if got := lastText(p.Requests[i+1]); got != want {
 			t.Fatalf("request %d ends with %q, want %q", i+1, got, want)
 		}
@@ -239,7 +239,7 @@ func TestMaxTokensEscalateThenResume(t *testing.T) {
 		maxOutput int
 		want      int
 	}{
-		{"escalates to the cap", 100_000, EscalatedMaxTokens},
+		{"escalates to the cap", 100_000, DefaultEscalatedMaxTokens},
 		{"capped at the profile", 32_000, 32_000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -248,7 +248,7 @@ func TestMaxTokensEscalateThenResume(t *testing.T) {
 				Provider:          p,
 				MaxTokens:         1_000,
 				Profile:           &llm.Profile{ContextWindow: 200_000, MaxOutput: tc.maxOutput},
-				EscalateMaxTokens: true,
+				EscalateMaxTokens: DefaultEscalatedMaxTokens,
 			})
 
 			events, final := collect(t, a.Run(context.Background(), userInput("go")))
@@ -265,7 +265,7 @@ func TestMaxTokensEscalateThenResume(t *testing.T) {
 			}
 			resume := p.Requests[2]
 			msgs := resume.Messages
-			if lastText(resume) != DefaultResumePrompt || msgs[len(msgs)-2].Text() != "longer cut" {
+			if lastText(resume) != defaultResumePrompt || msgs[len(msgs)-2].Text() != "longer cut" {
 				t.Fatalf("resume request ends with %+v, want truncated reply then resume prompt", msgs[len(msgs)-2:])
 			}
 			if !slices.ContainsFunc(events, func(ev Event) bool { return ev.Kind == KindRetry }) {
@@ -547,7 +547,7 @@ func TestTokenLimitSkipsEscalation(t *testing.T) {
 	cut := truncatedTurn("cut")
 	cut.Usage = llm.Usage{Output: 1000}
 	p := llmtest.New(cut, llmtest.Turn{Text: "never reached"})
-	a := mustNew(t, Config{Provider: p, MaxTokens: 1_000, EscalateMaxTokens: true, MaxTotalTokens: 1000})
+	a := mustNew(t, Config{Provider: p, MaxTokens: 1_000, EscalateMaxTokens: DefaultEscalatedMaxTokens, MaxTotalTokens: 1000})
 
 	_, final := collect(t, a.Run(context.Background(), userInput("go")))
 
@@ -588,5 +588,62 @@ func TestSettlementPastTokenCapStillEndsMaxTurns(t *testing.T) {
 
 	if final.Reason != ReasonMaxTurns || final.Text != "summary" || p.Calls() != 2 {
 		t.Fatalf("final = %+v after %d calls, want max_turns with the settlement summary", final, p.Calls())
+	}
+}
+
+func TestCustomBudgetNudge(t *testing.T) {
+	p := llmtest.New(textTurn("a", 100), textTurn("b", 100))
+	a := mustNew(t, Config{Provider: p, TokenBudget: 10_000, BudgetNudge: "go on, %d left"})
+	collect(t, a.Run(context.Background(), userInput("go")))
+	if got := lastText(p.Requests[1]); got != "go on, 9900 left" {
+		t.Fatalf("nudge = %q, want custom text", got)
+	}
+}
+
+func TestBudgetNudgeWithoutVerb(t *testing.T) {
+	p := llmtest.New(textTurn("a", 100), textTurn("b", 100))
+	a := mustNew(t, Config{Provider: p, TokenBudget: 10_000, BudgetNudge: "keep going"})
+	collect(t, a.Run(context.Background(), userInput("go")))
+	if got := lastText(p.Requests[1]); got != "keep going" {
+		t.Fatalf("nudge = %q, want %q", got, "keep going")
+	}
+}
+
+func TestCustomResumePrompt(t *testing.T) {
+	p := llmtest.New(truncatedTurn("cut"), llmtest.Turn{Text: "done"})
+	a := mustNew(t, Config{Provider: p, ResumePrompt: "continue"})
+	collect(t, a.Run(context.Background(), userInput("go")))
+	if got := lastText(p.Requests[1]); got != "continue" {
+		t.Fatalf("resume prompt = %q, want %q", got, "continue")
+	}
+}
+
+func TestEscalateMaxTokensInt(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		escalate  int
+		wantCalls int
+		want      int
+	}{
+		{"custom limit", 30_000, 3, 30_000},
+		{"capped at the profile", 100_000, 3, 64_000},
+		{"off", 0, 3, 1_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := llmtest.New(truncatedTurn("cut"), truncatedTurn("longer cut"), llmtest.Turn{Text: "done"})
+			a := mustNew(t, Config{
+				Provider:          p,
+				MaxTokens:         1_000,
+				Profile:           &llm.Profile{ContextWindow: 200_000, MaxOutput: 64_000},
+				EscalateMaxTokens: tc.escalate,
+			})
+			collect(t, a.Run(context.Background(), userInput("go")))
+			if p.Calls() != tc.wantCalls {
+				t.Fatalf("calls = %d, want %d", p.Calls(), tc.wantCalls)
+			}
+			if got := p.Requests[1].MaxTokens; got != tc.want {
+				t.Fatalf("second request MaxTokens = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }

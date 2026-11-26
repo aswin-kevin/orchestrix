@@ -99,8 +99,20 @@ func New(cfg Config) (*Agent, error) {
 	if mode := cfg.PermissionMode; mode != "" && !mode.Valid() {
 		return nil, fmt.Errorf("agent: unknown permission mode %q", mode)
 	}
+	if cfg.OutputRetries < NoOutputRetries {
+		return nil, fmt.Errorf("agent: Config.OutputRetries %d is invalid", cfg.OutputRetries)
+	}
+	if cfg.EscalateMaxTokens < 0 {
+		return nil, fmt.Errorf("agent: Config.EscalateMaxTokens %d is negative", cfg.EscalateMaxTokens)
+	}
+	if badPromptVerbs(cfg.BudgetNudge) {
+		return nil, errors.New("agent: Config.BudgetNudge has bad format verbs")
+	}
+	if badPromptVerbs(cfg.InvalidOutputPrompt) {
+		return nil, errors.New("agent: Config.InvalidOutputPrompt has bad format verbs")
+	}
 	cfg = withDefaults(cloneConfig(cfg))
-	format, err := outputPrompt(cfg.OutputSchema)
+	format, err := outputPrompt(cfg.OutputPrompt, cfg.OutputSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -203,6 +215,21 @@ func withDefaults(cfg Config) Config {
 	}
 	if cfg.Settlement != nil && cfg.Settlement.MaxTurns <= 0 {
 		cfg.Settlement.MaxTurns = DefaultSettlementMaxTurns
+	}
+	if cfg.BudgetNudge == "" {
+		cfg.BudgetNudge = defaultBudgetNudge
+	}
+	if cfg.ResumePrompt == "" {
+		cfg.ResumePrompt = defaultResumePrompt
+	}
+	if cfg.OutputPrompt == "" {
+		cfg.OutputPrompt = defaultOutputPrompt
+	}
+	if cfg.InvalidOutputPrompt == "" {
+		cfg.InvalidOutputPrompt = defaultInvalidOutputPrompt
+	}
+	if cfg.OutputRetries == 0 {
+		cfg.OutputRetries = DefaultOutputRetries
 	}
 	if cfg.Profile == nil {
 		profile := llm.LookupProfile(cfg.Model)
