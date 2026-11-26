@@ -664,11 +664,15 @@ go get github.com/aswin-kevin/orchestrix/orxotel
 
 ```go
 // Imports omitted; model and tp (an OpenTelemetry TracerProvider) come from surrounding code.
+mw, err := orxotel.New(orxotel.Config{
+	TracerProvider: tp,          // nil uses otel.GetTracerProvider()
+	ProviderName:   "anthropic", // optional: gen_ai.provider.name
+})
+if err != nil {
+	return err
+}
 a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
-	orchestrix.WithMiddleware(orxotel.New(orxotel.Config{
-		TracerProvider: tp,          // nil uses otel.GetTracerProvider()
-		ProviderName:   "anthropic", // optional: gen_ai.provider.name
-	})),
+	orchestrix.WithMiddleware(mw),
 )
 _, _ = a, err
 ```
