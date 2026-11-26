@@ -90,7 +90,7 @@ func TestWithFallbackConfigPrependsPrimary(t *testing.T) {
 	var events []llm.FallbackEvent
 	cfg := llm.FallbackConfig{
 		Entries:    []llm.FallbackEntry{{Provider: llmtest.New(llmtest.Turn{Text: "from b"}), Name: "b"}},
-		Cooldown:   -1,
+		Cooldown:   llm.NoCooldown,
 		OnFallback: func(_ context.Context, ev llm.FallbackEvent) { events = append(events, ev) },
 	}
 	got := runText(t, llmtest.New(overloaded()), orchestrix.WithFallbackConfig(cfg),

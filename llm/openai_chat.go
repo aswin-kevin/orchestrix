@@ -215,7 +215,7 @@ func (p *openAIProvider) emptyRetries() int {
 	switch {
 	case p.cfg.EmptyResponseRetries == 0:
 		return DefaultEmptyResponseRetries
-	case p.cfg.EmptyResponseRetries < 0:
+	case p.cfg.EmptyResponseRetries == NoRetries:
 		return 0
 	}
 	return p.cfg.EmptyResponseRetries

@@ -82,7 +82,7 @@ func blockingSSE(t *testing.T, contentType, first string, block time.Duration) s
 
 func TestTransportStreamIdleOutsidePackage(t *testing.T) {
 	url := blockingSSE(t, "text/event-stream", "data: a\n\n", 2*time.Second)
-	tr := newTransport(t, llm.Config{StreamIdleTimeout: 100 * time.Millisecond, MaxRetries: -1})
+	tr := newTransport(t, llm.Config{StreamIdleTimeout: 100 * time.Millisecond, MaxRetries: llm.NoRetries})
 
 	next, stop := iter.Pull2(tr.Stream(t.Context(), getTo(url)))
 	defer stop()
@@ -105,7 +105,7 @@ func TestTransportStreamPausesWhileConsumerWorks(t *testing.T) {
 		_, _ = io.WriteString(w, "data: 1\n\ndata: 2\n\ndata: 3\n\n")
 	}))
 	defer srv.Close()
-	tr := newTransport(t, llm.Config{StreamIdleTimeout: 100 * time.Millisecond, MaxRetries: -1})
+	tr := newTransport(t, llm.Config{StreamIdleTimeout: 100 * time.Millisecond, MaxRetries: llm.NoRetries})
 
 	var got []string
 	for ev, err := range tr.Stream(t.Context(), getTo(srv.URL)) {
@@ -125,7 +125,7 @@ func TestTransportStreamDoErrorYieldedOnce(t *testing.T) {
 		http.Error(w, "nope", http.StatusBadRequest)
 	}))
 	defer srv.Close()
-	tr := newTransport(t, llm.Config{MaxRetries: -1})
+	tr := newTransport(t, llm.Config{MaxRetries: llm.NoRetries})
 
 	var errs []error
 	for _, err := range tr.Stream(t.Context(), getTo(srv.URL)) {
@@ -139,7 +139,7 @@ func TestTransportStreamDoErrorYieldedOnce(t *testing.T) {
 
 func TestTransportFetchIdle(t *testing.T) {
 	url := blockingSSE(t, "application/json", `{"id":"m","content":[`, 2*time.Second)
-	tr := newTransport(t, llm.Config{StreamIdleTimeout: 100 * time.Millisecond, MaxRetries: -1})
+	tr := newTransport(t, llm.Config{StreamIdleTimeout: 100 * time.Millisecond, MaxRetries: llm.NoRetries})
 	start := time.Now()
 	if _, err := tr.Fetch(t.Context(), getTo(url)); !errors.Is(err, llm.ErrStreamIdle) {
 		t.Fatalf("err = %v, want ErrStreamIdle", err)

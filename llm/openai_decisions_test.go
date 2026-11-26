@@ -20,7 +20,7 @@ const oaReplyJSON = `{"model":"decider-1","answers":[
 func newTestOpenAIDecisions(t *testing.T, baseURL string) Decider {
 	t.Helper()
 	d, err := NewDecider(Config{Format: FormatOpenAIDecisions, BaseURL: baseURL, APIKey: "key-1", Model: "decider-1",
-		MaxRetries: -1, RetryInterval: time.Millisecond, Headers: map[string]string{"X-Extra": "yes"}})
+		MaxRetries: NoRetries, RetryInterval: time.Millisecond, Headers: map[string]string{"X-Extra": "yes"}})
 	if err != nil {
 		t.Fatal(err)
 	}

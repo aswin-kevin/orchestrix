@@ -110,7 +110,7 @@ func (t *Transport) maxRetries() int {
 	switch {
 	case t.cfg.MaxRetries == 0:
 		return DefaultMaxRetries
-	case t.cfg.MaxRetries < 0:
+	case t.cfg.MaxRetries == NoRetries:
 		return 0
 	}
 	return t.cfg.MaxRetries

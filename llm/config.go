@@ -44,6 +44,17 @@ const (
 	defaultOpenAIBaseURL    = "https://api.openai.com/v1"
 )
 
+// Sentinels accepted by Config fields where -1 turns a feature off; any
+// other negative value is an error.
+const (
+	// NoRetries is the Config.MaxRetries and Config.EmptyResponseRetries
+	// value that disables the retry.
+	NoRetries = -1
+	// NoIdleTimeout is the Config.StreamIdleTimeout value that disables
+	// the idle timeout.
+	NoIdleTimeout time.Duration = -1
+)
+
 // Config configures a provider adapter. It is plain data: New and
 // NewTransport copy it, so a Config may be reused or changed afterwards.
 type Config struct {
@@ -69,37 +80,38 @@ type Config struct {
 	Proxy string
 
 	// MaxRetries is the retry count after the first attempt: 0 selects
-	// DefaultMaxRetries and a negative value disables retries. A server's
-	// Retry-After is honoured, capped at one minute. No wait is started that
-	// would end after the call's context deadline: the provider's error is
-	// returned at once instead. Inside a fallback chain (NewFallback), an
-	// entry that another follows does not retry an error that would make
-	// the chain switch.
+	// DefaultMaxRetries and NoRetries (-1) disables retries; any other
+	// negative value is an error. A server's Retry-After is honoured, capped
+	// at one minute. No wait is started that would end after the call's
+	// context deadline: the provider's error is returned at once instead.
+	// Inside a fallback chain (NewFallback), an entry that another follows
+	// does not retry an error that would make the chain switch.
 	MaxRetries int
 	// RetryInterval is a fixed wait between retries; zero selects
-	// exponential backoff with jitter.
+	// exponential backoff with jitter and a negative value is an error.
 	RetryInterval time.Duration
 	// EmptyResponseRetries applies to OpenAI chat only: 0 selects
-	// DefaultEmptyResponseRetries and a negative value disables the retry.
-	// A reply is retried only when it ends normally with neither text nor
-	// tool calls; one stopped by the output limit or a filter is returned
-	// as is. To keep a reply retryable, its thinking deltas are held back
-	// until text or a tool call arrives, so a streaming consumer sees
-	// thinking late. The usage of discarded attempts is added to the
-	// reported usage.
+	// DefaultEmptyResponseRetries and NoRetries (-1) disables the retry; any
+	// other negative value is an error. A reply is retried only when it ends
+	// normally with neither text nor tool calls; one stopped by the output
+	// limit or a filter is returned as is. To keep a reply retryable, its
+	// thinking deltas are held back until text or a tool call arrives, so a
+	// streaming consumer sees thinking late. The usage of discarded attempts
+	// is added to the reported usage.
 	EmptyResponseRetries int
 	// StreamIdleTimeout bounds how long a model reply may go silent once its
-	// response headers have arrived: any bytes received, keep-alive
-	// comments included, count as activity, for a stream (Transport.Stream)
-	// and for a non-streaming reply body (Transport.Fetch) alike. When it
-	// runs out the call fails with ErrStreamIdle. 0 selects
-	// DefaultStreamIdleTimeout and a negative value disables it. The
-	// time the consumer spends handling an event does not count. It does not
-	// bound the wait for response headers or the call as a whole; use the
-	// context's deadline for that. A decision format (NewDecider) does not
-	// use it.
+	// response headers have arrived: any bytes received, keep-alive comments
+	// included, count as activity, for a stream (Transport.Stream) and for a
+	// non-streaming reply body (Transport.Fetch) alike. When it runs out the
+	// call fails with ErrStreamIdle. 0 selects DefaultStreamIdleTimeout and
+	// NoIdleTimeout (-1) disables it; any other negative value is an error.
+	// The time the consumer spends handling an event does not count. It does
+	// not bound the wait for response headers or the call as a whole; use the
+	// context's deadline for that. A decision format (NewDecider) does not use
+	// it.
 	StreamIdleTimeout time.Duration
-	// RateLimit throttles request starts; nil means unlimited.
+	// RateLimit throttles request starts; nil means unlimited. A negative
+	// field is an error.
 	RateLimit *RateLimit
 
 	// Thinking is the default Request.Thinking for requests that leave it
@@ -117,7 +129,7 @@ type Config struct {
 	// DefaultMaxTokensField otherwise.
 	MaxTokensField string
 	// DefaultMaxTokens is used when a request sets no limit; 0 selects
-	// DefaultMaxTokens.
+	// DefaultMaxTokens and a negative value is an error.
 	DefaultMaxTokens int
 }
 
@@ -157,10 +169,15 @@ func envOr(name, fallback string) string {
 }
 
 // New returns the Provider for cfg.Format. The configuration is copied, so
-// the caller may reuse or modify cfg afterwards.
+// the caller may reuse or modify cfg afterwards. It fails for a missing
+// Model, an unknown or decision format, and a negative numeric field
+// other than a documented -1 constant.
 func New(cfg Config) (Provider, error) {
 	if cfg.Model == "" {
 		return nil, errors.New("llm: config has no model")
+	}
+	if err := cfg.checkNegatives(); err != nil {
+		return nil, err
 	}
 	e, ok := lookup(cfg.Format)
 	if !ok {
@@ -174,4 +191,31 @@ func New(cfg Config) (Provider, error) {
 		return nil, err
 	}
 	return p, nil
+}
+
+// checkNegatives returns an error naming the first numeric field of c that
+// is negative, accepting only the -1 constants the fields document
+// (NoRetries, NoIdleTimeout).
+func (c Config) checkNegatives() error {
+	rl := c.RateLimit
+	if rl == nil {
+		rl = &RateLimit{}
+	}
+	for _, f := range []struct {
+		name string
+		bad  bool
+	}{
+		{"MaxRetries", c.MaxRetries < 0 && c.MaxRetries != NoRetries},
+		{"RetryInterval", c.RetryInterval < 0},
+		{"EmptyResponseRetries", c.EmptyResponseRetries < 0 && c.EmptyResponseRetries != NoRetries},
+		{"StreamIdleTimeout", c.StreamIdleTimeout < 0 && c.StreamIdleTimeout != NoIdleTimeout},
+		{"RateLimit.PerSecond", rl.PerSecond < 0},
+		{"RateLimit.PerMinute", rl.PerMinute < 0},
+		{"DefaultMaxTokens", c.DefaultMaxTokens < 0},
+	} {
+		if f.bad {
+			return fmt.Errorf("llm: %s is negative", f.name)
+		}
+	}
+	return nil
 }

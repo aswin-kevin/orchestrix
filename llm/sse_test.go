@@ -222,7 +222,7 @@ func TestStreamIdleTimeoutDefault(t *testing.T) {
 // retries, after applying mutate to its Config.
 func newTestProviderWith(t *testing.T, f Format, url string, mutate func(*Config)) Provider {
 	t.Helper()
-	cfg := Config{Format: f, BaseURL: url, APIKey: "key-1", Model: "test-model", MaxRetries: -1}
+	cfg := Config{Format: f, BaseURL: url, APIKey: "key-1", Model: "test-model", MaxRetries: NoRetries}
 	mutate(&cfg)
 	p, err := New(cfg)
 	if err != nil {

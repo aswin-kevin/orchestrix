@@ -6,7 +6,8 @@ import (
 	"time"
 )
 
-// RateLimit caps how many requests are started. Zero fields are unlimited.
+// RateLimit caps how many requests are started. Zero fields are unlimited;
+// a negative field makes New and NewTransport fail.
 type RateLimit struct {
 	// PerSecond is the maximum requests per second.
 	PerSecond int

@@ -49,7 +49,7 @@ func newTestAnthropic(t *testing.T, baseURL string) *anthropicProvider {
 		BaseURL:    baseURL,
 		APIKey:     "key-1",
 		Model:      "claude-test",
-		MaxRetries: -1,
+		MaxRetries: NoRetries,
 		Headers:    map[string]string{"X-Extra": "yes"},
 	})
 	if err != nil {

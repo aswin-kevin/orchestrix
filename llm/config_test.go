@@ -3,6 +3,7 @@ package llm
 import (
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestParseModel(t *testing.T) {
@@ -64,4 +65,60 @@ func TestNewTransportProxy(t *testing.T) {
 	if _, err := NewTransport(Config{Proxy: "http://bad host"}); err == nil {
 		t.Error("invalid proxy URL should fail")
 	}
+}
+
+// TestConfigNegatives pins the rule for Config's numeric fields: zero means
+// the default, a field's named -1 constant is accepted with its documented
+// meaning, and any other negative value fails New, NewDecider and
+// NewTransport with an error naming the field.
+func TestConfigNegatives(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		set   func(*Config)
+		want  string                // "" means accepted
+		check func(*Transport) bool // the accepted value's meaning
+	}{
+		{"zero", func(*Config) {}, "", func(tr *Transport) bool {
+			return tr.maxRetries() == DefaultMaxRetries && tr.streamIdleTimeout() == DefaultStreamIdleTimeout
+		}},
+		{"MaxRetries NoRetries", func(c *Config) { c.MaxRetries = NoRetries }, "",
+			func(tr *Transport) bool { return tr.maxRetries() == 0 }},
+		{"EmptyResponseRetries NoRetries", func(c *Config) { c.EmptyResponseRetries = NoRetries }, "",
+			func(tr *Transport) bool { return (&openAIProvider{cfg: tr.cfg}).emptyRetries() == 0 }},
+		{"StreamIdleTimeout NoIdleTimeout", func(c *Config) { c.StreamIdleTimeout = NoIdleTimeout }, "",
+			func(tr *Transport) bool { return tr.streamIdleTimeout() == 0 }},
+		{"MaxRetries", func(c *Config) { c.MaxRetries = -2 }, "llm: MaxRetries is negative", nil},
+		{"EmptyResponseRetries", func(c *Config) { c.EmptyResponseRetries = -2 }, "llm: EmptyResponseRetries is negative", nil},
+		{"StreamIdleTimeout", func(c *Config) { c.StreamIdleTimeout = -2 }, "llm: StreamIdleTimeout is negative", nil},
+		{"RetryInterval", func(c *Config) { c.RetryInterval = -time.Second }, "llm: RetryInterval is negative", nil},
+		{"DefaultMaxTokens", func(c *Config) { c.DefaultMaxTokens = -1 }, "llm: DefaultMaxTokens is negative", nil},
+		{"RateLimit.PerSecond", func(c *Config) { c.RateLimit = &RateLimit{PerSecond: -1} }, "llm: RateLimit.PerSecond is negative", nil},
+		{"RateLimit.PerMinute", func(c *Config) { c.RateLimit = &RateLimit{PerMinute: -1} }, "llm: RateLimit.PerMinute is negative", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{Format: FormatOpenAI, Model: "m"}
+			tt.set(&cfg)
+			_, errNew := New(cfg)
+			dcfg := cfg
+			dcfg.Format = FormatOpenAIDecisions
+			_, errDecider := NewDecider(dcfg)
+			tr, errTransport := NewTransport(cfg)
+			for name, err := range map[string]error{"New": errNew, "NewDecider": errDecider, "NewTransport": errTransport} {
+				if got := errText(err); got != tt.want {
+					t.Errorf("%s = %q, want %q", name, got, tt.want)
+				}
+			}
+			if tt.check != nil && errTransport == nil && !tt.check(tr) {
+				t.Errorf("%s does not have its documented meaning", tt.name)
+			}
+		})
+	}
+}
+
+// errText returns err's text, or "" for nil.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

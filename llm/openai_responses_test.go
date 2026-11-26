@@ -17,7 +17,7 @@ func newTestResponses(t *testing.T, baseURL string, mutate ...func(*Config)) *re
 		BaseURL:       baseURL,
 		APIKey:        "key-1",
 		Model:         "resp-test",
-		MaxRetries:    -1,
+		MaxRetries:    NoRetries,
 		RetryInterval: time.Millisecond,
 		Headers:       map[string]string{"X-Extra": "yes"},
 	}

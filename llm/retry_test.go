@@ -84,7 +84,7 @@ func TestDoHonorsMaxRetriesNegative(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tr := testTransport(t, func(c *Config) { c.MaxRetries = -1 })
+	tr := testTransport(t, func(c *Config) { c.MaxRetries = NoRetries })
 	if _, err := tr.Do(t.Context(), requestTo(srv.URL)); err == nil {
 		t.Fatal("want error")
 	}

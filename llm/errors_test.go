@@ -68,7 +68,7 @@ func TestTransportErrorKeepsDeadline(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tr, err := NewTransport(Config{MaxRetries: -1, HTTPClient: &http.Client{Timeout: 20 * time.Millisecond}})
+	tr, err := NewTransport(Config{MaxRetries: NoRetries, HTTPClient: &http.Client{Timeout: 20 * time.Millisecond}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func secretConfig(t *testing.T, base string) (Config, []string) {
 	cfg := Config{
 		BaseURL:    u.String(),
 		APIKey:     secrets[0],
-		MaxRetries: -1,
+		MaxRetries: NoRetries,
 		Headers: map[string]string{
 			"Proxy-Authorization": "Bearer " + secrets[1],
 			"X-Goog-Api-Key":      secrets[2],
@@ -344,7 +344,7 @@ func TestStreamErrorRedactsConfiguredSecrets(t *testing.T) {
 			name: "anthropic",
 			body: "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"bad " + key + "\"}}\n\n",
 			run: func(t *testing.T, base string) error {
-				p, err := newAnthropic(Config{BaseURL: base, APIKey: key, Model: "m", MaxRetries: -1})
+				p, err := newAnthropic(Config{BaseURL: base, APIKey: key, Model: "m", MaxRetries: NoRetries})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -398,7 +398,7 @@ func TestAPIErrorHeaderDropsCookies(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tr := testTransport(t, func(c *Config) { c.MaxRetries = -1 })
+	tr := testTransport(t, func(c *Config) { c.MaxRetries = NoRetries })
 	_, err := tr.Do(t.Context(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
@@ -478,7 +478,7 @@ func TestHasRetryAfterExported(t *testing.T) {
 	}
 
 	hits.Store(0)
-	_, err = testTransport(t, func(c *Config) { c.MaxRetries = -1 }).Do(t.Context(), requestTo(srv.URL))
+	_, err = testTransport(t, func(c *Config) { c.MaxRetries = NoRetries }).Do(t.Context(), requestTo(srv.URL))
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("err = %v, want *APIError", err)

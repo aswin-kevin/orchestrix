@@ -47,6 +47,18 @@ func TestNewFallbackValidates(t *testing.T) {
 	if _, err := llm.NewFallback(llm.FallbackConfig{Entries: []llm.FallbackEntry{{Provider: ok}, {Provider: ok}}}); err != nil {
 		t.Errorf("default names: %v", err)
 	}
+	// Cooldown: zero and NoCooldown are accepted (TestFallbackCooldown and
+	// TestFallbackProvenanceRoundTrip pin their meaning); any other negative
+	// value is an error.
+	for _, tt := range []struct {
+		cooldown time.Duration
+		ok       bool
+	}{{0, true}, {llm.NoCooldown, true}, {-2, false}} {
+		_, err := llm.NewFallback(llm.FallbackConfig{Entries: []llm.FallbackEntry{{Provider: ok}, {Provider: ok}}, Cooldown: tt.cooldown})
+		if want := "llm: Cooldown is negative"; tt.ok && err != nil || !tt.ok && (err == nil || err.Error() != want) {
+			t.Errorf("Cooldown %d: NewFallback = %v, want ok=%v (error %q)", tt.cooldown, err, tt.ok, want)
+		}
+	}
 }
 
 func TestFallbackSwitchesOnOverload(t *testing.T) {
@@ -416,7 +428,7 @@ func TestFallbackProvenanceRoundTrip(t *testing.T) {
 	b := llmtest.New(llmtest.Turn{Text: "ok"})
 	p := newFallback(t, llm.FallbackConfig{
 		Entries:  []llm.FallbackEntry{{Provider: a, Name: "a"}, {Provider: b, Name: "b"}},
-		Cooldown: -1,
+		Cooldown: llm.NoCooldown,
 	})
 	msgs := provenanceHistory()
 	ctx := t.Context()
@@ -476,7 +488,7 @@ func TestFallbackFillsModelFromNewProvider(t *testing.T) {
 	srv, maxTokens := maxTokensServer(t)
 	backup, err := llm.New(llm.Config{
 		Format: llm.FormatOpenAI, Model: "gpt-4o", APIKey: "sk-fake",
-		BaseURL: srv.URL, MaxRetries: -1,
+		BaseURL: srv.URL, MaxRetries: llm.NoRetries,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -505,7 +517,7 @@ func TestFallbackExplicitModelWins(t *testing.T) {
 	srv, maxTokens := maxTokensServer(t)
 	backup, err := llm.New(llm.Config{
 		Format: llm.FormatOpenAI, Model: "gpt-4o", APIKey: "sk-fake",
-		BaseURL: srv.URL, MaxRetries: -1,
+		BaseURL: srv.URL, MaxRetries: llm.NoRetries,
 	})
 	if err != nil {
 		t.Fatal(err)

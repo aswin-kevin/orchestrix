@@ -91,10 +91,14 @@ func lookup(f Format) (entry, bool) {
 }
 
 // NewDecider returns the Decider for cfg.Format. The configuration is
-// copied, so the caller may reuse or modify cfg afterwards.
+// copied, so the caller may reuse or modify cfg afterwards. It fails like
+// New, and for a text format.
 func NewDecider(cfg Config) (Decider, error) {
 	if cfg.Model == "" {
 		return nil, errors.New("llm: config has no model")
+	}
+	if err := cfg.checkNegatives(); err != nil {
+		return nil, err
 	}
 	e, ok := lookup(cfg.Format)
 	if !ok {

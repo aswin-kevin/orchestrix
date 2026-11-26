@@ -30,8 +30,12 @@ type Transport struct {
 // Headers included, so the caller may change cfg afterwards. It uses
 // cfg.HTTPClient when set and otherwise a clone of http.DefaultTransport
 // that sends through cfg.Proxy, or the environment's proxy settings when
-// Proxy is empty.
+// Proxy is empty. It fails for a Proxy that is not a URL and for a
+// negative numeric field other than a documented -1 constant (see New).
 func NewTransport(cfg Config) (*Transport, error) {
+	if err := cfg.checkNegatives(); err != nil {
+		return nil, err
+	}
 	cfg.Headers = maps.Clone(cfg.Headers)
 	client, err := newHTTPClient(cfg)
 	if err != nil {
@@ -140,7 +144,7 @@ func (t *Transport) streamIdleTimeout() time.Duration {
 	switch {
 	case t.cfg.StreamIdleTimeout == 0:
 		return DefaultStreamIdleTimeout
-	case t.cfg.StreamIdleTimeout < 0:
+	case t.cfg.StreamIdleTimeout == NoIdleTimeout:
 		return 0
 	}
 	return t.cfg.StreamIdleTimeout

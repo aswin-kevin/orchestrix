@@ -20,7 +20,7 @@ func newTestOpenAI(t *testing.T, baseURL string, mutate ...func(*Config)) *openA
 		BaseURL:       baseURL,
 		APIKey:        "key-1",
 		Model:         "chat-test",
-		MaxRetries:    -1,
+		MaxRetries:    NoRetries,
 		RetryInterval: time.Millisecond,
 		Headers:       map[string]string{"X-Extra": "yes"},
 	}
@@ -412,7 +412,7 @@ func TestOpenAIChatEmptyResponseRetriesExhausted(t *testing.T) {
 
 func TestOpenAIChatEmptyResponseRetryDisabled(t *testing.T) {
 	srv, hits := newSequenceServer(t, openAIEmptyStream, openAIHelloStream)
-	p := newTestOpenAI(t, srv.URL, func(c *Config) { c.EmptyResponseRetries = -1 })
+	p := newTestOpenAI(t, srv.URL, func(c *Config) { c.EmptyResponseRetries = NoRetries })
 	collectOpenAI(t, p, Request{})
 
 	if got := hits.Load(); got != 1 {
@@ -624,7 +624,7 @@ func TestEmptyReplyRetryUsageSummed(t *testing.T) {
 func TestHeadersCopied(t *testing.T) {
 	srv := newSSEServer(t, 200, "text/event-stream", openAIHelloStream)
 	headers := map[string]string{"X-Extra": "yes"}
-	p, err := New(Config{Format: FormatOpenAI, BaseURL: srv.URL, Model: "m", MaxRetries: -1, Headers: headers})
+	p, err := New(Config{Format: FormatOpenAI, BaseURL: srv.URL, Model: "m", MaxRetries: NoRetries, Headers: headers})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -17,6 +17,10 @@ const sourceKey = "orchestrix.source"
 // error is skipped when FallbackConfig.Cooldown is zero.
 const DefaultFallbackCooldown = 30 * time.Second
 
+// NoCooldown is the FallbackConfig.Cooldown value that disables the
+// cool-down: a failed entry is tried again on the next call.
+const NoCooldown time.Duration = -1
+
 // FallbackEntry is one provider in a fallback chain. Every entry gets the
 // request's Extra unchanged, so its keys must suit every entry's wire format;
 // leave Extra empty when the entries speak different formats.
@@ -51,7 +55,8 @@ type FallbackConfig struct {
 	// are required.
 	Entries []FallbackEntry
 	// Cooldown is how long an entry that failed with a fallback error is
-	// skipped. 0 means DefaultFallbackCooldown; negative disables it.
+	// skipped. 0 means DefaultFallbackCooldown and NoCooldown (-1) disables
+	// it; any other negative value is an error.
 	Cooldown time.Duration
 	// ShouldFallback decides whether err moves the call to the next entry.
 	// nil means DefaultShouldFallback.
@@ -95,10 +100,15 @@ func DefaultShouldFallback(err error) bool {
 // lose their Signature and every other ProviderData key. The caller's
 // messages are never modified. Stream switches only before the attempt has
 // yielded content; see Stream. The returned Fallback is safe for concurrent
-// use; methods may be added.
+// use; methods may be added. NewFallback fails for fewer than two entries,
+// an entry without a Provider, a name used twice and a negative Cooldown
+// other than NoCooldown.
 func NewFallback(cfg FallbackConfig) (*Fallback, error) {
 	if len(cfg.Entries) < 2 {
 		return nil, fmt.Errorf("llm: fallback needs at least 2 entries, got %d", len(cfg.Entries))
+	}
+	if cfg.Cooldown < 0 && cfg.Cooldown != NoCooldown {
+		return nil, errors.New("llm: Cooldown is negative")
 	}
 	entries := make([]FallbackEntry, len(cfg.Entries))
 	taken := make(map[string]bool, len(entries))
@@ -194,7 +204,7 @@ func (f *Fallback) order(now time.Time) []int {
 
 // markDown starts entry i's cool-down.
 func (f *Fallback) markDown(i int) {
-	if f.cooldown < 0 {
+	if f.cooldown == NoCooldown {
 		return
 	}
 	until := f.now().Add(f.cooldown)
