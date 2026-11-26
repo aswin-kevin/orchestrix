@@ -100,7 +100,8 @@ func WithoutMiddleware(names ...string) Option {
 // WithBackend makes every thread work on b. When b can run commands
 // (backend.Executor, such as a sandbox or shell backend), the agent gets the
 // execute tool. It cannot be combined with WithBackendFactory. Agent.Close
-// closes b when it implements agent.Closer, or else io.Closer.
+// closes b when it, or a backend it wraps (found with backend.AsCloser),
+// implements agent.Closer or io.Closer.
 func WithBackend(b backend.Backend) Option {
 	return func(s *settings) { s.cfg.Backend = b }
 }

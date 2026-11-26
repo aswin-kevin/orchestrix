@@ -37,9 +37,10 @@
 //
 // WithOutputType and WithOutputSchema make the final answer a validated JSON
 // object: the agent asks for it, checks the reply and asks again (up to
-// Config.OutputRetries times) when it does not match. RunTyped runs an agent to
-// completion and returns the answer decoded into a Go struct, and Decode does
-// the same for any agent.Final, such as the one ending a Thread stream.
+// agent.Config.OutputRetries times, set through WithConfig) when it does not
+// match. RunTyped runs an agent to completion and returns the answer decoded
+// into a Go struct, and Decode does the same for any agent.Final, such as the
+// one ending a Thread stream.
 //
 // WithFallback and WithFallbackConfig name backup models: when the primary
 // fails with an overload, a rate limit or a network error, the call moves to

@@ -14,7 +14,8 @@ import (
 // Closer is implemented by a middleware, backend or checkpointer that holds
 // resources (connections, processes, background jobs) to release when the
 // agent shuts down; see Agent.Close. ctx bounds how long Close may wait for
-// them to end. It is backend.Closer.
+// them to end. It is an alias of backend.Closer, the same interface, so one
+// Close(ctx) method serves as both.
 type Closer = backend.Closer
 
 // Drainer is implemented by a middleware that runs work of its own beside

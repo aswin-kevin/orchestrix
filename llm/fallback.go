@@ -17,7 +17,9 @@ const sourceKey = "orchestrix.source"
 // error is skipped when FallbackConfig.Cooldown is zero.
 const DefaultFallbackCooldown = 30 * time.Second
 
-// FallbackEntry is one provider in a fallback chain.
+// FallbackEntry is one provider in a fallback chain. Every entry gets the
+// request's Extra unchanged, so its keys must suit every entry's wire format;
+// leave Extra empty when the entries speak different formats.
 type FallbackEntry struct {
 	// Provider is the provider that serves requests for this entry.
 	Provider Provider
@@ -80,7 +82,8 @@ func DefaultShouldFallback(err error) bool {
 // the next entry only when ShouldFallback accepts the error. An entry that
 // failed that way is skipped for the cool-down period unless every entry is
 // cooling down. Backups get the request with Model cleared, so they answer
-// with the model they were built with. When the call's context is done, the
+// with the model they were built with; Request.Extra is passed unchanged to
+// every entry (see FallbackEntry). When the call's context is done, the
 // error is returned as is: no switch, no OnFallback and no cool-down. When
 // every entry fails, the last entry's error is returned wrapped (errors.Is
 // and errors.As still reach it).

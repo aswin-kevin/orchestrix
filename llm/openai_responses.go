@@ -130,8 +130,9 @@ type responsesEvent struct {
 }
 
 // streamResponsesEvents translates the SSE events into events passed to
-// emit, starting with a message start once the request has succeeded. A
-// body that ends without a terminal event is reported as an error so
+// emit, starting with a message start sent when the first event arrives (or
+// when the body ends with no events; a read error before any event sends
+// none). A body that ends without a terminal event is reported as an error so
 // truncated replies are never mistaken for complete ones. It returns nil
 // without further reading once emit reports the consumer is gone.
 func streamResponsesEvents(t *Transport, events iter.Seq2[SSEEvent, error], emit func(StreamEvent) bool) error {
