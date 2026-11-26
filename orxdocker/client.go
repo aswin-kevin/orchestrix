@@ -19,7 +19,8 @@ import (
 type APIError struct {
 	// Method is the HTTP method of the failed request.
 	Method string
-	// Path is the request path, including any query string.
+	// Path is the API path of the request, without the version prefix or
+	// query string.
 	Path string
 	// Status is the HTTP status code, such as 404 or 409.
 	Status int

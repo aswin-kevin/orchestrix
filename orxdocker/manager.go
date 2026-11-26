@@ -52,7 +52,8 @@ type Manager struct {
 	// written before, is its result.
 	closeDone chan struct{}
 	closeErr  error
-	// the executor Executor and Backend return
+	// threads holds the executor that Executor and Backend return for each
+	// thread.
 	threads map[string]*Executor
 	live    map[*Executor]struct{} // executors that may own a container
 	// removing counts the removals in flight per container id; adopt and
@@ -63,12 +64,15 @@ type Manager struct {
 	stop        chan struct{}
 	janitorDone chan struct{}
 
-	// Waits, changed only by tests.
-	// between SIGTERM, SIGKILL and removing the container
+	// killGrace, hardGrace and exitWait are waits that only tests change.
+	// killGrace is the wait between SIGTERM, SIGKILL and removing the
+	// container.
 	killGrace time.Duration
-	// after a command's timeout before its container is removed
+	// hardGrace is the wait after a command's timeout before its container
+	// is removed.
 	hardGrace time.Duration
-	// for an exec to report its exit once its output ended
+	// exitWait is the wait for an exec to report its exit once its output
+	// ended.
 	exitWait time.Duration
 }
 

@@ -338,7 +338,6 @@ func mcpOption(ctx context.Context, file string, stderr io.Writer) (orchestrix.O
 	return orchestrix.WithMCP(m), closeMCP, exitOK, nil
 }
 
-// effectiveMode resolves -yes and -mode; an explicit -mode wins.
 // warnIfHoldsHome warns when the workspace is the user's home folder or
 // contains it, as when orx runs from ~. Per-user settings live there (git and
 // SSH config, shell startup files), and later commands read them, so an edit
@@ -375,6 +374,7 @@ func realPath(p string) (string, error) {
 	return filepath.EvalSymlinks(abs)
 }
 
+// effectiveMode resolves -yes and -mode; an explicit -mode wins.
 func effectiveMode(o options, stderr io.Writer) permission.Mode {
 	switch {
 	case o.modeGiven && o.yes:
