@@ -36,11 +36,15 @@ var (
 // ends with ReasonCheckpointError wrapping checkpoint.ErrConflict. Such a
 // run started from an outdated version ends before its first model call;
 // one that loses the race mid-run ends at its next save, after its tools
-// ran. When the Checkpointer implements checkpoint.Leaser, runs of the same
-// thread also never overlap: a run started while another holds the
-// thread's lease ends at once with ReasonBusy. After a conflict or a busy
-// lease the handle keeps its State; open the thread again (Agent.Thread)
-// to continue from what the other writer saved.
+// ran. A Resume by a handle that has no version yet (nothing was saved when
+// it was opened) of a thread another writer has saved since ends at once
+// with ReasonInvalidResume, wrapping ErrResumeWithoutVersion and
+// checkpoint.ErrConflict. When the Checkpointer implements
+// checkpoint.Leaser, runs of the same thread also never overlap: a run
+// started while another holds the thread's lease ends at once with
+// ReasonBusy. After a conflict, a refused resume or a busy lease the handle
+// keeps its State; open the thread again (Agent.Thread) to continue from
+// what the other writer saved.
 //
 // Between runs, Messages, State and Pending describe the outcome of the
 // last one; while a run is in progress they describe the State it started

@@ -30,5 +30,9 @@
 // so the core test compiles its blocks). The scratch module requires the
 // core and that satellite through replace directives to the working tree,
 // uses the go.sum of the module whose test runs, and is checked with
-// go vet with GOPROXY=off, so it needs no network.
+// go vet with GOPROXY=off, so it needs no network. The dependencies must
+// already be in the module cache: go test ./... puts them there, but run
+// alone on an empty cache the check fails with "module lookup disabled by
+// GOPROXY=off"; run go mod download first. Check skips in short mode and
+// outside a repository checkout.
 package snippets

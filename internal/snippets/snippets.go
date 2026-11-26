@@ -502,15 +502,24 @@ func importDecl(paths map[string]bool) string {
 }
 
 // Check compiles, with go vet, the Go blocks of Files that belong to module
-// (Core, OrxOtel or OrxPg), from root, the repository root. It skips t when
-// the go command is not on PATH, and fails it when a block of the module
-// does not compile, when the module has no blocks, or (for Core) when a
-// block cannot be wrapped.
+// (Core, OrxOtel or OrxPg), from root, the repository root. It skips t in
+// short mode, when the go command is not on PATH, and when root lacks one
+// of Files (a module tested outside a repository checkout). It fails t when
+// a block of the module does not compile, when the module has no blocks, or
+// (for Core) when a block cannot be wrapped.
 func Check(t *testing.T, root, module string) {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("compiling the documentation's Go blocks is skipped in short mode")
+	}
 	goCmd, err := exec.LookPath("go")
 	if err != nil {
 		t.Skip("go command not on PATH")
+	}
+	for _, file := range Files {
+		if _, err := os.Stat(filepath.Join(root, file)); err != nil {
+			t.Skipf("%s not found under %s: not a repository checkout", file, root)
+		}
 	}
 	root, err = filepath.Abs(root)
 	if err != nil {

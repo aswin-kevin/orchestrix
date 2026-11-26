@@ -204,8 +204,8 @@ func (a *Agent) checkResumeVersion(ctx context.Context, in Input) (TerminalReaso
 		return ReasonCheckpointError, fmt.Errorf("agent: checkpoint: %w", err)
 	}
 	return ReasonInvalidResume, fmt.Errorf(
-		"%w: thread %q is saved; resume it with Thread.Resume, or ResumeWith and "+
-			"the Version its State was loaded at: %w",
+		"%w: thread %q is already saved; reopen it with Agent.Thread, or "+
+			"pass ResumeWith the Version its State was loaded at: %w",
 		ErrResumeWithoutVersion, in.ThreadID, checkpoint.Conflict(in.ThreadID, "", v))
 }
 
