@@ -421,6 +421,34 @@ func TestServerConfigValidation(t *testing.T) {
 	}
 }
 
+// TestServerConfigNegatives pins the timeouts of ServerConfig: zero means
+// the default and a negative value fails Connect with an error naming the
+// field.
+func TestServerConfigNegatives(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		set  func(*ServerConfig)
+		want string // "" means Connect succeeds
+	}{
+		{"zero", func(*ServerConfig) {}, ""},
+		{"ConnectTimeout", func(c *ServerConfig) { c.ConnectTimeout = -1 }, `mcp: server "a": ConnectTimeout is negative`},
+		{"RequestTimeout", func(c *ServerConfig) { c.RequestTimeout = -1 }, `mcp: server "a": RequestTimeout is negative`},
+		{"CallTimeout", func(c *ServerConfig) { c.CallTimeout = -1 }, `mcp: server "a": CallTimeout is negative`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := ServerConfig{Name: "a", Transport: InProcess(newTestServer(nil))}
+			tt.set(&sc)
+			m, err := Connect(t.Context(), []ServerConfig{sc}, ConnectConfig{})
+			if err == nil {
+				_ = m.Close(t.Context())
+			}
+			if tt.want == "" && err != nil || tt.want != "" && (err == nil || err.Error() != tt.want) {
+				t.Fatalf("Connect = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestCloseIsIdempotent(t *testing.T) {
 	m, err := Connect(t.Context(), []ServerConfig{inProcessServer("srv", newTestServer(nil))}, ConnectConfig{})
 	if err != nil {

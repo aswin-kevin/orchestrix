@@ -108,12 +108,14 @@ type ServerConfig struct {
 	TrustReadOnlyHints bool
 
 	// ConnectTimeout bounds starting the server, the handshake and the first
-	// tool listing; 0 means DefaultConnectTimeout.
+	// tool listing; 0 means DefaultConnectTimeout and a negative value is an
+	// error.
 	ConnectTimeout time.Duration
 	// RequestTimeout bounds tool-list refreshes and resource requests;
-	// 0 means DefaultRequestTimeout.
+	// 0 means DefaultRequestTimeout and a negative value is an error.
 	RequestTimeout time.Duration
-	// CallTimeout bounds each tool call; 0 means DefaultCallTimeout.
+	// CallTimeout bounds each tool call; 0 means DefaultCallTimeout and a
+	// negative value is an error.
 	CallTimeout time.Duration
 }
 
@@ -329,8 +331,8 @@ func (m *Middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 // start nor end with '_'.
 var serverNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]([A-Za-z0-9_-]*[A-Za-z0-9-])?$`)
 
-// validateServers checks every server's name, transport choice and tool
-// patterns.
+// validateServers checks every server's name, transport choice, tool
+// patterns and timeouts.
 func validateServers(servers []ServerConfig) error {
 	seen := make(map[string]bool, len(servers))
 	for _, cfg := range servers {
@@ -353,6 +355,18 @@ func validateServers(servers []ServerConfig) error {
 		for _, p := range cfg.Tools {
 			if err := tool.ValidPattern(p); err != nil {
 				return fmt.Errorf("mcp: server %q: Tools: %w", cfg.Name, err)
+			}
+		}
+		for _, f := range []struct {
+			name string
+			v    time.Duration
+		}{
+			{"ConnectTimeout", cfg.ConnectTimeout},
+			{"RequestTimeout", cfg.RequestTimeout},
+			{"CallTimeout", cfg.CallTimeout},
+		} {
+			if f.v < 0 {
+				return fmt.Errorf("mcp: server %q: %s is negative", cfg.Name, f.name)
 			}
 		}
 	}
