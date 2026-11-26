@@ -198,25 +198,39 @@ func (t *httpTransport) Send(ctx context.Context, msg json.RawMessage) error {
 		t.mu.Unlock()
 	}
 
+	if streaming, err = t.handleReply(ctx, resp, sid, stop, cancel); err != nil {
+		return err
+	}
+
+	if isInitializedNotification(msg) {
+		t.startListener()
+	}
+	return nil
+}
+
+// handleReply handles the response to a POST: it drains an acknowledgement,
+// ends the session on an expired one, pushes a JSON body and, for an event
+// stream, starts relaying it. A relay goroutine takes over stop and cancel
+// and the reply is then streaming. sid is the session id the request carried.
+func (t *httpTransport) handleReply(ctx context.Context, resp *http.Response, sid string, stop func() bool, cancel context.CancelFunc) (streaming bool, err error) {
 	switch {
 	case resp.StatusCode == http.StatusAccepted:
 		drainClose(resp.Body)
 	case resp.StatusCode == http.StatusNotFound && sid != "":
 		drainClose(resp.Body)
 		t.end(ErrSessionExpired)
-		return fmt.Errorf("mcp: http: %w", ErrSessionExpired)
+		return false, fmt.Errorf("mcp: http: %w", ErrSessionExpired)
 	case resp.StatusCode != http.StatusOK:
-		return statusError(resp)
+		return false, statusError(resp)
 	case hasMediaType(resp, mediaTypeEventStream):
 		if err := ctx.Err(); err != nil { // ctx ended as the headers arrived
 			resp.Body.Close()
-			return err
+			return false, err
 		}
 		if !t.track() {
 			resp.Body.Close()
-			return t.closedError()
+			return false, t.closedError()
 		}
-		streaming = true
 		go func() {
 			defer t.wg.Done()
 			defer stop()
@@ -226,24 +240,21 @@ func (t *httpTransport) Send(ctx context.Context, msg json.RawMessage) error {
 				t.end(fmt.Errorf("mcp: http: %w", err))
 			}
 		}()
+		return true, nil
 	case hasMediaType(resp, mediaTypeJSON):
 		body, err := readLimited(resp.Body, t.max)
 		drainClose(resp.Body)
 		if err != nil {
-			return t.requestError(ctx, err)
+			return false, t.requestError(ctx, err)
 		}
 		if len(bytes.TrimSpace(body)) > 0 && !t.push(body) {
-			return t.closedError()
+			return false, t.closedError()
 		}
 	default:
 		drainClose(resp.Body)
-		return fmt.Errorf("mcp: http: POST: unexpected content type %q", resp.Header.Get("Content-Type"))
+		return false, fmt.Errorf("mcp: http: POST: unexpected content type %q", resp.Header.Get("Content-Type"))
 	}
-
-	if isInitializedNotification(msg) {
-		t.startListener()
-	}
-	return nil
+	return false, nil
 }
 
 // Messages yields the server's messages from every reply and stream.
