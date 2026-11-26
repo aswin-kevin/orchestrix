@@ -7,7 +7,7 @@
 
 **An AI agent framework for Go.** Orchestrix is an LLM agent harness SDK that turns Claude, GPT or any OpenAI-compatible model into an autonomous, tool-using agent, with streaming, middleware, permissions and human-in-the-loop approval built in.
 
-You get a production-ready agent loop in a few lines of code, with two small dependencies beyond the Go standard library.
+You get a complete agent loop in a few lines of code, with two small dependencies beyond the Go standard library; the [Production checklist](#production-checklist) lists what to set before serving traffic.
 
 > Orchestrix is under active development. The API is being frozen for 1.0; until that release it may still change in the 0.x line.
 
@@ -124,10 +124,17 @@ func main() {
 		case agent.KindFinal:
 			fmt.Printf("\n\nfinished: %s after %d turns, %d output tokens\n",
 				ev.Final.Reason, ev.Final.Turns, ev.Final.Usage.Output)
+			if ev.Final.Reason != agent.ReasonCompleted {
+				log.Fatalf("run did not complete: %s", ev.Final.Reason)
+			}
+		default:
+			// thinking, tool results, usage and kinds added later
 		}
 	}
 }
 ```
+
+The files live in an in-memory workspace: a run without a thread ID gets a fresh one that is dropped when the run ends, so `/notes/hello.txt` is not on your disk afterwards. To work on a real directory, use `WithShell(dir, shell.Config{})` (which also adds the `execute` tool) or `WithBackend` with a `disk.New(dir, disk.Config{})` backend ([Backends](#backends)).
 
 `orchestrix.New` gives you an agent with file tools (`ls`, `read_file`, `glob`, `grep`, `write_file`, `edit_file`, `multi_edit`, `delete`), a planning tool (`write_todos`), subagents (`task`), context summarization, prompt caching and permission checks already wired. Other options: `WithTools`, `WithMiddleware`, `WithoutMiddleware`, `WithBackend`, `WithAllow`/`WithAsk`/`WithDeny`, `WithApprover`, `WithMaxDuration`, `WithMaxTotalTokens`, `WithModelTimeout`, `WithMaxTokens`, `WithLogger`, `WithWorkingDir`, and the feature options described below (`WithSubagents`, `WithSummarize`, `WithHooks`, `WithInterruptOn`, `WithCheckpointer`, `WithShell`, `WithJobs`, `WithMemory`, `WithSkills`, `WithMCP`, `WithPlanMode`, `WithDeferredTools`, `WithWeb`, `WithAskUser`, `WithAsync`, `WithCompress`, `WithRubric`, `WithOutputType`/`WithOutputSchema`, `WithFallback`/`WithFallbackConfig`, `WithProfiles`, `WithMount`). `orchestrix.Options` bundles several options into one, for a preset you reuse. `WithConfig` exposes the full `agent.Config`, and you can build one yourself and call `agent.New` for complete control.
 
@@ -440,13 +447,14 @@ The `cache` middleware asks providers that support prompt caching to cache the s
 
 Orchestrix runs actions a model chooses, so several layers stand between the model and your host. What each one covers:
 
-- **Permission gate.** Every tool call, including file tools, `execute`, MCP tools, web requests and each call a subagent makes, is checked against the mode and rules before it runs, and deny rules win even in `bypassPermissions`. Rules are matched lexically: they decide which calls the agent makes, and they are not a sandbox ([Permissions](#permissions)).
+- **Permission gate.** Every tool call, including file tools, `execute`, MCP tools, web requests and each call a subagent makes, is checked against the mode and rules before it runs, and deny rules win even in `bypassPermissions`. Read-only calls run in every mode, `dontAsk` and `auto` included, unless a deny or ask rule matches them, so add `read(...)` deny rules to keep the model out of part of the workspace. Rules are matched lexically: they decide which calls the agent makes, and they are not a sandbox ([Permissions](#permissions)).
 - **Network.** `web_fetch` refuses connections to loopback, private, link-local and other non-public addresses, at every redirect hop and for every DNS answer, unless `AllowPrivateNetworks` is set ([Web](#web)).
-- **Workspace confinement.** The disk and shell backends refuse access outside their root, a `kv.DirStore` names files by a hash of the key so no key can name a path outside it, and the sandbox backend single-quotes paths and sends content as base64 ([Backends](#backends)).
-- **Shell commands.** `execute` runs commands with a small allowlist of your environment variables (`shell.InheritedEnv`), git limited to bare repositories named explicitly (`shell.SafeGitEnv`), timeouts and output limits, and kills a command's process group when it ends. Commands still run as your process: the shell backend is not a sandbox ([Shell and background jobs](#shell-and-background-jobs)).
+- **Workspace confinement.** The disk and shell backends refuse access outside their root (a file already hard-linked from inside the root to one outside it is not detected; see `backend/disk`), a `kv.DirStore` names files by a hash of the key so no key can name a path outside it, and the sandbox backend single-quotes paths and sends content as base64 ([Backends](#backends)).
+- **Shell commands.** `execute` runs commands with a small allowlist of your environment variables (`shell.InheritedEnv`), git limited to bare repositories named explicitly (`shell.SafeGitEnv`), timeouts and output limits, and kills a command's process group when it ends; a process that leaves the group (`setsid`, daemonizing) keeps running. Commands still run as your process: the shell backend is not a sandbox ([Shell and background jobs](#shell-and-background-jobs)).
 - **Containers.** `orxdocker` runs file tools and commands in a container per thread, as `nobody`, with a read-only root file system, all capabilities dropped, `no-new-privileges`, Docker's default seccomp profile, resource limits, no network and no host environment, each an explicit opt-out ([Untrusted tools in containers](#untrusted-tools-in-containers)).
 - **Credentials and logs.** API keys, sensitive headers and URL passwords and query values are replaced with `[REDACTED]` in provider errors; the logger never logs message content or tool inputs; `orxotel` exports tool arguments and results only with `CaptureContent` ([Providers](#providers), [Limits, timeouts and logging](#limits-timeouts-and-logging), [Tracing](#tracing)).
 - **Trusted inputs.** Memory files, skills, MCP server instructions and web pages all reach the model's context. Load the first three only from sources you trust; the default web prompt tells the model never to follow instructions found in pages ([Memory](#memory), [Skills](#skills), [MCP](#mcp)).
+- **Tool results are untrusted.** Every tool result reaches the context too: workspace files, command output, MCP tool results and subagent answers, which is the usual path for prompt injection. The prompt is not a control; the permission gate is, and the `guard` middleware can screen tool calls with a decision model ([Decision models](#decision-models)).
 
 [SECURITY.md](SECURITY.md) says what is in scope and how to report a vulnerability privately.
 
@@ -460,8 +468,10 @@ Every tool call is checked before it runs. Choose a mode with `WithPermissionMod
 | `acceptEdits` | Also allows file-modifying tools, except writes to git metadata, which ask. |
 | `bypassPermissions` | Allows everything except what a deny rule forbids. |
 | `plan` | Denies everything that is not read-only. |
-| `dontAsk` | Never asks; denies whatever is not explicitly allowed. |
-| `auto` | Never asks; denies unless a rule or the tool itself allows. |
+| `dontAsk` | Never asks; read-only calls run, anything else is denied unless an allow rule allows it. |
+| `auto` | Never asks; read-only calls run, anything else is denied unless an allow rule or the tool's own verdict allows it. |
+
+Read-only calls are those of tools marked read-only: built-in ones such as `ls`, `read_file`, `glob`, `grep`, `write_todos`, `ask_user` and `task` (each call the subagent makes is checked on its own), any tool built with `tool.WithReadOnly`, the web tools with `web.Config.ReadOnly`, and MCP tools annotated read-only on a server with `TrustReadOnlyHints`. To keep a `dontAsk` or `auto` agent from reading some paths, add `read(...)` deny rules.
 
 Rules refine the mode. Deny rules always win, even over `bypassPermissions`, an ask rule asks even for a tool that considers itself safe, and a tool that refuses a call itself is never overridden. A path hidden by a `read(...)` deny or ask rule is also left out of `ls`, `glob` and `grep` results.
 
@@ -488,7 +498,10 @@ Without an approver, a tool call that needs approval pauses the run. The final e
 
 ```go
 // Imports omitted; ctx and model come from surrounding code.
-a, _ := orchestrix.New("anthropic:claude-sonnet-4-5") // default mode: write_file needs approval
+a, err := orchestrix.New("anthropic:claude-sonnet-4-5") // default mode: write_file needs approval
+if err != nil {
+	log.Fatal(err)
+}
 
 in := orchestrix.Text("Create /todo.txt with three items.")
 in.ThreadID = "demo"
@@ -526,7 +539,7 @@ if final.Reason == agent.ReasonInterrupted {
 }
 ```
 
-Pass the same thread ID to `Resume` so the run keeps using the same backend.
+Pass the same thread ID to `Resume` so the run keeps using the same backend. `Agent.Resume` suits an agent without a checkpointer: with `WithCheckpointer` it saves as a new thread, which already exists, so the run ends with `checkpoint_error`. There, open the thread with `Agent.Thread` and answer with `Thread.Resume` ([Checkpoints and threads](#checkpoints-and-threads)), or call `ResumeWith` with an `agent.Input` holding the thread ID, `Final.State` and `Final.Version`.
 
 `Final.State` can be serialized with `encoding/json` and resumed later. It holds the conversation and run state, not the workspace: to continue in a new process with the files intact, use a checkpointer (see [Checkpoints and threads](#checkpoints-and-threads)).
 
@@ -1350,7 +1363,7 @@ orchestrix.WithFallbackConfig(llm.FallbackConfig{
 
 ### Shutting down
 
-`Agent.Close(ctx)` releases what an agent holds, once, when the host is done with it. It first drains every middleware that runs work beside the agent's runs (`agent.Drainer`; `WithAsync` stops its background subagents), then closes, in reverse stack order, every middleware that implements `agent.Closer` (MCP connections, `WithJobs` background jobs, `WithAsync`), then the backend and checkpointer when they implement it, and finally drops the default per-thread workspaces. `ctx` bounds how long it waits. Runs already started are neither waited for nor stopped, so cancel their contexts first for a clean stop; a run started after `Close` ends at once with reason `internal_error` and an error wrapping `agent.ErrClosed`. Close only the top-level agent: subagents share its resources. A backend returned by `WithBackendFactory` and satellite resources such as an `orxdocker.Manager` or a `pgxpool.Pool` stay with the host.
+`Agent.Close(ctx)` releases what an agent holds, once, when the host is done with it. It first drains every middleware that runs work beside the agent's runs (`agent.Drainer`; `WithAsync` stops its background subagents), then closes, in reverse stack order, every middleware that implements `agent.Closer` (`WithJobs` background jobs, MCP connections, `WithAsync`), then the backend and checkpointer when they implement it, and finally the `agent.Config.OnClose` functions, in reverse order (the preset adds one that drops the default per-thread workspaces). `ctx` bounds how long it waits. Runs already started are neither waited for nor stopped, so cancel their contexts first for a clean stop; a run started after `Close` ends at once with reason `internal_error` and an error wrapping `agent.ErrClosed`. Close only the top-level agent: subagents share its resources. A backend returned by `WithBackendFactory` and satellite resources such as an `orxdocker.Manager` or a `pgxpool.Pool` stay with the host.
 
 ```go
 // Imports omitted; tm is a *jobs.Middleware and m an *mcp.Middleware.
@@ -1423,7 +1436,7 @@ Every part of the harness that talks to the outside world is an interface you ca
 
 Three rules keep these contracts stable after 1.0:
 
-- An interface never gains a method; a new capability arrives as a new optional interface, found by type assertion.
+- An interface never gains a method; a new capability arrives as a new optional interface, found with `tool.As` and the `backend.AsX` helpers.
 - A wrapper exposes what it wraps with `Unwrap`, and capabilities are looked up through it: `tool.As` for tools, `backend.AsExecutor`, `backend.AsStarter`, `backend.AsSnapshotter`, `backend.AsMultiEditor` and `backend.AsCloser` for backends, never a bare type assertion.
 - The value sets of enums (event kinds, terminal reasons, statuses) may grow in a minor release, so code that switches on them needs a default case.
 
@@ -1446,9 +1459,12 @@ The repository holds five Go modules. Install only the ones you use; each satell
 Orchestrix follows semantic versioning. Before v1.0.0 a minor release may break the API; v0.10.0 was the freeze pass that gave every public contract the shape it will keep. [CHANGELOG.md](CHANGELOG.md) lists every break, with its replacement, under "Breaking changes". From v1.0.0, for the core module:
 
 - **Exported API.** Exported identifiers of the non-internal packages are not removed or changed incompatibly within v1.
-- **Interfaces.** An interface never gains a method. A new capability arrives as a new optional interface, found by type assertion through `Unwrap` ([Extending Orchestrix](#extending-orchestrix)).
+- **Interfaces.** An interface never gains a method. A new capability arrives as a new optional interface, found with `tool.As` and the `backend.AsX` helpers, which follow `Unwrap` ([Extending Orchestrix](#extending-orchestrix)).
 - **Enums grow.** The value sets of enums (event kinds, terminal reasons, background task statuses, and in `llm` stop reasons, error kinds, block types and stream event types) may grow in a minor release. Give a switch on them a default case and treat an unknown value as its documentation says: ignore an event kind you do not know, and treat an unknown terminal reason or task status as a failure.
 - **Not API.** Default prompt texts, tool descriptions, log messages and error texts may change in a minor release; match errors with `errors.Is` and `errors.As`, not their text.
+- **Defaults.** Default values (the `DefaultX` constants, such as `agent.DefaultMaxTurns`) and default behaviour may be tuned in a minor release, and the CHANGELOG lists each change. Set a value explicitly when your code depends on it.
+- **Conformance kits.** The `*test` packages (`backendtest`, `llmtest`, `checkpointtest` and the others) may gain checks in a minor release, so a third-party implementation can start failing one; a new check enforces a documented contract, and the CHANGELOG lists it.
+- **Go version.** The core needs Go 1.26 or newer. The minimum is raised only in a minor release, and the CHANGELOG says so.
 - **Satellites.** `orxotel`, `orxpg` and `orxdocker` stay on v0.x after the core reaches 1.0, because they track dependencies that still move, such as the OpenTelemetry GenAI conventions; a minor release of one may break its API. `evals` is not released.
 - **Security fixes** go into the latest minor release of each module ([SECURITY.md](SECURITY.md)).
 
@@ -1492,7 +1508,7 @@ ORX_TEST_MODEL=openai:<model> ORX_TEST_BASE_URL=<url> ORX_TEST_API_KEY=<key> \
 
 The `Live` workflow runs both nightly and on demand for each configured model; see `.github/workflows/live.yml` for the repository variables and secrets it reads. It uploads the results as artifacts.
 
-Release checklist: tag a release only when the latest `Live` run is green for every configured model, with no harness violations and no scenario below its baseline.
+Release checklist: rename `## Unreleased` in CHANGELOG.md to the release's `## vX.Y.Z` heading and set `internal/version` to the same number, then tag the release only when the latest `Live` run is green for every configured model, with no harness violations and no scenario below its baseline.
 
 ### License
 
