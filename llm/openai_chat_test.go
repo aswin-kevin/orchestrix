@@ -744,3 +744,69 @@ func TestOpenAIChatResponseModelAndID(t *testing.T) {
 		t.Errorf("stop = %q, want %q", resp.StopReason, StopContentFilter)
 	}
 }
+
+// yields collects every pair a stream yields.
+func yields(p Provider) (evs []StreamEvent, errs []error) {
+	for ev, err := range p.Stream(context.Background(), Request{Messages: []Message{UserText("x")}}) {
+		evs, errs = append(evs, ev), append(errs, err)
+	}
+	return evs, errs
+}
+
+// A stream that fails before its first SSE event yields only the error: one
+// pair, the zero event with a non-nil error.
+func TestEarlyStreamErrorYieldsOnlyTheError(t *testing.T) {
+	cut := func(t *testing.T) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Content-Length", "1000")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, "data: {")
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	status := func(t *testing.T) string {
+		return newSSEServer(t, http.StatusBadRequest, "application/json", `{"error":{"message":"bad"}}`).URL
+	}
+	for _, f := range optionFormats() {
+		if f.name == "anthropic" {
+			continue
+		}
+		for name, server := range map[string]func(*testing.T) string{"read error": cut, "error status": status} {
+			t.Run(f.name+"/"+name, func(t *testing.T) {
+				evs, errs := yields(f.make(t, server(t)))
+				if len(errs) != 1 || errs[0] == nil || evs[0] != (StreamEvent{}) {
+					t.Fatalf("yielded %d pairs (events %+v, errors %v), want only the error", len(errs), evs, errs)
+				}
+			})
+		}
+	}
+}
+
+// An error event that is the first SSE event comes after the message start
+// and ends the stream: the message start, then the error, nothing more.
+func TestFirstEventErrorEndsStream(t *testing.T) {
+	for name, tc := range map[string]struct {
+		make func(*testing.T, string) Provider
+		body string
+	}{
+		"openai": {
+			func(t *testing.T, u string) Provider { return newTestOpenAI(t, u) },
+			chunks(`{"error":{"message":"overloaded"}}`, `{"choices":[{"delta":{"content":"late"}}]}`),
+		},
+		"responses": {
+			func(t *testing.T, u string) Provider { return newTestResponses(t, u) },
+			"event: error\ndata: {\"type\":\"error\",\"message\":\"overloaded\"}\n\n" +
+				"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"late\"}\n\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := newSSEServer(t, http.StatusOK, "text/event-stream", tc.body)
+			evs, errs := yields(tc.make(t, srv.URL))
+			if len(errs) != 2 || errs[0] != nil || evs[0].Type != EventMessageStart || errs[1] == nil || evs[1] != (StreamEvent{}) {
+				t.Fatalf("yielded events %+v, errors %v; want a message start, then the error alone", evs, errs)
+			}
+		})
+	}
+}

@@ -55,6 +55,33 @@ func optionRequest() Request {
 	return Request{Messages: []Message{UserText("x")}, Tools: searchTool}
 }
 
+// Extra is checked by top-level key only: a nested map passes through
+// unchanged even when its keys name fields the adapter set, and a nested
+// value under a key the adapter set is still a conflict.
+func TestExtraNestedKeys(t *testing.T) {
+	for _, f := range optionFormats() {
+		t.Run(f.name, func(t *testing.T) {
+			url, bodies, _ := optionsServer(t)
+			req := optionRequest()
+			req.Extra = map[string]any{"model": map[string]any{"name": "x"}}
+			if _, err := f.make(t, url).Complete(context.Background(), req); !errors.Is(err, ErrExtraConflict) {
+				t.Fatalf("nested value under \"model\": err = %v, want ErrExtraConflict", err)
+			}
+			req.Extra = map[string]any{"metadata": map[string]any{"model": "x", "stream": true}}
+			_, _ = f.make(t, url).Complete(context.Background(), req)
+			if len(*bodies) != 1 {
+				t.Fatalf("got %d requests, want 1", len(*bodies))
+			}
+			if got, want := string((*bodies)[0]["metadata"]), `{"model":"x","stream":true}`; got != want {
+				t.Errorf("metadata = %s, want %s", got, want)
+			}
+			if got := string((*bodies)[0]["model"]); got == `"x"` {
+				t.Errorf("model = %s, want the nested key not to reach the top level", got)
+			}
+		})
+	}
+}
+
 func TestToolChoiceWire(t *testing.T) {
 	want := map[string]map[string]string{
 		"anthropic": {
