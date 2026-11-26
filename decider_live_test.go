@@ -32,13 +32,13 @@ func TestLiveDecide(t *testing.T) {
 	resp, err := d.Decide(ctx, llm.DecisionRequest{
 		Input: []llm.Block{llm.TextBlock("My card was charged twice for the same order. Please refund the duplicate payment today, it is blocking my rent.")},
 		Questions: []llm.Question{
-			{Name: "refund", Type: llm.YesNo, Instructions: "Is the customer asking for a refund?"},
-			{Name: "team", Type: llm.Choice, Instructions: "Which team should handle this?", Options: []llm.Option{
+			{Name: "refund", Type: llm.QuestionYesNo, Instructions: "Is the customer asking for a refund?"},
+			{Name: "team", Type: llm.QuestionChoice, Instructions: "Which team should handle this?", Choices: []llm.Choice{
 				{Value: "payments", Description: "billing, charges and refunds"},
 				{Value: "mobile", Description: "app bugs and crashes"},
 				{Value: "identity", Description: "login and account access"},
 			}},
-			{Name: "urgency", Type: llm.Score, Instructions: "How urgent is the request?", Options: []llm.Option{
+			{Name: "urgency", Type: llm.QuestionScore, Instructions: "How urgent is the request?", Choices: []llm.Choice{
 				{Value: "low"}, {Value: "medium"}, {Value: "high"},
 			}},
 		},

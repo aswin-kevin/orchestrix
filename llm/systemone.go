@@ -137,13 +137,13 @@ func (s *systemOne) buildRequest(req DecisionRequest) (systemOneRequest, error) 
 func toSystemOneQuestion(q Question) systemOneQuestion {
 	wq := systemOneQuestion{Instructions: q.Instructions}
 	switch q.Type {
-	case YesNo:
+	case QuestionYesNo:
 		wq.Type = systemOneYesNo
-	case Choice:
+	case QuestionChoice:
 		wq.Type = systemOneChoice
 		// An option without a description is sent as null (a bare label).
-		criteria := make(map[string]*string, len(q.Options))
-		for _, o := range q.Options {
+		criteria := make(map[string]*string, len(q.Choices))
+		for _, o := range q.Choices {
 			if o.Description != "" {
 				criteria[o.Value] = &o.Description
 			} else {
@@ -151,12 +151,12 @@ func toSystemOneQuestion(q Question) systemOneQuestion {
 			}
 		}
 		wq.Criteria = criteria
-	case Score:
+	case QuestionScore:
 		wq.Type = systemOneScore
 		// Levels are plain strings, lowest first; answers refer to them by
-		// index, which toResponse maps back to Option.Value.
-		levels := make([]string, len(q.Options))
-		for i, o := range q.Options {
+		// index, which toResponse maps back to Choice.Value.
+		levels := make([]string, len(q.Choices))
+		for i, o := range q.Choices {
 			levels[i] = o.Value
 			if o.Description != "" {
 				levels[i] += ": " + o.Description
@@ -182,15 +182,15 @@ func (r systemOneReply) toResponse(qs []Question) (*DecisionResponse, error) {
 		}
 		switch a.Type {
 		case systemOneYesNo:
-			out.Answers[q.Name] = Answer{Type: YesNo, Yes: a.Noul}
+			out.Answers[q.Name] = Answer{Type: QuestionYesNo, Yes: a.Noul}
 		case systemOneChoice:
-			out.Answers[q.Name] = Answer{Type: Choice, Choice: a.Choice, Probabilities: a.Probabilities, Confidence: a.Confidence}
+			out.Answers[q.Name] = Answer{Type: QuestionChoice, Choice: a.Choice, Probabilities: a.Probabilities, Confidence: a.Confidence}
 		case systemOneScore:
 			probs, err := rekeyLevels(q, a.Probabilities)
 			if err != nil {
 				return nil, err
 			}
-			out.Answers[q.Name] = Answer{Type: Score, Score: a.Score, Probabilities: probs, Confidence: a.Confidence}
+			out.Answers[q.Name] = Answer{Type: QuestionScore, Score: a.Score, Probabilities: probs, Confidence: a.Confidence}
 		}
 	}
 	return out, nil
@@ -205,10 +205,10 @@ func rekeyLevels(q Question, probs map[string]float64) (map[string]float64, erro
 	out := make(map[string]float64, len(probs))
 	for k, p := range probs {
 		i, err := strconv.Atoi(k)
-		if err != nil || i < 0 || i >= len(q.Options) {
+		if err != nil || i < 0 || i >= len(q.Choices) {
 			return nil, fmt.Errorf("llm: systemone score key %q for question %q is not a level index", k, q.Name)
 		}
-		out[q.Options[i].Value] = p
+		out[q.Choices[i].Value] = p
 	}
 	return out, nil
 }

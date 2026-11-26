@@ -16,11 +16,11 @@ import (
 // assumptions.
 
 var docQuestions = []llm.Question{
-	{Name: "unsafe", Type: llm.YesNo, Instructions: "Is it unsafe?"},
-	{Name: "label", Type: llm.Choice, Instructions: "Which label?",
-		Options: []llm.Option{{Value: "bug"}, {Value: "billing", Description: "Payments"}}},
-	{Name: "risk", Type: llm.Score, Instructions: "How risky?",
-		Options: []llm.Option{{Value: "low", Description: "Harmless"}, {Value: "high", Description: "Dangerous"}}},
+	{Name: "unsafe", Type: llm.QuestionYesNo, Instructions: "Is it unsafe?"},
+	{Name: "label", Type: llm.QuestionChoice, Instructions: "Which label?",
+		Choices: []llm.Choice{{Value: "bug"}, {Value: "billing", Description: "Payments"}}},
+	{Name: "risk", Type: llm.QuestionScore, Instructions: "How risky?",
+		Choices: []llm.Choice{{Value: "low", Description: "Harmless"}, {Value: "high", Description: "Dangerous"}}},
 }
 
 var docInput = []llm.Block{llm.TextBlock("rm -rf /")}

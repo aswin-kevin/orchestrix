@@ -89,7 +89,7 @@ func TestFallbackStreamSwitchesBeforeContent(t *testing.T) {
 
 func TestFallbackStreamDropsHeldEvents(t *testing.T) {
 	primary := &eventStub{
-		events: []llm.StreamEvent{{Type: llm.EvMessageStart, Usage: llm.Usage{Input: 99}}},
+		events: []llm.StreamEvent{{Type: llm.EventMessageStart, Usage: llm.Usage{Input: 99}}},
 		err:    &llm.APIError{Status: 529},
 	}
 	p := newFallback(t, llm.FallbackConfig{Entries: []llm.FallbackEntry{
@@ -100,11 +100,11 @@ func TestFallbackStreamDropsHeldEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := countType(evs, llm.EvMessageStart); n != 1 {
+	if n := countType(evs, llm.EventMessageStart); n != 1 {
 		t.Fatalf("message starts = %d, want 1", n)
 	}
 	for _, ev := range evs {
-		if ev.Type == llm.EvMessageStart && ev.Usage.Input != 7 {
+		if ev.Type == llm.EventMessageStart && ev.Usage.Input != 7 {
 			t.Errorf("message start usage = %d, want the backup's 7", ev.Usage.Input)
 		}
 	}
@@ -113,8 +113,8 @@ func TestFallbackStreamDropsHeldEvents(t *testing.T) {
 func TestFallbackStreamNoSwitchAfterContent(t *testing.T) {
 	primary := &eventStub{
 		events: []llm.StreamEvent{
-			{Type: llm.EvMessageStart},
-			{Type: llm.EvTextDelta, Text: "par"},
+			{Type: llm.EventMessageStart},
+			{Type: llm.EventTextDelta, Text: "par"},
 		},
 		err: &llm.APIError{Status: 529},
 	}
@@ -134,7 +134,7 @@ func TestFallbackStreamNoSwitchAfterContent(t *testing.T) {
 	}
 	text := ""
 	for _, ev := range evs {
-		if ev.Type == llm.EvTextDelta {
+		if ev.Type == llm.EventTextDelta {
 			text += ev.Text
 		}
 	}
@@ -145,7 +145,7 @@ func TestFallbackStreamNoSwitchAfterContent(t *testing.T) {
 
 func TestFallbackStreamCoolsDownAfterMidStreamFailure(t *testing.T) {
 	primary := &eventStub{
-		events: []llm.StreamEvent{{Type: llm.EvTextDelta, Text: "par"}},
+		events: []llm.StreamEvent{{Type: llm.EventTextDelta, Text: "par"}},
 		err:    &llm.APIError{Status: 529},
 	}
 	backup := llmtest.New(llmtest.Turn{Text: "ok"})
@@ -167,7 +167,7 @@ func TestFallbackStreamCoolsDownAfterMidStreamFailure(t *testing.T) {
 
 func TestFallbackStreamNonFallbackErrorBeforeContent(t *testing.T) {
 	primary := &eventStub{
-		events: []llm.StreamEvent{{Type: llm.EvMessageStart}},
+		events: []llm.StreamEvent{{Type: llm.EventMessageStart}},
 		err:    &llm.APIError{Status: 400},
 	}
 	backup := llmtest.New(llmtest.Turn{Text: "ok"})
@@ -184,9 +184,9 @@ func TestFallbackStreamNonFallbackErrorBeforeContent(t *testing.T) {
 
 func TestFallbackStreamWithoutContentFlushes(t *testing.T) {
 	primary := &eventStub{events: []llm.StreamEvent{
-		{Type: llm.EvMessageStart, Usage: llm.Usage{Input: 3}},
-		{Type: llm.EvMessageDelta, StopReason: llm.StopEndTurn},
-		{Type: llm.EvMessageStop},
+		{Type: llm.EventMessageStart, Usage: llm.Usage{Input: 3}},
+		{Type: llm.EventMessageDelta, StopReason: llm.StopEndTurn},
+		{Type: llm.EventMessageStop},
 	}}
 	backup := llmtest.New(llmtest.Turn{Text: "ok"})
 	p := newFallback(t, llm.FallbackConfig{Entries: []llm.FallbackEntry{{Provider: primary}, {Provider: backup}}})
@@ -194,7 +194,7 @@ func TestFallbackStreamWithoutContentFlushes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(evs) != 3 || evs[0].Type != llm.EvMessageStart || evs[2].Type != llm.EvMessageStop {
+	if len(evs) != 3 || evs[0].Type != llm.EventMessageStart || evs[2].Type != llm.EventMessageStop {
 		t.Errorf("events = %+v, want the primary's three events", evs)
 	}
 	if backup.Calls() != 0 {
@@ -204,9 +204,9 @@ func TestFallbackStreamWithoutContentFlushes(t *testing.T) {
 
 func TestFallbackStreamStopsWhenConsumerStops(t *testing.T) {
 	primary := &eventStub{events: []llm.StreamEvent{
-		{Type: llm.EvMessageStart},
-		{Type: llm.EvTextDelta, Text: "a"},
-		{Type: llm.EvTextDelta, Text: "b"},
+		{Type: llm.EventMessageStart},
+		{Type: llm.EventTextDelta, Text: "a"},
+		{Type: llm.EventTextDelta, Text: "b"},
 	}}
 	p := newFallback(t, llm.FallbackConfig{Entries: []llm.FallbackEntry{{Provider: primary}, {Provider: llmtest.New()}}})
 	n := 0
@@ -225,11 +225,11 @@ func TestFallbackStreamStampsBlocks(t *testing.T) {
 	// A block may start with a non-content event, as Anthropic's redacted
 	// thinking does: the stamp follows it and is held back with it.
 	primary := &eventStub{events: []llm.StreamEvent{
-		{Type: llm.EvMessageStart},
-		{Type: llm.EvSignature, Index: 0, Value: "opaque"},
-		{Type: llm.EvTextDelta, Index: 1, Text: "hi"},
-		{Type: llm.EvTextDelta, Index: 1, Text: "!"},
-		{Type: llm.EvMessageStop},
+		{Type: llm.EventMessageStart},
+		{Type: llm.EventSignature, Index: 0, Value: "opaque"},
+		{Type: llm.EventTextDelta, Index: 1, Text: "hi"},
+		{Type: llm.EventTextDelta, Index: 1, Text: "!"},
+		{Type: llm.EventMessageStop},
 	}}
 	p := newFallback(t, llm.FallbackConfig{Entries: []llm.FallbackEntry{
 		{Provider: primary, Name: "a"},
@@ -241,13 +241,13 @@ func TestFallbackStreamStampsBlocks(t *testing.T) {
 	}
 	stamps := map[int]int{}
 	for k, ev := range evs {
-		if ev.Type != llm.EvProviderData {
+		if ev.Type != llm.EventProviderData {
 			continue
 		}
 		if ev.Key != "orchestrix.source" || ev.Value != "a" {
 			t.Errorf("stamp = %+v", ev)
 		}
-		if k == 0 || evs[k-1].Index != ev.Index || evs[k-1].Type == llm.EvProviderData {
+		if k == 0 || evs[k-1].Index != ev.Index || evs[k-1].Type == llm.EventProviderData {
 			t.Errorf("stamp for block %d does not follow the block's first event", ev.Index)
 		}
 		stamps[ev.Index]++

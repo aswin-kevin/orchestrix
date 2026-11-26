@@ -94,7 +94,7 @@ func stampFormat(b *Block, format Format) {
 
 // formatStampEvent stamps the block at index with format during a stream.
 func formatStampEvent(index int, format Format) StreamEvent {
-	return StreamEvent{Type: EvProviderData, Index: index, Key: formatKey, Value: string(format)}
+	return StreamEvent{Type: EventProviderData, Index: index, Key: formatKey, Value: string(format)}
 }
 
 // foreignThinking reports whether b is thinking that a format other than own

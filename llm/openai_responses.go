@@ -140,7 +140,7 @@ type responsesEvent struct {
 // without further reading once emit reports the consumer is gone.
 func streamResponsesEvents(ctx context.Context, cfg *Config, body io.Reader, idle *idleTimer, emit func(StreamEvent) bool) error {
 	state := &responsesStreamState{cfg: cfg, argumentsSeen: make(map[int]bool), startedTools: make(map[int]bool)}
-	if !emit(StreamEvent{Type: EvMessageStart}) {
+	if !emit(StreamEvent{Type: EventMessageStart}) {
 		return nil
 	}
 	for sse, err := range readSSE(body, idle) {
@@ -190,12 +190,12 @@ func (s *responsesStreamState) translate(data string) (events []StreamEvent, don
 	index := ev.OutputIndex
 	switch ev.Type {
 	case respEvTextDelta:
-		return []StreamEvent{{Type: EvTextDelta, Index: index, Text: ev.Delta}}, false, nil
+		return []StreamEvent{{Type: EventTextDelta, Index: index, Text: ev.Delta}}, false, nil
 	case respEvReasoningDelta, respEvReasoningText:
-		return []StreamEvent{{Type: EvThinkingDelta, Index: index, Text: ev.Delta}}, false, nil
+		return []StreamEvent{{Type: EventThinkingDelta, Index: index, Text: ev.Delta}}, false, nil
 	case respEvArgumentsDelta:
 		s.argumentsSeen[index] = true
-		return []StreamEvent{{Type: EvToolInputDelta, Index: index, Text: ev.Delta}}, false, nil
+		return []StreamEvent{{Type: EventToolInputDelta, Index: index, Text: ev.Delta}}, false, nil
 	case respEvOutputItemAdded:
 		return s.itemAdded(ev), false, nil
 	case respEvOutputItemDone:
@@ -223,7 +223,7 @@ func (s *responsesStreamState) startTool(ev responsesEvent) []StreamEvent {
 		return nil
 	}
 	s.startedTools[ev.OutputIndex] = true
-	return []StreamEvent{{Type: EvToolStart, Index: ev.OutputIndex, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}
+	return []StreamEvent{{Type: EventToolStart, Index: ev.OutputIndex, ToolID: ev.Item.CallID, ToolName: ev.Item.Name}}
 }
 
 func (s *responsesStreamState) itemDone(ev responsesEvent) []StreamEvent {
@@ -231,8 +231,8 @@ func (s *responsesStreamState) itemDone(ev responsesEvent) []StreamEvent {
 	switch ev.Item.Type {
 	case responsesReasoningType:
 		return []StreamEvent{
-			{Type: EvSignature, Index: index, Value: ev.Item.EncryptedContent},
-			{Type: EvProviderData, Index: index, Key: responsesReasoningIDKey, Value: ev.Item.ID},
+			{Type: EventSignature, Index: index, Value: ev.Item.EncryptedContent},
+			{Type: EventProviderData, Index: index, Key: responsesReasoningIDKey, Value: ev.Item.ID},
 			formatStampEvent(index, FormatOpenAIResponses),
 		}
 	case responsesFunctionCallType:
@@ -240,7 +240,7 @@ func (s *responsesStreamState) itemDone(ev responsesEvent) []StreamEvent {
 		// included.
 		events := s.startTool(ev)
 		if !s.argumentsSeen[index] && ev.Item.Arguments != "" {
-			events = append(events, StreamEvent{Type: EvToolInputDelta, Index: index, Text: ev.Item.Arguments})
+			events = append(events, StreamEvent{Type: EventToolInputDelta, Index: index, Text: ev.Item.Arguments})
 		}
 		return events
 	}
@@ -249,18 +249,18 @@ func (s *responsesStreamState) itemDone(ev responsesEvent) []StreamEvent {
 
 // closingEvents emits the final usage and stop reason for a terminal event.
 func (s *responsesStreamState) closingEvents(ev responsesEvent) []StreamEvent {
-	final := StreamEvent{Type: EvMessageDelta, StopReason: s.stopReason(ev), Model: s.model, ResponseID: s.id}
+	final := StreamEvent{Type: EventMessageDelta, StopReason: s.stopReason(ev), Model: s.model, ResponseID: s.id}
 	if u := ev.Response.Usage; u != nil {
 		cached := u.InputTokensDetails.CachedTokens
 		final.Usage = Usage{Input: max(u.InputTokens-cached, 0), Output: u.OutputTokens, CacheRead: cached}
 	}
-	return []StreamEvent{final, {Type: EvMessageStop}}
+	return []StreamEvent{final, {Type: EventMessageStop}}
 }
 
-func (s *responsesStreamState) stopReason(ev responsesEvent) string {
+func (s *responsesStreamState) stopReason(ev responsesEvent) StopReason {
 	if ev.Type == respEvIncomplete {
 		if reason := ev.Response.IncompleteDetails.Reason; reason != responsesMaxTokensReason {
-			return reason
+			return StopReason(reason)
 		}
 		return StopMaxTokens
 	}

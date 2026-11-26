@@ -222,7 +222,7 @@ func buildAgent(ctx context.Context, o options, ap *approver, newProvider func(l
 	if o.baseURL != "" {
 		cfg.BaseURL = o.baseURL
 	}
-	cfg.Thinking, cfg.ReasoningEffort = o.thinking, o.effort
+	cfg.Thinking, cfg.ReasoningEffort = llm.ThinkingMode(o.thinking), llm.ReasoningEffort(o.effort)
 	provider, err := newProvider(cfg)
 	if err != nil {
 		return fail(exitError, "%v", err)

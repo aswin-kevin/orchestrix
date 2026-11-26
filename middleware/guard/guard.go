@@ -240,7 +240,7 @@ func (m *middleware) evaluate(ctx context.Context, s *state.State, target, text 
 			v.Error = fmt.Sprintf("guard: decider gave no answer for check %q", c.Name)
 		case a.Refused:
 			v.Refused = true
-		case a.Type != llm.YesNo || !(a.Yes >= 0 && a.Yes <= 1):
+		case a.Type != llm.QuestionYesNo || !(a.Yes >= 0 && a.Yes <= 1):
 			v.Error = fmt.Sprintf("guard: decider gave no valid yes/no answer for check %q", c.Name)
 		default:
 			v.Yes = a.Yes
@@ -266,7 +266,7 @@ func (m *middleware) decide(ctx context.Context, text string, checks []Check) (*
 	defer cancel()
 	questions := make([]llm.Question, len(checks))
 	for i, c := range checks {
-		questions[i] = llm.Question{Name: c.Name, Type: llm.YesNo, Instructions: c.Question}
+		questions[i] = llm.Question{Name: c.Name, Type: llm.QuestionYesNo, Instructions: c.Question}
 	}
 	resp, err := m.decider.Decide(ctx, llm.DecisionRequest{
 		Model:     m.model,

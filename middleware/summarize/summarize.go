@@ -279,7 +279,7 @@ func contextWindow(p llm.Profile) int {
 	if p.ContextWindow > 0 {
 		return p.ContextWindow
 	}
-	return llm.DefaultProfile.ContextWindow
+	return llm.DefaultProfile().ContextWindow
 }
 
 // Shares of the configured tail a compaction keeps.

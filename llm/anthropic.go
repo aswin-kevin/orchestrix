@@ -187,7 +187,7 @@ func (r anthropicResponse) toResponse() *Response {
 	}
 	return &Response{
 		Message:    Message{Role: RoleAssistant, Content: content},
-		StopReason: r.StopReason,
+		StopReason: StopReason(r.StopReason),
 		Usage:      r.Usage.toUsage(),
 		Model:      r.Model,
 		ID:         r.ID,
@@ -277,7 +277,7 @@ func translateAnthropicEvent(cfg *Config, sse sseEvent) (events []StreamEvent, d
 	case "message_delta":
 		return messageDeltaEvents(ev), false, nil
 	case "message_stop":
-		return []StreamEvent{{Type: EvMessageStop}}, true, nil
+		return []StreamEvent{{Type: EventMessageStop}}, true, nil
 	case "error":
 		// Status 0: the HTTP exchange itself succeeded.
 		return nil, false, cfg.streamError(sse.Data)
@@ -288,14 +288,14 @@ func translateAnthropicEvent(cfg *Config, sse sseEvent) (events []StreamEvent, d
 
 func messageStartEvents(ev anthropicEvent) []StreamEvent {
 	if ev.Message == nil {
-		return []StreamEvent{{Type: EvMessageStart}}
+		return []StreamEvent{{Type: EventMessageStart}}
 	}
 	usage := ev.Message.Usage.toUsage()
 	// message_start reports a provisional output count and message_delta then
 	// reports the running total, so counting both would double-count.
 	usage.Output = 0
 	return []StreamEvent{{
-		Type: EvMessageStart, Usage: usage,
+		Type: EventMessageStart, Usage: usage,
 		Model: ev.Message.Model, ResponseID: ev.Message.ID,
 	}}
 }
@@ -307,14 +307,14 @@ func blockStartEvents(ev anthropicEvent) []StreamEvent {
 	switch BlockType(ev.ContentBlock.Type) {
 	case BlockToolUse:
 		return []StreamEvent{{
-			Type: EvToolStart, Index: ev.Index,
+			Type: EventToolStart, Index: ev.Index,
 			ToolID: ev.ContentBlock.ID, ToolName: ev.ContentBlock.Name,
 		}}
 	case anthropicRedactedThinking:
 		// Redacted thinking arrives whole here and gets no deltas.
 		return []StreamEvent{
-			{Type: EvSignature, Index: ev.Index, Value: ev.ContentBlock.Data},
-			{Type: EvProviderData, Index: ev.Index, Key: anthropicRedactedKey, Value: "true"},
+			{Type: EventSignature, Index: ev.Index, Value: ev.ContentBlock.Data},
+			{Type: EventProviderData, Index: ev.Index, Key: anthropicRedactedKey, Value: "true"},
 			formatStampEvent(ev.Index, FormatAnthropic),
 		}
 	}
@@ -329,27 +329,27 @@ func blockDeltaEvents(ev anthropicEvent) []StreamEvent {
 	d := ev.Delta
 	switch d.Type {
 	case "text_delta":
-		return []StreamEvent{{Type: EvTextDelta, Index: ev.Index, Text: d.Text}}
+		return []StreamEvent{{Type: EventTextDelta, Index: ev.Index, Text: d.Text}}
 	case "thinking_delta":
-		return []StreamEvent{{Type: EvThinkingDelta, Index: ev.Index, Text: d.Thinking}}
+		return []StreamEvent{{Type: EventThinkingDelta, Index: ev.Index, Text: d.Thinking}}
 	case "signature_delta":
 		// Every thinking block ends with its signature, which also makes the
 		// block exist even when no thinking text streamed, so it is stamped
 		// here.
 		return []StreamEvent{
-			{Type: EvSignature, Index: ev.Index, Value: d.Signature},
+			{Type: EventSignature, Index: ev.Index, Value: d.Signature},
 			formatStampEvent(ev.Index, FormatAnthropic),
 		}
 	case "input_json_delta":
-		return []StreamEvent{{Type: EvToolInputDelta, Index: ev.Index, Text: d.PartialJSON}}
+		return []StreamEvent{{Type: EventToolInputDelta, Index: ev.Index, Text: d.PartialJSON}}
 	}
 	return nil
 }
 
 func messageDeltaEvents(ev anthropicEvent) []StreamEvent {
-	out := StreamEvent{Type: EvMessageDelta}
+	out := StreamEvent{Type: EventMessageDelta}
 	if ev.Delta != nil {
-		out.StopReason = ev.Delta.StopReason
+		out.StopReason = StopReason(ev.Delta.StopReason)
 	}
 	if ev.Usage != nil {
 		out.Usage = ev.Usage.toUsage()
@@ -407,20 +407,20 @@ func (p *anthropicProvider) buildRequest(req Request, stream bool) anthropicRequ
 		Model:         firstNonEmpty(req.Model, p.cfg.Model),
 		MaxTokens:     maxTokens,
 		System:        toAnthropicSystem(req.System, req.CacheBoundary),
-		Messages:      toAnthropicMessages(req.Messages, thinking != "disabled"),
+		Messages:      toAnthropicMessages(req.Messages, thinking != ThinkingDisabled),
 		Tools:         toAnthropicTools(req.Tools),
 		Temperature:   req.Temperature,
 		StopSequences: req.Stop,
 		Thinking:      thinkingCfg,
 		Stream:        stream,
 	}
-	if thinking == "enabled" || thinking == "adaptive" {
+	if thinking == ThinkingEnabled || thinking == ThinkingAdaptive {
 		// The API rejects sampling changes alongside thinking.
 		wire.Temperature = nil
 	}
 	markRecentUserMessages(wire.Messages, req.CacheRecent, MaxCacheBreakpoints-countSystemBreakpoints(wire.System))
 	if effort != "" {
-		wire.OutputConfig = &anthropicOutput{Effort: effort}
+		wire.OutputConfig = &anthropicOutput{Effort: string(effort)}
 	}
 	return wire
 }
@@ -478,16 +478,16 @@ func toAnthropicTools(tools []ToolSchema) []anthropicTool {
 // to send with it. The API requires a budget of at least minThinkingBudget
 // and below max_tokens, so when the minimum does not fit, max_tokens grows by
 // the budget and the reply keeps the room the caller asked for.
-func toAnthropicThinking(mode string, maxTokens int) (*anthropicThinking, int) {
+func toAnthropicThinking(mode ThinkingMode, maxTokens int) (*anthropicThinking, int) {
 	switch mode {
-	case "enabled":
+	case ThinkingEnabled:
 		budget := max(minThinkingBudget, maxTokens/2)
 		if budget >= maxTokens {
 			maxTokens += budget
 		}
 		return &anthropicThinking{Type: "enabled", BudgetTokens: budget}, maxTokens
-	case "adaptive", "disabled":
-		return &anthropicThinking{Type: mode}, maxTokens
+	case ThinkingAdaptive, ThinkingDisabled:
+		return &anthropicThinking{Type: string(mode)}, maxTokens
 	}
 	return nil, maxTokens
 }

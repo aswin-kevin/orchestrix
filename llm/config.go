@@ -109,14 +109,14 @@ type Config struct {
 
 	// Thinking is the default Request.Thinking for requests that leave it
 	// empty. For Anthropic, the adapter's wire format has not been verified
-	// live against current models: "enabled" sends a budget_tokens budget,
-	// which recent models reject (use "adaptive"); "disabled" is rejected by
-	// some recent models; and recent models reject a non-default
-	// temperature or top_p.
-	Thinking string
+	// live against current models: ThinkingEnabled sends a budget_tokens
+	// budget, which recent models reject (use ThinkingAdaptive);
+	// ThinkingDisabled is rejected by some recent models; and recent models
+	// reject a non-default temperature or top_p.
+	Thinking ThinkingMode
 	// ReasoningEffort is the default Request.ReasoningEffort for requests
 	// that leave it empty.
-	ReasoningEffort string
+	ReasoningEffort ReasoningEffort
 	// MaxTokensField names the OpenAI chat output-limit field; empty selects
 	// max_completion_tokens when BaseURL's host is api.openai.com and
 	// DefaultMaxTokensField otherwise.

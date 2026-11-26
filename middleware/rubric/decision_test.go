@@ -24,7 +24,7 @@ func yesValues(ys ...float64) deciderFunc {
 	return func(_ context.Context, req llm.DecisionRequest) (*llm.DecisionResponse, error) {
 		answers := map[string]llm.Answer{}
 		for i, y := range ys {
-			answers[req.Questions[i].Name] = llm.Answer{Type: llm.YesNo, Yes: y}
+			answers[req.Questions[i].Name] = llm.Answer{Type: llm.QuestionYesNo, Yes: y}
 		}
 		return &llm.DecisionResponse{Answers: answers}, nil
 	}
@@ -32,8 +32,8 @@ func yesValues(ys ...float64) deciderFunc {
 
 func refusing(_ context.Context, req llm.DecisionRequest) (*llm.DecisionResponse, error) {
 	return &llm.DecisionResponse{Answers: map[string]llm.Answer{
-		"c1": {Type: llm.YesNo, Yes: 1},
-		"c2": {Type: llm.YesNo, Refused: true},
+		"c1": {Type: llm.QuestionYesNo, Yes: 1},
+		"c2": {Type: llm.QuestionYesNo, Refused: true},
 	}}, nil
 }
 
@@ -72,7 +72,7 @@ func TestDecisionGraderRequestShape(t *testing.T) {
 	}
 	for i, q := range seen.Questions {
 		want := []string{"c1", "c2", "c3"}[i]
-		if q.Name != want || q.Type != llm.YesNo || !strings.HasSuffix(q.Instructions, decisionReq.Criteria[i]) ||
+		if q.Name != want || q.Type != llm.QuestionYesNo || !strings.HasSuffix(q.Instructions, decisionReq.Criteria[i]) ||
 			!strings.HasPrefix(q.Instructions, "Does the answer inside <answer> fully meet this criterion? ") {
 			t.Errorf("question %d = %+v", i, q)
 		}
@@ -85,13 +85,13 @@ func TestDecisionGraderRequestShape(t *testing.T) {
 func TestDecisionGraderErrors(t *testing.T) {
 	boom := errors.New("boom")
 	missing := deciderFunc(func(context.Context, llm.DecisionRequest) (*llm.DecisionResponse, error) {
-		return &llm.DecisionResponse{Answers: map[string]llm.Answer{"c1": {Type: llm.YesNo, Yes: 1}, "c3": {Type: llm.YesNo, Yes: 1}}}, nil
+		return &llm.DecisionResponse{Answers: map[string]llm.Answer{"c1": {Type: llm.QuestionYesNo, Yes: 1}, "c3": {Type: llm.QuestionYesNo, Yes: 1}}}, nil
 	})
 	answering := func(a llm.Answer) deciderFunc {
 		return func(_ context.Context, req llm.DecisionRequest) (*llm.DecisionResponse, error) {
 			answers := map[string]llm.Answer{}
 			for _, q := range req.Questions {
-				answers[q.Name] = llm.Answer{Type: llm.YesNo, Yes: 1}
+				answers[q.Name] = llm.Answer{Type: llm.QuestionYesNo, Yes: 1}
 			}
 			answers["c2"] = a
 			return &llm.DecisionResponse{Answers: answers}, nil
@@ -102,11 +102,11 @@ func TestDecisionGraderErrors(t *testing.T) {
 		g    DecisionGrader
 		want string
 	}{
-		"wrong type":   {DecisionGrader{Decider: answering(llm.Answer{Type: llm.Choice, Choice: "a"})}, invalid},
+		"wrong type":   {DecisionGrader{Decider: answering(llm.Answer{Type: llm.QuestionChoice, Choice: "a"})}, invalid},
 		"zero type":    {DecisionGrader{Decider: answering(llm.Answer{Yes: 1})}, invalid},
-		"yes above 1":  {DecisionGrader{Decider: answering(llm.Answer{Type: llm.YesNo, Yes: 1.5})}, invalid},
-		"yes negative": {DecisionGrader{Decider: answering(llm.Answer{Type: llm.YesNo, Yes: -0.1})}, invalid},
-		"yes NaN":      {DecisionGrader{Decider: answering(llm.Answer{Type: llm.YesNo, Yes: math.NaN()})}, invalid},
+		"yes above 1":  {DecisionGrader{Decider: answering(llm.Answer{Type: llm.QuestionYesNo, Yes: 1.5})}, invalid},
+		"yes negative": {DecisionGrader{Decider: answering(llm.Answer{Type: llm.QuestionYesNo, Yes: -0.1})}, invalid},
+		"yes NaN":      {DecisionGrader{Decider: answering(llm.Answer{Type: llm.QuestionYesNo, Yes: math.NaN()})}, invalid},
 		"threshold above 1": {DecisionGrader{Decider: yesValues(1, 1, 1), Threshold: 1.5},
 			"rubric: DecisionGrader Threshold must be between 0 and 1"},
 		"threshold NaN": {DecisionGrader{Decider: yesValues(1, 1, 1), Threshold: math.NaN()},

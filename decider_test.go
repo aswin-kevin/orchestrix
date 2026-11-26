@@ -30,7 +30,7 @@ func TestNewDeciderFromSpec(t *testing.T) {
 	}
 	resp, err := d.Decide(context.Background(), llm.DecisionRequest{
 		Input:     []llm.Block{llm.TextBlock("I want my money back")},
-		Questions: []llm.Question{{Name: "refund", Type: llm.YesNo, Instructions: "Is this a refund request?"}},
+		Questions: []llm.Question{{Name: "refund", Type: llm.QuestionYesNo, Instructions: "Is this a refund request?"}},
 	})
 	if err != nil {
 		t.Fatal(err)

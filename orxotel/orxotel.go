@@ -175,7 +175,7 @@ func (m *middleware) WrapModel(ctx context.Context, req *agent.ModelRequest, nex
 	}
 	if resp != nil {
 		if resp.StopReason != "" {
-			span.SetAttributes(attribute.StringSlice(keyFinishReasons, []string{resp.StopReason}))
+			span.SetAttributes(attribute.StringSlice(keyFinishReasons, []string{string(resp.StopReason)}))
 		}
 		span.SetAttributes(
 			attribute.Int(keyInputTokens, resp.Usage.Input),

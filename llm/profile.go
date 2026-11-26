@@ -29,9 +29,11 @@ const (
 	defaultMaxOutput     = 8_192
 )
 
-// DefaultProfile is what LookupProfile returns for a model that matches no
-// registered prefix.
-var DefaultProfile = Profile{ContextWindow: defaultContextWindow, MaxOutput: defaultMaxOutput}
+// DefaultProfile returns what LookupProfile returns for a model that matches
+// no registered prefix. Each call returns a fresh value.
+func DefaultProfile() Profile {
+	return Profile{ContextWindow: defaultContextWindow, MaxOutput: defaultMaxOutput}
+}
 
 // profilesMu guards profiles. Registration and lookup can happen from any
 // goroutine, so reads take the read lock.
@@ -57,11 +59,11 @@ func RegisterProfile(modelPrefix string, p Profile) {
 }
 
 // LookupProfile returns the profile registered under the longest prefix of
-// model, or DefaultProfile when none matches. Matching is case-sensitive.
+// model, or DefaultProfile() when none matches. Matching is case-sensitive.
 func LookupProfile(model string) Profile {
 	p, ok := lookupProfile(model)
 	if !ok {
-		return DefaultProfile
+		return DefaultProfile()
 	}
 	return p
 }

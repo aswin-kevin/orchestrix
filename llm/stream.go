@@ -11,23 +11,23 @@ type EventType string
 
 // Stream event types.
 const (
-	EvMessageStart   EventType = "message_start"
-	EvTextDelta      EventType = "text_delta"
-	EvThinkingDelta  EventType = "thinking_delta"
-	EvSignature      EventType = "signature"
-	EvToolStart      EventType = "tool_start"
-	EvToolInputDelta EventType = "tool_input_delta"
-	EvProviderData   EventType = "provider_data"
-	EvMessageDelta   EventType = "message_delta"
-	EvMessageStop    EventType = "message_stop"
+	EventMessageStart   EventType = "message_start"
+	EventTextDelta      EventType = "text_delta"
+	EventThinkingDelta  EventType = "thinking_delta"
+	EventSignature      EventType = "signature"
+	EventToolStart      EventType = "tool_start"
+	EventToolInputDelta EventType = "tool_input_delta"
+	EventProviderData   EventType = "provider_data"
+	EventMessageDelta   EventType = "message_delta"
+	EventMessageStop    EventType = "message_stop"
 )
 
 // StreamEvent is one incremental update from a streaming provider. Providers
 // assign Index to identify the content block an event belongs to.
 //
 // Field use by type: text and thinking deltas and tool input deltas use Text;
-// EvSignature uses Value; EvToolStart uses ToolID and ToolName; EvProviderData
-// uses Key and Value; EvMessageStart and EvMessageDelta use Usage, and the
+// EventSignature uses Value; EventToolStart uses ToolID and ToolName; EventProviderData
+// uses Key and Value; EventMessageStart and EventMessageDelta use Usage, and the
 // latter may also set StopReason. Either may carry Model and ResponseID, the
 // model and reply id the provider reported, once they are known.
 type StreamEvent struct {
@@ -37,19 +37,19 @@ type StreamEvent struct {
 	Index int
 	// Text is the text, thinking or tool-input fragment of a delta event.
 	Text string
-	// ToolID is the tool_use id, for EvToolStart.
+	// ToolID is the tool_use id, for EventToolStart.
 	ToolID string
-	// ToolName is the tool name, for EvToolStart.
+	// ToolName is the tool name, for EventToolStart.
 	ToolName string
-	// StopReason is why generation stopped, set on EvMessageDelta.
-	StopReason string
-	// Key is the provider-data key, for EvProviderData.
+	// StopReason is why generation stopped, set on EventMessageDelta.
+	StopReason StopReason
+	// Key is the provider-data key, for EventProviderData.
 	Key string
-	// Value is the signature for EvSignature or the provider-data value for
-	// EvProviderData.
+	// Value is the signature for EventSignature or the provider-data value for
+	// EventProviderData.
 	Value string
-	// Usage is the token usage reported by EvMessageStart and
-	// EvMessageDelta.
+	// Usage is the token usage reported by EventMessageStart and
+	// EventMessageDelta.
 	Usage Usage
 	// Model is the model the provider reported, once known.
 	Model string
@@ -73,7 +73,7 @@ type slot struct {
 type Accumulator struct {
 	slots      []*slot       // in order of first-seen Index
 	byIndex    map[int]*slot // provider block index -> slot
-	stopReason string
+	stopReason StopReason
 	usage      Usage
 	model      string
 	id         string
@@ -85,28 +85,28 @@ type Accumulator struct {
 func (a *Accumulator) Add(ev StreamEvent) error {
 	a.sawEvent = true
 	switch ev.Type {
-	case EvMessageStart:
+	case EventMessageStart:
 		a.usage.MergeEcho(ev.Usage)
 		a.setReplyIDs(ev)
-	case EvMessageDelta:
+	case EventMessageDelta:
 		a.usage.MergeEcho(ev.Usage)
 		a.setReplyIDs(ev)
 		if ev.StopReason != "" {
 			a.stopReason = ev.StopReason
 		}
-	case EvMessageStop:
+	case EventMessageStop:
 		// Completion is implied by the stream ending; nothing to record.
-	case EvTextDelta:
+	case EventTextDelta:
 		return a.appendText(ev, BlockText)
-	case EvThinkingDelta:
+	case EventThinkingDelta:
 		return a.appendText(ev, BlockThinking)
-	case EvSignature:
+	case EventSignature:
 		return a.setSignature(ev)
-	case EvToolStart:
+	case EventToolStart:
 		return a.startTool(ev)
-	case EvToolInputDelta:
+	case EventToolInputDelta:
 		return a.appendToolInput(ev)
-	case EvProviderData:
+	case EventProviderData:
 		return a.setProviderData(ev)
 	default:
 		return fmt.Errorf("llm: unknown stream event type %q", ev.Type)

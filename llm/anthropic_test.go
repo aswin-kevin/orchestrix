@@ -151,7 +151,7 @@ func TestAnthropicThinkingAndHistory(t *testing.T) {
 		}},
 		UserText("again"),
 	}
-	run := func(thinking string) []any {
+	run := func(thinking ThinkingMode) []any {
 		req := Request{Messages: history, MaxTokens: 4000, Thinking: thinking, ReasoningEffort: "high"}
 		if _, err := Collect(context.Background(), p, req); err != nil {
 			t.Fatal(err)
@@ -636,7 +636,7 @@ func TestAnthropicThinkingDropsTemperature(t *testing.T) {
 	p := newTestAnthropic(t, srv.URL)
 	temp := 0.2
 
-	for _, mode := range []string{"enabled", "adaptive"} {
+	for _, mode := range []ThinkingMode{ThinkingEnabled, ThinkingAdaptive} {
 		req := Request{Messages: []Message{UserText("q")}, Thinking: mode, Temperature: &temp}
 		if _, err := Collect(context.Background(), p, req); err != nil {
 			t.Fatal(err)
@@ -647,7 +647,7 @@ func TestAnthropicThinkingDropsTemperature(t *testing.T) {
 			}
 		}
 	}
-	for _, mode := range []string{"", "disabled"} {
+	for _, mode := range []ThinkingMode{"", ThinkingDisabled} {
 		req := Request{Messages: []Message{UserText("q")}, Thinking: mode, Temperature: &temp}
 		if _, err := Collect(context.Background(), p, req); err != nil {
 			t.Fatal(err)

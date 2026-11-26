@@ -570,7 +570,7 @@ func TestSyntheticToolIDsUniqueAcrossResponses(t *testing.T) {
 func TestDoneWithoutFinishReason(t *testing.T) {
 	for name, tc := range map[string]struct {
 		payload string
-		want    string
+		want    StopReason
 	}{
 		"text": {`{"choices":[{"delta":{"content":"hi"}}]}`, StopEndTurn},
 		"tool": {`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"n","arguments":"{}"}}]}}]}`, StopToolUse},

@@ -78,28 +78,66 @@ type Request struct {
 	// Stop lists sequences that end generation.
 	Stop []string
 
-	// Thinking is "" to inherit the provider default, or "enabled",
-	// "adaptive" or "disabled". On recent Anthropic models use "adaptive";
-	// see Config.Thinking.
-	Thinking string
+	// Thinking is "" to inherit the provider default, or one of
+	// ThinkingEnabled, ThinkingAdaptive and ThinkingDisabled. On recent
+	// Anthropic models use ThinkingAdaptive; see Config.Thinking.
+	Thinking ThinkingMode
 
-	// ReasoningEffort is "" to inherit the provider default.
-	ReasoningEffort string
+	// ReasoningEffort is "" to inherit the provider default, or one of the
+	// Effort constants.
+	ReasoningEffort ReasoningEffort
 }
+
+// ThinkingMode selects whether and how a model reasons before it answers.
+type ThinkingMode string
+
+// Thinking modes.
+const (
+	// ThinkingEnabled turns extended thinking on with a token budget.
+	ThinkingEnabled ThinkingMode = "enabled"
+	// ThinkingAdaptive lets the model decide how much to think.
+	ThinkingAdaptive ThinkingMode = "adaptive"
+	// ThinkingDisabled turns extended thinking off.
+	ThinkingDisabled ThinkingMode = "disabled"
+)
+
+// ReasoningEffort is how much reasoning a model should spend on a reply.
+// Providers accept different subsets; an unsupported value is rejected by
+// the provider, not by this package.
+type ReasoningEffort string
+
+// Reasoning effort levels.
+const (
+	// EffortMinimal asks for the least reasoning the model offers.
+	EffortMinimal ReasoningEffort = "minimal"
+	// EffortLow asks for light reasoning.
+	EffortLow ReasoningEffort = "low"
+	// EffortMedium asks for a balanced amount of reasoning.
+	EffortMedium ReasoningEffort = "medium"
+	// EffortHigh asks for thorough reasoning.
+	EffortHigh ReasoningEffort = "high"
+)
+
+// StopReason is why a model stopped generating.
+type StopReason string
 
 // Reasons a model stopped generating.
 const (
-	StopEndTurn   = "end_turn"
-	StopToolUse   = "tool_use"
-	StopMaxTokens = "max_tokens"
-	StopSequence  = "stop_sequence"
+	// StopEndTurn means the model finished its reply.
+	StopEndTurn StopReason = "end_turn"
+	// StopToolUse means the model stopped to call tools.
+	StopToolUse StopReason = "tool_use"
+	// StopMaxTokens means the output limit cut the reply short.
+	StopMaxTokens StopReason = "max_tokens"
+	// StopSequence means the reply reached a stop sequence.
+	StopSequence StopReason = "stop_sequence"
 	// StopRefusal means the model declined to answer.
-	StopRefusal = "refusal"
+	StopRefusal StopReason = "refusal"
 	// StopPauseTurn means the provider paused a long-running turn; sending
 	// the reply back as-is lets the model continue.
-	StopPauseTurn = "pause_turn"
+	StopPauseTurn StopReason = "pause_turn"
 	// StopContentFilter means a content filter cut the reply short.
-	StopContentFilter = "content_filter"
+	StopContentFilter StopReason = "content_filter"
 )
 
 // Response is a complete model reply.
@@ -107,7 +145,7 @@ type Response struct {
 	// Message is the assistant's reply.
 	Message Message
 	// StopReason is why generation stopped, one of the Stop constants.
-	StopReason string
+	StopReason StopReason
 	// Usage is the token usage of the call.
 	Usage Usage
 	// Model is the model that produced the reply, as the provider reported

@@ -479,9 +479,9 @@ func thinkingText(m llm.Message) string {
 
 func (r *run) emitDelta(ev llm.StreamEvent) {
 	switch ev.Type {
-	case llm.EvTextDelta:
+	case llm.EventTextDelta:
 		r.emit(Event{Kind: KindText, Text: ev.Text})
-	case llm.EvThinkingDelta:
+	case llm.EventThinkingDelta:
 		r.emit(Event{Kind: KindThinking, Text: ev.Text})
 	}
 }

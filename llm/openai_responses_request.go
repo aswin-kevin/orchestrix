@@ -92,7 +92,7 @@ func (p *responsesProvider) buildRequest(req Request) responsesRequest {
 		Stream:          true,
 	}
 	if effort := firstNonEmpty(req.ReasoningEffort, p.cfg.ReasoningEffort); effort != "" {
-		wire.Reasoning = &responsesReasoningConfig{Effort: effort}
+		wire.Reasoning = &responsesReasoningConfig{Effort: string(effort)}
 	}
 	return wire
 }

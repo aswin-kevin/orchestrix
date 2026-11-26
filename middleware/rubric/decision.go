@@ -55,7 +55,7 @@ func (g DecisionGrader) Grade(ctx context.Context, req GradeRequest) (Grade, err
 	for i, c := range req.Criteria {
 		questions[i] = llm.Question{
 			Name:         criterionName(i),
-			Type:         llm.YesNo,
+			Type:         llm.QuestionYesNo,
 			Instructions: "Does the answer inside <answer> fully meet this criterion? " + c,
 		}
 	}
@@ -78,7 +78,7 @@ func (g DecisionGrader) Grade(ctx context.Context, req GradeRequest) (Grade, err
 			return Grade{}, fmt.Errorf("rubric: decider gave no answer for criterion %d", i+1)
 		case a.Refused:
 			return Grade{}, fmt.Errorf("rubric: decider refused criterion %d", i+1)
-		case a.Type != llm.YesNo || !(a.Yes >= 0 && a.Yes <= 1):
+		case a.Type != llm.QuestionYesNo || !(a.Yes >= 0 && a.Yes <= 1):
 			return Grade{}, fmt.Errorf("rubric: decider gave no valid yes/no answer for criterion %d", i+1)
 		case a.Yes < threshold:
 			fmt.Fprintf(&failed, "%d. %s\n", i+1, c)

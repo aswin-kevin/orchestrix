@@ -175,7 +175,7 @@ func TestDefaultShouldFallbackInStream(t *testing.T) {
 
 func TestFallbackStreamSwitchesOnInStreamOverload(t *testing.T) {
 	primary := &eventStub{
-		events: []llm.StreamEvent{{Type: llm.EvMessageStart}},
+		events: []llm.StreamEvent{{Type: llm.EventMessageStart}},
 		err:    &llm.APIError{Body: anthropicOverloadedEvent},
 	}
 	backup := llmtest.New(llmtest.Turn{Text: "ok"})

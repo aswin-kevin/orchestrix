@@ -74,7 +74,7 @@ func DefaultShouldFallback(err error) bool {
 	return IsRetryable(err) || isTransientStreamError(err)
 }
 
-// NewFallback returns a Provider that tries cfg.Entries in order, moving to
+// NewFallback returns a *Fallback, a Provider that tries cfg.Entries in order, moving to
 // the next entry only when ShouldFallback accepts the error. An entry that
 // failed that way is skipped for the cool-down period unless every entry is
 // cooling down. Backups get the request with Model cleared, so they answer
@@ -89,9 +89,9 @@ func DefaultShouldFallback(err error) bool {
 // primary's) are rewritten: thinking blocks are dropped, and other blocks
 // lose their Signature and every other ProviderData key. The caller's
 // messages are never modified. Stream switches only before the attempt has
-// yielded content; see Stream. The returned Provider is safe for concurrent
-// use.
-func NewFallback(cfg FallbackConfig) (Provider, error) {
+// yielded content; see Stream. The returned Fallback is safe for concurrent
+// use; methods may be added.
+func NewFallback(cfg FallbackConfig) (*Fallback, error) {
 	if len(cfg.Entries) < 2 {
 		return nil, fmt.Errorf("llm: fallback needs at least 2 entries, got %d", len(cfg.Entries))
 	}
@@ -131,7 +131,7 @@ func NewFallback(cfg FallbackConfig) (Provider, error) {
 		taken[name] = true
 		entries[i].Name = name
 	}
-	f := &fallback{
+	f := &Fallback{
 		entries:  entries,
 		cooldown: cfg.Cooldown,
 		should:   cfg.ShouldFallback,
@@ -154,8 +154,9 @@ type modelReporter interface {
 	configuredModel() string
 }
 
-// fallback is the Provider returned by NewFallback.
-type fallback struct {
+// Fallback is the Provider returned by NewFallback. It is safe for
+// concurrent use; methods may be added.
+type Fallback struct {
 	entries  []FallbackEntry
 	cooldown time.Duration
 	should   func(error) bool
@@ -169,7 +170,7 @@ type fallback struct {
 
 // order returns the indexes of the entries to try at now: those not cooling
 // down, in order, or every entry when all are cooling down.
-func (f *fallback) order(now time.Time) []int {
+func (f *Fallback) order(now time.Time) []int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	idx := make([]int, 0, len(f.entries))
@@ -187,7 +188,7 @@ func (f *fallback) order(now time.Time) []int {
 }
 
 // markDown starts entry i's cool-down.
-func (f *fallback) markDown(i int) {
+func (f *Fallback) markDown(i int) {
 	if f.cooldown < 0 {
 		return
 	}
@@ -198,7 +199,7 @@ func (f *fallback) markDown(i int) {
 }
 
 // markUp clears entry i's cool-down.
-func (f *fallback) markUp(i int) {
+func (f *Fallback) markUp(i int) {
 	f.mu.Lock()
 	f.downTill[i] = time.Time{}
 	f.mu.Unlock()
@@ -209,7 +210,7 @@ func (f *fallback) markUp(i int) {
 // lowered to the MaxOutput of the profile the entry's Model matches, if any.
 // Assistant blocks from another entry are rewritten by provenance. req
 // itself, its messages and their blocks are never modified.
-func (f *fallback) prepare(i int, req Request) Request {
+func (f *Fallback) prepare(i int, req Request) Request {
 	if i > 0 {
 		req.Model = ""
 	}
@@ -224,7 +225,7 @@ func (f *fallback) prepare(i int, req Request) Request {
 
 // failed handles a fallback error from entry order[k]: it starts the entry's
 // cool-down and reports the switch when another entry follows.
-func (f *fallback) failed(ctx context.Context, order []int, k int, err error) {
+func (f *Fallback) failed(ctx context.Context, order []int, k int, err error) {
 	f.markDown(order[k])
 	if f.notify != nil && k+1 < len(order) {
 		f.notify(ctx, FallbackEvent{
@@ -241,7 +242,7 @@ func allFailed(err error) error {
 }
 
 // Complete implements Provider.
-func (f *fallback) Complete(ctx context.Context, req Request) (*Response, error) {
+func (f *Fallback) Complete(ctx context.Context, req Request) (*Response, error) {
 	order := f.order(f.now())
 	var last error
 	for k, i := range order {
@@ -268,7 +269,7 @@ func (f *fallback) Complete(ctx context.Context, req Request) (*Response, error)
 // happens without waiting through that entry's retries and Retry-After. The
 // last entry keeps its normal retries, so a chain never gives up sooner than
 // a single provider would.
-func (f *fallback) entryContext(ctx context.Context, order []int, k int) context.Context {
+func (f *Fallback) entryContext(ctx context.Context, order []int, k int) context.Context {
 	if k == len(order)-1 {
 		return ctx
 	}
@@ -298,7 +299,7 @@ func stamp(resp *Response, name string) {
 // no provider data and pass through. msgs is never modified: a message or
 // block slice is copied only when something in it changes, and unchanged
 // messages are shared with the result.
-func (f *fallback) provenance(i int, msgs []Message) []Message {
+func (f *Fallback) provenance(i int, msgs []Message) []Message {
 	var out []Message // nil until the first message changes
 	for k, m := range msgs {
 		if m.Role == RoleAssistant {
@@ -322,7 +323,7 @@ func (f *fallback) provenance(i int, msgs []Message) []Message {
 
 // foreignBlocks applies the provenance rules to blocks for entry i. It
 // returns blocks itself and false when nothing changes, else a new slice.
-func (f *fallback) foreignBlocks(i int, blocks []Block) ([]Block, bool) {
+func (f *Fallback) foreignBlocks(i int, blocks []Block) ([]Block, bool) {
 	name, primary := f.entries[i].Name, f.entries[0].Name
 	var out []Block // nil until the first block changes
 	for k, b := range blocks {

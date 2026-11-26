@@ -56,7 +56,7 @@ func TestRateLimitedPrimaryFallsBackPromptly(t *testing.T) {
 					if err != nil {
 						t.Fatalf("after %v and %d primary attempts: %v", time.Since(start).Round(time.Second), hits.Load(), err)
 					}
-					if ev.Type == llm.EvTextDelta {
+					if ev.Type == llm.EventTextDelta {
 						text.WriteString(ev.Text)
 					}
 				}

@@ -247,7 +247,7 @@ type emptyReplyGate struct {
 	carried Usage
 	// stopReason and usage are those of this attempt's message delta, with
 	// carried included in usage.
-	stopReason string
+	stopReason StopReason
 	usage      Usage
 }
 
@@ -261,11 +261,11 @@ func (g *emptyReplyGate) retryable() bool {
 // emit forwards ev, or buffers it while the reply is still empty. It reports
 // whether the consumer wants more events.
 func (g *emptyReplyGate) emit(ev StreamEvent) bool {
-	if ev.Type == EvMessageDelta {
+	if ev.Type == EventMessageDelta {
 		ev.Usage.Add(g.carried)
 		g.stopReason, g.usage = ev.StopReason, ev.Usage
 	}
-	if !g.opened && (ev.Type == EvTextDelta || ev.Type == EvToolStart) {
+	if !g.opened && (ev.Type == EventTextDelta || ev.Type == EventToolStart) {
 		g.opened = true
 		if !g.flush() {
 			return false
@@ -301,7 +301,7 @@ func (g *emptyReplyGate) flush() bool {
 // nil without further reading once emit reports the consumer is gone.
 func streamOpenAIChunks(ctx context.Context, cfg *Config, body io.Reader, idle *idleTimer, emit func(StreamEvent) bool) error {
 	state := newOpenAIStreamState(cfg)
-	if !emit(StreamEvent{Type: EvMessageStart}) {
+	if !emit(StreamEvent{Type: EventMessageStart}) {
 		return nil
 	}
 	for sse, err := range readSSE(body, idle) {
@@ -396,10 +396,10 @@ func (s *openAIStreamState) translate(data string) ([]StreamEvent, error) {
 func (s *openAIStreamState) deltaEvents(d openAIDelta) []StreamEvent {
 	var events []StreamEvent
 	if d.Content != "" {
-		events = append(events, StreamEvent{Type: EvTextDelta, Index: openAITextIndex, Text: d.Content})
+		events = append(events, StreamEvent{Type: EventTextDelta, Index: openAITextIndex, Text: d.Content})
 	}
 	if thinking := firstNonEmpty(d.ReasoningContent, d.Reasoning); thinking != "" {
-		events = append(events, StreamEvent{Type: EvThinkingDelta, Index: openAIThinkingIndex, Text: thinking})
+		events = append(events, StreamEvent{Type: EventThinkingDelta, Index: openAIThinkingIndex, Text: thinking})
 	}
 	for _, call := range d.ToolCalls {
 		events = append(events, s.toolCallEvents(call)...)
@@ -424,16 +424,16 @@ func (s *openAIStreamState) toolCallEvents(call openAIToolCallDelta) []StreamEve
 		slot = &toolSlot{id: id, synthetic: synthetic, index: openAIToolIndexBase + s.next}
 		s.slots[call.Index] = slot
 		s.next++
-		events = append(events, StreamEvent{Type: EvToolStart, Index: slot.index, ToolID: id, ToolName: call.Function.Name})
+		events = append(events, StreamEvent{Type: EventToolStart, Index: slot.index, ToolID: id, ToolName: call.Function.Name})
 	}
 	index := slot.index
 	if extra := call.ExtraContent; len(extra) > 0 && string(extra) != "null" {
 		events = append(events, StreamEvent{
-			Type: EvProviderData, Index: index, Key: openAIExtraContentKey, Value: string(extra),
+			Type: EventProviderData, Index: index, Key: openAIExtraContentKey, Value: string(extra),
 		})
 	}
 	if call.Function.Arguments != "" {
-		events = append(events, StreamEvent{Type: EvToolInputDelta, Index: index, Text: call.Function.Arguments})
+		events = append(events, StreamEvent{Type: EventToolInputDelta, Index: index, Text: call.Function.Arguments})
 	}
 	return events
 }
@@ -452,14 +452,14 @@ func (s *openAIStreamState) startsNewCall(slot *toolSlot, call openAIToolCallDel
 // complete emits the closing events.
 func (s *openAIStreamState) complete(emit func(StreamEvent) bool) {
 	final := StreamEvent{
-		Type:       EvMessageDelta,
+		Type:       EventMessageDelta,
 		StopReason: s.stopReason(),
 		Usage:      s.usage,
 		Model:      s.model,
 		ResponseID: s.id,
 	}
 	if emit(final) {
-		emit(StreamEvent{Type: EvMessageStop})
+		emit(StreamEvent{Type: EventMessageStop})
 	}
 }
 
@@ -467,7 +467,7 @@ func (s *openAIStreamState) complete(emit func(StreamEvent) bool) {
 // servers report "stop" even when the model called tools, which would hide
 // the calls from a loop keyed on the stop reason, and some end with [DONE]
 // and no finish_reason at all.
-func (s *openAIStreamState) stopReason() string {
+func (s *openAIStreamState) stopReason() StopReason {
 	switch s.finishReason {
 	case "stop", "":
 		if s.next > 0 {
@@ -481,7 +481,7 @@ func (s *openAIStreamState) stopReason() string {
 	case "content_filter":
 		return StopContentFilter
 	}
-	return s.finishReason
+	return StopReason(s.finishReason)
 }
 
 // send issues the HTTP request, returning the 2xx response.
@@ -520,7 +520,7 @@ func (p *openAIProvider) buildRequest(req Request) openAIRequest {
 		Tools:           toOpenAITools(req.Tools),
 		Temperature:     req.Temperature,
 		Stop:            req.Stop,
-		ReasoningEffort: firstNonEmpty(req.ReasoningEffort, p.cfg.ReasoningEffort),
+		ReasoningEffort: string(firstNonEmpty(req.ReasoningEffort, p.cfg.ReasoningEffort)),
 		Stream:          true,
 		StreamOptions:   openAIStreamOptions{IncludeUsage: true},
 	}
@@ -530,7 +530,7 @@ func (p *openAIProvider) buildRequest(req Request) openAIRequest {
 		wire.MaxTokens = maxTokens
 	}
 	if thinking := firstNonEmpty(req.Thinking, p.cfg.Thinking); thinking != "" {
-		wire.Thinking = &openAIThinking{Type: thinking}
+		wire.Thinking = &openAIThinking{Type: string(thinking)}
 	}
 	return wire
 }

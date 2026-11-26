@@ -85,14 +85,14 @@ func TestOpenAIDecisionsAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a := resp.Answers["refund"]; a.Type != YesNo || a.Yes != 0.9 {
+	if a := resp.Answers["refund"]; a.Type != QuestionYesNo || a.Yes != 0.9 {
 		t.Errorf("refund = %+v", a)
 	}
-	if a := resp.Answers["team"]; a.Type != Choice || a.Choice != "payments" || a.Confidence != 0.8 ||
+	if a := resp.Answers["team"]; a.Type != QuestionChoice || a.Choice != "payments" || a.Confidence != 0.8 ||
 		a.Probabilities["payments"] != 0.8 || a.Probabilities["mobile"] != 0.2 {
 		t.Errorf("team = %+v", a)
 	}
-	if a := resp.Answers["urgency"]; a.Type != Score || a.Score != 0.7 || a.Confidence != 0.6 ||
+	if a := resp.Answers["urgency"]; a.Type != QuestionScore || a.Score != 0.7 || a.Confidence != 0.6 ||
 		a.Probabilities["low"] != 0.3 || a.Probabilities["high"] != 0.7 || len(a.Probabilities) != 2 {
 		t.Errorf("urgency = %+v", a)
 	}
@@ -110,10 +110,10 @@ func TestOpenAIDecisionsRefusal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a := resp.Answers["refund"]; !a.Refused || a.Type != YesNo {
+	if a := resp.Answers["refund"]; !a.Refused || a.Type != QuestionYesNo {
 		t.Errorf("refund = %+v", a)
 	}
-	if a := resp.Answers["team"]; !a.Refused || a.Type != Choice {
+	if a := resp.Answers["team"]; !a.Refused || a.Type != QuestionChoice {
 		t.Errorf("team = %+v", a)
 	}
 }

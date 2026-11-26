@@ -1,7 +1,7 @@
 package llm
 
 // firstNonEmpty returns the first non-empty string, or "" if none.
-func firstNonEmpty(values ...string) string {
+func firstNonEmpty[T ~string](values ...T) T {
 	for _, v := range values {
 		if v != "" {
 			return v

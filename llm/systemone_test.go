@@ -21,10 +21,10 @@ const soReplyJSON = `{"model":"decide:1","answers":{
 
 func soQuestions() []Question {
 	return []Question{
-		{Name: "refund", Type: YesNo, Instructions: "Is the customer asking for a refund?"},
-		{Name: "team", Type: Choice, Instructions: "Which team?", Options: []Option{
+		{Name: "refund", Type: QuestionYesNo, Instructions: "Is the customer asking for a refund?"},
+		{Name: "team", Type: QuestionChoice, Instructions: "Which team?", Choices: []Choice{
 			{Value: "payments", Description: "billing, refunds"}, {Value: "mobile", Description: "app bugs"}}},
-		{Name: "urgency", Type: Score, Instructions: "How urgent?", Options: []Option{
+		{Name: "urgency", Type: QuestionScore, Instructions: "How urgent?", Choices: []Choice{
 			{Value: "low", Description: "cosmetic"}, {Value: "high", Description: "outage"}}},
 	}
 }
@@ -70,7 +70,7 @@ func TestSystemOneRequestAndAnswers(t *testing.T) {
 	 "urgency":{"type":"score","instructions":"How urgent?","criteria":["low: cosmetic","high: outage"]}}}`
 	assertJSONEq(t, gotBody, want)
 
-	if a := resp.Answers["refund"]; a.Type != YesNo || a.Yes != 0.9923 {
+	if a := resp.Answers["refund"]; a.Type != QuestionYesNo || a.Yes != 0.9923 {
 		t.Errorf("refund = %+v", a)
 	}
 	if a := resp.Answers["team"]; a.Choice != "payments" || a.Confidence != 0.9892 || a.Probabilities["mobile"] != 0.0018 {

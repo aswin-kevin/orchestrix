@@ -202,16 +202,16 @@ func decisionImageURL(b Block) (string, error) {
 func toOpenAIDecisionQuestion(q Question) openAIDecisionQuestion {
 	wq := openAIDecisionQuestion{Name: q.Name, Instructions: q.Instructions}
 	switch q.Type {
-	case YesNo:
+	case QuestionYesNo:
 		wq.Type = openAIPredicate
-	case Choice:
+	case QuestionChoice:
 		wq.Type = openAIChoice
-		for _, o := range q.Options {
+		for _, o := range q.Choices {
 			wq.Choices = append(wq.Choices, openAIDecisionChoice(o))
 		}
-	case Score:
+	case QuestionScore:
 		wq.Type = openAIScore
-		for _, o := range q.Options {
+		for _, o := range q.Choices {
 			wq.Levels = append(wq.Levels, openAIDecisionLevel{Label: o.Value, Description: o.Description})
 		}
 	}
@@ -243,11 +243,11 @@ func (r openAIDecisionsReply) toResponse(qs []Question) *DecisionResponse {
 		}
 		switch a.Type {
 		case openAIPredicate:
-			out.Answers[q.Name] = Answer{Type: YesNo, Yes: a.Probability}
+			out.Answers[q.Name] = Answer{Type: QuestionYesNo, Yes: a.Probability}
 		case openAIChoice:
-			out.Answers[q.Name] = Answer{Type: Choice, Choice: a.Choice, Probabilities: a.probabilities(false), Confidence: a.Confidence}
+			out.Answers[q.Name] = Answer{Type: QuestionChoice, Choice: a.Choice, Probabilities: a.probabilities(false), Confidence: a.Confidence}
 		case openAIScore:
-			out.Answers[q.Name] = Answer{Type: Score, Score: a.Score, Probabilities: a.probabilities(true), Confidence: a.Confidence}
+			out.Answers[q.Name] = Answer{Type: QuestionScore, Score: a.Score, Probabilities: a.probabilities(true), Confidence: a.Confidence}
 		case openAIRefusal:
 			out.Answers[q.Name] = Answer{Type: q.Type, Refused: true}
 		}
@@ -256,7 +256,7 @@ func (r openAIDecisionsReply) toResponse(qs []Question) *DecisionResponse {
 }
 
 // probabilities maps the answer's probabilities by option value, or by label
-// for scores (the request sends each level's Option.Value as its label).
+// for scores (the request sends each level's Choice.Value as its label).
 func (a openAIDecisionAnswer) probabilities(byLabel bool) map[string]float64 {
 	if a.Probabilities == nil {
 		return nil

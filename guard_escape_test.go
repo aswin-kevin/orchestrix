@@ -19,7 +19,7 @@ func (d *recordingDecider) Decide(_ context.Context, req llm.DecisionRequest) (*
 	d.seen = append(d.seen, req.Input[0].Text)
 	answers := map[string]llm.Answer{}
 	for _, q := range req.Questions {
-		answers[q.Name] = llm.Answer{Type: llm.YesNo}
+		answers[q.Name] = llm.Answer{Type: llm.QuestionYesNo}
 	}
 	return &llm.DecisionResponse{Answers: answers}, nil
 }

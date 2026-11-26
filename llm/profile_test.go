@@ -39,17 +39,17 @@ func TestLookupLongestPrefix(t *testing.T) {
 }
 
 func TestLookupUnknownDefault(t *testing.T) {
-	if got := LookupProfile("mystery-model"); got != DefaultProfile {
-		t.Errorf("LookupProfile(unknown) = %+v, want DefaultProfile %+v", got, DefaultProfile)
+	if got := LookupProfile("mystery-model"); got != DefaultProfile() {
+		t.Errorf("LookupProfile(unknown) = %+v, want DefaultProfile() %+v", got, DefaultProfile())
 	}
-	if DefaultProfile.ContextWindow != 128_000 || DefaultProfile.MaxOutput != 8_192 {
-		t.Errorf("DefaultProfile = %+v, want 128000 context and 8192 output", DefaultProfile)
+	if DefaultProfile().ContextWindow != 128_000 || DefaultProfile().MaxOutput != 8_192 {
+		t.Errorf("DefaultProfile() = %+v, want 128000 context and 8192 output", DefaultProfile())
 	}
 }
 
 func TestLookupIsCaseSensitive(t *testing.T) {
-	if got := LookupProfile("Claude-3"); got != DefaultProfile {
-		t.Errorf("LookupProfile(%q) = %+v, want DefaultProfile", "Claude-3", got)
+	if got := LookupProfile("Claude-3"); got != DefaultProfile() {
+		t.Errorf("LookupProfile(%q) = %+v, want DefaultProfile()", "Claude-3", got)
 	}
 }
 

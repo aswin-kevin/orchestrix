@@ -270,7 +270,7 @@ func TestLiveSummarizationTinyWindow(t *testing.T) {
 
 	// Measure the fixed cost (system prompt and tools) with a first request
 	// so the window leaves a known amount of room for the conversation.
-	probe, _ := drain(t, minimalSummarizingAgent(t, spec, llm.DefaultProfile.ContextWindow).
+	probe, _ := drain(t, minimalSummarizingAgent(t, spec, llm.DefaultProfile().ContextWindow).
 		Run(ctx, orchestrix.Text("Reply with OK.")))
 	requireCompleted(t, probe)
 	baseline := probe.Usage.Input + probe.Usage.CacheRead + probe.Usage.CacheWrite

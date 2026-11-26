@@ -17,7 +17,7 @@ import (
 
 func overloaded() llmtest.Turn { return llmtest.Turn{Err: &llm.APIError{Status: 529}} }
 
-func newFallback(t *testing.T, cfg llm.FallbackConfig) llm.Provider {
+func newFallback(t *testing.T, cfg llm.FallbackConfig) *llm.Fallback {
 	t.Helper()
 	p, err := llm.NewFallback(cfg)
 	if err != nil {

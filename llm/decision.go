@@ -13,14 +13,14 @@ type QuestionType string
 
 // Question types.
 const (
-	YesNo  QuestionType = "yes_no"
-	Choice QuestionType = "choice"
-	Score  QuestionType = "score"
+	QuestionYesNo  QuestionType = "yes_no"
+	QuestionChoice QuestionType = "choice"
+	QuestionScore  QuestionType = "score"
 )
 
-// Option is a choice option or a score level.
-type Option struct {
-	// Value is the option's identifier, used as the answer and as a key of
+// Choice is a choice option or a score level.
+type Choice struct {
+	// Value is the choice's identifier, used as the answer and as a key of
 	// Answer.Probabilities; unique within a question.
 	Value string
 	// Description explains to the model what the option or level means.
@@ -34,7 +34,7 @@ type Question struct {
 	Type QuestionType
 	// Instructions tell the model what to decide; required.
 	Instructions string
-	Options      []Option // choice: options; score: levels, lowest first
+	Choices      []Choice // choice: choices; score: levels, lowest first
 }
 
 // DecisionRequest asks a decision model to answer Questions about Input.
@@ -50,10 +50,10 @@ type Answer struct {
 	// Type is the type of the question this answers; it selects which of the
 	// other fields are set.
 	Type          QuestionType
-	Yes           float64            // YesNo: probability of yes
+	Yes           float64            // QuestionYesNo: probability of yes
 	Choice        string             // Choice: the chosen option
 	Score         float64            // Score: expected level index, may be fractional
-	Probabilities map[string]float64 // Choice/Score: by Option.Value
+	Probabilities map[string]float64 // Choice/Score: by Choice.Value
 	Confidence    float64            // Choice/Score
 	Refused       bool               // the provider declined this question
 }
@@ -105,17 +105,17 @@ func (q Question) validate() error {
 	if strings.TrimSpace(q.Instructions) == "" {
 		return fmt.Errorf("llm: question %q has no instructions", q.Name)
 	}
-	n := len(q.Options)
+	n := len(q.Choices)
 	switch q.Type {
-	case YesNo:
+	case QuestionYesNo:
 		if n != 0 {
-			return fmt.Errorf("llm: yes_no question %q must not have options", q.Name)
+			return fmt.Errorf("llm: yes_no question %q must not have choices", q.Name)
 		}
-	case Choice:
+	case QuestionChoice:
 		if n < 2 {
-			return fmt.Errorf("llm: choice question %q needs at least 2 options", q.Name)
+			return fmt.Errorf("llm: choice question %q needs at least 2 choices", q.Name)
 		}
-	case Score:
+	case QuestionScore:
 		if n < 2 || n > 10 {
 			return fmt.Errorf("llm: score question %q needs 2 to 10 levels", q.Name)
 		}
@@ -123,12 +123,12 @@ func (q Question) validate() error {
 		return fmt.Errorf("llm: question %q has unknown type %q", q.Name, q.Type)
 	}
 	values := make(map[string]bool, n)
-	for _, o := range q.Options {
+	for _, o := range q.Choices {
 		if o.Value == "" {
-			return fmt.Errorf("llm: question %q has an option with an empty value", q.Name)
+			return fmt.Errorf("llm: question %q has a choice with an empty value", q.Name)
 		}
 		if values[o.Value] {
-			return fmt.Errorf("llm: question %q has duplicate option value %q", q.Name, o.Value)
+			return fmt.Errorf("llm: question %q has duplicate choice value %q", q.Name, o.Value)
 		}
 		values[o.Value] = true
 	}

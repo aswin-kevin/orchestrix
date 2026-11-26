@@ -41,7 +41,7 @@ type Turn struct {
 	// ToolCalls are emitted after the text, each as its own content block.
 	ToolCalls []Call
 	// StopReason defaults to tool_use when ToolCalls is set, else end_turn.
-	StopReason string
+	StopReason llm.StopReason
 	// Usage is the token usage the turn reports.
 	Usage llm.Usage
 	// Err, when set, is returned instead of any events.
@@ -116,7 +116,7 @@ func (s *Scripted) take(req llm.Request) (Turn, error) {
 // thinking, then text, then each tool call, every block at its own index.
 func (t Turn) events() ([]llm.StreamEvent, error) {
 	evs := []llm.StreamEvent{{
-		Type: llm.EvMessageStart,
+		Type: llm.EventMessageStart,
 		Usage: llm.Usage{
 			Input:      t.Usage.Input,
 			CacheRead:  t.Usage.CacheRead,
@@ -125,11 +125,11 @@ func (t Turn) events() ([]llm.StreamEvent, error) {
 	}}
 	index := 0
 	if t.Thinking != "" {
-		evs = append(evs, llm.StreamEvent{Type: llm.EvThinkingDelta, Index: index, Text: t.Thinking})
+		evs = append(evs, llm.StreamEvent{Type: llm.EventThinkingDelta, Index: index, Text: t.Thinking})
 		index++
 	}
 	if t.Text != "" {
-		evs = append(evs, llm.StreamEvent{Type: llm.EvTextDelta, Index: index, Text: t.Text})
+		evs = append(evs, llm.StreamEvent{Type: llm.EventTextDelta, Index: index, Text: t.Text})
 		index++
 	}
 	for _, c := range t.ToolCalls {
@@ -138,18 +138,18 @@ func (t Turn) events() ([]llm.StreamEvent, error) {
 			return nil, err
 		}
 		evs = append(evs,
-			llm.StreamEvent{Type: llm.EvToolStart, Index: index, ToolID: c.ID, ToolName: c.Name},
-			llm.StreamEvent{Type: llm.EvToolInputDelta, Index: index, Text: input},
+			llm.StreamEvent{Type: llm.EventToolStart, Index: index, ToolID: c.ID, ToolName: c.Name},
+			llm.StreamEvent{Type: llm.EventToolInputDelta, Index: index, Text: input},
 		)
 		index++
 	}
 	return append(evs,
 		llm.StreamEvent{
-			Type:       llm.EvMessageDelta,
+			Type:       llm.EventMessageDelta,
 			StopReason: t.stopReason(),
 			Usage:      llm.Usage{Output: t.Usage.Output},
 		},
-		llm.StreamEvent{Type: llm.EvMessageStop},
+		llm.StreamEvent{Type: llm.EventMessageStop},
 	), nil
 }
 
@@ -172,7 +172,7 @@ func (t Turn) toolInput(c Call) (string, error) {
 	return string(b), nil
 }
 
-func (t Turn) stopReason() string {
+func (t Turn) stopReason() llm.StopReason {
 	switch {
 	case t.StopReason != "":
 		return t.StopReason

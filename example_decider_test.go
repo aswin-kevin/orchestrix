@@ -19,9 +19,9 @@ func ExampleNewDecider() {
 	resp, err := d.Decide(context.Background(), llm.DecisionRequest{
 		Input: []llm.Block{llm.TextBlock("Please refund my order, it never arrived.")},
 		Questions: []llm.Question{
-			{Name: "angry", Type: llm.YesNo, Instructions: "Is the customer angry?"},
-			{Name: "topic", Type: llm.Choice, Instructions: "What is this about?",
-				Options: []llm.Option{{Value: "refund"}, {Value: "shipping"}, {Value: "other"}}},
+			{Name: "angry", Type: llm.QuestionYesNo, Instructions: "Is the customer angry?"},
+			{Name: "topic", Type: llm.QuestionChoice, Instructions: "What is this about?",
+				Choices: []llm.Choice{{Value: "refund"}, {Value: "shipping"}, {Value: "other"}}},
 		},
 	})
 	if err != nil {

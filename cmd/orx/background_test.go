@@ -254,16 +254,16 @@ func (p *stepProvider) Stream(_ context.Context, _ llm.Request) iter.Seq2[llm.St
 	p.steps = p.steps[1:]
 	p.mu.Unlock()
 	return func(yield func(llm.StreamEvent, error) bool) {
-		if !yield(llm.StreamEvent{Type: llm.EvMessageStart}, nil) ||
-			!yield(llm.StreamEvent{Type: llm.EvTextDelta, Text: st.text}, nil) {
+		if !yield(llm.StreamEvent{Type: llm.EventMessageStart}, nil) ||
+			!yield(llm.StreamEvent{Type: llm.EventTextDelta, Text: st.text}, nil) {
 			return
 		}
 		if st.err != nil {
 			yield(llm.StreamEvent{}, st.err)
 			return
 		}
-		if yield(llm.StreamEvent{Type: llm.EvMessageDelta, StopReason: "end_turn"}, nil) {
-			yield(llm.StreamEvent{Type: llm.EvMessageStop}, nil)
+		if yield(llm.StreamEvent{Type: llm.EventMessageDelta, StopReason: "end_turn"}, nil) {
+			yield(llm.StreamEvent{Type: llm.EventMessageStop}, nil)
 		}
 	}
 }

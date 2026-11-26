@@ -22,16 +22,16 @@ func feed(t *testing.T, events ...StreamEvent) *Response {
 
 func TestAccumulatorAssemblesInterleavedBlocks(t *testing.T) {
 	resp := feed(t,
-		StreamEvent{Type: EvTextDelta, Index: 0, Text: "Hel"},
-		StreamEvent{Type: EvTextDelta, Index: 0, Text: "lo"},
-		StreamEvent{Type: EvToolStart, Index: 1, ToolID: "t1", ToolName: "read_file"},
-		StreamEvent{Type: EvToolInputDelta, Index: 1, Text: `{"pa`},
-		StreamEvent{Type: EvToolInputDelta, Index: 1, Text: `th":"/a"}`},
-		StreamEvent{Type: EvThinkingDelta, Index: 2, Text: "hmm"},
-		StreamEvent{Type: EvSignature, Index: 2, Value: "sig"},
-		StreamEvent{Type: EvProviderData, Index: 1, Key: "k", Value: "v"},
-		StreamEvent{Type: EvMessageDelta, StopReason: StopToolUse, Usage: Usage{Output: 9}},
-		StreamEvent{Type: EvMessageStop},
+		StreamEvent{Type: EventTextDelta, Index: 0, Text: "Hel"},
+		StreamEvent{Type: EventTextDelta, Index: 0, Text: "lo"},
+		StreamEvent{Type: EventToolStart, Index: 1, ToolID: "t1", ToolName: "read_file"},
+		StreamEvent{Type: EventToolInputDelta, Index: 1, Text: `{"pa`},
+		StreamEvent{Type: EventToolInputDelta, Index: 1, Text: `th":"/a"}`},
+		StreamEvent{Type: EventThinkingDelta, Index: 2, Text: "hmm"},
+		StreamEvent{Type: EventSignature, Index: 2, Value: "sig"},
+		StreamEvent{Type: EventProviderData, Index: 1, Key: "k", Value: "v"},
+		StreamEvent{Type: EventMessageDelta, StopReason: StopToolUse, Usage: Usage{Output: 9}},
+		StreamEvent{Type: EventMessageStop},
 	)
 	c := resp.Message.Content
 	if len(c) != 3 {
@@ -60,9 +60,9 @@ func TestAccumulatorAssemblesInterleavedBlocks(t *testing.T) {
 
 func TestAccumulatorOrdersBlocksByFirstSeenIndex(t *testing.T) {
 	resp := feed(t,
-		StreamEvent{Type: EvTextDelta, Index: 5, Text: "x"},
-		StreamEvent{Type: EvToolStart, Index: 2, ToolID: "t", ToolName: "n"},
-		StreamEvent{Type: EvTextDelta, Index: 5, Text: "y"},
+		StreamEvent{Type: EventTextDelta, Index: 5, Text: "x"},
+		StreamEvent{Type: EventToolStart, Index: 2, ToolID: "t", ToolName: "n"},
+		StreamEvent{Type: EventTextDelta, Index: 5, Text: "y"},
 	)
 	c := resp.Message.Content
 	if len(c) != 2 || c[0].Text != "xy" || c[1].Type != BlockToolUse {
@@ -72,9 +72,9 @@ func TestAccumulatorOrdersBlocksByFirstSeenIndex(t *testing.T) {
 
 func TestAccumulatorMergesUsageEchoes(t *testing.T) {
 	resp := feed(t,
-		StreamEvent{Type: EvMessageStart, Usage: Usage{Input: 10, CacheRead: 4}},
-		StreamEvent{Type: EvMessageDelta, Usage: Usage{Input: 10, Output: 5}},
-		StreamEvent{Type: EvMessageDelta, Usage: Usage{Output: 7}, StopReason: StopEndTurn},
+		StreamEvent{Type: EventMessageStart, Usage: Usage{Input: 10, CacheRead: 4}},
+		StreamEvent{Type: EventMessageDelta, Usage: Usage{Input: 10, Output: 5}},
+		StreamEvent{Type: EventMessageDelta, Usage: Usage{Output: 7}, StopReason: StopEndTurn},
 	)
 	want := Usage{Input: 10, Output: 12, CacheRead: 4}
 	if resp.Usage != want {
@@ -83,7 +83,7 @@ func TestAccumulatorMergesUsageEchoes(t *testing.T) {
 }
 
 func TestAccumulatorEmptyToolInputBecomesObject(t *testing.T) {
-	resp := feed(t, StreamEvent{Type: EvToolStart, Index: 0, ToolID: "t1", ToolName: "n"})
+	resp := feed(t, StreamEvent{Type: EventToolStart, Index: 0, ToolID: "t1", ToolName: "n"})
 	if got := string(resp.Message.Content[0].Input); got != `{}` {
 		t.Errorf("Input = %q, want {}", got)
 	}
@@ -91,8 +91,8 @@ func TestAccumulatorEmptyToolInputBecomesObject(t *testing.T) {
 
 func TestAccumulatorInvalidToolJSONIsKept(t *testing.T) {
 	resp := feed(t,
-		StreamEvent{Type: EvToolStart, Index: 0, ToolID: "t1", ToolName: "n"},
-		StreamEvent{Type: EvToolInputDelta, Index: 0, Text: `{"a":`},
+		StreamEvent{Type: EventToolStart, Index: 0, ToolID: "t1", ToolName: "n"},
+		StreamEvent{Type: EventToolInputDelta, Index: 0, Text: `{"a":`},
 	)
 	in := resp.Message.Content[0].Input
 	if string(in) != `{"a":` {
@@ -105,10 +105,10 @@ func TestAccumulatorInvalidToolJSONIsKept(t *testing.T) {
 
 func TestAccumulatorRejectsDeltaForWrongBlockKind(t *testing.T) {
 	var a Accumulator
-	if err := a.Add(StreamEvent{Type: EvTextDelta, Index: 0, Text: "x"}); err != nil {
+	if err := a.Add(StreamEvent{Type: EventTextDelta, Index: 0, Text: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Add(StreamEvent{Type: EvToolInputDelta, Index: 0, Text: "{}"}); err == nil {
+	if err := a.Add(StreamEvent{Type: EventToolInputDelta, Index: 0, Text: "{}"}); err == nil {
 		t.Error("expected error for tool input delta on a text block")
 	}
 }

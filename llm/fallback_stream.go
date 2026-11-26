@@ -13,9 +13,9 @@ import (
 // the stream as is, so text already yielded is never repeated or mixed with
 // another model's; OnFallback is not called then, but a fallback error still
 // starts the entry's cool-down so the next call begins elsewhere. An attempt that ends without content is committed when it
-// ends. The first event of each new block is followed by an EvProviderData
+// ends. The first event of each new block is followed by an EventProviderData
 // event stamping the block with the entry's name.
-func (f *fallback) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
+func (f *Fallback) Stream(ctx context.Context, req Request) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
 		order := f.order(f.now())
 		var last error
@@ -39,7 +39,7 @@ func (f *fallback) Stream(ctx context.Context, req Request) iter.Seq2[StreamEven
 // streamEntry relays entry i's stream to yield under the rules of Stream. It
 // returns switched true, with the error, when the attempt failed with a
 // fallback error before committing; nothing has been yielded then.
-func (f *fallback) streamEntry(ctx context.Context, i int, req Request, yield func(StreamEvent, error) bool) (switched bool, err error) {
+func (f *Fallback) streamEntry(ctx context.Context, i int, req Request, yield func(StreamEvent, error) bool) (switched bool, err error) {
 	s := entryStream{name: f.entries[i].Name, yield: yield}
 	for ev, err := range f.entries[i].Provider.Stream(ctx, f.prepare(i, req)) {
 		if err != nil {
@@ -90,7 +90,7 @@ func (s *entryStream) add(ev StreamEvent) bool {
 		s.stamped = make(map[int]bool)
 	}
 	s.stamped[ev.Index] = true
-	return s.emit(StreamEvent{Type: EvProviderData, Index: ev.Index, Key: sourceKey, Value: s.name})
+	return s.emit(StreamEvent{Type: EventProviderData, Index: ev.Index, Key: sourceKey, Value: s.name})
 }
 
 // emit yields ev once committed and holds it back before.
@@ -123,15 +123,15 @@ func (s *entryStream) commit() bool {
 // consumer, after which a stream can no longer switch entries.
 func isContentEvent(t EventType) bool {
 	switch t {
-	case EvTextDelta, EvThinkingDelta, EvToolStart, EvToolInputDelta:
+	case EventTextDelta, EventThinkingDelta, EventToolStart, EventToolInputDelta:
 		return true
 	}
 	return false
 }
 
 // startsBlock reports whether an event of type t belongs to a content block,
-// creating it in an Accumulator when its Index is new. EvProviderData does
+// creating it in an Accumulator when its Index is new. EventProviderData does
 // not: it needs its block to exist already.
 func startsBlock(t EventType) bool {
-	return isContentEvent(t) || t == EvSignature
+	return isContentEvent(t) || t == EventSignature
 }

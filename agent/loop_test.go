@@ -176,7 +176,7 @@ func TestRunUsageAndInputState(t *testing.T) {
 	if !sawUsage {
 		t.Fatal("no KindUsage event")
 	}
-	if p.Requests[0].MaxTokens != llm.DefaultProfile.MaxOutput {
+	if p.Requests[0].MaxTokens != llm.DefaultProfile().MaxOutput {
 		t.Fatalf("MaxTokens = %d, want profile max output", p.Requests[0].MaxTokens)
 	}
 }
@@ -365,7 +365,7 @@ type blockingProvider struct {
 
 func (p *blockingProvider) Stream(ctx context.Context, _ llm.Request) iter.Seq2[llm.StreamEvent, error] {
 	return func(yield func(llm.StreamEvent, error) bool) {
-		if !yield(llm.StreamEvent{Type: llm.EvTextDelta, Text: "partial"}, nil) {
+		if !yield(llm.StreamEvent{Type: llm.EventTextDelta, Text: "partial"}, nil) {
 			return
 		}
 		<-ctx.Done()

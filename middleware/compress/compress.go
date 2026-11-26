@@ -255,7 +255,7 @@ func (m *middleware) shouldPropose(req *agent.ModelRequest) bool {
 	}
 	window := req.Profile.ContextWindow
 	if window <= 0 {
-		window = llm.DefaultProfile.ContextWindow
+		window = llm.DefaultProfile().ContextWindow
 	}
 	return float64(summarize.Estimate(req.State, req.Request.Messages)) > m.cfg.TriggerFraction*float64(window)
 }
