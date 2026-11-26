@@ -95,7 +95,7 @@ type settledFunc func(ctx context.Context, t *task, out Outcome, ended time.Time
 
 func newTask(base context.Context) *task {
 	base = context.WithoutCancel(base)
-	return &task{base: base, epCtx: base, done: make(chan struct{})}
+	return &task{base: base, epCtx: base, done: make(chan struct{}), state: episodeStarting}
 }
 
 // bind gives t the identity of its record and the function told when an

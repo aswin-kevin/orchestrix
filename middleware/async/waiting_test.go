@@ -414,9 +414,9 @@ func TestApproverStaysInBand(t *testing.T) {
 	h := &harness{m: m, a: a, p: p, st: state.New(), thread: "t", be: testutil.Memory(t)}
 	h.run(t, context.Background(), "go", nil)
 	waitEnded(t, m, "async_1")
-	got := calls.waitCalls(t, 1)
+	calls.waitCalls(t, 1)
 	time.Sleep(20 * time.Millisecond)
-	if got = calls.get(); len(got) != 1 || got[0].Status != StatusCompleted {
+	if got := calls.get(); len(got) != 1 || got[0].Status != StatusCompleted {
 		t.Fatalf("OnSettled calls = %+v, want one completed", got)
 	}
 	if asked.Load() != 1 || w.runs.Load() != 1 {
