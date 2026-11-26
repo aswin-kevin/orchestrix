@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
 	"github.com/aswin-kevin/orchestrix/backend/backendtest"
@@ -184,6 +185,56 @@ func TestCloseConcurrent(t *testing.T) {
 	}
 	if n := def.calls.Load(); n != 1 {
 		t.Fatalf("closed %d times, want 1", n)
+	}
+}
+
+// blockingCloser is a backend whose Close signals entered, then blocks
+// until release is closed.
+type blockingCloser struct {
+	backend.Backend
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingCloser) Close(context.Context) error {
+	close(c.entered)
+	<-c.release
+	return nil
+}
+
+// A Close whose ctx ends while the first Close is still working returns
+// ctx.Err() at once; the work goes on, and a later Close gets its result.
+func TestCloseHonoursEachCallersCtx(t *testing.T) {
+	def := &blockingCloser{Backend: testutil.Memory(t), entered: make(chan struct{}), release: make(chan struct{})}
+	closeFn := closeOf(t, mustNew(t, def))
+	first := make(chan error, 1)
+	go func() { first <- closeFn(context.Background()) }()
+	<-def.entered
+
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	second := make(chan error, 1)
+	go func() { second <- closeFn(expired) }()
+	select {
+	case err := <-second:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("second Close = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		close(def.release)
+		t.Fatal("second Close with an expired ctx waited for the first")
+	}
+	select {
+	case err := <-first:
+		t.Fatalf("first Close returned %v before its work finished", err)
+	default:
+	}
+	close(def.release)
+	if err := <-first; err != nil {
+		t.Fatalf("first Close = %v", err)
+	}
+	if err := closeFn(expired); err != nil {
+		t.Fatalf("Close after the work finished = %v, want its result", err)
 	}
 }
 

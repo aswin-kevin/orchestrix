@@ -120,7 +120,8 @@ type Backend interface {
 
 // ExecOptions configures Executor.Execute and Starter.Start.
 type ExecOptions struct {
-	// Timeout stops the command after this long; 0 means the backend default.
+	// Timeout stops the command after this long; 0 means the backend
+	// default, and implementations treat a negative value as 0.
 	Timeout time.Duration
 	// Env holds variables that override the backend's environment; nil adds
 	// none. Implementations must not modify it. A key must be non-empty and
@@ -128,7 +129,8 @@ type ExecOptions struct {
 	Env map[string]string
 	// Dir is the working directory as a backend path; empty means the root.
 	Dir string
-	// MaxOutputBytes caps the captured output; 0 means the backend default.
+	// MaxOutputBytes caps the captured output; 0 means the backend default,
+	// and implementations treat a negative value as 0.
 	MaxOutputBytes int
 }
 

@@ -100,7 +100,9 @@ func InheritedEnv() []string { return hostenv.DefaultNames() }
 type Config struct {
 	// Env is added to every command's environment after the inherited
 	// variables, NonInteractiveEnv and SafeGitEnv, so it wins over them;
-	// ExecOptions.Env wins over it. nil adds nothing.
+	// ExecOptions.Env wins over it. nil adds nothing. A key that is empty
+	// or holds '=' or NUL makes New fail, and in ExecOptions.Env makes
+	// Execute and Start fail.
 	Env map[string]string
 	// InheritEnv passes the whole host environment instead of only
 	// InheritedEnv. It may expose secrets such as API keys to commands.
@@ -145,6 +147,9 @@ func New(root string, cfg Config) (*Backend, error) {
 	case cfg.MemoryLimitBytes < 0:
 		return nil, errors.New("shell: MemoryLimitBytes is negative")
 	}
+	if err := checkEnv(cfg.Env); err != nil {
+		return nil, err
+	}
 	d, err := disk.New(root, cfg.Disk)
 	if err != nil {
 		return nil, fmt.Errorf("shell: %w", err)
@@ -180,6 +185,9 @@ func (b *Backend) Start(ctx context.Context, cmd string, opts backend.ExecOption
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := checkEnv(opts.Env); err != nil {
+		return nil, err
+	}
 	dir, err := b.workDir(opts.Dir)
 	if err != nil {
 		return nil, err
@@ -207,6 +215,14 @@ func (b *Backend) workDir(dir string) (string, error) {
 		return "", fmt.Errorf("shell: dir %s: %w", dir, backend.ErrNotDir)
 	}
 	return realPath, nil
+}
+
+// checkEnv rejects an environment key that is empty or holds '=' or NUL.
+func checkEnv(env map[string]string) error {
+	if key, bad := hostenv.InvalidKey(env); bad {
+		return fmt.Errorf("shell: env key %q is invalid", key)
+	}
+	return nil
 }
 
 // environ builds a command's environment, lowest precedence first. exec.Cmd

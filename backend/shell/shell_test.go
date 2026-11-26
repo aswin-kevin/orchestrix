@@ -416,6 +416,9 @@ func TestNewRejectsNegative(t *testing.T) {
 		"Timeout":          {shell.Config{Timeout: -1}, "shell: Timeout is negative"},
 		"MaxOutputBytes":   {shell.Config{MaxOutputBytes: -1}, "shell: MaxOutputBytes is negative"},
 		"MemoryLimitBytes": {shell.Config{MemoryLimitBytes: -1}, "shell: MemoryLimitBytes is negative"},
+		"empty env key":    {shell.Config{Env: map[string]string{"": "x"}}, `shell: env key "" is invalid`},
+		"env key with =":   {shell.Config{Env: map[string]string{"A=B": "x"}}, `shell: env key "A=B" is invalid`},
+		"env key with NUL": {shell.Config{Env: map[string]string{"A\x00": "x"}}, `shell: env key "A\x00" is invalid`},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -427,6 +430,26 @@ func TestNewRejectsNegative(t *testing.T) {
 				t.Errorf("New returned a backend with its error")
 			}
 		})
+	}
+}
+
+func TestExecRejectsInvalidEnvKey(t *testing.T) {
+	b, err := shell.New(t.TempDir(), shell.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"", "A=B", "A\x00"} {
+		want := `shell: env key "` + strings.ReplaceAll(key, "\x00", `\x00`) + `" is invalid`
+		opts := backend.ExecOptions{Env: map[string]string{"OK": "1", key: "x"}}
+		if res, err := b.Execute(t.Context(), "echo ran", opts); err == nil || err.Error() != want {
+			t.Errorf("Execute with env key %q = %+v, %v; want %q", key, res, err, want)
+		}
+		if p, err := b.Start(t.Context(), "echo ran", opts); err == nil || err.Error() != want {
+			if err == nil {
+				<-p.Done()
+			}
+			t.Errorf("Start with env key %q: err = %v, want %q", key, err, want)
+		}
 	}
 }
 

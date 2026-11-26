@@ -46,9 +46,12 @@ type composite struct {
 
 	// owned is def followed by the route backends in the order given to
 	// New: the order Close releases them in.
-	owned     []backend.Backend
-	closeOnce sync.Once
-	closeErr  error
+	owned []backend.Backend
+
+	closeMu   sync.Mutex
+	closing   bool          // the first Close has started
+	closeDone chan struct{} // closed once the first Close has finished
+	closeErr  error         // written before closeDone is closed
 }
 
 var (
