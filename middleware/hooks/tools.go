@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/internal/toolutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -174,7 +175,7 @@ func setDescription(call *agent.ToolCall, fields map[string]json.RawMessage, des
 func rewriteInput(ctx context.Context, call *agent.ToolCall, updated json.RawMessage) *tool.Result {
 	info, ok := agent.Info(ctx)
 	if !ok {
-		return errorResult("hooks: cannot check a rewritten input outside a run")
+		return toolutil.ErrorResult("hooks: cannot check a rewritten input outside a run")
 	}
 	call.Input = updated
 	if res := checkInput(call); res != nil {
@@ -183,7 +184,7 @@ func rewriteInput(ctx context.Context, call *agent.ToolCall, updated json.RawMes
 	d := info.Agent.CheckPermission(ctx, call)
 	switch {
 	case d.Behavior == permission.Deny:
-		return errorResult("Permission denied: %s", d.Message)
+		return toolutil.ErrorResult("Permission denied: %s", d.Message)
 	case d.Behavior == permission.Allow && len(d.UpdatedInput) > 0:
 		call.Input = d.UpdatedInput
 		return checkInput(call)
@@ -195,14 +196,9 @@ func rewriteInput(ctx context.Context, call *agent.ToolCall, updated json.RawMes
 // error result for invalid input.
 func checkInput(call *agent.ToolCall) *tool.Result {
 	if err := tool.CheckInput(call.Tool, call.Input); err != nil {
-		return errorResult("invalid input for %s: %v", call.Name, err)
+		return toolutil.ErrorResult("invalid input for %s: %v", call.Name, err)
 	}
 	return nil
-}
-
-func errorResult(format string, args ...any) *tool.Result {
-	res := tool.Errorf(format, args...)
-	return &res
 }
 
 // toolInput describes call to a hook.
@@ -224,7 +220,7 @@ func toolInput(ctx context.Context, call *agent.ToolCall) (ToolInput, error) {
 }
 
 func blockedResult(reason string) *tool.Result {
-	return errorResult("Blocked by hook: %s", reason)
+	return toolutil.ErrorResult("Blocked by hook: %s", reason)
 }
 
 // derefResult returns *res, or the zero Result when res is nil.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/agent/elide"
+	"github.com/aswin-kevin/orchestrix/internal/msgutil"
 	"github.com/aswin-kevin/orchestrix/internal/pathsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -172,7 +173,7 @@ func boundedRender(msgs []llm.Message, limit int) string {
 		if size > limit {
 			break
 		}
-		if i == 0 || !carriesToolResult(msgs[i]) {
+		if i == 0 || !msgutil.CarriesToolResult(msgs[i]) {
 			start = i
 		}
 	}

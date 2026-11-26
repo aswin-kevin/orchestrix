@@ -814,3 +814,13 @@ func (m *Manager[H]) shutdown(ctx context.Context, wait time.Duration) bool {
 	}
 	return false
 }
+
+// WaitLimit turns a requested number of seconds into a wait, capped at max;
+// zero or less means max. A request too large to convert to a Duration
+// also means max.
+func WaitLimit(seconds int, max time.Duration) time.Duration {
+	if seconds <= 0 || time.Duration(seconds) >= max/time.Second {
+		return max
+	}
+	return time.Duration(seconds) * time.Second
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/aswin-kevin/orchestrix/internal/toolutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -152,7 +153,7 @@ func (r *run) prepare(use llm.Block, via string) (c *toolCall) {
 	c.tool = t
 	input, err := parseToolInput(use.Input)
 	if err != nil {
-		c.blocked = errorResult("invalid JSON arguments: %v. Re-issue the call with valid JSON.", err)
+		c.blocked = toolutil.ErrorResult("invalid JSON arguments: %v. Re-issue the call with valid JSON.", err)
 		return c
 	}
 	c.input = input
@@ -180,15 +181,15 @@ func (r *run) prepare(use llm.Block, via string) (c *toolCall) {
 func (r *run) resolve(name string) (tool.Tool, *tool.Result) {
 	// The model may still call a tool hidden from it during settlement.
 	if r.disabled(name) {
-		return nil, errorResult("tool %s is not available while the run is wrapping up", name)
+		return nil, toolutil.ErrorResult("tool %s is not available while the run is wrapping up", name)
 	}
 	t, ok := r.turnTools().Get(name)
 	if !ok {
-		return nil, errorResult("unknown tool %q", name)
+		return nil, toolutil.ErrorResult("unknown tool %q", name)
 	}
 	if a, ok := tool.As[tool.Availability](t); ok {
 		if err := a.Available(r.state); err != nil {
-			return nil, errorResult("%v", err)
+			return nil, toolutil.ErrorResult("%v", err)
 		}
 	}
 	return t, nil
@@ -204,7 +205,7 @@ func (r *run) resolve(name string) (tool.Tool, *tool.Result) {
 func (r *run) dispatch(c *toolCall, d tool.Dispatcher) *tool.Result {
 	name, input, err := d.Dispatch(c.input)
 	if err != nil {
-		return errorResult("%v", err)
+		return toolutil.ErrorResult("%v", err)
 	}
 	target, blocked := r.resolve(name)
 	if blocked != nil {
@@ -214,7 +215,7 @@ func (r *run) dispatch(c *toolCall, d tool.Dispatcher) *tool.Result {
 		return notDispatchable(name, c.name)
 	}
 	if !json.Valid(input) {
-		return errorResult("invalid input for %s: not valid JSON", name)
+		return toolutil.ErrorResult("invalid input for %s: not valid JSON", name)
 	}
 	if res := validateInput(target, input); res != nil {
 		return res
@@ -233,5 +234,5 @@ func concurrencySafe(t tool.Tool, in json.RawMessage) bool {
 
 // notDispatchable answers a dispatch whose target is itself a dispatcher.
 func notDispatchable(target, via string) *tool.Result {
-	return errorResult("tool %s cannot be called through %s", target, via)
+	return toolutil.ErrorResult("tool %s cannot be called through %s", target, via)
 }

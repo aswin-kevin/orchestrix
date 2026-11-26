@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/agent/elide"
+	"github.com/aswin-kevin/orchestrix/internal/msgutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/summarize"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -77,16 +77,11 @@ func (m *Middleware) selectRange(s *state.State) (span, bool) {
 func turnStarts(msgs []llm.Message, from int) []int {
 	var starts []int
 	for i := from; i < len(msgs); i++ {
-		if isUserTurn(msgs[i]) {
+		if msgutil.IsUserTurn(msgs[i]) {
 			starts = append(starts, i)
 		}
 	}
 	return starts
-}
-
-func isUserTurn(m llm.Message) bool {
-	return m.Role == llm.RoleUser && m.Meta[agent.InjectedMetaKey] == "" &&
-		!slices.ContainsFunc(m.Content, func(b llm.Block) bool { return b.Type == llm.BlockToolResult })
 }
 
 // obstacles returns the ranges a proposal must not touch: the elisions at or

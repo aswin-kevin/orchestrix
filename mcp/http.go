@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/internal/limitio"
 	"github.com/aswin-kevin/orchestrix/internal/sse"
 )
 
@@ -391,11 +392,11 @@ func hasMediaType(resp *http.Response, mediaType string) bool {
 
 // readLimited reads all of r, failing once it holds more than max bytes.
 func readLimited(r io.Reader, max int) ([]byte, error) {
-	body, err := io.ReadAll(io.LimitReader(r, int64(max)+1))
+	body, over, err := limitio.ReadAll(r, int64(max))
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > max {
+	if over {
 		return nil, fmt.Errorf("response over %d bytes", max)
 	}
 	return body, nil

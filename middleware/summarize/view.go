@@ -5,8 +5,8 @@ import (
 	"slices"
 	"unicode/utf8"
 
-	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/agent/elide"
+	"github.com/aswin-kevin/orchestrix/internal/msgutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 )
@@ -40,7 +40,7 @@ func (m *Middleware) view(s *state.State, current []llm.Message) []llm.Message {
 // Assistant messages inside an elision are not in the view, so they are not
 // counted; the view holds the others in the same order.
 func settledAssistants(history []llm.Message, from int, applied []elide.Elision) int {
-	end := lastIndex(history[from:], isUserTurn) + from
+	end := lastIndex(history[from:], msgutil.IsUserTurn) + from
 	n := 0
 	for i := from; i < end; i++ {
 		if isAssistant(history[i]) && !slices.ContainsFunc(applied, func(e elide.Elision) bool { return e.From <= i && i < e.To }) {
@@ -67,18 +67,12 @@ func summaryMessage(b Boundary) string {
 // safe; want is clamped to len(msgs).
 func SafeCut(msgs []llm.Message, from, want int) int {
 	for k := min(want, len(msgs)); k > from; k-- {
-		if k == len(msgs) || !carriesToolResult(msgs[k]) {
+		if k == len(msgs) || !msgutil.CarriesToolResult(msgs[k]) {
 			return k
 		}
 	}
 	return from
 }
-
-func carriesToolResult(m llm.Message) bool {
-	return m.Role == llm.RoleUser && slices.ContainsFunc(m.Content, isToolResult)
-}
-
-func isToolResult(b llm.Block) bool { return b.Type == llm.BlockToolResult }
 
 // clearOldResults replaces, in place, the content of every tool result
 // before the last assistant message, other than the newest KeepToolResults of
@@ -90,7 +84,7 @@ func (m *Middleware) clearOldResults(msgs []llm.Message) {
 	for i := lastIndex(msgs, isAssistant) - 1; i >= 0; i-- {
 		content := msgs[i].Content
 		for j := len(content) - 1; j >= 0; j-- {
-			if !isToolResult(content[j]) {
+			if !msgutil.IsToolResult(content[j]) {
 				continue
 			}
 			kept++
@@ -140,12 +134,6 @@ func lastIndex(msgs []llm.Message, f func(llm.Message) bool) int {
 }
 
 func isAssistant(m llm.Message) bool { return m.Role == llm.RoleAssistant }
-
-// isUserTurn reports a user message that starts a turn: neither a set of
-// tool results nor a message a middleware injected (agent.InjectedMetaKey).
-func isUserTurn(m llm.Message) bool {
-	return m.Role == llm.RoleUser && !carriesToolResult(m) && m.Meta[agent.InjectedMetaKey] == ""
-}
 
 // shortenedInput returns {"truncated": "<first keptInputChars chars>…"}.
 func shortenedInput(input json.RawMessage) json.RawMessage {

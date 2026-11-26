@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/internal/msgutil"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -103,7 +104,7 @@ func (m *Middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 		return nil
 	}
 	gradesKey.Set(s, nil)
-	if task := userText(info.Input); task != "" {
+	if task := msgutil.UserText(info.Input); task != "" {
 		taskKey.Set(s, task)
 	}
 	return nil
@@ -155,15 +156,4 @@ func taskOf(s *state.State) string {
 		}
 	}
 	return ""
-}
-
-// userText joins the text of the user messages in msgs.
-func userText(msgs []llm.Message) string {
-	var parts []string
-	for _, m := range msgs {
-		if t := m.Text(); m.Role == llm.RoleUser && t != "" {
-			parts = append(parts, t)
-		}
-	}
-	return strings.Join(parts, "\n")
 }

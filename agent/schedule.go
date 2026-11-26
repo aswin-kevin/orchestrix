@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aswin-kevin/orchestrix/agent/internal/elision"
+	"github.com/aswin-kevin/orchestrix/internal/toolutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -117,9 +118,9 @@ func (r *run) stopTurn(assistantIndex int, calls []*toolCall, err error) *Final 
 		}
 		c.interrupt = nil
 		if c.announced {
-			r.settle(c, *errorResult(skippedToolResult))
+			r.settle(c, *toolutil.ErrorResult(skippedToolResult))
 		} else {
-			c.result = errorResult(skippedToolResult)
+			c.result = toolutil.ErrorResult(skippedToolResult)
 		}
 	}
 	pendingKey.Delete(r.state)
@@ -282,7 +283,7 @@ func parseToolInput(raw json.RawMessage) (json.RawMessage, error) {
 // returns the error result for invalid input, nil otherwise.
 func validateInput(t tool.Tool, in json.RawMessage) *tool.Result {
 	if err := tool.CheckInput(t, in); err != nil {
-		return errorResult("invalid input for %s: %v", t.Name(), err)
+		return toolutil.ErrorResult("invalid input for %s: %v", t.Name(), err)
 	}
 	return nil
 }
@@ -323,7 +324,7 @@ func (r *run) runCall(c *toolCall) (res tool.Result, intr *Interrupt) {
 	}
 	if errors.Is(err, ErrStopRun) {
 		r.requestStop(err)
-		return *errorResult("tool %s stopped the run: %v", c.name, err), nil
+		return *toolutil.ErrorResult("tool %s stopped the run: %v", c.name, err), nil
 	}
 	if errors.As(err, &intr) && intr != nil {
 		return tool.Result{}, intr
@@ -331,7 +332,7 @@ func (r *run) runCall(c *toolCall) (res tool.Result, intr *Interrupt) {
 	if stopped := r.stoppedResult(); stopped != nil {
 		return *stopped, nil
 	}
-	return *errorResult("tool %s failed: %v", c.name, err), nil
+	return *toolutil.ErrorResult("tool %s failed: %v", c.name, err), nil
 }
 
 // stoppedResult returns the result for a call that the run's cancellation or
@@ -340,9 +341,9 @@ func (r *run) runCall(c *toolCall) (res tool.Result, intr *Interrupt) {
 func (r *run) stoppedResult() *tool.Result {
 	switch {
 	case r.ctx.Err() != nil:
-		return errorResult(cancelledToolResult)
+		return toolutil.ErrorResult(cancelledToolResult)
 	case r.budget.expired():
-		return errorResult(timeBudgetToolResult)
+		return toolutil.ErrorResult(timeBudgetToolResult)
 	default:
 		return nil
 	}
@@ -418,11 +419,6 @@ func toolResultMessages(calls []*toolCall) []llm.Message {
 	return append([]llm.Message{{Role: llm.RoleUser, Content: blocks}}, extra...)
 }
 
-func errorResult(format string, args ...any) *tool.Result {
-	res := tool.Errorf(format, args...)
-	return &res
-}
-
 func panicResult(name string, v any) *tool.Result {
-	return errorResult("tool %s panicked: %v", name, v)
+	return toolutil.ErrorResult("tool %s panicked: %v", name, v)
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/aswin-kevin/orchestrix/internal/toolutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -258,15 +259,15 @@ func (c *toolCall) answerWithoutRunning() *tool.Result {
 	switch {
 	case d.Type == Reject && !c.resumed.reinvokeOnReject:
 		if d.Message == "" {
-			return errorResult(rejectedToolResult)
+			return toolutil.ErrorResult(rejectedToolResult)
 		}
-		return errorResult("%s: %s", rejectedToolResult, d.Message)
+		return toolutil.ErrorResult("%s: %s", rejectedToolResult, d.Message)
 	case d.Type == Respond && c.resumed.origin == originPermission:
 		res := tool.Text(d.Message)
 		return &res
 	case d.Type == Edit:
 		if err := checkEditedInput(c.tool, d.Input); err != nil {
-			return errorResult("Edited input is invalid: %v", err)
+			return toolutil.ErrorResult("Edited input is invalid: %v", err)
 		}
 	}
 	return nil

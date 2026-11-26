@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/internal/msgutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -162,7 +163,7 @@ func (m *Middleware) BeforeAgent(ctx context.Context, s *state.State) error {
 	if !ok || info.Depth != 0 {
 		return nil
 	}
-	text := userText(info.Input)
+	text := msgutil.UserText(info.Input)
 	if text == "" {
 		return nil
 	}
@@ -286,15 +287,4 @@ func plainArguments(raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("guard: encode tool arguments: %w", err)
 	}
 	return strings.TrimSuffix(sb.String(), "\n"), nil
-}
-
-// userText joins the text of the user messages in msgs.
-func userText(msgs []llm.Message) string {
-	var parts []string
-	for _, m := range msgs {
-		if t := m.Text(); m.Role == llm.RoleUser && t != "" {
-			parts = append(parts, t)
-		}
-	}
-	return strings.Join(parts, "\n")
 }

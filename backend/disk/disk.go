@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -15,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/limitio"
 )
 
 const (
@@ -340,12 +340,12 @@ func (b *Backend) readRegular(rel string, limit int64) ([]byte, fs.FileInfo, err
 		return nil, nil, err
 	}
 	// The limit also bounds a file that grows while it is read.
-	content, err := io.ReadAll(io.LimitReader(f, limit+1))
+	content, over, err := limitio.ReadAll(f, limit)
 	if err != nil {
 		return nil, nil, err
 	}
-	if size := int64(len(content)); size > limit {
-		return nil, nil, &backend.TooLargeError{Size: size}
+	if over {
+		return nil, nil, &backend.TooLargeError{Size: limit + 1}
 	}
 	return content, info, nil
 }

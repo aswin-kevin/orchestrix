@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/aswin-kevin/orchestrix/internal/toolutil"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
@@ -70,7 +71,7 @@ func (r *run) recheck(c *toolCall) *tool.Result {
 // to c and validated.
 func (r *run) applyPermission(c *toolCall, decision permission.Decision) *tool.Result {
 	if decision.Behavior != permission.Allow {
-		return errorResult("Permission denied: %s", decision.Message)
+		return toolutil.ErrorResult("Permission denied: %s", decision.Message)
 	}
 	if len(decision.UpdatedInput) == 0 {
 		return nil

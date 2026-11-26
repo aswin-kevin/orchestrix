@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	registry "github.com/aswin-kevin/orchestrix/internal/jobs"
 	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -81,15 +82,6 @@ type MonitorInput struct {
 	TimeoutSeconds int `json:"timeout_seconds,omitempty" desc:"Most seconds to wait; capped at 300."`
 }
 
-// waitLimit turns a requested number of seconds into a wait, capped at
-// DefaultMaxSleep; zero or less means the cap.
-func waitLimit(seconds int) time.Duration {
-	if seconds <= 0 {
-		return DefaultMaxSleep
-	}
-	return min(time.Duration(seconds)*time.Second, DefaultMaxSleep)
-}
-
 // lookup finds a job of the call's thread: the live job, or failing that
 // the run's record of it. Records are refreshed first.
 func (m *Middleware) lookup(c *tool.Call, id string) (*job, Record, bool) {
@@ -109,7 +101,7 @@ func (m *Middleware) lookup(c *tool.Call, id string) (*job, Record, bool) {
 func (m *Middleware) checkJob(ctx context.Context, in CheckInput, c *tool.Call) (tool.Result, error) {
 	j, _, ok := m.lookup(c, in.JobID)
 	if ok && j != nil && in.Wait {
-		if err := waitDone(ctx, j, waitLimit(in.TimeoutSeconds)); err != nil {
+		if err := waitDone(ctx, j, registry.WaitLimit(in.TimeoutSeconds, DefaultMaxSleep)); err != nil {
 			return tool.Result{}, err
 		}
 	}
@@ -200,7 +192,7 @@ func (m *Middleware) sleep(ctx context.Context, in SleepInput, c *tool.Call) (to
 	if in.Seconds <= 0 {
 		return tool.Errorf("seconds must be positive"), nil
 	}
-	limit := waitLimit(in.Seconds)
+	limit := registry.WaitLimit(in.Seconds, DefaultMaxSleep)
 	changed, lastFinished := m.jobs.Changed(c.ThreadID)
 	timer := time.NewTimer(limit)
 	defer timer.Stop()
@@ -226,7 +218,7 @@ func (m *Middleware) monitor(ctx context.Context, in MonitorInput, c *tool.Call)
 	case j == nil:
 		return tool.Text(describe(r) + recordedOutput(r)), nil
 	}
-	limit := waitLimit(in.TimeoutSeconds)
+	limit := registry.WaitLimit(in.TimeoutSeconds, DefaultMaxSleep)
 	deadline := time.NewTimer(limit)
 	defer deadline.Stop()
 	poll := time.NewTicker(monitorPoll)

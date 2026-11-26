@@ -172,15 +172,6 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 		j.ID, in.SubagentType, ToolCheck)), nil
 }
 
-// waitLimit turns a requested number of seconds into a wait, capped at
-// DefaultMaxWait; zero or less means the cap.
-func waitLimit(seconds int) time.Duration {
-	if seconds <= 0 {
-		return DefaultMaxWait
-	}
-	return min(time.Duration(seconds)*time.Second, DefaultMaxWait)
-}
-
 // checkTask reports a task's status with its progress, what it waits for,
 // or, once it ended, its full result. Showing the result counts as telling
 // the model the task ended, so no notification repeats it.
@@ -190,7 +181,7 @@ func (m *Middleware) checkTask(ctx context.Context, in CheckInput, c *tool.Call)
 		return tool.Errorf("unknown task %q", in.TaskID), nil
 	}
 	if in.Wait && j != nil && r.Status == StatusRunning {
-		timer := time.NewTimer(waitLimit(in.TimeoutSeconds))
+		timer := time.NewTimer(jobs.WaitLimit(in.TimeoutSeconds, DefaultMaxWait))
 		defer timer.Stop()
 		select {
 		case <-j.Handle.Done():

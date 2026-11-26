@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"path"
 	"slices"
 	"strings"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/limitio"
 	"github.com/aswin-kevin/orchestrix/internal/names"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
@@ -163,11 +163,11 @@ func readSkillFile(s Skill, file string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, MaxFileBytes+1))
+	data, over, err := limitio.ReadAll(f, MaxFileBytes)
 	switch {
 	case err != nil:
 		return "", err
-	case len(data) > MaxFileBytes:
+	case over:
 		return "", fmt.Errorf("the file is over the limit of %d bytes", MaxFileBytes)
 	case backend.IsBinary(data):
 		return "", errors.New("the file is binary")

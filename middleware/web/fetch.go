@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"mime"
 	"net"
@@ -15,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aswin-kevin/orchestrix/internal/limitio"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -202,15 +202,11 @@ func (f *HTTPFetcher) get(ctx context.Context, u *url.URL, maxBytes int64) (*res
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	body, over, err := limitio.ReadAll(resp.Body, maxBytes)
 	if err != nil {
 		return nil, err
 	}
-	r := &response{url: resp.Request.URL, status: resp.StatusCode, contentType: resp.Header.Get("Content-Type"), body: body}
-	if int64(len(body)) > maxBytes {
-		r.body, r.truncated = body[:maxBytes], true
-	}
-	return r, nil
+	return &response{url: resp.Request.URL, status: resp.StatusCode, contentType: resp.Header.Get("Content-Type"), body: body, truncated: over}, nil
 }
 
 // describe names the cause of a failed request for the model.

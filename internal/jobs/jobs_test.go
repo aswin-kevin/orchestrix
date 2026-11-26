@@ -937,3 +937,18 @@ func TestAdoptStartingReservesFirst(t *testing.T) {
 		t.Fatalf("next id = %s, want x_8", j2.ID)
 	}
 }
+
+func TestWaitLimit(t *testing.T) {
+	const max = 5 * time.Minute
+	tests := []struct {
+		seconds int
+		want    time.Duration
+	}{
+		{-1, max}, {0, max}, {1, time.Second}, {300, max}, {301, max}, {1 << 40, max},
+	}
+	for _, tt := range tests {
+		if got := WaitLimit(tt.seconds, max); got != tt.want {
+			t.Errorf("WaitLimit(%d) = %v, want %v", tt.seconds, got, tt.want)
+		}
+	}
+}

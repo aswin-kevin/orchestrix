@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/aswin-kevin/orchestrix/internal/limitio"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -132,7 +132,7 @@ func (s *searchClient) do(req *http.Request) (body []byte, status int, err error
 		return nil, 0, fmt.Errorf("%s: %s", s.name, describe(err))
 	}
 	defer resp.Body.Close()
-	body, err = io.ReadAll(io.LimitReader(resp.Body, maxSearchBody+1))
+	body, over, err := limitio.ReadAll(resp.Body, maxSearchBody)
 	if err != nil {
 		return nil, 0, fmt.Errorf("%s: reading response: %s", s.name, describe(err))
 	}
@@ -140,7 +140,7 @@ func (s *searchClient) do(req *http.Request) (body []byte, status int, err error
 		quote := body[:min(len(body), errorBodyBytes)]
 		return nil, 0, fmt.Errorf("%s: HTTP %d: %s", s.name, resp.StatusCode, strings.ToValidUTF8(string(quote), "�"))
 	}
-	if len(body) > maxSearchBody {
+	if over {
 		return nil, 0, fmt.Errorf("%s: response exceeds %d MiB", s.name, maxSearchBody>>20)
 	}
 	return body, resp.StatusCode, nil

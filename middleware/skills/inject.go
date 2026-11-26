@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/aswin-kevin/orchestrix/internal/msgutil"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/deferred"
 	"github.com/aswin-kevin/orchestrix/state"
@@ -37,7 +38,7 @@ func (m *Middleware) standing(s *state.State, scope Scope, msgs []llm.Message) [
 		return msgs
 	}
 	text := StandingHeader + "\n\n" + strings.Join(blocks, "\n\n")
-	if len(msgs) > 0 && msgs[0].Role == llm.RoleUser && !slices.ContainsFunc(msgs[0].Content, isToolResult) {
+	if len(msgs) > 0 && msgs[0].Role == llm.RoleUser && !slices.ContainsFunc(msgs[0].Content, msgutil.IsToolResult) {
 		out := slices.Clone(msgs)
 		out[0].Content = append(slices.Clone(out[0].Content), llm.TextBlock(text))
 		return out
@@ -60,7 +61,7 @@ func shown(msgs []llm.Message, name string) bool {
 				if in, ok := skillInput(b); ok && in.Name == name && in.File == "" {
 					loads[b.ID] = true
 				}
-			case isToolResult(b) && loads[b.ToolUseID]:
+			case msgutil.IsToolResult(b) && loads[b.ToolUseID]:
 				text := llm.Message{Content: b.Content}.Text()
 				if strings.Contains(text, marker) && strings.Contains(text, skillEnd) {
 					return true
@@ -87,5 +88,3 @@ func skillInput(use llm.Block) (Input, bool) {
 	var in Input
 	return in, json.Unmarshal(raw, &in) == nil
 }
-
-func isToolResult(b llm.Block) bool { return b.Type == llm.BlockToolResult }
