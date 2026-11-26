@@ -66,7 +66,7 @@ func RunExecutor(t *testing.T, newExecutor func(t *testing.T) backend.Executor) 
 		}
 	})
 	t.Run("Truncate", func(t *testing.T) {
-		res := exec(t, "printf '%0100d' 0", backend.ExecOptions{MaxOutputBytes: 10})
+		res := exec(t, "printf '%01000d' 0", backend.ExecOptions{MaxOutputBytes: 10})
 		if !res.Truncated || len(res.Output) > 10+markerSlack {
 			t.Fatalf("Truncated = %v len(Output) = %d, want true and <= %d", res.Truncated, len(res.Output), 10+markerSlack)
 		}
@@ -142,9 +142,9 @@ func RunStarter(t *testing.T, newStarter func(t *testing.T) backend.Starter) {
 	t.Run("OutputWhileRunning", func(t *testing.T) {
 		p := start(t, t.Context(), "echo a; sleep 5", backend.ExecOptions{})
 		deadline := time.Now().Add(outputWithin)
-		for !strings.Contains(p.Output(), "a") {
+		for !strings.HasPrefix(p.Output(), "a\n") {
 			if time.Now().After(deadline) {
-				t.Fatalf("Output = %q after %v, want it to contain %q", p.Output(), outputWithin, "a")
+				t.Fatalf("Output = %q after %v, want prefix %q", p.Output(), outputWithin, "a\n")
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
@@ -174,8 +174,8 @@ func RunStarter(t *testing.T, newStarter func(t *testing.T) backend.Starter) {
 	t.Run("Timeout", func(t *testing.T) {
 		p := start(t, t.Context(), "sleep 5", backend.ExecOptions{Timeout: 200 * time.Millisecond})
 		waitDone(t, p, stopBound)
-		if res, ok := p.Result(); !ok || !res.TimedOut {
-			t.Fatalf("Result = %+v ok %v, want TimedOut", res, ok)
+		if res, ok := p.Result(); !ok || !res.TimedOut || res.ExitCode != -1 {
+			t.Fatalf("Result = %+v ok %v, want TimedOut and ExitCode -1", res, ok)
 		}
 	})
 }

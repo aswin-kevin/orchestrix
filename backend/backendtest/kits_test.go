@@ -23,20 +23,6 @@ func (brokenExec) Execute(context.Context, string, backend.ExecOptions) (backend
 	return backend.ExecResult{Output: "wrong"}, nil
 }
 
-// brokenStarter returns a process that never finishes and cannot be stopped.
-type brokenStarter struct{}
-
-func (brokenStarter) Start(context.Context, string, backend.ExecOptions) (backend.Process, error) {
-	return &stuck{done: make(chan struct{})}, nil
-}
-
-type stuck struct{ done chan struct{} }
-
-func (s *stuck) Done() <-chan struct{}              { return s.done }
-func (s *stuck) Result() (backend.ExecResult, bool) { return backend.ExecResult{}, true }
-func (s *stuck) Output() string                     { return "" }
-func (s *stuck) Stop(context.Context) error         { return nil }
-
 // brokenSnap snapshots fine but restores nothing and ignores ctx.
 type brokenSnap struct{ *memory.Backend }
 
@@ -45,33 +31,39 @@ func (brokenSnap) Snapshot(context.Context) (json.RawMessage, error) {
 }
 func (brokenSnap) Restore(context.Context, json.RawMessage) error { return nil }
 
+// mutants maps "kit/name" to a runner of the kit against a fake that breaks
+// exactly one behaviour. Unix-only entries are added by kits_unix_test.go.
+var mutants = map[string]func(t *testing.T){
+	"exec/Echo": func(t *testing.T) { RunExecutor(t, func(*testing.T) backend.Executor { return brokenExec{} }) },
+	"snap/RestoreReplaces": func(t *testing.T) {
+		RunSnapshotter(t, func(*testing.T) backend.Backend { return brokenSnap{memory.New()} })
+	},
+}
+
+// flagged names the kit case each mutant must fail; the key is the mutant.
+var flagged = map[string]string{}
+
 func TestBrokenFakesAreFlagged(t *testing.T) {
-	if os.Getenv(brokenEnv) != "" {
-		switch os.Getenv(brokenEnv) {
-		case "exec":
-			RunExecutor(t, func(*testing.T) backend.Executor { return brokenExec{} })
-		case "start":
-			RunStarter(t, func(*testing.T) backend.Starter { return brokenStarter{} })
-		case "snap":
-			RunSnapshotter(t, func(*testing.T) backend.Backend { return brokenSnap{memory.New()} })
-		}
+	if name := os.Getenv(brokenEnv); name != "" {
+		mutants[name](t)
 		return
 	}
-	for kit, wantFail := range map[string]string{
-		"exec":  "Echo",
-		"start": "ResultBeforeDone",
-		"snap":  "RestoreReplaces",
-	} {
-		t.Run(kit, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	for name := range mutants {
+		_, wantFail, _ := strings.Cut(name, "/")
+		if w, ok := flagged[name]; ok {
+			wantFail = w
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBrokenFakesAreFlagged$", "-test.v")
-			cmd.Env = append(os.Environ(), brokenEnv+"="+kit)
+			cmd.Env = append(os.Environ(), brokenEnv+"="+name)
 			out, err := cmd.CombinedOutput()
 			if err == nil {
 				t.Fatalf("kit passed a broken fake:\n%s", out)
 			}
-			if !strings.Contains(string(out), "--- FAIL: TestBrokenFakesAreFlagged/"+wantFail) {
+			if !strings.Contains(string(out), "--- FAIL: TestBrokenFakesAreFlagged/"+wantFail+" (") {
 				t.Fatalf("kit did not flag case %s:\n%s", wantFail, out)
 			}
 		})
