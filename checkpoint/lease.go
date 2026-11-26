@@ -28,9 +28,16 @@ func NewLease(threadID, owner string, renew, release func(context.Context) error
 	return &Lease{threadID: threadID, owner: owner, renew: renew, release: release}
 }
 
+// ThreadID returns the thread the lease is on.
+func (l *Lease) ThreadID() string { return l.threadID }
+
+// Owner returns the owner the lease was acquired for.
+func (l *Lease) Owner() string { return l.owner }
+
 // Renew extends the lease by its ttl from now. It returns an error wrapping
 // ErrLeaseHeld once the lease expired or another owner took it, and after
-// Release, without calling the store.
+// Release, without calling the store. A Renew already running when Release
+// is called may still reach the store.
 func (l *Lease) Renew(ctx context.Context) error {
 	l.mu.Lock()
 	released := l.released
@@ -43,7 +50,8 @@ func (l *Lease) Renew(ctx context.Context) error {
 
 // Release gives the lease up; it never removes another owner's lease. The
 // first call calls the store and returns its error; later calls do nothing
-// and return nil.
+// and return nil, so a failed Release is not retried: the lease then
+// lapses when its ttl does.
 func (l *Lease) Release(ctx context.Context) error {
 	l.mu.Lock()
 	first := !l.released

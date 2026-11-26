@@ -70,6 +70,7 @@ func Run(t *testing.T, newCheckpointer func(t *testing.T) checkpoint.Checkpointe
 	}{
 		{"LeaseExclusive", leaseExclusive},
 		{"LeaseReleaseAndReacquire", leaseRelease},
+		{"LeaseStaleRelease", leaseStaleRelease},
 		{"LeaseExpires", leaseExpires},
 		{"LeaseRenewAfterTakeover", leaseRenewAfterTakeover},
 		{"LeaseRenewAfterExpiryFails", leaseRenewAfterExpiry},
@@ -618,14 +619,39 @@ func leaseRelease(t *testing.T, l checkpoint.Leaser) {
 	if err != nil {
 		t.Fatalf("Acquire after release: %v", err)
 	}
-	// A stale release by the old owner must not drop b's lease.
-	if err := lease.Release(ctx); err != nil {
-		t.Fatalf("second release: %v", err)
+	defer leaseB.Release(ctx)
+	if _, err := l.Acquire(ctx, "t", "c", leaseTTL); !errors.Is(err, checkpoint.ErrLeaseHeld) {
+		t.Fatalf("Acquire while b holds the lease: %v", err)
+	}
+}
+
+// leaseStaleRelease checks that releasing a lease that lapsed and was taken
+// by another owner does not drop that owner's lease. The Lease is fresh, so
+// the store's own owner check runs.
+func leaseStaleRelease(t *testing.T, l checkpoint.Leaser) {
+	stale, err := l.Acquire(ctx, "t", "a", 50*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var leaseB *checkpoint.Lease
+	for {
+		leaseB, err = l.Acquire(ctx, "t", "b", leaseTTL)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Acquire after expiry: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer leaseB.Release(ctx)
+	if err := stale.Release(ctx); err != nil {
+		t.Fatalf("release of a lapsed lease: %v", err)
 	}
 	if _, err := l.Acquire(ctx, "t", "c", leaseTTL); !errors.Is(err, checkpoint.ErrLeaseHeld) {
 		t.Fatalf("old owner's release dropped another owner's lease: %v", err)
 	}
-	leaseB.Release(ctx)
 }
 
 func leaseExpires(t *testing.T, l checkpoint.Leaser) {

@@ -53,6 +53,14 @@ func TestNewLeaseNilPanics(t *testing.T) {
 	}
 }
 
+func TestLeaseAccessors(t *testing.T) {
+	ok := func(context.Context) error { return nil }
+	l := checkpoint.NewLease("thread", "owner", ok, ok)
+	if l.ThreadID() != "thread" || l.Owner() != "owner" {
+		t.Fatalf("accessors: %q %q", l.ThreadID(), l.Owner())
+	}
+}
+
 func TestLeaseConcurrentRelease(t *testing.T) {
 	var releases atomic.Int32
 	l := checkpoint.NewLease("thread", "owner",
