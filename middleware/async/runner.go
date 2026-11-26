@@ -166,7 +166,10 @@ type Continuer interface {
 	// ErrFinished and never starts a second episode (the next follow-up goes
 	// to the new Handle). A failed call starts nothing, so it may be
 	// retried. ctx carries the caller's values but the new episode must not
-	// end with it (as for Runner.Start).
+	// end with it (as for Runner.Start). It also carries the parent run's
+	// current permission mode (FollowUpMode): the episode MUST run in
+	// permission.Stricter of that mode and the task's own, so a parent
+	// that entered plan mode cannot resume a task that writes.
 	Continue(ctx context.Context, message string) (Handle, error)
 }
 
@@ -178,7 +181,9 @@ type Resolver interface {
 	// Done stays closed. It fails with ErrNotWaiting when the episode did
 	// not stop waiting. At most one call per Handle succeeds: a later or
 	// concurrent one fails with an error wrapping ErrNotWaiting and never
-	// starts a second episode. ctx is handled as by Continue.
+	// starts a second episode. ctx is handled as by Continue, permission
+	// mode included (FollowUpMode): the episode MUST run in
+	// permission.Stricter of it and the task's own mode.
 	Resolve(ctx context.Context, decisions []agent.Decision) (Handle, error)
 }
 
@@ -193,7 +198,9 @@ type Reattacher interface {
 	// fails with an error wrapping ErrCannotReattach when the task's
 	// history is gone or the record cannot be taken over. The middleware
 	// serializes Attach calls, so a runner need not handle two concurrent
-	// calls for one record. ctx is handled as by Runner.Start.
+	// calls for one record. ctx is handled as by Runner.Start; it carries
+	// the parent run's current permission mode (FollowUpMode), which every
+	// later episode of the Handle MUST apply as Continue does.
 	Attach(ctx context.Context, rec TaskRecord) (Handle, error)
 }
 
@@ -283,6 +290,22 @@ func withFollowUp(ctx context.Context, f followUp) context.Context {
 	return context.WithValue(ctx, followUpKey{}, f)
 }
 
+// FollowUpMode returns the parent run's current permission mode, which the
+// middleware passes in the ctx of Continuer.Continue, Resolver.Resolve and
+// Reattacher.Attach; ok is false for any other ctx. The episode it starts
+// must run in permission.Stricter of this mode and the task's own: the
+// middleware passes the mode, the runner enforces it. Since only the
+// built-in runner is known to, the middleware refuses a follow-up or a
+// decision through any other Runner while this mode is stricter than the
+// parent's when it started the task (TaskRecord.StartMode).
+func FollowUpMode(ctx context.Context) (permission.Mode, bool) {
+	f, ok := followUpOf(ctx)
+	if !ok || f.mode == "" {
+		return "", false
+	}
+	return f.mode, true
+}
+
 // followUpOf returns the followUp of ctx, if any.
 func followUpOf(ctx context.Context) (followUp, bool) {
 	f, ok := ctx.Value(followUpKey{}).(followUp)
@@ -319,7 +342,11 @@ func (l *localRunner) Start(ctx context.Context, req Request) (Handle, error) {
 // Attach implements Reattacher for a task that is not running: it loads the
 // task's thread from the checkpointer its episodes saved to and returns a
 // Handle whose episode stopped, with the record's outcome, which can be
-// continued. A running record cannot be reattached yet. ctx must belong to
+// continued or, for a waiting task, resolved; what a waiting task waits for
+// is read from the loaded thread, not from the record. A task cancelled
+// while it waited cannot be taken over (as the middleware refuses to
+// continue one it holds). A running record cannot be reattached yet. ctx
+// must belong to
 // the parent's run; the middleware passes the call's backend with it.
 func (l *localRunner) Attach(ctx context.Context, rec TaskRecord) (Handle, error) {
 	if rec.Status == StatusRunning {
@@ -351,13 +378,23 @@ func (l *localRunner) Attach(ctx context.Context, rec TaskRecord) (Handle, error
 	if err != nil {
 		return nil, err
 	}
+	out := Outcome{Status: rec.Status, Text: rec.Result, Error: rec.Error}
+	intr, pending := agent.Pending(s)
+	switch {
+	case rec.Status == StatusWaiting && !pending:
+		return nil, fmt.Errorf("%w: its thread %s holds no pending action", ErrCannotReattach, rec.TaskThreadID)
+	case rec.Status == StatusWaiting:
+		out.Pending = intr // the thread's, in full: the record's is a capped copy
+	case rec.Status == StatusCancelled && pending:
+		// Cancelled while it waited: its pending actions never run.
+		return nil, errCancelledWaiting
+	}
 	sess := &localSession{l: l, taskID: rec.ID, child: child, threadID: rec.TaskThreadID, backend: f.backend, agentName: spec.Name}
 	done := make(chan struct{})
 	close(done)
 	return &localTask{
 		sess: sess, stop: func(error) {}, done: done, inbox: &inbox{closed: true},
-		out:  Outcome{Status: rec.Status, Text: rec.Result, Error: rec.Error, Pending: rec.Pending},
-		last: s, version: v,
+		out: out, last: s, version: v,
 	}, nil
 }
 
@@ -535,7 +572,8 @@ func (sess *localSession) backendFor(ctx context.Context) backend.Backend {
 // Resolve implements Resolver: the next episode resumes the subagent on the
 // task's thread from the interrupted State this one ended with, answering
 // its pending actions with decisions (see agent.Agent.Resume), in the
-// task's own permission mode. The pending actions are read from that State,
+// stricter of the task's permission mode and FollowUpMode's: an approved
+// write is still denied while the parent is in plan mode. The pending actions are read from that State,
 // in full, not from the capped copy a record shows. Decisions that do not
 // answer every pending action exactly once, with a type it allows, are
 // refused and start nothing. Only the first successful call starts an
@@ -566,9 +604,18 @@ func (t *localTask) Resolve(ctx context.Context, decisions []agent.Decision) (Ha
 	last, version := t.last, t.version
 	t.mu.Unlock()
 	sess := t.sess
+	s := last.Clone()
+	if f, ok := followUpOf(ctx); ok && f.mode != "" {
+		if err := agent.SetPermissionMode(s, permission.Stricter(f.mode, sess.child.PermissionMode(s))); err != nil {
+			t.mu.Lock()
+			t.continued = false
+			t.mu.Unlock()
+			return nil, err
+		}
+	}
 	h, err := sess.start(ctx, agent.Input{
 		ThreadID:  sess.threadID,
-		State:     last.Clone(),
+		State:     s,
 		Version:   version,
 		Backend:   sess.backendFor(ctx),
 		AgentName: sess.agentName,

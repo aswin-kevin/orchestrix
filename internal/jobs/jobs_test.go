@@ -817,3 +817,25 @@ func TestPinnedJobIsNotEvicted(t *testing.T) {
 		t.Fatal("the unpinned jobs were not trimmed to MaxFinished")
 	}
 }
+
+func TestRestartOfForgottenJobIsStopped(t *testing.T) {
+	m := NewManager[*episodic]("x_", Limits{MaxRunning: 2, MaxFinished: 5})
+	j, e := startEpisodic(t, m, "t")
+	ch, _ := m.Changed("t")
+	e.end()
+	waitFor(t, ch)
+	_, err := m.Restart("t", j.ID, func() error {
+		// The nested run that owns the job ends while it restarts.
+		m.StopAndForget(context.Background(), "t", []string{j.ID}, time.Second, func() {})
+		return e.rearm()
+	})
+	if !errors.Is(err, ErrUnknownJob) {
+		t.Fatalf("Restart = %v, want ErrUnknownJob", err)
+	}
+	if m.Get("t", j.ID) != nil {
+		t.Fatal("the forgotten job was registered again")
+	}
+	if !j.Ended() || !j.Stopped() {
+		t.Fatalf("the restarted episode: ended %v stopped %v; want it stopped", j.Ended(), j.Stopped())
+	}
+}

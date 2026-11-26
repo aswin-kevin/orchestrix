@@ -34,11 +34,19 @@
 // starts waiting, and Resolve answers its pending actions and resumes it,
 // still nested in the run that started it. A waiting task is never released
 // nor forgotten (it does not count against Config.MaxFinished) until it is
-// resolved or cancelled. A task's permission mode is fixed when an episode starts: the stricter of the
-// parent's mode at that moment and the spec's, and for a follow-up the
-// stricter of the parent's current mode and the task's own. A parent that
-// enters plan mode or a stricter mode does not change the mode of an
-// episode already running, but a follow-up it sends runs in that mode. A
+// resolved or cancelled.
+//
+// A task's permission mode is fixed when an episode starts: for the first,
+// the stricter of the parent's mode at that moment and the spec's; for a
+// follow-up or a decision, the stricter of the parent's current mode and
+// the task's own. A parent that enters plan mode or a stricter mode does not
+// change the mode of an episode already running, but a follow-up it sends,
+// or a decision the host gives after a turn of the parent's thread in that
+// mode, runs in it. The middleware
+// passes the parent's mode to the runner (FollowUpMode) and the runner
+// enforces it: the built-in runner does, and since a custom Runner may not,
+// a follow-up or decision through one is refused while the parent's mode is
+// stricter than when it started the task (TaskRecord.StartMode). A
 // background subagent's State is not merged into the parent's (the parent
 // may have moved on by the time it ends); files are shared through the
 // backend.
@@ -77,6 +85,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/internal/jobs"
 	"github.com/aswin-kevin/orchestrix/llm"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
+	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -305,9 +314,12 @@ func (m *Middleware) Close(ctx context.Context) error {
 // action of its TaskRecord.Pending matched by ToolUseID, and starts its next
 // episode through the Runner's Resolver. It is the host's answer, on the
 // user's behalf: the parent model has no tool for it. The episode runs as
-// the task's earlier ones did: nested in the run that started the task, in
-// the task's own permission mode, on the backend of its start; ctx only
-// bounds the call (OnSettled gets it, detached, when the episode stops).
+// the task's earlier ones did: nested in the run that started the task, on
+// the backend of its start, in the stricter of the task's permission mode
+// and the parent's as last seen at a turn of its thread (see FollowUpMode;
+// through a custom Runner, a parent mode stricter than at the task's start
+// refuses the decision). ctx only bounds the call (OnSettled gets it,
+// detached, when the episode stops).
 // The parent's record shows the task running at the parent's next turn, and
 // its end is announced as usual.
 //
@@ -329,8 +341,13 @@ func (m *Middleware) Resolve(ctx context.Context, threadID, taskID string, decis
 	if !j.Handle.waiting() {
 		return fmt.Errorf("%w: %s", ErrNotWaiting, taskID)
 	}
+	mode := j.Handle.lastParentMode()
+	if err := m.checkFollowUpMode(mode, j.Handle.identity().StartMode); err != nil {
+		return fmt.Errorf("async: resolve task %s: %w", taskID, err)
+	}
+	f := followUp{mode: mode}
 	_, err := m.jobs.Restart(threadID, taskID, func() error {
-		return j.Handle.resolveWith(j.Handle.base, ctx, decisions)
+		return j.Handle.resolveWith(withFollowUp(j.Handle.base, f), ctx, decisions)
 	})
 	var limit *jobs.LimitError
 	switch {
@@ -347,6 +364,23 @@ func (m *Middleware) Resolve(ctx context.Context, threadID, taskID string, decis
 		return fmt.Errorf("async: thread %s already runs %d tasks; resolve task %s once one ends", threadID, limit.Limit, taskID)
 	}
 	return fmt.Errorf("async: resolve task %s: %w", taskID, err)
+}
+
+// checkFollowUpMode refuses a follow-up or a decision through a Runner
+// other than the built-in one while the parent's current mode is stricter
+// than its mode at the task's start: only the built-in runner is known to
+// apply FollowUpMode.
+func (m *Middleware) checkFollowUpMode(current, start permission.Mode) error {
+	if _, local := m.runner.(*localRunner); local || current == "" {
+		return nil
+	}
+	if permission.Stricter(current, start) == permission.Stricter(start, start) {
+		return nil
+	}
+	if start == "" {
+		start = permission.ModeDefault
+	}
+	return fmt.Errorf("the conversation is now in %s mode, stricter than when the task started (%s), and its runner cannot be made to apply it; start a new task instead", current, start)
 }
 
 // settled is every task's settledFunc: it reports the episode of t that
@@ -398,8 +432,15 @@ func (m *Middleware) BeforeModel(ctx context.Context, s *state.State) error {
 	if threadID != "" {
 		m.jobs.Release(threadID)
 	}
+	var mode permission.Mode
+	if info, ok := agent.Info(ctx); ok && info.Agent != nil {
+		mode = info.Agent.PermissionMode(s)
+	}
 	var notices []llm.Message
 	m.updateRecords(s, threadID, func(r *TaskRecord) {
+		if j := m.jobs.Get(r.ThreadID, r.ID); j != nil && mode != "" {
+			j.Handle.setParentMode(mode) // for a host's decision
+		}
 		switch {
 		case r.Notified || r.Status == StatusRunning:
 		case r.Status == StatusWaiting:

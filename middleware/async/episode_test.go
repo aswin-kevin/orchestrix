@@ -3,6 +3,7 @@ package async
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -136,19 +137,6 @@ func TestContinueSavesTaskThread(t *testing.T) {
 	}
 }
 
-func TestContinueAfterRelease(t *testing.T) {
-	// Two more parent runs: the first announces the end, the next releases
-	// the thread's entry, so the job is no longer held.
-	h, child := continueHistory(t, Config{}, nil, llmtest.Turn{Text: "noted"}, llmtest.Turn{Text: "idle"})
-	reqs := child.Requests
-	if len(reqs) != 2 || !strings.Contains(strings.Join(roleTexts(reqs[1]), "\n"), "user: find A\nassistant: A\nuser: "+wantFollowUp) {
-		t.Fatalf("child requests = %+v", reqs)
-	}
-	if r := record(t, h.st, "async_1"); r.Status != StatusCompleted || r.Result != "B" {
-		t.Fatalf("record = %+v", r)
-	}
-}
-
 func TestContinueUnsupportedHandle(t *testing.T) {
 	f := &fakeRunner{out: Outcome{Status: StatusCompleted, Text: "done"}}
 	h := newHarness(t, Config{Runner: f, DisableStopReminder: true},
@@ -269,26 +257,52 @@ func TestContinueUsesStricterParentMode(t *testing.T) {
 	}
 }
 
-func TestContinueAfterReleaseIsNested(t *testing.T) {
+func TestContinueAfterRelease(t *testing.T) {
 	spy := &modeSpy{}
 	child := llmtest.New(llmtest.Turn{Text: "A"}, llmtest.Turn{Text: "B"})
-	h := newHarnessWith(t, Config{Subagents: []subagents.Subagent{researcher(child)}, DisableStopReminder: true}, []agent.Middleware{spy.hooks()},
+	spec := researcher(child)
+	spec.PermissionMode = permission.ModeAcceptEdits
+	h := newHarnessWith(t, Config{Subagents: []subagents.Subagent{spec}, DisableStopReminder: true}, []agent.Middleware{spy.hooks()},
 		start("s1", "researcher", "find A"), llmtest.Turn{Text: "started"},
 		llmtest.Turn{Text: "noted"}, llmtest.Turn{Text: "idle"},
-		update("u1", "async_1", "and B?"), llmtest.Turn{Text: "asked"})
+		update("u1", "async_1", "and B?"), llmtest.Turn{Text: "asked"},
+		llmtest.Turn{Text: "done"})
+	if err := agent.SetPermissionMode(h.st, permission.ModeAcceptEdits); err != nil {
+		t.Fatal(err)
+	}
 	h.run(t, context.Background(), "go", nil)
 	waitEnded(t, h.m, "async_1")
+	// The first run announces the end, the next releases the thread's
+	// entry, so the job is no longer held.
 	h.run(t, context.Background(), "more", nil)
 	h.run(t, context.Background(), "more", nil)
 	if h.m.jobs.Get("t", "async_1") != nil {
 		t.Fatal("the job is still held")
 	}
-	h.run(t, context.Background(), "ask more", nil)
+	// The parent is now in plan mode: the reattached task may not write.
+	if err := agent.SetPermissionMode(h.st, permission.ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := h.run(t, context.Background(), "ask more", nil)
+	if res := result(t, evs, ToolUpdate); res.IsError {
+		t.Fatalf("update_task = %+v", res)
+	}
 	waitEnded(t, h.m, "async_1")
+	h.run(t, context.Background(), "next", nil)
+	reqs := child.Requests
+	if len(reqs) != 2 || !strings.Contains(strings.Join(roleTexts(reqs[1]), "\n"), "user: find A\nassistant: A\nuser: "+wantFollowUp) {
+		t.Fatalf("child requests = %+v", reqs)
+	}
+	if r := record(t, h.st, "async_1"); r.Status != StatusCompleted || r.Result != "B" {
+		t.Fatalf("record = %+v", r)
+	}
 	spy.mu.Lock()
 	defer spy.mu.Unlock()
 	if len(spy.depths) != 2 || spy.depths[1] != 1 {
 		t.Fatalf("task depths = %v, want the reattached episode at 1", spy.depths)
+	}
+	if spy.modes[0] != permission.ModeAcceptEdits || spy.modes[1] != permission.ModePlan {
+		t.Fatalf("task modes = %v, want [acceptEdits plan]", spy.modes)
 	}
 }
 
@@ -464,5 +478,108 @@ func TestRecordedPendingIsCapped(t *testing.T) {
 	}
 	if len(p.Requests[0].Input) != len(big) {
 		t.Fatal("recordedPending changed its argument")
+	}
+}
+
+// modeHandle is an ended ctlHandle that is a Continuer and a Resolver; each
+// call records FollowUpMode of its ctx and returns a completed episode.
+type modeHandle struct {
+	*ctlHandle
+	mu    sync.Mutex
+	modes []permission.Mode
+	known []bool
+}
+
+func (m *modeHandle) next(ctx context.Context) (Handle, error) {
+	mode, ok := FollowUpMode(ctx)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.modes, m.known = append(m.modes, mode), append(m.known, ok)
+	return ended(Outcome{Status: StatusCompleted, Text: "again"}), nil
+}
+
+func (m *modeHandle) Continue(ctx context.Context, _ string) (Handle, error) { return m.next(ctx) }
+
+func (m *modeHandle) Resolve(ctx context.Context, _ []agent.Decision) (Handle, error) {
+	return m.next(ctx)
+}
+
+func (m *modeHandle) calls() ([]permission.Mode, []bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.modes), slices.Clone(m.known)
+}
+
+func TestFollowUpModeReachesCustomRunner(t *testing.T) {
+	hd := &modeHandle{ctlHandle: ended(Outcome{Status: StatusCompleted, Text: "x"})}
+	run := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
+	// One run: the job is still held when it is updated.
+	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
+		start("s1", gp, "x"), update("u1", "async_1", "more"), llmtest.Turn{Text: "ok"})
+	if err := agent.SetPermissionMode(h.st, permission.ModeAcceptEdits); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := h.run(t, context.Background(), "go", nil)
+	if res := result(t, evs, ToolUpdate); res.IsError {
+		t.Fatalf("update_task = %+v", res)
+	}
+	if r := record(t, h.st, "async_1"); r.StartMode != permission.ModeAcceptEdits {
+		t.Fatalf("record StartMode = %q", r.StartMode)
+	}
+	modes, known := hd.calls()
+	if len(modes) != 1 || !known[0] || modes[0] != permission.ModeAcceptEdits {
+		t.Fatalf("FollowUpMode = %v %v, want [acceptEdits] known", modes, known)
+	}
+}
+
+func TestCustomRunnerFollowUpRefusedInStricterMode(t *testing.T) {
+	hd := &modeHandle{ctlHandle: ended(Outcome{Status: StatusCompleted, Text: "x"})}
+	run := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
+	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
+		start("s1", gp, "x"), llmtest.Turn{Text: "started"},
+		update("u1", "async_1", "more"), llmtest.Turn{Text: "ok"})
+	if err := agent.SetPermissionMode(h.st, permission.ModeAcceptEdits); err != nil {
+		t.Fatal(err)
+	}
+	h.run(t, context.Background(), "go", nil)
+	if err := agent.SetPermissionMode(h.st, permission.ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	evs, _ := h.run(t, context.Background(), "more", nil)
+	want := "cannot update task async_1: the conversation is now in plan mode, stricter than when the task started (acceptEdits), and its runner cannot be made to apply it; start a new task instead"
+	if res := result(t, evs, ToolUpdate); !res.IsError || res.Flatten() != want {
+		t.Fatalf("update_task = %+v", res)
+	}
+	if modes, _ := hd.calls(); len(modes) != 0 {
+		t.Fatalf("the refused follow-up reached the runner: %v", modes)
+	}
+}
+
+func TestCustomRunnerResolveRefusedInStricterMode(t *testing.T) {
+	hd := &modeHandle{ctlHandle: waitingHandle()}
+	run := funcRunner(func(context.Context, Request) (Handle, error) { return hd, nil })
+	h := newHarness(t, Config{Runner: run, DisableStopReminder: true},
+		start("s1", gp, "x"), llmtest.Turn{Text: "started"}, llmtest.Turn{Text: "ok"}, llmtest.Turn{Text: "ok"})
+	h.run(t, context.Background(), "go", nil)
+	approve := []agent.Decision{{ToolUseID: "w1", Type: agent.Approve}}
+	if err := agent.SetPermissionMode(h.st, permission.ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	h.run(t, context.Background(), "plan now", nil) // the middleware sees the parent's mode
+	if err := h.m.Resolve(context.Background(), "t", "async_1", approve); err == nil || !strings.Contains(err.Error(), "plan mode") {
+		t.Fatalf("Resolve in plan mode = %v, want a refusal", err)
+	}
+	if modes, _ := hd.calls(); len(modes) != 0 {
+		t.Fatalf("the refused decision reached the runner: %v", modes)
+	}
+	if err := agent.SetPermissionMode(h.st, permission.ModeDefault); err != nil {
+		t.Fatal(err)
+	}
+	h.run(t, context.Background(), "default again", nil)
+	if err := h.m.Resolve(context.Background(), "t", "async_1", approve); err != nil {
+		t.Fatalf("Resolve = %v", err)
+	}
+	if modes, known := hd.calls(); len(modes) != 1 || !known[0] || modes[0] != permission.ModeDefault {
+		t.Fatalf("FollowUpMode = %v %v, want [default]", modes, known)
 	}
 }

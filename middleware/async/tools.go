@@ -124,7 +124,9 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 	if info.Depth >= m.maxDepth {
 		return tool.Errorf("cannot start background task %s: the maximum nesting depth of %d is reached; do the task yourself", in.SubagentType, m.maxDepth), nil
 	}
+	startMode := info.Agent.PermissionMode(c.State)
 	t := newTask(ctx)
+	t.setParentMode(startMode)
 	j, err := m.jobs.Start(c.ThreadID, recordedIDs(c.State), func() (*task, error) { return t, nil })
 	var limit *jobs.LimitError
 	switch {
@@ -147,7 +149,8 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 		return tool.Errorf("cannot start background task %s: %v", in.SubagentType, err), nil
 	}
 	t.bind(TaskRecord{
-		ID: j.ID, ThreadID: c.ThreadID, TaskThreadID: taskThread, SubagentType: in.SubagentType, Description: in.Description, Started: j.Started,
+		ID: j.ID, ThreadID: c.ThreadID, TaskThreadID: taskThread, SubagentType: in.SubagentType, Description: in.Description,
+		StartMode: startMode, Started: j.Started,
 	}, m.settled)
 	t.attach(h)
 	if j.Stopped() {
@@ -158,7 +161,7 @@ func (m *Middleware) startTask(ctx context.Context, raw json.RawMessage, c *tool
 	}
 	addRecord(c.State, TaskRecord{
 		ID: j.ID, ThreadID: c.ThreadID, TaskThreadID: taskThread, SubagentType: in.SubagentType, Description: in.Description,
-		Status: StatusRunning, Started: j.Started,
+		StartMode: startMode, Status: StatusRunning, Started: j.Started,
 	})
 	return tool.Text(fmt.Sprintf("Started background task %s (%s). You will be notified when it finishes; use %s to see its progress.",
 		j.ID, in.SubagentType, ToolCheck)), nil
@@ -291,15 +294,21 @@ func (m *Middleware) updateTask(ctx context.Context, in UpdateInput, c *tool.Cal
 // continueTask starts the next episode of the ended task r with message, on
 // the task's own history, when its Handle is a Continuer. A task this
 // process no longer holds is first reattached when the Runner is a
-// Reattacher. The episode runs from the context the task started under (so
-// it stays nested in the parent), in the stricter of the task's permission
-// mode and the parent run's current one: a parent now in plan mode cannot
-// resume a task that writes. It takes a running slot (jobs.Manager.Restart),
+// Reattacher. The episode runs from the update_task call's context (so it
+// is nested in the parent run, under this call), in the stricter of the
+// task's permission mode and the parent run's current one: a parent now in
+// plan mode cannot resume a task that writes. The runner enforces that mode
+// (see FollowUpMode); through a Runner other than the built-in one, a
+// follow-up is refused while the parent's mode is stricter than at the
+// task's start. It takes a running slot (jobs.Manager.Restart),
 // and the record is running again, unannounced.
 func (m *Middleware) continueTask(ctx context.Context, c *tool.Call, r TaskRecord, j *jobs.Job[*task], message string) tool.Result {
 	f := followUp{backend: c.Backend}
 	if info, ok := agent.Info(ctx); ok && info.Agent != nil {
 		f.mode = info.Agent.PermissionMode(c.State)
+	}
+	if err := m.checkFollowUpMode(f.mode, r.StartMode); err != nil {
+		return tool.Errorf("cannot update task %s: %v", r.ID, err)
 	}
 	if j == nil {
 		var err error
@@ -311,7 +320,7 @@ func (m *Middleware) continueTask(ctx context.Context, c *tool.Call, r TaskRecor
 		return tool.Errorf("cannot update task %s: %v", r.ID, ErrFinished)
 	}
 	_, err := m.jobs.Restart(r.ThreadID, r.ID, func() error {
-		return j.Handle.continueWith(withFollowUp(j.Handle.base, f), ctx, message)
+		return j.Handle.continueWith(withFollowUp(ctx, f), ctx, message)
 	})
 	var limit *jobs.LimitError
 	switch {
@@ -324,6 +333,7 @@ func (m *Middleware) continueTask(ctx context.Context, c *tool.Call, r TaskRecor
 	case err != nil:
 		return tool.Errorf("cannot update task %s: %v", r.ID, err)
 	}
+	j.Handle.setParentMode(f.mode)
 	m.updateRecords(c.State, c.ThreadID, func(rec *TaskRecord) {
 		if rec.ID == r.ID {
 			rec.Status, rec.Ended = StatusRunning, time.Time{}
@@ -358,7 +368,8 @@ func (m *Middleware) reattach(ctx context.Context, r TaskRecord) (*jobs.Job[*tas
 	// Bound after attach: the attached episode stopped before, and was
 	// reported then; only later episodes are.
 	t.bind(TaskRecord{
-		ID: r.ID, ThreadID: r.ThreadID, TaskThreadID: r.TaskThreadID, SubagentType: r.SubagentType, Description: r.Description, Started: r.Started,
+		ID: r.ID, ThreadID: r.ThreadID, TaskThreadID: r.TaskThreadID, SubagentType: r.SubagentType, Description: r.Description,
+		StartMode: r.StartMode, Started: r.Started,
 	}, m.settled)
 	j, err := m.jobs.Adopt(r.ThreadID, r.ID, r.Started, t)
 	if err != nil {
@@ -369,6 +380,9 @@ func (m *Middleware) reattach(ctx context.Context, r TaskRecord) (*jobs.Job[*tas
 	}
 	if r.Notified {
 		m.jobs.MarkNotified(r.ThreadID, r.ID)
+	}
+	if f, ok := followUpOf(ctx); ok {
+		t.setParentMode(f.mode)
 	}
 	return j, nil
 }

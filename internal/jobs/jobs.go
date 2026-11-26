@@ -316,7 +316,9 @@ func (m *Manager[H]) Start(threadID string, recordedIDs []string, start func() (
 // stays as it was, ended.
 //
 // Restart returns ErrShutdown after Close, ErrUnknownJob when the job is not
-// held, is still running or is being restarted, and a *LimitError when the
+// held, is still running or is being restarted (or, after start, when
+// StopAndForget dropped it meanwhile: the new run is then stopped and the
+// job stays forgotten), and a *LimitError when the
 // thread runs or is starting MaxRunning jobs, all without calling start; an
 // error from start is returned as is. A job committed after Close began is
 // stopped at once, as in Start.
@@ -371,9 +373,20 @@ func (m *Manager[H]) Restart(threadID, id string, start func() error) (*Job[H], 
 	t.starting--
 	committed = true
 	j.restarting = false
+	if m.threads[threadID] != t || t.jobs[id] != j {
+		// StopAndForget dropped the job meanwhile (its run ended): the new
+		// run has nobody left to report to, so it is stopped, not kept.
+		if len(t.jobs) == 0 && t.starting == 0 && m.threads[threadID] == t {
+			delete(m.threads, threadID)
+		}
+		m.mu.Unlock()
+		ctx, cancel := detachedStop(context.Background())
+		_, _ = requestStop(ctx, j) // a failed signal still ends in Done via the handle's own escalation
+		cancel()
+		return nil, fmt.Errorf("%w: %s was forgotten while it restarted", ErrUnknownJob, id)
+	}
 	j.stopped.Store(false)
 	j.notified.Store(false)
-	t.jobs[id] = j // in case StopAndForget dropped it meanwhile
 	m.watchers.Add(1)
 	go m.watch(t, j)
 	closed := m.closed

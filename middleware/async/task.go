@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/permission"
 )
 
 // episodeState is where a task entry is between its episodes. Every change
@@ -51,10 +52,12 @@ var errCancelledWaiting = errors.New("async: the task was cancelled while it wai
 // as ended always has one. done closes when the Handle's episode stops, also
 // when the task now waits for a decision.
 type task struct {
-	// base is the context every later episode starts from: the start_task
-	// call's (or for an adopted task, the call's that adopted it), without
-	// its cancellation. It keeps the parent run's values, so an episode runs
-	// nested (agent.RunInfo.Depth is the parent's plus one).
+	// base is the start_task call's context (or for an adopted task, the
+	// call's that adopted it), without its cancellation. An episode a host's
+	// decision starts runs from it, so it runs nested in the parent run
+	// (agent.RunInfo.Depth is the parent's plus one), with that call's
+	// values (its tool call id, run id and trace span); a follow-up runs
+	// from the update_task call's context instead.
 	base context.Context
 
 	mu      sync.Mutex
@@ -71,6 +74,10 @@ type task struct {
 	meta    TaskRecord
 	settled settledFunc
 	epCtx   context.Context
+	// parentMode is the parent run's permission mode as last seen: at
+	// start_task, at a follow-up and at each turn of a run of the parent's
+	// thread. A host's decision passes it on (see Middleware.Resolve).
+	parentMode permission.Mode
 }
 
 // settledFunc is told that an episode of t stopped with out (ended is when),
@@ -88,6 +95,21 @@ func (t *task) bind(meta TaskRecord, settled settledFunc) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.meta, t.settled = meta, settled
+}
+
+// setParentMode records the parent run's current permission mode.
+func (t *task) setParentMode(mode permission.Mode) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.parentMode = mode
+}
+
+// lastParentMode returns the parent run's permission mode as last seen; ""
+// when never seen.
+func (t *task) lastParentMode() permission.Mode {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.parentMode
 }
 
 // identity returns the identity of the task's record (see bind).

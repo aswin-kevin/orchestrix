@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/agent/agenttest"
 	"github.com/aswin-kevin/orchestrix/internal/testutil"
 	"github.com/aswin-kevin/orchestrix/llm/llmtest"
 	"github.com/aswin-kevin/orchestrix/middleware/subagents"
@@ -576,11 +577,53 @@ func TestContinueAfterCancelledWaitingReleasedDoesNotRunPending(t *testing.T) {
 		t.Fatal("the cancelled task is still held")
 	}
 	evs, _ := h.run(t, context.Background(), "go on", nil)
+	// As on the held path: the task was cancelled while it waited.
 	res := result(t, evs, ToolUpdate)
-	if !res.IsError {
-		waitEnded(t, h.m, "async_1")
+	if !res.IsError || !strings.Contains(res.Flatten(), "cancelled while it waited") {
+		t.Fatalf("update_task = %+v", res)
 	}
 	if w.runs.Load() != 0 {
 		t.Fatalf("the unapproved call ran %d times after the task was cancelled (update_task = %+v)", w.runs.Load(), res)
+	}
+}
+
+func TestLocalResolveAppliesStricterParentMode(t *testing.T) {
+	w := newWriter(llmtest.Turn{Text: "could not write"})
+	h := waitingHarness(t, Config{}, w, nil, llmtest.Turn{Text: "ok"})
+	if err := agent.SetPermissionMode(h.st, permission.ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	h.run(t, context.Background(), "plan now", nil)
+	r := record(t, h.st, "async_1")
+	if err := h.m.Resolve(context.Background(), "t", "async_1", approveAll(t, r)); err != nil {
+		t.Fatalf("Resolve = %v", err)
+	}
+	waitEnded(t, h.m, "async_1")
+	if w.runs.Load() != 0 {
+		t.Fatal("an approved write ran while the parent is in plan mode")
+	}
+}
+
+func TestAttachReadsPendingFromThread(t *testing.T) {
+	w := newWriter()
+	h := waitingHarness(t, Config{}, w, nil)
+	lr := h.m.runner.(*localRunner)
+	rec := liveRecord(t, h, "async_1")
+	ctx, _ := agenttest.Context(context.Background(), agent.RunInfo{Agent: h.a, ThreadID: "t", Depth: 0})
+	ctx = withFollowUp(ctx, followUp{backend: h.be})
+	stale := rec
+	stale.Pending = &agent.Interrupt{Requests: []agent.ActionRequest{{ToolUseID: "stale", Tool: "write_file"}}}
+	hd, err := lr.Attach(ctx, stale)
+	if err != nil {
+		t.Fatalf("Attach = %v", err)
+	}
+	out, ok := hd.Outcome()
+	if !ok || out.Status != StatusWaiting || out.Pending == nil || out.Pending.Requests[0].ToolUseID != "w1" {
+		t.Fatalf("attached outcome = %+v, %v; want the thread's pending call w1", out, ok)
+	}
+	cancelled := rec
+	cancelled.Status, cancelled.Pending = StatusCancelled, nil
+	if _, err := lr.Attach(ctx, cancelled); !errors.Is(err, errCancelledWaiting) {
+		t.Fatalf("Attach of a task cancelled while it waited = %v, want errCancelledWaiting", err)
 	}
 }

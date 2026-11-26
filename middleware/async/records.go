@@ -8,6 +8,7 @@ import (
 	"github.com/aswin-kevin/orchestrix/agent"
 	"github.com/aswin-kevin/orchestrix/internal/jobs"
 	"github.com/aswin-kevin/orchestrix/internal/promptsafe"
+	"github.com/aswin-kevin/orchestrix/permission"
 	"github.com/aswin-kevin/orchestrix/state"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
@@ -25,6 +26,12 @@ type TaskRecord struct {
 	SubagentType string `json:"subagent_type"`
 	// Description is the task as the model wrote it.
 	Description string `json:"description"`
+	// StartMode is the parent run's permission mode when it started the
+	// task. A follow-up or decision through a Runner other than the
+	// built-in one is refused while the parent's mode is stricter (see
+	// FollowUpMode); empty in records saved before it existed, which then
+	// count as permission.ModeDefault.
+	StartMode permission.Mode `json:"start_mode,omitempty"`
 	// Status is one of the Status constants.
 	Status Status `json:"status"`
 	// Started is when the task was started.
