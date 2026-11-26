@@ -8,9 +8,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -75,10 +77,13 @@ func TestStdio(t *testing.T) {
 
 // mutant wraps an in-process transport and breaks one behaviour. Incoming
 // messages pass through transform, which returns what to deliver instead
-// (possibly nothing, or several held-back messages).
+// (possibly nothing, or several held-back messages; a nil entry is a
+// pause of notifyLag). The harness itself never hangs: the forwarder stops
+// delivering once Close starts, and Close waits for it only within ctx.
 type mutant struct {
 	inner mcp.Transport
 	out   chan json.RawMessage
+	stop  chan struct{} // closed when Close starts
 	fwd   chan struct{} // closed when the forwarder has closed out
 
 	transform func(json.RawMessage) []json.RawMessage
@@ -86,14 +91,26 @@ type mutant struct {
 	send func(ctx context.Context, m *mutant, msg json.RawMessage) error
 	// lateClose leaves Messages open for a while after Close returns.
 	lateClose bool
-	// err, when set, is what Err reports.
+	// err, when set, is what Err reports after Close.
 	err error
 	// closeOnceOnly makes every Close after the first fail.
 	closeOnceOnly bool
+	// ignoreCtx makes a Close whose ctx has already ended block for
+	// slowCloseFor instead of returning ctx.Err(), as a Close that waits on
+	// a slow release without watching ctx would. (A live ctx is not
+	// delayed, so the other cases stay fast.)
+	ignoreCtx bool
 
-	closes atomic.Int32
-	closed atomic.Bool
+	stopOnce sync.Once
+	closes   atomic.Int32
+	closed   atomic.Bool
 }
+
+// notifyLag is how long a nil transform entry delays what follows it.
+const notifyLag = 200 * time.Millisecond
+
+// slowCloseFor is how long an ignoreCtx mutant's Close blocks.
+const slowCloseFor = 3 * time.Second
 
 // newMutant starts a mutant over a fresh in-process session; configure
 // adjusts it before its forwarder starts.
@@ -101,26 +118,41 @@ func newMutant(configure func(m *mutant)) *mutant {
 	m := &mutant{
 		inner: mcp.InProcess(mcptest.NewServer()),
 		out:   make(chan json.RawMessage),
+		stop:  make(chan struct{}),
 		fwd:   make(chan struct{}),
 	}
 	configure(m)
-	go func() {
-		defer close(m.fwd)
-		for raw := range m.inner.Messages() {
-			msgs := []json.RawMessage{raw}
-			if m.transform != nil {
-				msgs = m.transform(raw)
-			}
-			for _, msg := range msgs {
-				m.out <- msg
-			}
-		}
-		if m.lateClose {
-			time.Sleep(500 * time.Millisecond)
-		}
-		close(m.out)
-	}()
+	go m.forward()
 	return m
+}
+
+// forward delivers the inner transport's messages, transformed, until the
+// inner transport ends; once Close starts it drops them instead.
+func (m *mutant) forward() {
+	defer close(m.fwd)
+	for raw := range m.inner.Messages() {
+		msgs := []json.RawMessage{raw}
+		if m.transform != nil {
+			msgs = m.transform(raw)
+		}
+		for _, msg := range msgs {
+			if msg == nil {
+				select {
+				case <-time.After(notifyLag):
+				case <-m.stop:
+				}
+				continue
+			}
+			select {
+			case m.out <- msg:
+			case <-m.stop:
+			}
+		}
+	}
+	if m.lateClose {
+		time.Sleep(500 * time.Millisecond)
+	}
+	close(m.out)
 }
 
 func (m *mutant) Send(ctx context.Context, msg json.RawMessage) error {
@@ -144,11 +176,20 @@ func (m *mutant) Close(ctx context.Context) error {
 		return errors.New("mutant: already closed")
 	}
 	m.closed.Store(true)
-	err := m.inner.Close(ctx)
-	if !m.lateClose {
-		<-m.fwd
+	m.stopOnce.Do(func() { close(m.stop) })
+	if m.ignoreCtx && ctx.Err() != nil {
+		time.Sleep(slowCloseFor)
 	}
-	return err
+	err := m.inner.Close(ctx)
+	if err != nil || m.lateClose {
+		return err
+	}
+	select {
+	case <-m.fwd:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // rewrite replaces from with to in every incoming message.
@@ -196,8 +237,30 @@ func reversedNotifications() func(json.RawMessage) []json.RawMessage {
 	}
 }
 
+// heldNotifications holds notifications back until the next response.
+// With lag set, they follow the response after a pause of notifyLag;
+// otherwise they are dropped.
+func heldNotifications(lag bool) func(json.RawMessage) []json.RawMessage {
+	var held []json.RawMessage
+	return func(raw json.RawMessage) []json.RawMessage {
+		if bytes.Contains(raw, []byte(`"notifications/message"`)) {
+			held = append(held, raw)
+			return nil
+		}
+		out := []json.RawMessage{raw}
+		if lag && len(held) > 0 {
+			out = append(append(out, nil), held...)
+		}
+		held = nil
+		return out
+	}
+}
+
 // clobberConcurrent overwrites the echo text of a message sent while
 // another Send is in flight, like a transport sharing one write buffer.
+// It relies on Sends overlapping: the 2ms sleep keeps each Send in flight
+// long enough that the kit's 8 concurrent callers always collide, while
+// sequential callers (one Send at a time) never do.
 func clobberConcurrent() func(ctx context.Context, m *mutant, msg json.RawMessage) error {
 	var inFlight atomic.Int32
 	return func(ctx context.Context, m *mutant, msg json.RawMessage) error {
@@ -205,33 +268,55 @@ func clobberConcurrent() func(ctx context.Context, m *mutant, msg json.RawMessag
 		if inFlight.Add(1) > 1 {
 			msg = json.RawMessage(strings.Replace(string(msg), `"text":"`, `"text":"clobbered `, 1))
 		}
-		time.Sleep(2 * time.Millisecond) // widen the window
+		time.Sleep(2 * time.Millisecond)
 		return m.inner.Send(ctx, msg)
+	}
+}
+
+// afterClose makes Send return err once Close has been called.
+func afterClose(err error) func(m *mutant) {
+	return func(m *mutant) {
+		m.send = func(ctx context.Context, m *mutant, msg json.RawMessage) error {
+			if m.closed.Load() {
+				return err
+			}
+			return m.inner.Send(ctx, msg)
+		}
 	}
 }
 
 // mutants maps "Case/how" to a configuration that breaks exactly the
 // behaviour the kit case Case checks.
 var mutants = map[string]func(m *mutant){
-	"Handshake/wrongName":               func(m *mutant) { m.transform = rewrite(`"name":"mcptest"`, `"name":"other"`) },
-	"Sequential/staleResults":           func(m *mutant) { m.transform = staleResults() },
-	"Concurrent/clobberedSend":          func(m *mutant) { m.send = clobberConcurrent() },
-	"NotificationsBeforeReply/reversed": func(m *mutant) { m.transform = reversedNotifications() },
-	"CloseEndsMessages/stillOpen":       func(m *mutant) { m.lateClose = true },
-	"CloseEndsMessages/errAfterClose":   func(m *mutant) { m.err = errors.New("mutant: closed") },
-	"CloseIdempotent/secondCloseFails":  func(m *mutant) { m.closeOnceOnly = true },
-	"SendAfterClose/silentDrop": func(m *mutant) {
-		m.send = func(ctx context.Context, m *mutant, msg json.RawMessage) error {
-			if m.closed.Load() {
-				return nil
-			}
-			return m.inner.Send(ctx, msg)
-		}
-	},
+	"Handshake/wrongName":                 func(m *mutant) { m.transform = rewrite(`"name":"mcptest"`, `"name":"other"`) },
+	"Sequential/staleResults":             func(m *mutant) { m.transform = staleResults() },
+	"Concurrent/clobberedSend":            func(m *mutant) { m.send = clobberConcurrent() },
+	"NotificationsBeforeReply/reversed":   func(m *mutant) { m.transform = reversedNotifications() },
+	"NotificationsBeforeReply/afterReply": func(m *mutant) { m.transform = heldNotifications(true) },
+	"NotificationsBeforeReply/dropped":    func(m *mutant) { m.transform = heldNotifications(false) },
+	"CloseEndsMessages/stillOpen":         func(m *mutant) { m.lateClose = true },
+	"CloseEndsMessages/errAfterClose":     func(m *mutant) { m.err = errors.New("mutant: closed") },
+	"CloseIdempotent/secondCloseFails":    func(m *mutant) { m.closeOnceOnly = true },
+	"CloseIdempotent/ignoresCtx":          func(m *mutant) { m.ignoreCtx = true },
+	"SendAfterClose/silentDrop":           afterClose(nil),
+	"SendAfterClose/wrongError":           afterClose(errors.New("mutant: send on closed transport")),
 }
 
+// alsoFails lists the other kit cases a mutant is expected to fail, beyond
+// the one its name targets.
+var alsoFails = map[string][]string{
+	// Stale results break every echo after the first, concurrent ones too.
+	"Sequential/staleResults": {"Concurrent"},
+	// The connected variants close the transport twice: directly, then
+	// through the client left open on it.
+	"CloseIdempotent/secondCloseFails": {"CloseEndsMessages", "SendAfterClose"},
+}
+
+// failedCase matches the failure line of a top-level kit case.
+var failedCase = regexp.MustCompile(`(?m)^\s*--- FAIL: TestBrokenTransportsAreFlagged/([A-Za-z]+) \(`)
+
 // TestBrokenTransportsAreFlagged runs the kit in a child process against
-// each mutant and checks that the case the mutant breaks fails.
+// each mutant and checks that exactly the cases the mutant breaks fail.
 func TestBrokenTransportsAreFlagged(t *testing.T) {
 	if name := os.Getenv(brokenEnv); name != "" {
 		mcptest.Run(t, func(t *testing.T) mcp.Transport {
@@ -249,7 +334,9 @@ func TestBrokenTransportsAreFlagged(t *testing.T) {
 		t.Skip("re-executes the test binary per mutant")
 	}
 	for name := range mutants {
-		wantFail, _, _ := strings.Cut(name, "/")
+		target, _, _ := strings.Cut(name, "/")
+		want := append([]string{target}, alsoFails[name]...)
+		slices.Sort(want)
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
@@ -260,8 +347,13 @@ func TestBrokenTransportsAreFlagged(t *testing.T) {
 			if err == nil {
 				t.Fatalf("kit passed a broken transport:\n%s", out)
 			}
-			if !strings.Contains(string(out), "--- FAIL: TestBrokenTransportsAreFlagged/"+wantFail+" (") {
-				t.Fatalf("kit did not flag case %s:\n%s", wantFail, out)
+			var got []string
+			for _, m := range failedCase.FindAllStringSubmatch(string(out), -1) {
+				got = append(got, m[1])
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, want) {
+				t.Fatalf("failed cases = %v, want %v:\n%s", got, want, out)
 			}
 		})
 	}
