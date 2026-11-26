@@ -1,0 +1,171 @@
+# Orchestrix
+
+> Orchestrix is an AI agent framework for Go: an LLM agent harness SDK that turns Claude, GPT or any OpenAI-compatible model into a tool-using agent with streaming, middleware, permissions and human-in-the-loop approval. Module `github.com/aswin-kevin/orchestrix`, Go 1.26 or newer, Apache-2.0, two dependencies beyond the standard library (`golang.org/x/net`, `gopkg.in/yaml.v3`). It is under active development: the API is being frozen for 1.0 and may still change in the 0.x line.
+
+This file is a map for coding agents. [llms-full.txt](https://raw.githubusercontent.com/aswin-kevin/orchestrix/main/llms-full.txt) has every feature with a compiling snippet, the extension points and the mistakes that compile but behave wrong. Both files are checked against the code by `internal/doccheck`.
+
+Rules to get right when writing code against Orchestrix:
+
+- **Model spec.** A model is a `format:model` string; only the first colon splits it. Formats: `anthropic` (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`), `openai` (Chat Completions) and `openai-responses` (both `OPENAI_API_KEY`, `OPENAI_BASE_URL`). Decision models: `systemone` and `openai-decisions`, built with `orchestrix.NewDecider`. For full control build an `llm.Config`, call `llm.New` and pass the provider to `orchestrix.NewWithProvider`.
+- **Two ways to build an agent.** `orchestrix.New(spec, opts...)` is the preset: file tools, `write_todos`, the `task` subagent tool, summarization, prompt caching and the permission gate, adjusted with options such as `orchestrix.WithMaxTurns`. `agent.New(cfg)` takes a full `agent.Config` for a custom stack; `orchestrix.WithConfig` edits the preset's config instead.
+- **Constructors validate.** Every `New(cfg)` takes a `Config` struct by value and returns `(T, error)`; check the error. A zero field means the default (`DefaultX` constants). A negative number makes `New` fail, except the exported `-1` constants a field names: `agent.Unlimited`, `agent.NoOutputRetries`, `llm.NoRetries`, `llm.NoIdleTimeout`, `llm.NoCooldown`, `orxdocker.Unlimited`.
+- **Runs are iterators.** `Agent.Run(ctx, in)` returns `iter.Seq2[agent.Event, error]`. Switch on `Event.Kind` (`agent.KindText`, `agent.KindToolUse`, `agent.KindInterrupt`, ...). The last event is always `agent.KindFinal`; its `*agent.Final` holds `Reason`, `Text`, `Usage`, `State` and `Version`. Only that final event carries an error, and only for a failed run: `max_turns`, `timeout`, `token_limit`, `refusal` and `interrupted` end with a nil error, so check `Final.Reason`.
+- **Enums grow.** Event kinds, terminal reasons, task and job statuses may gain values in a minor release. Give every switch a default case: ignore an unknown event kind, treat an unknown reason or status as a failure.
+- **Permissions.** Every tool call passes the gate: a mode (`permission.ModeDefault` when unset, `ModeAcceptEdits`, `ModeBypass`, `ModePlan`, `ModeDontAsk`, `ModeAuto`) plus `WithAllow`/`WithAsk`/`WithDeny` rules; deny always wins. In the default mode read-only calls run and anything else asks. A call that asks goes to `WithApprover`, or without one pauses the run: it ends with `agent.ReasonInterrupted`, and you answer with `agent.Decision` values through `Agent.Resume` or `Thread.Resume`.
+- **Interfaces plus optional capabilities.** `tool.Tool`, `agent.Middleware`, `backend.Backend`, `llm.Provider`, `checkpoint.Checkpointer` and `kv.Store` are small interfaces that never gain methods. Extra capabilities are optional interfaces; look them up through wrappers with `tool.As`, `backend.AsExecutor`, `backend.AsStarter`, `backend.AsSnapshotter`, `backend.AsMultiEditor` and `backend.AsCloser`, never a bare type assertion. A middleware is any value with `Name() string` plus the hook interfaces it needs.
+- **Close.** Call `Agent.Close(ctx)` on the top-level agent when done, with a bounded context: it stops background subagents and jobs, closes MCP connections, and closes the backend and checkpointer it owns. Hosts own `async.Middleware`, `jobs.Middleware` and `mcp.Middleware` values too; closing the agent closes them.
+- **Threads.** Set `agent.Input.ThreadID` (or use `Agent.Thread`) for a conversation that continues; with `orchestrix.WithCheckpointer` it continues in another process. Background tasks (`start_task`) need a thread.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/permission"
+)
+
+func main() {
+	ctx := context.Background()
+	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
+		orchestrix.WithMaxTurns(20),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer a.Close(ctx)
+
+	for ev, err := range a.Run(ctx, orchestrix.Text("Create /hello.txt saying hello.")) {
+		switch ev.Kind {
+		case agent.KindText:
+			fmt.Print(ev.Text)
+		case agent.KindFinal:
+			if err != nil || ev.Final.Reason != agent.ReasonCompleted {
+				log.Fatalf("run ended: %s: %v", ev.Final.Reason, err)
+			}
+		}
+	}
+}
+```
+
+## Docs
+
+- [Overview](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#overview): why Orchestrix, a comparison with other frameworks, and the feature list
+- [Quick start](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#quick-start): install and a first agent; every preset option is listed under it
+- [Core concepts](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#core-concepts): agent, run and events, tool, middleware, backend, permission gate, thread and checkpoint, terminal reasons
+- [Providers](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#providers): model formats, environment variables, `llm.Config`, `llm.APIError`
+- [Model fallback](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#model-fallback): backup models, triggers, cool-down, retries inside a chain
+- [Decision models](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#decision-models): typed yes/no, choice and score answers; `rubric.DecisionGrader`; the `guard` middleware
+- [Model profiles](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#model-profiles): per-model prompt suffix, tool descriptions and exclusions
+- [Structured output](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#structured-output): `WithOutputType`, `RunTyped`, `Decode`
+- [Prompt caching](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#prompt-caching): the `cache` middleware
+- [Security model](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#security-model): what each layer between the model and the host covers
+- [Permissions](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#permissions): the six modes, rule grammar and its lexical limits, git metadata
+- [Human in the loop](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#human-in-the-loop): interrupts, decisions, `Resume`, `WithInterruptOn`
+- [Plan mode](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#plan-mode): `enter_plan_mode`, `exit_plan_mode` and plan approval
+- [Hooks](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#hooks): callbacks at eight lifecycle points
+- [Asking the user](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#asking-the-user): `ask_user` questions, answered by an `Asker` or through an interrupt
+- [Self-grading](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#self-grading): the `rubric` middleware and stop continuations
+- [Limits, timeouts and logging](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#limits-timeouts-and-logging): turn, time and token budgets, every terminal reason, the logger
+- [Subagents](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#subagents): isolated and forked subagents through the `task` tool
+- [Background subagents](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#background-subagents): `WithAsync`, task statuses, approvals, restarts
+- [Coordinator](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#coordinator): a coordinator agent over workers, and `RunParallel`
+- [Memory](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#memory): `AGENTS.md`-style files and a long-term memory store
+- [Skills](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#skills): `SKILL.md` directories that unlock tools
+- [MCP](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#mcp): MCP servers over stdio or HTTP, and a small MCP server
+- [Web](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#web): `web_fetch`, `web_search`, the private-network guard
+- [Deferred tools](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#deferred-tools): `search_tools` and `call_tool` for large tool sets
+- [Context management](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#context-management): automatic summarization and offload
+- [Context compression](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#context-compression): model-directed compression with restore
+- [Backends](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#backends): memory, disk, kv, composite, sandbox, `WithMount`
+- [Shell and background jobs](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#shell-and-background-jobs): `WithShell`, `execute`, `WithJobs`
+- [Untrusted tools in containers](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#untrusted-tools-in-containers): `orxdocker`
+- [Production checklist](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#production-checklist): what to set before serving traffic
+- [Checkpoints and threads](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#checkpoints-and-threads): checkpointers, versions, leases, `orxpg`
+- [Tracing](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#tracing): `orxotel` spans and attributes
+- [Shutting down](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#shutting-down): what `Agent.Close` releases and in what order
+- [Middleware](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#middleware): hook interfaces and the fixed stack order
+- [Extending Orchestrix](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#extending-orchestrix): every interface you can implement and its conformance kit
+- [Stability and versioning](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#stability-and-versioning): what stays stable from v1.0.0, and what is not API
+- [Limitations](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#limitations): what Orchestrix does not do
+
+## Packages
+
+- [orchestrix](https://pkg.go.dev/github.com/aswin-kevin/orchestrix): the preset; `orchestrix.New`, `orchestrix.NewWithProvider`, `orchestrix.Text`, `orchestrix.RunTyped`, `orchestrix.Decode`, `orchestrix.NewDecider` and the `WithX` options
+- [agent](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/agent): the loop and its contracts; `agent.New`, `agent.Config`, `agent.Agent`, `agent.Thread`, `agent.Event`, `agent.Final`, `agent.Decision`, the hook interfaces such as `agent.ToolWrapper`, `agent.Emit`
+- [agent/agenttest](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/agent/agenttest): test kit; `agenttest.Context` builds a run context for calling a hook directly and records what it emits
+- [agent/elide](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/agent/elide): ranges of messages the request view replaces with one message; `elide.Add`, `elide.View`, `elide.Elision`
+- [backend](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/backend): the workspace contract; `backend.Backend`, `backend.Executor`, `backend.Starter`, `backend.AsExecutor`, sentinel errors such as `backend.ErrNotFound`
+- [backend/backendtest](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/backend/backendtest): conformance kit; `backendtest.Run`, `backendtest.RunExecutor`, `backendtest.RunStarter`, `backendtest.RunSnapshotter`
+- [backend/composite](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/backend/composite): backends mounted by path prefix; `composite.New`, `composite.Route`
+- [backend/disk](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/backend/disk): a directory on disk, confined to its root; `disk.New`, `disk.Config`
+- [backend/kv](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/backend/kv): files in a namespaced key/value store; `kv.New`, `kv.Store`, `kv.NewDirStore`, `kv.NewMemoryStore`
+- [backend/kv/kvtest](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/backend/kv/kvtest): conformance kit for `kv.Store`; `kvtest.Run`, `kvtest.RunWith`
+- [backend/memory](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/backend/memory): in-memory workspace, the preset's per-thread default; `memory.New(memory.Config{})`
+- [backend/sandbox](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/backend/sandbox): files and commands in a remote container or VM through a `backend.Executor`; `sandbox.New`, `sandbox.NewStarter`
+- [backend/shell](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/backend/shell): a disk backend that runs commands under `/bin/sh` (not a sandbox); `shell.New`, `shell.Config`, `shell.InheritedEnv`
+- [checkpoint](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/checkpoint): thread persistence contract; `checkpoint.Checkpointer`, `checkpoint.Leaser`, `checkpoint.Version`, `checkpoint.ErrConflict`
+- [checkpoint/checkpointtest](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/checkpoint/checkpointtest): conformance kit; `checkpointtest.Run`
+- [checkpoint/file](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/checkpoint/file): one append-only file per thread, one process per directory; `file.New`, `file.Config`
+- [checkpoint/memory](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/checkpoint/memory): process-local checkpointer for tests; `memory.New()`
+- [coordinator](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/coordinator): a coordinator agent over worker subagents, and bounded parallel runs; `coordinator.New`, `coordinator.Config`, `coordinator.RunParallel`, `coordinator.Job`
+- [llm](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/llm): provider-neutral messages and providers; `llm.New`, `llm.Config`, `llm.Provider`, `llm.ParseModel`, `llm.NewFallback`, `llm.Decider`, `llm.APIError`, `llm.RegisterProvider`, `llm.RegisterProfile`
+- [llm/llmtest](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/llm/llmtest): scripted provider and decider for offline tests, and a provider conformance check; `llmtest.New`, `llmtest.Turn`, `llmtest.NewDecider`, `llmtest.CheckProvider`
+- [mcp](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/mcp): Model Context Protocol client middleware and a small server; `mcp.Connect`, `mcp.ServerConfig`, `mcp.LoadConfig`, `mcp.NewServer`, `mcp.InProcess`
+- [mcp/mcptest](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/mcp/mcptest): conformance kit for `mcp.Transport`; `mcptest.Run`, `mcptest.NewServer`
+- [middleware/askuser](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/askuser): the `ask_user` tool; `askuser.Config`, `askuser.Asker`, `askuser.Questions`, `askuser.Respond`
+- [middleware/async](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/async): background subagents (`start_task` and friends); `async.New`, `async.Config`, `async.Tasks`, `async.Runner`
+- [middleware/async/asynctest](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/async/asynctest): conformance kit for `async.Runner` handles; `asynctest.Run`
+- [middleware/cache](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/cache): prompt-cache breakpoints, in the preset; `cache.New`, `cache.Config`
+- [middleware/compress](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/compress): model-directed context compression; `compress.New`, `compress.Config`
+- [middleware/deferred](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/deferred): tools offered by name until searched, and gated tools; `deferred.New`, `deferred.Defer`, `deferred.Gate`, `deferred.Config`
+- [middleware/filesystem](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/filesystem): the file tools and `execute`, in the preset; `filesystem.New`, `filesystem.Config`
+- [middleware/guard](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/guard): blocks input and tool calls a decision model flags; `guard.New`, `guard.Config`, `guard.Check`, `guard.Verdicts`
+- [middleware/hitl](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/hitl): human approval for chosen tools; `hitl.New`, `hitl.InterruptConfig`, `hitl.DefaultAllowed`
+- [middleware/hooks](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/hooks): host callbacks at lifecycle points; `hooks.New`, `hooks.Config`, `hooks.PreToolUseHook`, `hooks.StopHook`
+- [middleware/jobs](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/jobs): background shell jobs; `jobs.New`, `jobs.Config`, `jobs.Records`
+- [middleware/memory](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/memory): instruction files and a long-term memory store; `memory.Config`, `memory.DefaultFiles`, `memory.NewFileStore`, `memory.Store`, `memory.DefaultDir`
+- [middleware/planmode](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/planmode): plan mode with approval; `planmode.New`, `planmode.Config`, `planmode.Plan`
+- [middleware/planning](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/planning): the `write_todos` list, in the preset; `planning.New`, `planning.Todos`
+- [middleware/profiles](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/profiles): per-model adjustments; `profiles.Config`, `profiles.Adjustment`
+- [middleware/rubric](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/rubric): self-grading against criteria; `rubric.Config`, `rubric.ModelGrader`, `rubric.DecisionGrader`, `rubric.Grader`, `rubric.Grades`
+- [middleware/skills](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/skills): `SKILL.md` skills; `skills.Config`, `skills.DirSource`, `skills.Load`, `skills.New`
+- [middleware/subagents](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/subagents): the `task` tool, in the preset; `subagents.Subagent`, `subagents.Config`, `subagents.SuspendedFor`
+- [middleware/summarize](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/summarize): automatic summarization, in the preset; `summarize.Config`, `summarize.Summarizer`, `summarize.Current`
+- [middleware/web](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/middleware/web): `web_fetch` and `web_search`; `web.Config`, `web.NewDuckDuckGo`, `web.NewBrave`, `web.NewTavily`, `web.NewHTTPClient`, `web.Fetcher`
+- [permission](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/permission): modes, rules and the gate's evaluation order; `permission.Mode`, `permission.Approver`, `permission.Allowed`, `permission.Denied`, `permission.ParseRule`
+- [state](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/state): typed, JSON-serializable run state; `state.State`, `state.NewKey`, `state.Key`
+- [tool](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/tool): the tool contract and typed tools; `tool.New`, `tool.Tool`, `tool.Result`, `tool.Text`, `tool.Errorf`, `tool.As`, `tool.SchemaFor`, `tool.MatchName`
+- [orxotel](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/orxotel): separate module; OpenTelemetry tracing middleware; `orxotel.New`, `orxotel.Config`, `orxotel.RecordFallback`
+- [orxpg](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/orxpg): separate module; PostgreSQL checkpointer and `kv.Store` with leases across processes; `orxpg.Migrate`, `orxpg.NewCheckpointer`, `orxpg.NewStore`, `orxpg.Schema`
+- [orxdocker](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/orxdocker): separate module; hardened Docker container per thread as a backend; `orxdocker.NewManager`, `orxdocker.Config`, `orxdocker.Manager.Backend`, `orxdocker.Manager.Reap`
+- [evals](https://pkg.go.dev/github.com/aswin-kevin/orchestrix/evals): separate, untagged module; repeated-trial evaluations against a live model; `evals.RunSuite`, `evals.Scenarios`, `evals.Env`
+
+## Examples
+
+Each runs offline on a scripted model (`go run ./examples/<name>`), or against a real model when `ORX_MODEL` is set.
+
+- [quickstart](https://github.com/aswin-kevin/orchestrix/tree/main/examples/quickstart): `orchestrix.New` with one typed tool built by `tool.New`
+- [approval](https://github.com/aswin-kevin/orchestrix/tree/main/examples/approval): `WithInterruptOn` and a file checkpointer; the run pauses and `Thread.Resume` approves it
+- [persistent-memory](https://github.com/aswin-kevin/orchestrix/tree/main/examples/persistent-memory): `WithMemory` and `WithMount` over a `kv.DirStore`; a memory recorded in one thread is recalled in another
+- [background-tasks](https://github.com/aswin-kevin/orchestrix/tree/main/examples/background-tasks): `WithAsync`; a background researcher subagent whose result arrives on the next prompt
+- [coordinator](https://github.com/aswin-kevin/orchestrix/tree/main/examples/coordinator): `coordinator.New` with two workers, then `coordinator.RunParallel`
+- [self-check](https://github.com/aswin-kevin/orchestrix/tree/main/examples/self-check): `WithRubric`; the first answer fails, the revision passes
+- [structured-output](https://github.com/aswin-kevin/orchestrix/tree/main/examples/structured-output): `WithOutputType` and `RunTyped` with one automatic correction
+- [fallback](https://github.com/aswin-kevin/orchestrix/tree/main/examples/fallback): `WithFallbackConfig`; the primary is overloaded and the call moves to a backup
+
+## CLI
+
+- [orx](https://github.com/aswin-kevin/orchestrix/tree/main/cmd/orx): a coding-agent CLI on the SDK (`go install github.com/aswin-kevin/orchestrix/cmd/orx@latest`); flags such as `-model`, `-p`, `-mode`, `-store`, `-mcp`, `-web`, `-async` are listed in the [README](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#cli)
+
+## Optional
+
+- [CHANGELOG.md](https://github.com/aswin-kevin/orchestrix/blob/main/CHANGELOG.md): every release and every breaking change with its replacement
+- [CONTRIBUTING.md](https://github.com/aswin-kevin/orchestrix/blob/main/CONTRIBUTING.md): module layout, required checks and the code style rules
+- [SECURITY.md](https://github.com/aswin-kevin/orchestrix/blob/main/SECURITY.md): scope and private vulnerability reporting
+- [llms-full.txt](https://raw.githubusercontent.com/aswin-kevin/orchestrix/main/llms-full.txt): the self-contained reference, with a snippet for every feature

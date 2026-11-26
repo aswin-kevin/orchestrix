@@ -1,0 +1,1470 @@
+# Orchestrix
+
+> Orchestrix is an AI agent framework for Go: an LLM agent harness SDK that turns Claude, GPT or any OpenAI-compatible model into a tool-using agent with streaming, middleware, permissions and human-in-the-loop approval. Module `github.com/aswin-kevin/orchestrix`, Go 1.26 or newer, Apache-2.0, two dependencies beyond the standard library (`golang.org/x/net`, `gopkg.in/yaml.v3`). It is under active development: the API is being frozen for 1.0 and may still change in the 0.x line.
+
+This is the self-contained reference for coding agents; [llms.txt](https://raw.githubusercontent.com/aswin-kevin/orchestrix/main/llms.txt) is the short map, and the [README](https://github.com/aswin-kevin/orchestrix/blob/main/README.md) has the full prose. Every Go snippet below compiles against the current code: each is the body of a Go file without its `package` clause (imports included), except the complete programs, which start with `package main`. Identifiers written as `pkg.Name` resolve to exported declarations, and `internal/doccheck` fails when one stops existing.
+
+## Install and modules
+
+```sh
+go get github.com/aswin-kevin/orchestrix
+go install github.com/aswin-kevin/orchestrix/cmd/orx@latest   # optional CLI
+```
+
+The repository holds five modules. Install only what you use; each satellite's `go.mod` names the core release it needs.
+
+| Module | What it is | Needs |
+| --- | --- | --- |
+| `github.com/aswin-kevin/orchestrix` | The SDK and the `orx` CLI | Go 1.26+ |
+| `github.com/aswin-kevin/orchestrix/orxotel` | OpenTelemetry tracing middleware | the OpenTelemetry Go SDK |
+| `github.com/aswin-kevin/orchestrix/orxpg` | PostgreSQL checkpointer and `kv.Store` | `pgx/v5`, a PostgreSQL server |
+| `github.com/aswin-kevin/orchestrix/orxdocker` | A hardened Docker container per thread as a backend | a Docker Engine over its Unix socket |
+| `github.com/aswin-kevin/orchestrix/evals` | Repeated-trial evaluations and the `orxeval` command | a model endpoint; not tagged |
+
+The satellites stay on v0.x after the core reaches 1.0, so a minor release of one may break its API.
+
+## Conventions
+
+These rules hold across every package; code that ignores them compiles and then misbehaves.
+
+- **Model spec.** `format:model`; only the first colon splits it, so model names may contain colons. Formats and their environment: `anthropic` (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`), `openai` for Chat Completions and `openai-responses` for the Responses API (both `OPENAI_API_KEY`, `OPENAI_BASE_URL`). Setting `OPENAI_BASE_URL` points the `openai` formats at any compatible server. Decision-model formats: `systemone` (`SYSTEMONE_API_KEY`, `SYSTEMONE_BASE_URL`) and `openai-decisions`. `llm.ParseModel` turns a spec into an `llm.Config`.
+- **Facade or full config.** `orchestrix.New(spec, opts...)` and `orchestrix.NewWithProvider(p, opts...)` return an `*agent.Agent` with the default stack: `summarize`, `cache`, `filesystem` (file tools), `planning` (`write_todos`) and `subagents` (`task`), behind the permission gate. Options are the `WithX` functions of package `orchestrix`; `orchestrix.Options` bundles several into one. `agent.New(agent.Config{...})` builds an agent from a config you assemble yourself; `orchestrix.WithConfig` edits the preset's `agent.Config` instead.
+- **Constructors.** `New(cfg Config) (T, error)` with `Config` passed by value. The zero value of a field means its default, usually an exported `DefaultX` constant. A negative number makes `New` fail with an error naming the field, except the `-1` constants a field documents: `agent.Unlimited`, `agent.NoOutputRetries`, `llm.NoRetries`, `llm.NoIdleTimeout`, `llm.NoCooldown`, `orxdocker.Unlimited`. Constructors that do I/O are verbs (`mcp.Connect`, `mcp.DialHTTP`, `mcp.StartStdio`).
+- **Prompts.** A `Prompt *string` field is one prompt segment: nil means the default text, a pointer to `""` means none. A `Prompt string` field is a whole prompt; `""` means the default. Default texts are not API and may change in a minor release.
+- **Runs.** `Agent.Run(ctx, agent.Input)` returns `iter.Seq2[agent.Event, error]`. The last event is always `agent.KindFinal`, and only it can carry a non-nil error: `Final.Err`, set for a failed run. `max_turns`, `token_limit`, `timeout`, `refusal` and `interrupted` end with a nil error, so success is `Final.Reason == agent.ReasonCompleted`.
+- **Enums grow.** Event kinds, terminal reasons, task and job statuses, and in `llm` stop reasons, error kinds, block types and stream event types may gain values in a minor release. Ignore an event kind you do not know; treat an unknown reason or status as a failure.
+- **Errors.** Errors that cross a package boundary start with `"pkg: "`. Match them with `errors.Is` and `errors.As` against the exported sentinels (`checkpoint.ErrConflict`, `agent.ErrInvalidOutput`, `backend.ErrNotFound`, ...) and error types (`*llm.APIError`); their text is not API.
+- **Interfaces.** Contracts such as `tool.Tool`, `agent.Middleware`, `backend.Backend`, `llm.Provider`, `checkpoint.Checkpointer` and `kv.Store` never gain methods. New capabilities are optional interfaces, found through `Unwrap` with `tool.As`, `backend.AsExecutor`, `backend.AsStarter`, `backend.AsSnapshotter`, `backend.AsMultiEditor` or `backend.AsCloser`.
+- **Closing.** Anything that may block or do I/O has an idempotent `Close(ctx) error`. Close the top-level agent, never a subagent.
+- **Concurrency.** One agent serves many concurrent runs; everything a run changes lives in its `state.State`. Middleware keeps per-run data in state keys (`state.NewKey`), not in its fields.
+
+## Quick start
+
+A complete program: one typed tool, a permission mode and a run loop that handles every outcome.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/permission"
+	"github.com/aswin-kevin/orchestrix/tool"
+)
+
+type weatherInput struct {
+	City string `json:"city" desc:"City name, such as Paris."`
+	Unit string `json:"unit,omitempty" enum:"celsius,fahrenheit"`
+}
+
+func main() {
+	ctx := context.Background()
+	weather := tool.New("get_weather", "Returns the current weather for a city.",
+		func(ctx context.Context, in weatherInput, c *tool.Call) (tool.Result, error) {
+			if in.City == "" {
+				return tool.Errorf("city is empty"), nil // the model sees it and can retry
+			}
+			return tool.Text("sunny in " + in.City), nil
+		},
+		tool.WithReadOnly(),   // read-only calls run without approval
+		tool.WithConcurrent(), // may run alongside other calls
+	)
+
+	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithSystemPrompt("You are a careful assistant."),
+		orchestrix.WithTools(weather),
+		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
+		orchestrix.WithMaxTurns(20),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer a.Close(ctx)
+
+	for ev, err := range a.Run(ctx, orchestrix.Text("What is the weather in Paris?")) {
+		switch ev.Kind {
+		case agent.KindText:
+			fmt.Print(ev.Text)
+		case agent.KindToolUse:
+			fmt.Printf("\n[tool: %s]\n", ev.ToolName)
+		case agent.KindFinal:
+			f := ev.Final
+			fmt.Printf("\n%s after %d turns, %d output tokens\n", f.Reason, f.Turns, f.Usage.Output)
+			if f.Reason != agent.ReasonCompleted {
+				log.Printf("run did not complete: %v", err)
+			}
+		default:
+			// thinking, tool results, usage, retries, custom events and
+			// kinds added later
+		}
+	}
+}
+```
+
+`tool.New` generates the input schema from the struct: the `json` tag names a property, `desc` describes it and `enum` lists its values; a field is required unless it is a pointer or tagged `omitempty`. Input is validated and decoded strictly before the function runs. A tool built without `tool.WithReadOnly` is not read-only, so in the `default` and `acceptEdits` modes each call needs an allow rule (`orchestrix.WithAllow("get_weather")`) or an approval. Other options: `tool.WithEdit`, `tool.WithPaths` (report the paths a call touches, for path rules), `tool.WithSubject` and `tool.WithShellSubject` (the string `Tool(pattern)` rules match), and `tool.WithPermission` (the tool's own verdict).
+
+## Runs, events and threads
+
+An `agent.Event` has a `Kind` and the fields that kind sets:
+
+| Kind | Fields |
+| --- | --- |
+| `agent.KindText`, `agent.KindThinking` | `Text`: a delta while streaming |
+| `agent.KindToolUse` | `ToolID`, `ToolName`, `Input` |
+| `agent.KindToolResult` | `ToolID`, `ToolName`, `ToolResult` |
+| `agent.KindProgress` | `Text` from a running tool |
+| `agent.KindUsage` | `Usage` of one model call |
+| `agent.KindRetry` | a model call is retried; drop partial output streamed so far |
+| `agent.KindInterrupt` | `Interrupt`: actions awaiting a human decision |
+| `agent.KindCustom` | `Data` sent by middleware with `agent.Emit` |
+| `agent.KindFinal` | `Final`: always last |
+
+Every event also carries `Agent`, `ParentToolID` (set on events forwarded from subagents), `Turn`, `Time` and `RunID`.
+
+Terminal reasons (`agent.TerminalReason`): `completed`, `max_turns`, `token_limit`, `timeout`, `interrupted`, `invalid_resume`, `model_error`, `prompt_too_long`, `aborted_streaming`, `aborted_tools`, `hook_stopped`, `middleware_error`, `checkpoint_error`, `busy`, `invalid_output`, `refusal`, `internal_error`. Each has a constant such as `agent.ReasonMaxTurns`.
+
+A helper that runs one prompt on a thread and reports the outcome:
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm"
+)
+
+// ask runs one prompt on thread id and returns the final answer.
+func ask(ctx context.Context, a *agent.Agent, id, prompt string) (string, error) {
+	in := agent.Input{ThreadID: id, Messages: []llm.Message{llm.UserText(prompt)}}
+	var final *agent.Final
+	for ev, err := range a.Run(ctx, in) {
+		if ev.Kind == agent.KindFinal {
+			final = ev.Final
+			if err != nil {
+				return "", fmt.Errorf("run %s: %w", final.Reason, err)
+			}
+		}
+	}
+	switch final.Reason {
+	case agent.ReasonCompleted:
+		return final.Text, nil
+	case agent.ReasonInterrupted:
+		pending, _ := agent.Pending(final.State)
+		return "", fmt.Errorf("%d action(s) await a decision", len(pending.Requests))
+	default: // max_turns, timeout, token_limit, refusal and reasons added later
+		return "", fmt.Errorf("run ended: %s", final.Reason)
+	}
+}
+```
+
+`orchestrix.Text(s)` is shorthand for an `agent.Input` holding one user message. An `agent.Thread` keeps the conversation between prompts; with a checkpointer it is saved after every change and reopened by ID in any process:
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/aswin-kevin/orchestrix/agent"
+)
+
+func chat(ctx context.Context, a *agent.Agent) error {
+	th, err := a.Thread(ctx, "ticket-42") // from its latest checkpoint, if any
+	if err != nil {
+		return err
+	}
+	if pending, ok := th.Pending(); ok {
+		fmt.Println("waiting for a decision on", len(pending.Requests), "action(s)")
+	}
+	for ev, err := range th.Prompt(ctx, "Continue where we left off.") {
+		if err != nil {
+			return err
+		}
+		if ev.Kind == agent.KindText {
+			fmt.Print(ev.Text)
+		}
+	}
+	return nil
+}
+```
+
+Other `Thread` methods: `Send` (messages instead of text), `Resume` (answer a pending interrupt), `Fork` (copy under a new ID), `Messages`, `State`, `Version`. A `Thread` handle runs one run at a time; a second concurrent run ends with `agent.ReasonBusy`. Breaking out of a `range` loop cancels the run.
+
+## Models
+
+### Providers
+
+For headers, a proxy, retries, rate limits or the stream idle timeout, build the provider yourself:
+
+```go
+import (
+	"os"
+	"time"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm"
+)
+
+func newWithProvider() (*agent.Agent, error) {
+	p, err := llm.New(llm.Config{
+		Format:            llm.FormatAnthropic,
+		Model:             "claude-sonnet-4-5",
+		APIKey:            os.Getenv("ANTHROPIC_API_KEY"),
+		MaxRetries:        5,               // default llm.DefaultMaxRetries (3); llm.NoRetries for none
+		StreamIdleTimeout: 2 * time.Minute, // default 5 minutes; llm.NoIdleTimeout disables
+		Thinking:          llm.ThinkingAdaptive,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return orchestrix.NewWithProvider(p)
+}
+```
+
+Formats: `llm.FormatAnthropic`, `llm.FormatOpenAI`, `llm.FormatOpenAIResponses`, and for deciders `llm.FormatSystemOne`, `llm.FormatOpenAIDecisions`. Thinking modes: `llm.ThinkingEnabled`, `llm.ThinkingAdaptive`, `llm.ThinkingDisabled`; reasoning efforts: `llm.EffortMinimal` to `llm.EffortHigh`. On recent Anthropic models use `ThinkingAdaptive` (they reject the fixed budget `ThinkingEnabled` sends, some reject `ThinkingDisabled`) and leave `agent.Config.Temperature` nil.
+
+A failed call returns an `*llm.APIError` for an error status; `Kind()` returns an `llm.ErrorKind` (`llm.ErrorRateLimit`, `llm.ErrorAuth`, `llm.ErrorOverloaded`, `llm.ErrorInvalidRequest`, `llm.ErrorContextOverflow`, `llm.ErrorServer`, `llm.ErrorUnknown`), and `RequestID` holds the provider's id. Credentials are replaced with `[REDACTED]` in error text. A silent stream fails with `llm.ErrStreamIdle`.
+
+To add a wire format, implement `llm.Provider` (`Stream` and `Complete`) and register it with `llm.RegisterProvider(llm.Format("myformat"), build)`; `"myformat:model"` then works with `orchestrix.New`. Build HTTP adapters on `llm.NewTransport` for the built-in retries, rate limit, SSE idle timeout and redaction, and check them with `llmtest.CheckProvider`. `llm.RegisterProfile(prefix, llm.Profile{...})` declares a model's context window, output limit and features.
+
+### Model fallback
+
+```go
+import (
+	"context"
+	"log"
+	"time"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm"
+)
+
+func newWithFallback() (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithFallback("openai:gpt-4o")) // backups as model specs
+}
+
+func newWithFallbackConfig(backup llm.Provider) (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithFallbackConfig(llm.FallbackConfig{
+			Entries:  []llm.FallbackEntry{{Provider: backup, Model: "gpt-4o", Name: "backup"}},
+			Cooldown: time.Minute, // default 30s; llm.NoCooldown turns it off
+			OnFallback: func(ctx context.Context, ev llm.FallbackEvent) {
+				log.Printf("model switched: %s -> %s: %v", ev.From, ev.To, ev.Err)
+			},
+		}))
+}
+```
+
+A call moves to the next entry on a retryable error (408, 409, 429, 5xx, 529, network errors) or an in-stream overload, never on a 400, an authentication error, a context overflow or a cancelled context; `ShouldFallback` replaces the rule. Every entry but the last skips its own retries. A stream switches only before it produced content. Use at most one of `WithFallback` and `WithFallbackConfig`. `llm.NewFallback` builds the same provider outside the preset. Pick backups whose context window is at least the primary's: the agent sizes requests for the primary.
+
+### Decision models
+
+A decision model answers typed yes/no, choice and score questions with probabilities.
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/llm"
+)
+
+func classify(ctx context.Context) error {
+	d, err := orchestrix.NewDecider("systemone:your-decision-model")
+	if err != nil {
+		return err
+	}
+	resp, err := d.Decide(ctx, llm.DecisionRequest{
+		Input: []llm.Block{llm.TextBlock("Please refund my order, it never arrived.")},
+		Questions: []llm.Question{
+			{Name: "angry", Type: llm.QuestionYesNo, Instructions: "Is the customer angry?"},
+			{Name: "topic", Type: llm.QuestionChoice, Instructions: "What is this about?",
+				Choices: []llm.Choice{{Value: "refund"}, {Value: "shipping"}, {Value: "other"}}},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Println(resp.Answers["angry"].Yes, resp.Answers["topic"].Choice)
+	return nil
+}
+```
+
+`rubric.DecisionGrader` and the `guard` middleware use a decider (see Self-grading and Guard below). Add a format with `llm.RegisterDecider`.
+
+### Model profiles
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/middleware/profiles"
+)
+
+func newProfiled() (*agent.Agent, error) {
+	// What a model can do.
+	llm.RegisterProfile("small-", llm.Profile{ContextWindow: 32_000, MaxOutput: 4_096})
+
+	// How this agent treats it.
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithProfiles(profiles.Config{Adjustments: []profiles.Adjustment{{
+			Models:            []string{"small-*", "*-mini"},
+			PromptSuffix:      "Take one small step at a time and call one tool per turn.",
+			ToolDescriptions:  map[string]string{"grep": "Search file contents for a regular expression."},
+			ExcludeTools:      []string{"web_*"},
+			ExcludeMiddleware: []string{"subagents"},
+		}}}),
+	)
+}
+```
+
+Patterns use `*` (any run of characters, `/` included) and `?`. A middleware that implements `agent.Required` (`guard`, `hitl`, `hooks`, `planmode`) cannot be excluded: building the agent for a matching model fails.
+
+### Structured output
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/aswin-kevin/orchestrix"
+)
+
+type Triage struct {
+	Severity string   `json:"severity" enum:"low,medium,high"`
+	Summary  string   `json:"summary"`
+	Files    []string `json:"files"`
+}
+
+func triage(ctx context.Context) error {
+	a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithOutputType[Triage]())
+	if err != nil {
+		return err
+	}
+	defer a.Close(ctx)
+	t, final, err := orchestrix.RunTyped[Triage](ctx, a, orchestrix.Text("Triage: the build fails on Windows."))
+	if err != nil {
+		return err // errors.Is(err, agent.ErrInvalidOutput) when no valid object came back
+	}
+	fmt.Println(t.Severity, t.Summary, final.Usage.Output)
+	return nil
+}
+```
+
+The agent asks for a JSON object valid against the schema, checks the reply that would end the run and sends invalid ones back with the validation error, up to `agent.Config.OutputRetries` (default `agent.DefaultOutputRetries`, 2) times. When corrections run out the run ends with `agent.ReasonInvalidOutput`. `Final.Output` holds the compact JSON and is non-nil exactly when the run completed; `orchestrix.Decode[T](final)` decodes any `*agent.Final` strictly. `WithOutputSchema` takes a hand-written schema instead. Only top-level runs are held to the schema; a subagent has its own `subagents.Subagent.OutputSchema`. `Output` is not stored in checkpoints.
+
+### Prompt caching
+
+The `cache` middleware, in the preset, marks the stable system prefix and the two most recent user messages as cache breakpoints for providers that support it. Remove it with `orchestrix.WithoutMiddleware(cache.Name)`; replace it with `orchestrix.WithMiddleware` and a `cache.New(cache.Config{Recent: n})` to change the count.
+
+## Safety and control
+
+### Permissions
+
+| Mode | Behavior |
+| --- | --- |
+| `permission.ModeDefault` (`default`, also the zero value) | Read-only calls run; anything else asks. |
+| `permission.ModeAcceptEdits` (`acceptEdits`) | Also allows file-modifying tools, except writes to git metadata. |
+| `permission.ModeBypass` (`bypassPermissions`) | Allows everything a deny rule does not forbid. |
+| `permission.ModePlan` (`plan`) | Denies everything that is not read-only. |
+| `permission.ModeDontAsk` (`dontAsk`) | Never asks; denies what is not explicitly allowed. |
+| `permission.ModeAuto` (`auto`) | Never asks; denies unless a rule or the tool itself allows. |
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/permission"
+)
+
+func newGated() (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithPermissionMode(permission.ModeDefault),
+		orchestrix.WithAllow("read_file", "write(/notes/**)", "execute(git:*)"),
+		orchestrix.WithAsk("delete"),
+		orchestrix.WithDeny("write(/secrets/**)", "execute(rm:*)"),
+		orchestrix.WithApprover(func(ctx context.Context, req permission.Request, reason string) permission.Decision {
+			fmt.Printf("%s %s: %s\n", req.Tool, req.Input, reason)
+			if req.ReadOnly {
+				return permission.Allowed()
+			}
+			return permission.Denied("not approved")
+		}),
+	)
+}
+```
+
+Rule grammar: `Tool` matches a tool by name; `Tool(pattern)` matches the call's subject (a shell command, where `git:*` means `git` and any arguments, or a URL for `web_fetch`); `read(glob)` and `write(glob)` match file paths. A malformed rule makes `New` fail. Evaluation order (`permission.Evaluate`): deny rule, the tool's own deny, unanalyzable shell commands when deny or ask rules name commands, bypass, plan, ask rule, the tool's own allow (not in dontAsk), allow rule, acceptEdits for edits, read-only, then dontAsk and auto deny and every other mode asks. Command rules see each command of a shell line: an allow rule must cover all of them. Rules are lexical; they are not a sandbox. An `Approver` may be called concurrently (subagents inherit it) and must deny when it cannot decide.
+
+### Human in the loop
+
+Without an approver, a call that needs approval pauses the run with `agent.ReasonInterrupted`. Answer each pending `agent.ActionRequest` with an `agent.Decision` and resume on the same thread ID:
+
+```go
+import (
+	"context"
+	"errors"
+
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm"
+)
+
+// runApproving runs prompt on thread id and approves every pending action
+// that approve accepts, rejecting the rest, until the run stops pausing.
+func runApproving(ctx context.Context, a *agent.Agent, id, prompt string,
+	approve func(agent.ActionRequest) bool) (*agent.Final, error) {
+	events := a.Run(ctx, agent.Input{ThreadID: id, Messages: []llm.Message{llm.UserText(prompt)}})
+	for {
+		var final *agent.Final
+		var pending *agent.Interrupt
+		for ev, err := range events {
+			switch ev.Kind {
+			case agent.KindInterrupt:
+				pending = ev.Interrupt
+			case agent.KindFinal:
+				final = ev.Final
+				if err != nil {
+					return final, err
+				}
+			}
+		}
+		if final.Reason != agent.ReasonInterrupted {
+			return final, nil
+		}
+		if pending == nil {
+			return final, errors.New("interrupted without a pending action")
+		}
+		var decisions []agent.Decision
+		for _, req := range pending.Requests {
+			d := agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Approve}
+			if !approve(req) {
+				d.Type, d.Message = agent.Reject, "the user declined"
+			}
+			decisions = append(decisions, d)
+		}
+		events = a.Resume(ctx, id, final.State, decisions)
+	}
+}
+```
+
+Decision types: `agent.Approve`, `agent.Edit` (with a replacement `Input`), `agent.Reject` (with a `Message` for the model) and `agent.Respond` (an answer instead of running the call); offer only the ones in `ActionRequest.Allowed`. `Final.State` is JSON-serializable and holds the conversation, not the workspace: to resume in another process with files intact, use a checkpointer and `Agent.Thread`, then `Thread.Resume`.
+
+To pause before chosen tools whatever the mode, use `WithInterruptOn` (tool name patterns, as `tool.MatchName` matches them) or `WithInterruptConfig`:
+
+```go
+import (
+	"context"
+	"strings"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/hitl"
+	"github.com/aswin-kevin/orchestrix/permission"
+)
+
+func newWithInterrupts() (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithPermissionMode(permission.ModeAcceptEdits),
+		orchestrix.WithInterruptOn("delete", "mcp__*"),
+		orchestrix.WithInterruptConfig(map[string]hitl.InterruptConfig{
+			"write_file": {
+				Allowed: []agent.DecisionType{agent.Approve, agent.Reject},
+				When: func(_ context.Context, call *agent.ToolCall) bool {
+					return strings.Contains(string(call.Input), "/prod/")
+				},
+			},
+		}),
+	)
+}
+```
+
+A nil `Allowed` offers `hitl.DefaultAllowed()` (approve, edit, reject); an empty non-nil one offers only reject. When several patterns match a tool they combine fail-closed.
+
+### Plan mode
+
+`WithPlanMode` adds `enter_plan_mode` and `exit_plan_mode`. Entering switches the run to `plan` mode; `exit_plan_mode` submits the plan for approval through the approver (with `permission.Request.DisableRemember` set) or an interrupt. Approval restores the earlier mode (or `planmode.Config.ApproveMode`); `planmode.Plan(state)` returns the approved plan.
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/planmode"
+	"github.com/aswin-kevin/orchestrix/permission"
+)
+
+func newPlanner() (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithPlanMode(planmode.Config{ApproveMode: permission.ModeAcceptEdits}),
+	)
+}
+```
+
+### Hooks
+
+Hook points: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop`, `SubagentStart`. Each takes a list of hook structs whose `Fn` must be set; tool hooks take a `hooks.Matcher` of tool name patterns (empty matches every tool).
+
+```go
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/hooks"
+)
+
+func newHooked() (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithHooks(hooks.Config{
+			PreToolUse: []hooks.PreToolUseHook{{
+				Matcher: hooks.Matcher{Tools: []string{"write_file", "edit_file"}},
+				Fn: func(ctx context.Context, in hooks.ToolInput) (hooks.PreToolUseOutput, error) {
+					if bytes.Contains(in.Input, []byte("/secrets/")) {
+						return hooks.PreToolUseOutput{Block: true, Reason: "secrets are off limits"}, nil
+					}
+					return hooks.PreToolUseOutput{}, nil
+				},
+			}},
+			Stop: []hooks.StopHook{{
+				Fn: func(ctx context.Context, in hooks.StopInput) (hooks.StopOutput, error) {
+					if in.Depth == 0 && !strings.Contains(in.Final, "Sources:") {
+						return hooks.StopOutput{Continue: "End with a Sources: line."}, nil
+					}
+					return hooks.StopOutput{}, nil
+				},
+			}},
+			SessionEnd: []hooks.SessionEndHook{{
+				Fn: func(ctx context.Context, in hooks.SessionInput) error {
+					fmt.Println("run ended on thread", in.ThreadID)
+					return nil
+				},
+			}},
+		}),
+	)
+}
+```
+
+A `PreToolUse` hook runs after the permission rules allowed a call and can block it, rewrite its input (`UpdatedInput`) or add `Context`. A hook error wrapping `agent.ErrStopRun` ends the run with `hook_stopped`. Hooks also fire in subagent and resumed runs (`Depth`, `ParentToolID`). Tool hooks of concurrent calls may run concurrently.
+
+### Asking the user
+
+`WithAskUser` adds `ask_user` (one to four multiple-choice questions). With `askuser.Config.Asker` your code answers synchronously; without it the run pauses and you resume with `askuser.Respond`:
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/askuser"
+)
+
+func newAsking() (*agent.Agent, error) {
+	asker := askuser.AskerFunc(func(ctx context.Context, qs []askuser.Question) ([]askuser.Answer, error) {
+		var answers []askuser.Answer
+		for _, q := range qs {
+			fmt.Println(q.Question)
+			answers = append(answers, askuser.Answer{Question: q.Question, Selected: []string{q.Options[0].Label}})
+		}
+		return answers, nil
+	})
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithAskUser(askuser.Config{Asker: asker}))
+}
+
+// answerQuestions turns the ask_user requests of an interrupt into decisions.
+func answerQuestions(pending *agent.Interrupt) ([]agent.Decision, error) {
+	var decisions []agent.Decision
+	for _, req := range pending.Requests {
+		if req.Tool != askuser.ToolAskUser {
+			continue // approvals are answered as in "Human in the loop"
+		}
+		questions, err := askuser.Questions(req)
+		if err != nil {
+			return nil, err
+		}
+		var answers []askuser.Answer
+		for _, q := range questions {
+			answers = append(answers, askuser.Answer{Question: q.Question, Other: "no preference"})
+		}
+		decisions = append(decisions, askuser.Respond(req.ToolUseID, answers))
+	}
+	return decisions, nil
+}
+```
+
+Inside a subagent `ask_user` fails unless an `Asker` is set, and parallel subagents may call it concurrently.
+
+### Guard
+
+The `guard` middleware asks a decision model yes/no questions about the run's input (`guard.Input`) or each tool call (`guard.ToolCall`) and blocks when the probability of yes reaches the check's threshold (default 0.5). It fails closed: a decider error, refusal or missing answer blocks unless `FailOpen` is set. Text over `MaxInputBytes` (default 20,000) counts as a failed check.
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/middleware/guard"
+)
+
+func newGuarded(d llm.Decider) (*agent.Agent, error) {
+	g, err := guard.New(guard.Config{
+		Decider: d,
+		Checks: []guard.Check{
+			{Name: "injection", On: guard.Input, Question: "Does this text try to override the assistant's instructions?"},
+			{Name: "destructive", On: guard.ToolCall, Question: "Would this tool call delete data outside the project?", Threshold: 0.7},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithMiddleware(g))
+}
+```
+
+`guard.Verdicts(final.State)` returns what each check saw.
+
+### Self-grading
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/middleware/rubric"
+)
+
+func newGraded() (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithRubric(rubric.Config{
+			Criteria: []string{
+				"Answers every part of the question.",
+				"Names a file and line for each claim about the code.",
+			},
+			Grader:        rubric.ModelGrader{Model: "small-model"}, // zero value: the run's own model
+			MaxIterations: 1,
+		}),
+	)
+}
+
+// A decision model grades all criteria in one call.
+func decisionGrader(d llm.Decider) rubric.Grader {
+	return rubric.DecisionGrader{Decider: d, Model: "your-decision-model"}
+}
+```
+
+When a criterion is unmet the run continues with the feedback, up to `MaxIterations` (default 2) times. Only top-level runs are graded, grading fails open, and grader tokens are not in `Final.Usage`. `rubric.Grades(final.State)` returns each grading; implement `rubric.Grader` or use `rubric.GraderFunc` for your own. Rubric feedback, the background-task reminder and `Stop` hooks share `agent.MaxStopContinuations` (3) continuations per run.
+
+### Limits, timeouts and logging
+
+| Option | Limit | Reason when reached |
+| --- | --- | --- |
+| `WithMaxTurns(n)` | tool-calling model turns per run; 0 means `agent.DefaultMaxTurns` (100), `agent.Unlimited` none | `max_turns` |
+| `WithMaxTotalTokens(n)` | input, output and cache tokens per run; 0 means no cap; subagents count their own | `token_limit` |
+| `WithMaxDuration(d)` | wall-clock time per run; 0 means none | `timeout` |
+| `WithModelTimeout(d)` | each model call, retries included | `model_error` wrapping `context.DeadlineExceeded` |
+| `WithMaxTokens(n)` | output tokens per response; 0 means the model profile's limit | |
+
+`WithLogger(*slog.Logger)` receives the errors the loop recovers from or drops (failed saves, lease errors, panics by type and stack). Message content and tool inputs are never logged, but `err` attributes may echo store or provider data.
+
+## Delegation
+
+### Subagents
+
+The preset's `task` tool starts a subagent that shares the parent's workspace, streams its events into the parent's, and returns its final answer. Isolated subagents (the built-in `general-purpose` one and every spec you add) see only the task; a fork continues the parent's conversation.
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/subagents"
+	"github.com/aswin-kevin/orchestrix/permission"
+)
+
+func newWithReviewer() (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithSubagents(subagents.Subagent{
+			Name:           "reviewer",
+			Description:    "Reviews a change for bugs and risky edits.",
+			SystemPrompt:   "You review code. Report concrete problems with file and line.",
+			PermissionMode: permission.ModePlan, // read-only
+			MaxTurns:       10,
+		}),
+		orchestrix.WithSubagentConfig(subagents.Config{MaxDepth: 1, DisableFork: true}),
+	)
+}
+```
+
+A field left zero in `subagents.Subagent` is inherited from the parent (`Tools`, `Middleware`, `Provider`, `Model`, `Rules`, `Skills`, ...). A subagent runs in the stricter of the parent's mode and its own (`permission.Stricter`). Without an approver, a subagent that needs a decision pauses the parent's `task` call with one request; `subagents.SuspendedFor(final.State, toolUseID)` shows its full requests. Subagent usage is not added to the parent's `Final.Usage`.
+
+### Background subagents
+
+`WithAsync` adds `start_task`, `check_task`, `update_task`, `cancel_task` and `list_tasks`. A task runs on its own thread `<thread>/<task id>`; when it ends, the next turn of the parent thread announces it.
+
+```go
+import (
+	"context"
+	"log"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/async"
+)
+
+func newWithBackgroundTasks() (*agent.Agent, *async.Middleware, error) {
+	var tasks *async.Middleware
+	tasks, err := async.New(async.Config{
+		MaxRunning: 3, // per thread; default async.DefaultMaxRunning (4)
+		OnSettled: func(ctx context.Context, threadID string, rec async.TaskRecord) {
+			if rec.Status != async.StatusWaiting {
+				return
+			}
+			go func() { // OnSettled runs on the task's goroutine: do not block it
+				var decisions []agent.Decision
+				for _, req := range rec.Pending.Requests {
+					decisions = append(decisions, agent.Decision{ToolUseID: req.ToolUseID, Type: agent.Reject, Message: "not allowed in background"})
+				}
+				if err := tasks.Resolve(context.Background(), threadID, rec.ID, decisions); err != nil {
+					log.Printf("resolve %s: %v", rec.ID, err)
+				}
+			}()
+		},
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithAsync(tasks))
+	if err != nil {
+		_ = tasks.Close(context.Background())
+		return nil, nil, err
+	}
+	return a, tasks, nil // a.Close stops the tasks too
+}
+```
+
+Run with `Input.ThreadID` set: `start_task` fails without a thread. Statuses (`async.Tasks(state)`): `running`, `waiting` (stopped for a decision, answered by `Middleware.Resolve`), `completed`, `failed` (refusals included), `cancelled`, `timed_out`, `lost`. Tasks belong to the thread and may outlive the run that started them. With a checkpointer, the next run of the thread in a new process takes over running tasks; without one they are reported `lost`. Implement `async.Runner` (and optionally `async.Reattacher`, `async.Continuer`, `async.Resolver`) to run tasks elsewhere, and check it with `asynctest.Run`.
+
+### Coordinator and parallel runs
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/coordinator"
+	"github.com/aswin-kevin/orchestrix/middleware/subagents"
+	"github.com/aswin-kevin/orchestrix/permission"
+)
+
+func brief(ctx context.Context) error {
+	c, err := coordinator.New("anthropic:claude-sonnet-4-5", coordinator.Config{
+		Workers: []subagents.Subagent{
+			{Name: "researcher", Description: "Finds facts on a topic and lists their sources.",
+				SystemPrompt: "You research a topic and report facts with sources."},
+			{Name: "writer", Description: "Turns notes into clear prose.",
+				SystemPrompt: "You write clear prose from the notes you are given."},
+		},
+		MaxConcurrency: 3, // default coordinator.DefaultMaxConcurrency (4)
+	})
+	if err != nil {
+		return err
+	}
+	defer c.Close(ctx) // stops workers still running
+
+	in := orchestrix.Text("Write a one-page brief on home battery storage.")
+	in.ThreadID = "battery-brief" // start_task needs a thread
+	for ev, err := range c.Run(ctx, in) {
+		if err != nil {
+			return err
+		}
+		if ev.Kind == agent.KindFinal {
+			fmt.Println(ev.Final.Text)
+		}
+	}
+	return nil
+}
+
+func summarizeAll(ctx context.Context, files []string) error {
+	a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithPermissionMode(permission.ModePlan))
+	if err != nil {
+		return err
+	}
+	defer a.Close(ctx)
+	jobs := make([]coordinator.Job, len(files))
+	for i, f := range files {
+		in := orchestrix.Text("Summarize " + f + ".")
+		in.ThreadID = "summary-" + f // each job its own thread
+		jobs[i] = coordinator.Job{Agent: a, Input: in}
+	}
+	for i, r := range coordinator.RunParallel(ctx, jobs, coordinator.ParallelOptions{MaxConcurrency: 2}) {
+		if r.Err != nil {
+			fmt.Println(files[i], "failed:", r.Err)
+			continue
+		}
+		fmt.Println(files[i], r.Final.Text)
+	}
+	return nil
+}
+```
+
+`coordinator.Coordinator` embeds `*agent.Agent`. `Coordinator.Resolve` answers a worker waiting for a decision. `RunParallel` returns one `coordinator.Result` per job in input order; one failing job does not stop the others.
+
+## Knowledge and context
+
+### Memory
+
+`WithMemory` puts standing instruction files into the system prompt and, with a `Store`, adds `record_memory` and `recall_memory`. Mount the store's directory on a persistent backend to share memories across threads and restarts:
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend/kv"
+	"github.com/aswin-kevin/orchestrix/middleware/memory"
+)
+
+func newRemembering() (*agent.Agent, error) {
+	store, err := kv.NewDirStore("./memories", kv.DirStoreConfig{}) // survives restarts
+	if err != nil {
+		return nil, err
+	}
+	shared, err := kv.New(store, "memories")
+	if err != nil {
+		return nil, err
+	}
+	entries, err := memory.NewFileStore(memory.FileStoreConfig{}) // under memory.DefaultDir
+	if err != nil {
+		return nil, err
+	}
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithMemory(memory.Config{
+			Files: memory.DefaultFiles(), // /AGENTS.md; a nil Files loads nothing
+			Store: entries,
+		}),
+		orchestrix.WithMount(memory.DefaultDir, shared), // every thread shares it
+	)
+}
+```
+
+Files are workspace paths and must be absolute. Recall is keyword search; implement `memory.Store` (`Record`, `Recall`, `Index`) for a database or vector index, and `memory.Pather` so path rules apply to it. Whoever can write these files can steer the agent.
+
+### Skills
+
+A skill is a directory with a `SKILL.md`: YAML frontmatter (`name`, `description`, optional `allowed-tools`, `mcp-servers`, `license`, `compatibility`, `metadata`) and Markdown instructions. The system prompt lists each skill; the model loads one with the `skill` tool, which unlocks the tools its `allowed-tools` names.
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/skills"
+	"github.com/aswin-kevin/orchestrix/middleware/subagents"
+	"github.com/aswin-kevin/orchestrix/tool"
+)
+
+func newSkilled(pdfRender tool.Tool) (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithSkills(skills.Config{
+			Sources: []skills.Source{skills.DirSource("./skills")},
+			Pinned:  []string{"house-style"}, // always in the system prompt
+			Tools:   []tool.Tool{pdfRender},  // hidden until a loaded skill names it
+		}),
+		orchestrix.WithSubagents(subagents.Subagent{
+			Name:         "pdf-worker",
+			Description:  "Extracts tables and text from PDF files.",
+			SystemPrompt: "You extract data from PDF files.",
+			Skills:       []string{"pdf"},
+		}),
+	)
+}
+```
+
+`New` fails when a source cannot be read or a pinned name is unknown; an invalid skill in a directory is skipped (`skills.New` reports it in `Warnings()`).
+
+### MCP
+
+```go
+import (
+	"context"
+	"os"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/mcp"
+)
+
+func newWithMCP(ctx context.Context) (*agent.Agent, error) {
+	m, err := mcp.Connect(ctx, []mcp.ServerConfig{
+		{Name: "repo", Command: "./bin/repo-server", Args: []string{"--root", "."}},
+		{Name: "docs", URL: "https://mcp.example.com/mcp", BearerToken: os.Getenv("DOCS_TOKEN"), Defer: true},
+	}, mcp.ConnectConfig{})
+	if err != nil {
+		return nil, err
+	}
+	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithMCP(m),
+		orchestrix.WithAllow("mcp__repo__status"),
+	)
+	if err != nil {
+		_ = m.Close(ctx)
+		return nil, err
+	}
+	return a, nil // a.Close closes the MCP connections
+}
+```
+
+Each server tool is named `mcp__<server>__<tool>` (`mcp.ToolName`). A server sets exactly one of `Command` (stdio child process with a small environment allowlist unless `InheritEnv`), `URL` (streamable HTTP) or `Transport` (such as `mcp.InProcess(server)`). `Defer` offers its tools through `search_tools`; `Gated` hides them until a skill lists the server; `Optional` records a failure in `Status()` instead of failing `Connect`. Server tools ask for approval unless `TrustReadOnlyHints` is set or a rule allows them. `mcp.LoadConfig` reads `{"mcpServers": {...}}` JSON with `${VAR}` expansion. Protocol revision 2025-06-18; no OAuth, sampling or elicitation.
+
+A small server, served in process, over stdio or over HTTP:
+
+```go
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+
+	"github.com/aswin-kevin/orchestrix/mcp"
+)
+
+func newServer() (*mcp.Server, http.Handler) {
+	s := mcp.NewServer(mcp.Implementation{Name: "clock", Version: "1.0.0"}, "Tells the time.")
+	s.AddTool(mcp.ToolInfo{
+		Name:        "now",
+		Description: "Returns the current time.",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(ctx context.Context, args json.RawMessage) (*mcp.CallToolResult, error) {
+		return mcp.TextResult("12:00"), nil
+	})
+	return s, s.Handler(mcp.HandlerConfig{AllowedHosts: []string{"localhost"}})
+}
+```
+
+### Web
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/web"
+)
+
+func newWithWeb() (*agent.Agent, error) {
+	cfg := web.Config{ProxyURL: "http://proxy.internal:3128"}
+	client, err := web.NewHTTPClient(cfg.ClientConfig()) // web_fetch's proxy and network policy
+	if err != nil {
+		return nil, err
+	}
+	cfg.Search, err = web.NewDuckDuckGo(web.DuckDuckGoConfig{Client: client})
+	if err != nil {
+		return nil, err
+	}
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithWeb(cfg),
+		orchestrix.WithAllow("web_search", "web_fetch(https://go.dev/*)"),
+	)
+}
+```
+
+`web_fetch` refuses loopback, private and link-local addresses at every redirect hop and DNS answer unless `AllowPrivateNetworks` is set. The tools need an allow rule or approval unless `ReadOnly` is set. Search backends: `web.NewDuckDuckGo` (no key), `web.NewBrave` and `web.NewTavily` (an empty key fails with `web.ErrNoAPIKey`); implement `web.SearchBackend` for others. A custom `web.Fetcher` replaces `web.HTTPFetcher` and must enforce its own network policy.
+
+### Deferred tools
+
+```go
+import (
+	"context"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/deferred"
+	"github.com/aswin-kevin/orchestrix/tool"
+)
+
+type reportInput struct {
+	Quarter string `json:"quarter" desc:"Such as 2026-Q3."`
+}
+
+func newWithDeferred() (*agent.Agent, error) {
+	report := tool.New("quarterly_report", "Builds the quarterly sales report.",
+		func(ctx context.Context, in reportInput, c *tool.Call) (tool.Result, error) {
+			return tool.Text("report for " + in.Quarter), nil
+		})
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithTools(deferred.Defer(report)), // found with search_tools
+		orchestrix.WithDeferredTools(deferred.Config{Tools: []string{"mcp__docs__*"}}),
+	)
+}
+```
+
+A deferred tool is listed by name only; `search_tools` returns its schema and `call_tool` calls any tool by name, checked against the target's own permissions. `deferred.Gate` keeps a tool locked until something unlocks it (a skill).
+
+### Context management and compression
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/compress"
+	"github.com/aswin-kevin/orchestrix/middleware/summarize"
+)
+
+func newLongRunning() (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithSummarize(summarize.Config{
+			TriggerFraction: 0.7,           // default 0.85 of the context window
+			Model:           "small-model", // summarize with a cheaper model
+			DisableOffload:  true,          // do not save old messages to the workspace
+		}),
+		orchestrix.WithCompress(compress.Config{
+			TriggerFraction: 0.5, // default 0.6
+			KeepTurns:       4,   // default 3
+		}),
+	)
+}
+```
+
+`summarize` (in the preset) replaces older messages in the request view with a summary when a request would pass the trigger, clears large old tool results, offers `compact_conversation`, and offloads summarized messages and tool results over 80,000 characters under `/.orchestrix/` in the workspace. State keeps every message. `summarize.Summarizer` (or `summarize.SummarizerFunc`) replaces how summaries are written. `compress` lets the model summarize ranges itself with `compress_context` and bring them back with `restore_context`.
+
+## Workspaces
+
+### Backends
+
+| Backend | Constructor | Notes |
+| --- | --- | --- |
+| in memory | `memory.New(memory.Config{})` (`backend/memory`) | the preset's default: one workspace per thread ID until `Close`; a run without a thread ID gets a fresh one |
+| disk | `disk.New(root, disk.Config{})` | paths relative to root; access outside it is refused |
+| shell | `shell.New(root, shell.Config{})` or `WithShell` | disk plus `execute` under `/bin/sh`; not a sandbox |
+| key/value | `kv.New(store, namespace)` over `kv.NewMemoryStore`, `kv.NewDirStore` or your `kv.Store` | outlives threads; `orxpg.NewStore` for PostgreSQL |
+| composite | `composite.New(def, composite.Route{Prefix: "/memories", Backend: b})` | longest prefix wins; commands run only in `def` |
+| sandbox | `sandbox.New(exec, sandbox.Config{Root: "/workspace"})` | every file operation is a POSIX `sh` script through your `backend.Executor` |
+| container | `orxdocker.NewManager(orxdocker.Config{})` then `WithBackendFactory(m.Backend)` | hardened container per thread |
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/disk"
+	"github.com/aswin-kevin/orchestrix/backend/memory"
+	"github.com/aswin-kevin/orchestrix/backend/sandbox"
+)
+
+func newOnDisk() (*agent.Agent, error) {
+	ws, err := disk.New("./workspace", disk.Config{})
+	if err != nil {
+		return nil, err
+	}
+	return orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithBackend(ws)) // shared by all threads; a.Close closes it
+}
+
+func newPerThread() (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithBackendFactory(func(threadID string) backend.Backend {
+			b, err := memory.New(memory.Config{})
+			if err != nil {
+				panic(err) // the zero Config is valid
+			}
+			return b
+		}))
+}
+
+func newSandboxed(remote backend.Executor) (*agent.Agent, error) {
+	sb, err := sandbox.New(remote, sandbox.Config{Root: "/workspace"})
+	if err != nil {
+		return nil, err
+	}
+	return orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithBackend(sb))
+}
+```
+
+`WithMount(prefix, b)` mounts a backend on top of whatever the agent uses; it is repeatable and an invalid or duplicate prefix makes `New` fail. Backends returned by `WithBackendFactory` are not closed by `Agent.Close`. Implement `backend.Backend` (and the optional `backend.Executor`, `backend.Starter`, `backend.Snapshotter`, `backend.MultiEditor`, `backend.Closer`) for your own; run `backendtest.Run` against it.
+
+### Shell and background jobs
+
+```go
+import (
+	"context"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend/shell"
+	"github.com/aswin-kevin/orchestrix/middleware/jobs"
+)
+
+func newWithShell() (*agent.Agent, error) {
+	tm, err := jobs.New(jobs.Config{})
+	if err != nil {
+		return nil, err
+	}
+	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithShell("./workspace", shell.Config{}),
+		orchestrix.WithJobs(tm),
+		orchestrix.WithAllow("execute(git:*)"),
+		orchestrix.WithDeny("execute(rm:*)"),
+	)
+	if err != nil {
+		_ = tm.Close(context.Background())
+		return nil, err
+	}
+	return a, nil // a.Close stops background jobs
+}
+```
+
+`WithShell` cannot be combined with `WithBackend` or `WithBackendFactory`. Commands get a small environment allowlist (`shell.InheritedEnv`), timeouts, output limits, and git limited to explicit bare repositories (`shell.SafeGitEnv`); a process that leaves its process group keeps running. `WithJobs` adds `run_in_background` to `execute` and the tools `check_job`, `cancel_job`, `list_jobs`, `sleep` and `monitor`; `jobs.Records(state)` lists jobs. Commands need `/bin/sh`, so they work on Unix only.
+
+### Untrusted tools in containers (orxdocker)
+
+```go
+import (
+	"context"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/middleware/jobs"
+	"github.com/aswin-kevin/orchestrix/orxdocker"
+)
+
+func newContained(ctx context.Context) (*agent.Agent, *orxdocker.Manager, error) {
+	m, err := orxdocker.NewManager(orxdocker.Config{}) // alpine:3.22, hardened defaults
+	if err != nil {
+		return nil, nil, err
+	}
+	tm, err := jobs.New(jobs.Config{})
+	if err != nil {
+		_ = m.Close(ctx)
+		return nil, nil, err
+	}
+	a, err := orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithBackendFactory(m.Backend), // file tools and execute run in the container
+		orchestrix.WithJobs(tm),
+	)
+	if err != nil {
+		_ = tm.Close(ctx)
+		_ = m.Close(ctx)
+		return nil, nil, err
+	}
+	return a, m, nil // the host closes m after a.Close
+}
+```
+
+Containers run as `nobody` with a read-only root file system, all capabilities dropped, `no-new-privileges`, resource limits (`orxdocker.Unlimited` lifts one), no network and no host environment; each weakening field is an explicit opt-out. A command of a run without a thread ID fails with `orxdocker.ErrNoThread`. `Manager.Reap` removes orphaned containers; workspace files are not captured by checkpoints.
+
+## Running in production
+
+### Checkpoints
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/checkpoint/file"
+)
+
+func newDurable() (*agent.Agent, error) {
+	cp, err := file.New("./checkpoints", file.Config{}) // one process per directory
+	if err != nil {
+		return nil, err
+	}
+	return orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithCheckpointer(cp))
+}
+```
+
+The agent saves a thread after every change; the default in-memory workspace is saved with it. A failed save ends the run with `checkpoint_error`. Saves are conditional on the version the run loaded: a run that finds the thread changed ends with `checkpoint_error` wrapping `checkpoint.ErrConflict`, so reopen it with `Agent.Thread`. A `checkpoint.Leaser` keeps two runs of one thread from overlapping (`busy`). `checkpoint/memory` is a process-local checkpointer for tests. Implement `checkpoint.Checkpointer` (optionally `checkpoint.Lister`, `checkpoint.Deleter`, `checkpoint.Leaser`) for another store and run `checkpointtest.Run`.
+
+For workers on several machines, `orxpg` stores checkpoints and kv data in PostgreSQL with leases across processes:
+
+```go
+import (
+	"context"
+	"os"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/backend/kv"
+	"github.com/aswin-kevin/orchestrix/orxpg"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func newOnPostgres(ctx context.Context) (*agent.Agent, *kv.Backend, error) {
+	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := orxpg.Migrate(ctx, pool, orxpg.Config{}); err != nil { // CREATE TABLE IF NOT EXISTS
+		return nil, nil, err
+	}
+	cp, err := orxpg.NewCheckpointer(pool, "acme", orxpg.Config{}) // tenant "acme"
+	if err != nil {
+		return nil, nil, err
+	}
+	store, err := orxpg.NewStore(pool, "acme", orxpg.Config{})
+	if err != nil {
+		return nil, nil, err
+	}
+	files, err := kv.New(store, "shared")
+	if err != nil {
+		return nil, nil, err
+	}
+	a, err := orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithCheckpointer(cp))
+	return a, files, err
+}
+```
+
+A checkpointer used by an agent must sit over a `*pgxpool.Pool`, not a `*pgx.Conn` or `pgx.Tx`. `orxpg.Schema` returns the DDL for migration tools.
+
+### Tracing (orxotel)
+
+```go
+import (
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm"
+	"github.com/aswin-kevin/orchestrix/orxotel"
+	"go.opentelemetry.io/otel/trace"
+)
+
+func newTraced(tp trace.TracerProvider, backup llm.Provider) (*agent.Agent, error) {
+	mw, err := orxotel.New(orxotel.Config{
+		TracerProvider: tp,          // nil uses otel.GetTracerProvider()
+		ProviderName:   "anthropic", // gen_ai.provider.name
+	})
+	if err != nil {
+		return nil, err
+	}
+	return orchestrix.New("anthropic:claude-sonnet-4-5",
+		orchestrix.WithMiddleware(mw),
+		orchestrix.WithFallbackConfig(llm.FallbackConfig{
+			Entries:    []llm.FallbackEntry{{Provider: backup, Model: "gpt-4o", Name: "backup"}},
+			OnFallback: orxotel.RecordFallback, // a switch becomes a span event
+		}),
+	)
+}
+```
+
+Spans: `invoke_agent` per run, `chat` per model call, `execute_tool` per tool call, following the OpenTelemetry GenAI conventions. Tool arguments and results are exported only with `CaptureContent`; error text only with capture on or through `RedactError`.
+
+### Shutting down
+
+```go
+import (
+	"context"
+	"log"
+	"time"
+
+	"github.com/aswin-kevin/orchestrix/agent"
+)
+
+func shutdown(a *agent.Agent) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := a.Close(ctx); err != nil {
+		log.Printf("close: %v", err)
+	}
+}
+```
+
+`Agent.Close` drains `agent.Drainer` middleware (background subagents), closes `agent.Closer` middleware in reverse stack order (MCP, jobs, async), then the backend and checkpointer when they implement it, then the `agent.Config.OnClose` functions. It is idempotent. Runs already started are not stopped: cancel their contexts first. A run started after `Close` ends with `internal_error` wrapping `agent.ErrClosed`. Backends from `WithBackendFactory`, an `orxdocker.Manager` and a `pgxpool.Pool` stay with the host.
+
+Production checklist: a checkpointer; a deliberate permission mode with rules and an approver or interrupt handling; `WithMaxTurns`, `WithMaxDuration`, `WithMaxTotalTokens` and `WithModelTimeout`; backup models; `orxdocker` for commands untrusted content can influence; `Agent.Close` with a bounded context; `orxotel` and a redacting `WithLogger`; `.orchestrix/` in `.gitignore` on disk workspaces; live evals before each release.
+
+## Extending
+
+### Middleware
+
+A middleware is any value with `Name() string` plus the hook interfaces it needs: `agent.BeforeAgent`, `agent.AfterAgent`, `agent.BeforeModel`, `agent.AfterModel`, `agent.BeforeStop`, `agent.ModelWrapper`, `agent.ToolWrapper`, `agent.RunWrapper`, `agent.ToolProvider`, `agent.DynamicToolProvider` and the others in the table below. Wrappers nest like an onion: the first in the stack is outermost.
+
+```go
+import (
+	"context"
+	"log"
+	"time"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/state"
+	"github.com/aswin-kevin/orchestrix/tool"
+)
+
+// toolCalls counts a run's tool calls in its State, not in the middleware.
+var toolCalls = state.NewKey[int]("example.tool_calls")
+
+type toolLogger struct{}
+
+func (toolLogger) Name() string { return "tool-logger" }
+
+func (toolLogger) WrapTool(ctx context.Context, call *agent.ToolCall, next agent.ToolHandler) (tool.Result, error) {
+	start := time.Now()
+	res, err := next(ctx, call)
+	toolCalls.Update(call.State, func(n int) int { return n + 1 })
+	log.Printf("%s took %s (err: %v)", call.Name, time.Since(start), err)
+	return res, err
+}
+
+func newLogged() (*agent.Agent, error) {
+	return orchestrix.New("anthropic:claude-sonnet-4-5", orchestrix.WithMiddleware(toolLogger{}))
+}
+```
+
+The preset's stack order is fixed, outermost first: `summarize`, `compress`, `cache`, `hooks`, `hitl`, `rubric`, `memory`, `skills`, `planmode`, `filesystem`, `planning`, `subagents`, `async`, `deferred`, `mcp`, `web`, `askuser`, `jobs`, `profiles`. A middleware added with `WithMiddleware` whose name matches a built-in replaces it; others run after `profiles`. `WithoutMiddleware(subagents.Name, summarize.Name)` removes built-ins by name. `agent.Emit(ctx, ev)` adds an `agent.KindCustom` event to the run's stream; never call it from the goroutine reading the events.
+
+| Middleware package | `Name` | In the preset | Option | Tools it adds |
+| --- | --- | --- | --- | --- |
+| `middleware/summarize` | `summarize` | yes | `WithSummarize` | `compact_conversation` |
+| `middleware/compress` | `compress` | no | `WithCompress` | `compress_context`, `restore_context` |
+| `middleware/cache` | `cache` | yes | none | |
+| `middleware/hooks` | `hooks` | no | `WithHooks` | |
+| `middleware/hitl` | `hitl` | no | `WithInterruptOn`, `WithInterruptConfig` | |
+| `middleware/rubric` | `rubric` | no | `WithRubric` | |
+| `middleware/memory` | `memory` | no | `WithMemory` | `record_memory`, `recall_memory` (with a `Store`) |
+| `middleware/skills` | `skills` | no | `WithSkills` | `skill` |
+| `middleware/planmode` | `planmode` | no | `WithPlanMode` | `enter_plan_mode`, `exit_plan_mode` |
+| `middleware/filesystem` | `filesystem` | yes | `WithBackend`, `WithShell` | `ls`, `read_file`, `write_file`, `edit_file`, `multi_edit`, `delete`, `glob`, `grep`, `execute` |
+| `middleware/planning` | `planning` | yes | none | `write_todos` |
+| `middleware/subagents` | `subagents` | yes | `WithSubagents`, `WithSubagentConfig` | `task` |
+| `middleware/async` | `async` | no | `WithAsync` | `start_task`, `check_task`, `update_task`, `cancel_task`, `list_tasks` |
+| `middleware/deferred` | `deferred` | when needed | `WithDeferredTools` | `search_tools`, `call_tool` |
+| `mcp` | `mcp` | no | `WithMCP` | `mcp__<server>__<tool>`, `list_mcp_resources`, `read_mcp_resource` |
+| `middleware/web` | `web` | no | `WithWeb` | `web_fetch`, `web_search` |
+| `middleware/askuser` | `askuser` | no | `WithAskUser` | `ask_user` |
+| `middleware/jobs` | `jobs` | no | `WithJobs` | `check_job`, `cancel_job`, `list_jobs`, `sleep`, `monitor` |
+| `middleware/profiles` | `profiles` | no | `WithProfiles` | |
+| `middleware/guard` | `guard` | no | `WithMiddleware` | |
+| `orxotel` | `otel` | no | `WithMiddleware` | |
+
+### Extension points
+
+Run a conformance kit from your own tests against your implementation where one exists.
+
+| Interface | Implement it to... | Conformance kit |
+| --- | --- | --- |
+| `llm.Provider`, registered with `llm.RegisterProvider` | add a model API, or wrap one | `llmtest.CheckProvider` |
+| `llm.Decider`, registered with `llm.RegisterDecider` | add a decision-model API | none (`llmtest.NewDecider` scripts one) |
+| `tool.Tool`; optional `tool.ReadOnlyer`, `tool.ConcurrencySafer`, `tool.PermissionChecker`, `tool.PathAccessor`, `tool.Subjecter`, `tool.ShellSubjecter`, `tool.Editor`, `tool.Background`, `tool.Availability`, `tool.Dispatcher`, `tool.RawInputer` | add a tool (most are built with `tool.New`) | none |
+| `agent.Middleware` with `agent.BeforeAgent`, `agent.AfterAgent`, `agent.BeforeModel`, `agent.AfterModel`, `agent.BeforeStop`, `agent.ModelWrapper`, `agent.ToolWrapper`, `agent.RunWrapper`, `agent.ToolProvider`, `agent.DynamicToolProvider`, `agent.ToolHider`, `agent.MiddlewareExcluder`, `agent.OrphanResolver`, `agent.Drainer`, `agent.Binder`, `agent.Required` | add behavior around runs, model calls and tool calls | `agenttest.Context` (a run context for calling a hook directly) |
+| `backend.Backend`; optional `backend.Executor`, `backend.Starter`, `backend.Snapshotter`, `backend.MultiEditor`, `backend.Closer` | keep files elsewhere, or run commands | `backendtest.Run`, `backendtest.RunExecutor`, `backendtest.RunStarter`, `backendtest.RunSnapshotter` |
+| `checkpoint.Checkpointer`; optional `checkpoint.Lister`, `checkpoint.Deleter`, `checkpoint.Leaser` | store threads in another database | `checkpointtest.Run` |
+| `kv.Store`; optional `kv.Stater` | keep `backend/kv` files in another store | `kvtest.Run`, `kvtest.RunWith` |
+| `async.Runner` and `async.Handle`; optional `async.Reattacher`, `async.Continuer`, `async.Resolver` | run background tasks in another process | `asynctest.Run` |
+| `mcp.Transport`; optional `mcp.ProtocolVersionSetter` | reach MCP servers over another channel | `mcptest.Run` |
+| `web.Fetcher`, `web.SearchBackend` | read pages another way, or add a search service | none |
+| `memory.Store`; optional `memory.Pather` | keep long-term memories in a database or vector index | none |
+| `summarize.Summarizer` (or `summarize.SummarizerFunc`) | write summaries another way | none |
+| `rubric.Grader` (or `rubric.GraderFunc`) | grade answers with your own code | none |
+| `askuser.Asker` (or `askuser.AskerFunc`) | answer `ask_user` from your own UI | none |
+| `permission.Approver` (a function type) | decide approvals in your own UI | none |
+| `agent.Closer` | release what a middleware holds on `Agent.Close` | none |
+
+A wrapper exposes what it wraps with `Unwrap`; look capabilities up with `tool.As` and the `AsX` helpers of package `backend`:
+
+```go
+import (
+	"context"
+	"encoding/json"
+	"errors"
+
+	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/tool"
+)
+
+func isReadOnly(t tool.Tool, in json.RawMessage) bool {
+	ro, ok := tool.As[tool.ReadOnlyer](t)
+	return ok && ro.ReadOnly(in)
+}
+
+func run(ctx context.Context, b backend.Backend, cmd string) (string, error) {
+	ex, ok := backend.AsExecutor(b)
+	if !ok {
+		return "", errors.New("this backend cannot run commands")
+	}
+	res, err := ex.Execute(ctx, cmd, backend.ExecOptions{})
+	if err != nil {
+		return "", err
+	}
+	return res.Output, nil
+}
+```
+
+### Testing without a model
+
+`llmtest.New` scripts a provider turn by turn, so a whole agent runs offline:
+
+```go
+import (
+	"context"
+	"testing"
+
+	"github.com/aswin-kevin/orchestrix"
+	"github.com/aswin-kevin/orchestrix/agent"
+	"github.com/aswin-kevin/orchestrix/llm/llmtest"
+	"github.com/aswin-kevin/orchestrix/permission"
+)
+
+func TestAgentWritesFile(t *testing.T) {
+	model := llmtest.New(
+		llmtest.Turn{ToolCalls: []llmtest.Call{{ID: "c1", Name: "write_file",
+			Input: map[string]any{"path": "/a.txt", "content": "hi"}}}},
+		llmtest.Turn{Text: "done"},
+	)
+	a, err := orchestrix.NewWithProvider(model, orchestrix.WithPermissionMode(permission.ModeAcceptEdits))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close(context.Background()) })
+	for ev, err := range a.Run(t.Context(), orchestrix.Text("write it")) {
+		if ev.Kind == agent.KindFinal && (err != nil || ev.Final.Text != "done") {
+			t.Fatalf("Run() final = %s %q, %v, want completed %q", ev.Final.Reason, ev.Final.Text, err, "done")
+		}
+	}
+}
+```
+
+## Mistakes that compile
+
+Each of these builds and then misbehaves.
+
+1. **Checking only the iterator's error.** `max_turns`, `token_limit`, `timeout`, `refusal` and `interrupted` end with a nil error. Check `Final.Reason == agent.ReasonCompleted`, and treat a reason you do not know as a failure.
+2. **A switch without a default.** Event kinds, terminal reasons and task statuses grow in minor releases; a switch that maps "anything else" to success breaks silently.
+3. **Forgetting `Close`.** Background subagents, background jobs and stdio MCP servers keep running, and disk backends hold their directory. Call `Agent.Close(ctx)` with a bounded context on the top-level agent; closing a subagent or fork releases the parent's resources.
+4. **Reading zero as zero.** `MaxTurns: 0` means 100 turns, `MaxTotalTokens: 0` no token cap, `MaxDuration: 0` no time limit. A limit you want must be set. Conversely `memory.Config{}` loads no files: pass `memory.DefaultFiles()` for `/AGENTS.md`.
+5. **Negative values for "off".** `WithMaxDuration(-1)` or `MaxRetries: -2` makes `New` fail; only the named `-1` constants (`agent.Unlimited`, `llm.NoRetries`, ...) are accepted. Code that drops the error from `New` then runs a nil agent.
+6. **No approver and no interrupt handling.** In the default mode every call that is not read-only (custom tools built without `tool.WithReadOnly` included) pauses the run with `interrupted`. A service that ignores the reason never performs those calls. Add allow rules, an approver, or resume the run.
+7. **Resuming in another process without a checkpointer.** `Final.State` holds the conversation, not the workspace: the default in-memory workspace is gone, and background tasks are reported `lost`. Use `WithCheckpointer` and `Agent.Thread`.
+8. **Resuming on a different thread ID.** `Resume` must get the thread ID of the interrupted run, or it runs against another workspace.
+9. **Calling `Run` on an interrupted State.** `Run` abandons the pending interrupt and starts afresh; use `Resume` (or `Thread.Resume`) to answer it.
+10. **Driving `Agent.Run` with a checkpointer and a zero `Input.Version`.** The first save expects that version, so continuing a saved thread ends with `checkpoint_error` wrapping `checkpoint.ErrConflict`. Pass `Final.Version` back, or use `Agent.Thread`.
+11. **One `async.Middleware` for several top-level agents.** It binds to the first agent; `Resolve` after a restart goes through that agent's checkpointer and backend only. Build one per top-level agent.
+12. **Background tasks without a thread.** `start_task` fails in a run without `Input.ThreadID`, and so do coordinator workers and `RunParallel` jobs without one. Never name your own thread like a task thread (`<thread>/<task id>`).
+13. **Per-run data in middleware fields.** One agent serves concurrent runs and subagents share its middleware; keep run data in `state.State` with `state.NewKey`.
+14. **Calling `agent.Emit` from the goroutine that reads the events.** It waits until the event is taken, so it blocks forever.
+15. **Breaking out of the event loop early.** It cancels the run: `AfterAgent` hooks, `SessionEnd` hooks and the end-of-run checkpoint are skipped.
+16. **Bare type assertions on tools and backends.** A wrapped tool or backend hides its capabilities from `t.(tool.ReadOnlyer)`; use `tool.As`, and `backend.AsExecutor` and the other `AsX` helpers of package `backend`.
+17. **Mounting a backend that must outlive the agent next to `WithBackend` or `WithShell`.** `Agent.Close` closes mounted backends then.
+18. **Treating the shell backend or permission rules as a sandbox.** Commands run as your process; rules are lexical. An allowed program that runs project code (`make`, `npm test`, `go test` after an edit) can run anything. Use `orxdocker` for untrusted input.
+19. **A custom `web.Fetcher` without its own network policy.** The private-address guard lives in `web.HTTPFetcher` only.
+20. **An approver that remembers answers for `DisableRemember` requests.** Plan approval must be asked every time.
+21. **A `Stop` hook as the only quality gate.** Continuations are shared with the async reminder and `rubric` (`agent.MaxStopContinuations`, 3); once spent, later `Stop` hooks do not run.
+22. **`Prompt: nil` versus a pointer to `""`.** nil keeps the default segment; to drop it, point to an empty string.
+23. **`orxpg` checkpointer over a `pgx.Tx` or `*pgx.Conn`.** Leases are renewed from another goroutine; use a `*pgxpool.Pool`.
+24. **Backups with a smaller context window, or Anthropic backups with thinking.** The agent sizes requests for the primary, and prompt-too-long errors never trigger a switch.
+25. **Matching error text.** Messages may change in a minor release; use `errors.Is` and `errors.As`.
+26. **Expecting `Final.Output` after a reload.** It is on the `Final` only and is not checkpointed.
+27. **Expecting `MaxTotalTokens` to cover subagents.** Each nested run counts only its own tokens, so total spend with N subagent runs can reach N+1 times the cap.
+
+## Evals
+
+The `evals` module runs scenarios against a live model several times each and reports pass rates; `go run ./cmd/orxeval -n 5 -out results.json` from `evals/` with `ORX_TEST_MODEL`, `ORX_TEST_BASE_URL` and `ORX_TEST_API_KEY` set. Programmatic use goes through `evals.RunSuite` with `evals.Scenarios()` and an `evals.Env`. See [Live tests and evals](https://github.com/aswin-kevin/orchestrix/blob/main/README.md#live-tests-and-evals).

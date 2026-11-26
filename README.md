@@ -31,6 +31,8 @@ Your application starts a run with `orchestrix.New(...)` (or the `orx` CLI) and 
 - [Extending](#extending): [Middleware](#middleware) · [Extending Orchestrix](#extending-orchestrix)
 - [Project](#project): [Modules](#modules) · [Stability and versioning](#stability-and-versioning) · [Limitations](#limitations) · [Contributing](#contributing) · [Live tests and evals](#live-tests-and-evals) · [License](#license)
 
+For coding agents: [llms.txt](llms.txt) maps the packages and the rules to get right, and [llms-full.txt](llms-full.txt) has a compiling snippet for every feature.
+
 ## Overview
 
 ### Why Orchestrix
