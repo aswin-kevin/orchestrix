@@ -1,6 +1,6 @@
 # Orchestrix
 
-> Orchestrix is an AI agent framework for Go: an LLM agent harness SDK that turns Claude, GPT or any OpenAI-compatible model into a tool-using agent with streaming, middleware, permissions and human-in-the-loop approval. Module `github.com/aswin-kevin/orchestrix`, Go 1.26 or newer, Apache-2.0, two dependencies beyond the standard library (`golang.org/x/net`, `gopkg.in/yaml.v3`). It is under active development: the API is being frozen for 1.0 and may still change in the 0.x line.
+> Orchestrix is an AI agent framework for Go: an LLM agent harness SDK that turns Claude, GPT or any OpenAI-compatible model into a tool-using agent with streaming, middleware, permissions and human-in-the-loop approval. Module `github.com/aswin-kevin/orchestrix`, Go 1.26 or newer, Apache-2.0, two dependencies beyond the standard library (`golang.org/x/net`, `gopkg.in/yaml.v3`). It is stable from v1.0.0: the core module's public API follows semantic versioning.
 
 This file is a map for coding agents. [llms-full.txt](https://raw.githubusercontent.com/aswin-kevin/orchestrix/main/llms-full.txt) covers the features with snippets, the extension points and the mistakes that compile but behave wrong. Tests compile the Go snippets of both files and of the README, and check their package lists, README links and `pkg.Name` references against the code (`internal/doccheck`, plus the `orxotel` and `orxpg` modules for their snippets).
 

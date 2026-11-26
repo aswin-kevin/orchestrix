@@ -1,6 +1,6 @@
 # Orchestrix
 
-> Orchestrix is an AI agent framework for Go: an LLM agent harness SDK that turns Claude, GPT or any OpenAI-compatible model into a tool-using agent with streaming, middleware, permissions and human-in-the-loop approval. Module `github.com/aswin-kevin/orchestrix`, Go 1.26 or newer, Apache-2.0, two dependencies beyond the standard library (`golang.org/x/net`, `gopkg.in/yaml.v3`). It is under active development: the API is being frozen for 1.0 and may still change in the 0.x line.
+> Orchestrix is an AI agent framework for Go: an LLM agent harness SDK that turns Claude, GPT or any OpenAI-compatible model into a tool-using agent with streaming, middleware, permissions and human-in-the-loop approval. Module `github.com/aswin-kevin/orchestrix`, Go 1.26 or newer, Apache-2.0, two dependencies beyond the standard library (`golang.org/x/net`, `gopkg.in/yaml.v3`). It is stable from v1.0.0: the core module's public API follows semantic versioning.
 
 This is the self-contained reference for coding agents; [llms.txt](https://raw.githubusercontent.com/aswin-kevin/orchestrix/main/llms.txt) is the short map, and the [README](https://github.com/aswin-kevin/orchestrix/blob/main/README.md) has the full prose. Every Go snippet below is the body of a Go file without its `package` clause (imports included), except the complete programs, which start with `package main`. Tests compile every snippet against the current code (`TestSnippetsCompile` in `internal/doccheck`, and in `orxotel` and `orxpg` for theirs), and `internal/doccheck` fails when a `pkg.Name` or `pkg.Type.Member` reference stops naming an exported declaration.
 
@@ -21,7 +21,7 @@ The repository holds five modules. Install only what you use; each satellite's `
 | `github.com/aswin-kevin/orchestrix/orxdocker` | A hardened Docker container per thread as a backend | a Docker Engine over its Unix socket |
 | `github.com/aswin-kevin/orchestrix/evals` | Repeated-trial evaluations and the `orxeval` command | a model endpoint; not tagged |
 
-The satellites stay on v0.x after the core reaches 1.0, so a minor release of one may break its API.
+The satellites stay on v0.x while the core is on v1, so a minor release of one may break its API.
 
 ## Conventions
 

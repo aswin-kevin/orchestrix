@@ -9,7 +9,7 @@
 
 You get a complete agent loop in a few lines of code, with two small dependencies beyond the Go standard library; the [Production checklist](#production-checklist) lists what to set before serving traffic.
 
-> Orchestrix is under active development. The API is being frozen for 1.0; until that release it may still change in the 0.x line.
+> Orchestrix 1.0 is stable: the core module's public API follows semantic versioning. See [Stability and versioning](#stability-and-versioning).
 
 <p align="center">
   <img src="assets/architecture.png" alt="Orchestrix architecture: your app or the orx CLI calls Run(prompt) and receives streamed events (text, tool calls, approvals, final). Inside the Orchestrix runtime the agent loop builds a request, calls the model and runs tools, wrapped by a middleware stack you can extend: memory, skills, plan mode, subagents, background tasks, shell jobs, MCP, ask user, summarize, compress, prompt cache, guard, rubric, hooks, web and profiles. A coordinator fans work out to parallel workers, and background tasks can wait for approval and resume after a restart. The runtime calls model providers (Anthropic Messages, OpenAI Chat, OpenAI Responses, OpenAI-compatible) with model fallback and decision models. Every tool call passes the permission gate (6 modes, allow, ask and deny rules, human approval) before reaching files, shell, MCP servers, web and workspaces (memory, disk, key-value, sandbox, mounts, Docker). State and checkpoints keep typed JSON state, threads and versioned checkpoints that resume in any process, stored in memory, files or Postgres, with OpenTelemetry tracing." width="900">
@@ -83,7 +83,7 @@ go get github.com/aswin-kevin/orchestrix
 
 Requires Go 1.26 or newer.
 
-The satellite modules (`orxotel`, `orxpg`, `orxdocker`) are installed separately and stay on v0.x after the core reaches 1.0, because they track dependencies that still move, such as the OpenTelemetry GenAI conventions. [Modules](#modules) lists what each one needs.
+The satellite modules (`orxotel`, `orxpg`, `orxdocker`) are installed separately and stay on v0.x while the core is on v1, because they track dependencies that still move, such as the OpenTelemetry GenAI conventions. [Modules](#modules) lists what each one needs.
 
 ### Quick start
 
@@ -1456,7 +1456,7 @@ The repository holds five Go modules. Install only the ones you use; each satell
 
 ### Stability and versioning
 
-Orchestrix follows semantic versioning. Before v1.0.0 a minor release may break the API; v0.10.0 was the freeze pass that gave every public contract the shape it will keep. [CHANGELOG.md](CHANGELOG.md) lists every break, with its replacement, under "Breaking changes". From v1.0.0, for the core module:
+Orchestrix follows semantic versioning, and the core module is stable from v1.0.0. Before it a minor release could break the API; v0.10.0 was the freeze pass that gave every public contract the shape it keeps in v1. [CHANGELOG.md](CHANGELOG.md) lists every break, with its replacement, under "Breaking changes". From v1.0.0, for the core module:
 
 - **Exported API.** Exported identifiers of the non-internal packages are not removed or changed incompatibly within v1.
 - **Interfaces.** An interface never gains a method. A new capability arrives as a new optional interface, found with `tool.As` and the `backend.AsX` helpers, which follow `Unwrap` ([Extending Orchestrix](#extending-orchestrix)).
@@ -1465,7 +1465,7 @@ Orchestrix follows semantic versioning. Before v1.0.0 a minor release may break 
 - **Defaults.** Default values (the `DefaultX` constants, such as `agent.DefaultMaxTurns`) and default behaviour may be tuned in a minor release, and the CHANGELOG lists each change. Set a value explicitly when your code depends on it.
 - **Conformance kits.** The `*test` packages (`backendtest`, `llmtest`, `checkpointtest` and the others) may gain checks in a minor release, so a third-party implementation can start failing one; a new check enforces a documented contract, and the CHANGELOG lists it.
 - **Go version.** The core needs Go 1.26 or newer. The minimum is raised only in a minor release, and the CHANGELOG says so.
-- **Satellites.** `orxotel`, `orxpg` and `orxdocker` stay on v0.x after the core reaches 1.0, because they track dependencies that still move, such as the OpenTelemetry GenAI conventions; a minor release of one may break its API. `evals` is not released.
+- **Satellites.** `orxotel`, `orxpg` and `orxdocker` stay on v0.x while the core is on v1, because they track dependencies that still move, such as the OpenTelemetry GenAI conventions; a minor release of one may break its API. `evals` is not released.
 - **Security fixes** go into the latest minor release of each module ([SECURITY.md](SECURITY.md)).
 
 ### Limitations

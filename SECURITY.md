@@ -23,4 +23,4 @@ Out of scope: what a model chooses to do within the permissions you granted it, 
 
 ## Supported versions
 
-Orchestrix is pre-1.0. Security fixes go into the latest minor release only (the newest `v0.x` core release, and the newest release of each satellite module: `orxotel`, `orxpg`, `orxdocker`). Upgrade to it to receive fixes.
+Security fixes go into the latest minor release only (the newest `v1.x` core release, and the newest release of each satellite module: `orxotel`, `orxpg`, `orxdocker`). Upgrade to it to receive fixes.
