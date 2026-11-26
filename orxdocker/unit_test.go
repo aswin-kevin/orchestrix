@@ -219,7 +219,7 @@ func TestConfigValidation(t *testing.T) {
 	if want := `orxdocker: label "` + LabelScope + `" is reserved`; err == nil || err.Error() != want {
 		t.Errorf("reserved label: err = %v, want %q", err, want)
 	}
-	m0, err := NewManager(Config{Socket: "/s", Labels: map[string]string{"dev.orchestrix.other": "ok", "team": "a"}})
+	m0, err := NewManager(Config{Socket: "/s", Labels: map[string]string{"dev.orchestrix.other": "ok", LabelManaged + "foo": "ok", "team": "a"}})
 	if err != nil {
 		t.Errorf("unreserved labels rejected: %v", err)
 	} else {

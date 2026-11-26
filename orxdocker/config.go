@@ -140,8 +140,9 @@ type Config struct {
 	// OpTimeout bounds each command a sandbox file operation sends; 0 means
 	// sandbox.DefaultOpTimeout.
 	OpTimeout time.Duration
-	// Labels are added to every container. Keys starting with LabelManaged
-	// ("dev.orchestrix.orxdocker") are reserved for orxdocker's own labels
+	// Labels are added to every container. LabelManaged
+	// ("dev.orchestrix.orxdocker") and keys under it
+	// ("dev.orchestrix.orxdocker.*") are reserved for orxdocker's own labels
 	// and rejected.
 	Labels map[string]string
 
@@ -238,7 +239,7 @@ func (c Config) withDefaults() (Config, error) {
 		return c, err
 	}
 	for k := range c.Labels {
-		if strings.HasPrefix(k, LabelManaged) {
+		if k == LabelManaged || strings.HasPrefix(k, LabelManaged+".") {
 			return c, fmt.Errorf("orxdocker: label %q is reserved", k)
 		}
 	}
