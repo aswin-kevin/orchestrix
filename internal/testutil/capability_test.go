@@ -22,11 +22,11 @@ func (capable) CheckPermission(context.Context, json.RawMessage, permission.Cont
 }
 
 func TestCapabilityHelpers(t *testing.T) {
-	ctx := context.Background()
-	if testutil.IsReadOnly(plain{}, nil) || testutil.SelfCheck(plain{}, ctx, nil, permission.Context{}).Message != "" {
+	ctx := t.Context()
+	if testutil.IsReadOnly(plain{}, nil) || testutil.SelfCheck(ctx, plain{}, nil, permission.Context{}).Message != "" {
 		t.Error("a tool without the capabilities must give the zero answers")
 	}
-	if !testutil.IsReadOnly(capable{}, nil) || testutil.SelfCheck(capable{}, ctx, nil, permission.Context{}).Message != "checked" {
+	if !testutil.IsReadOnly(capable{}, nil) || testutil.SelfCheck(ctx, capable{}, nil, permission.Context{}).Message != "checked" {
 		t.Error("a tool with the capabilities must be asked")
 	}
 }

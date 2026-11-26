@@ -134,13 +134,13 @@ func (b *Backend) run(ctx context.Context, op, p, script string, maxOutput int) 
 		MaxOutputBytes: maxOutput,
 	})
 	if err != nil {
-		return "", fmt.Errorf("sandbox: %s %s: %w", op, p, err)
+		return "", pathutil.Fail("sandbox", op, p, err)
 	}
 	if err := exitError(res); err != nil {
 		if !res.TimedOut && res.ExitCode == exitFailed && rejectsNonUTF8(res.Output) {
 			return "", nonUTF8Error(p)
 		}
-		return "", fmt.Errorf("sandbox: %s %s: %w", op, p, err)
+		return "", pathutil.Fail("sandbox", op, p, err)
 	}
 	if res.Truncated {
 		return "", fmt.Errorf("sandbox: %s %s: output over %d bytes was truncated", op, p, maxOutput)

@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/internal/pathutil"
 	"github.com/aswin-kevin/orchestrix/internal/limitio"
 )
 
@@ -145,7 +146,7 @@ func (b *Backend) resolve(op, p string) (clean, realPath string, err error) {
 		return "", "", wrapFSError(op, clean, err)
 	}
 	if !b.inside(resolved) {
-		return "", "", fmt.Errorf("disk: %s %s: %w", op, clean, backend.ErrOutsideRoot)
+		return "", "", pathutil.Fail("disk", op, clean, backend.ErrOutsideRoot)
 	}
 	return clean, resolved, nil
 }
@@ -216,11 +217,11 @@ func evalPath(p string) (string, error) {
 func wrapFSError(op, p string, err error) error {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return fmt.Errorf("disk: %s %s: %w", op, p, backend.ErrNotFound)
+		return pathutil.Fail("disk", op, p, backend.ErrNotFound)
 	case errors.Is(err, syscall.ENOTDIR):
-		return fmt.Errorf("disk: %s %s: %w", op, p, backend.ErrNotDir)
+		return pathutil.Fail("disk", op, p, backend.ErrNotDir)
 	}
-	return fmt.Errorf("disk: %s %s: %w", op, p, err)
+	return pathutil.Fail("disk", op, p, err)
 }
 
 // resolveBase resolves p (empty means the root) and stats the result.
@@ -246,7 +247,7 @@ func (b *Backend) resolveDir(op, p string) (clean, rel string, err error) {
 		return "", "", err
 	}
 	if !info.IsDir() {
-		return "", "", fmt.Errorf("disk: %s %s: %w", op, clean, backend.ErrNotDir)
+		return "", "", pathutil.Fail("disk", op, clean, backend.ErrNotDir)
 	}
 	return clean, rel, nil
 }

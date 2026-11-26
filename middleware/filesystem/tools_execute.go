@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/internal/jobs"
 	"github.com/aswin-kevin/orchestrix/tool"
 )
 
@@ -95,7 +97,12 @@ func (m *Middleware) executeInBackground(ctx context.Context, in ExecuteInput, c
 	}
 	withBackend := *c
 	withBackend.Backend = b
-	timeout := time.Duration(max(in.TimeoutSeconds, 0)) * time.Second
+	var timeout time.Duration
+	if in.TimeoutSeconds > 0 {
+		// Background commands are not capped here; the limit only keeps
+		// a huge value from overflowing into a negative timeout.
+		timeout = jobs.WaitLimit(in.TimeoutSeconds, math.MaxInt64)
+	}
 	id, err := c.Background.Start(ctx, &withBackend, in.Command, timeout)
 	if err != nil {
 		return tool.Errorf("background start failed: %v", err)
@@ -108,7 +115,7 @@ func (m *Middleware) execTimeout(seconds int) time.Duration {
 	if seconds <= 0 {
 		return min(m.cfg.ExecTimeout, m.cfg.MaxExecTimeout)
 	}
-	return min(time.Duration(seconds)*time.Second, m.cfg.MaxExecTimeout)
+	return jobs.WaitLimit(seconds, m.cfg.MaxExecTimeout)
 }
 
 func formatExec(res backend.ExecResult, timeout time.Duration) string {

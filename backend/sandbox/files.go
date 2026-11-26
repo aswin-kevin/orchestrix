@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/internal/pathutil"
 )
 
 const (
@@ -57,10 +58,10 @@ func (b *Backend) load(ctx context.Context, op, p string) (clean string, content
 	}
 	size, modTime, err := parseStat(out)
 	if err != nil {
-		return "", nil, time.Time{}, fmt.Errorf("sandbox: %s %s: %w", op, clean, err)
+		return "", nil, time.Time{}, pathutil.Fail("sandbox", op, clean, err)
 	}
 	if err := backend.CheckReadSize(size); err != nil {
-		return "", nil, time.Time{}, fmt.Errorf("sandbox: %s %s: %w", op, clean, err)
+		return "", nil, time.Time{}, pathutil.Fail("sandbox", op, clean, err)
 	}
 	out, err = b.run(ctx, op, clean, head+`base64 < "$p"`+orFail, encodedBytes(size)+outputSlack)
 	if err != nil {
@@ -68,7 +69,7 @@ func (b *Backend) load(ctx context.Context, op, p string) (clean string, content
 	}
 	content, err = decodeBase64(out)
 	if err != nil {
-		return "", nil, time.Time{}, fmt.Errorf("sandbox: %s %s: %w", op, clean, err)
+		return "", nil, time.Time{}, pathutil.Fail("sandbox", op, clean, err)
 	}
 	return clean, content, modTime, nil
 }
@@ -105,7 +106,7 @@ func (b *Backend) Write(ctx context.Context, p string, content []byte) error {
 // write implements Write for a cleaned path.
 func (b *Backend) write(ctx context.Context, op, clean string, content []byte) error {
 	if clean == "/" {
-		return fmt.Errorf("sandbox: %s %s: %w", op, clean, backend.ErrIsDir)
+		return pathutil.Fail("sandbox", op, clean, backend.ErrIsDir)
 	}
 	realPath := b.real(clean)
 	suffix := make([]byte, tmpRandomBytes)

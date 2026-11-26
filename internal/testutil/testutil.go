@@ -56,7 +56,7 @@ func IsReadOnly(t tool.Tool, in json.RawMessage) bool {
 
 // SelfCheck is t's own permission verdict, found with tool.As; the zero
 // Decision when t has none.
-func SelfCheck(t tool.Tool, ctx context.Context, in json.RawMessage, pc permission.Context) permission.Decision {
+func SelfCheck(ctx context.Context, t tool.Tool, in json.RawMessage, pc permission.Context) permission.Decision {
 	c, ok := tool.As[tool.PermissionChecker](t)
 	if !ok {
 		return permission.Decision{}

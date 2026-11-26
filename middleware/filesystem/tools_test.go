@@ -366,6 +366,12 @@ func TestExecuteTimeoutCappedAndSubject(t *testing.T) {
 		t.Fatalf("timeout = %v, want capped at 1m", eb.gotOptions.Timeout)
 	}
 
+	// A value that overflows time.Duration when scaled still hits the cap.
+	f.run(t, "execute", obj{"command": "sleep", "timeout_seconds": 10_000_000_000})
+	if eb.gotOptions.Timeout != time.Minute {
+		t.Fatalf("huge timeout = %v, want capped at 1m", eb.gotOptions.Timeout)
+	}
+
 	eb.result = backend.ExecResult{Output: "partial", TimedOut: true, Truncated: true, ExitCode: -1}
 	res := f.run(t, "execute", obj{"command": "sleep", "timeout_seconds": 5})
 	wantText(t, res, true, "partial\n[output truncated]\n[timed out after 5s]\n[exit code -1]")
@@ -378,7 +384,7 @@ func TestExecuteTimeoutCappedAndSubject(t *testing.T) {
 	if testutil.IsReadOnly(tl, raw) {
 		t.Fatal("execute must not be read-only")
 	}
-	if d := testutil.SelfCheck(tl, t.Context(), raw, permission.Context{}); d.Behavior != "" {
+	if d := testutil.SelfCheck(t.Context(), tl, raw, permission.Context{}); d.Behavior != "" {
 		t.Fatalf("execute self-check = %v, want no opinion", d.Behavior)
 	}
 }

@@ -243,7 +243,7 @@ func TestCancelJobKillsJob(t *testing.T) {
 func TestCancelJobAllowsItself(t *testing.T) {
 	m := mustNew(t, Config{})
 	for _, tl := range m.Tools() {
-		d := testutil.SelfCheck(tl, t.Context(), json.RawMessage(`{}`), permission.Context{})
+		d := testutil.SelfCheck(t.Context(), tl, json.RawMessage(`{}`), permission.Context{})
 		readOnly := testutil.IsReadOnly(tl, json.RawMessage(`{}`))
 		switch tl.Name() {
 		case ToolCancel:

@@ -550,7 +550,7 @@ func TestToolIsConcurrentAndAllowed(t *testing.T) {
 	if !isConcurrent(task, in) {
 		t.Fatal("task tool is not concurrency-safe")
 	}
-	if d := testutil.SelfCheck(task, t.Context(), in, permission.Context{}); d.Behavior != permission.Allow {
+	if d := testutil.SelfCheck(t.Context(), task, in, permission.Context{}); d.Behavior != permission.Allow {
 		t.Fatalf("task permission = %+v, want allowed", d)
 	}
 }

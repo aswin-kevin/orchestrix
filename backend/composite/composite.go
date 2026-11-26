@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/aswin-kevin/orchestrix/backend"
+	"github.com/aswin-kevin/orchestrix/backend/internal/pathutil"
 )
 
 // Route mounts Backend at Prefix: a path at or below Prefix is served by
@@ -96,7 +97,7 @@ func (c *composite) target(op, p string) (backend.Backend, string, error) {
 		return nil, "", err
 	}
 	if c.isAncestor(p) {
-		return nil, "", fmt.Errorf("composite: %s %s: %w", op, p, backend.ErrIsDir)
+		return nil, "", pathutil.Fail("composite", op, p, backend.ErrIsDir)
 	}
 	if m, rel, ok := c.resolve(p); ok {
 		return m.backend, rel, nil

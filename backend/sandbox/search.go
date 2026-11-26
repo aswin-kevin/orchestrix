@@ -166,7 +166,7 @@ func (b *Backend) list(ctx context.Context, op, clean, check, listing string) ([
 		return nil, nonUTF8Error(bad.path)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("sandbox: %s %s: %w", op, clean, err)
+		return nil, pathutil.Fail("sandbox", op, clean, err)
 	}
 	infos := make([]backend.FileInfo, 0, len(recs))
 	for _, r := range recs {
