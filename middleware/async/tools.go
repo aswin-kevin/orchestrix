@@ -390,10 +390,14 @@ func (m *Middleware) reattach(ctx context.Context, r TaskRecord) (*jobs.Job[*tas
 			t.attach(h)
 			return t, nil
 		})
-		t.releaseReports(err == nil)
 		if err != nil {
+			// The handle, if start returned one, was stopped: nobody is
+			// told of a task nobody holds, now or when it stops.
+			t.bind(meta, nil)
+			t.releaseReports(false)
 			return nil, err
 		}
+		t.releaseReports(true)
 	} else {
 		h, err := attach()
 		if err != nil {
